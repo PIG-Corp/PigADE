@@ -258,5 +258,29 @@ and mutation, retain the last good sequence/frame/history, name the rejected
 sequence and preserve raw bytes. Tests cover full replay, actual checkpoint-tail,
 host list/read, nonempty cold history and exact hidden-state continuation.
 Clean recovery verification still refuses any storage warning. See the runtime
-report. Completely unreadable headers/profiles can still be omitted by Host::open
-with only a log; visible recovery diagnostics are the next bounded fix.
+report. Completely unreadable headers/profiles now remain visible as bounded
+artifact diagnostics, without fabricated sessions. The app merges them atomically,
+shows a nonfatal warning and leaves healthy panel input available. Legal Unix
+control/backslash filenames are escaped; omitted-count formatting saturates.
+Fresh root checks pass 133 workspace tests, 27 Python tests, strict Clippy/fmt
+and release bins/examples. App29 tests/strict Clippy/build pass. Alacritty163
+library +45 reference tests and no-default check pass. Isolated warning native
+AT-SPI and four distinct child-ACK checks pass with app SHA26027250… and host
+SHAfface4d9…. The bridge maps Role::Alert to Notification101, not Alert2.
+Root caught/restored the prior local-input-error gate, so rejected input still
+requires acknowledgement; artifact notices remain nonfatal. The warning is
+legible in the screenshot. Root inspected `final-child-ack-present`: all four
+panes display distinct child ACKs and advance to seq3. The fixture waits 0.5s
+before capture, so this is live-replica correctness evidence, not latency data.
+
+CellExtra census now exposes references, reference-weighted combining capacity
+and the largest extra. A valid imported shared-mark witness shows that two VTE
+combining callbacks can create two large COW allocations; this does not assert
+ordinary ANSI reachability. Fresh release diagnostic results are in
+`benchmarks/results/terminal-allocation-census-references.json`. Admission cannot
+use incoming mark bytes alone; global/event/transient budgeting remains open.
+
+Latest retained-run inspection: the first two full corpus journals have reached
+1 GiB plus framing and their oracles completed; session three is generating.
+The soak has reached 3,603.09 seconds, 710 ACKs and 1,172 resizes per PTY, sampled
+host RSS277,217,280 bytes. These are running progress samples, not completed gates.

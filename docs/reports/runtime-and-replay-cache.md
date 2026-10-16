@@ -101,3 +101,42 @@ hidden normal screen, alternate screen, modes and partial UTF-8: both recovery
 paths preserve the exact pre-tail model and continue it identically. This does
 not yet cover resource rejection or every archive/I/O failure; whole-event
 memory admission remains open.
+
+## Unavailable artifacts and nonfatal UI notices
+
+When an artifact's header or terminal profile cannot produce a trustworthy
+model, the host now returns bounded protocol-2 `recovery` diagnostics on List
+and Poll. It reports up to 16 display filenames/causes, each at most 1,024 UTF-8
+bytes, plus a saturating omitted count. No synthetic session, frame or PID is
+created. Original artifacts remain untouched; healthy generations remain usable.
+Legal Unix filename controls, backslashes and percent characters are escaped
+for portable single-line display. These filenames are labels, not session IDs.
+
+The client validates the complete poll before changing cached frames or
+diagnostics. Notice-only updates advance the UI revision without cloning cells.
+The warning is separate from fatal connection/command errors. A selected
+session's storage failure names its reason and blocks only that panel; global
+artifact warnings do not block healthy input. The compact banner exposes GPUI
+Role::Alert. Its complete history-management workflow remains unfinished.
+
+Real-host integration covers unreadable and incompatible journals alongside
+valid saved history and an ordinary live shell accepting an ACK. List/Poll keep
+the same diagnostics, no extra process starts and all three source files remain
+byte-identical. The unreadable filename contains a newline and backslash to
+exercise the host/client naming boundary. Additional client tests cover bounded
+fields, atomic rejection, cached-cell identity and extreme omitted counts.
+
+The isolated same-app fixture in
+[`recovery-warning-20261017`](../../crates/app/evidence/recovery-warning-20261017/)
+also verifies the warning's accessible name/reason, unchanged source hashes and
+four child-generated PTY ACKs distinct from their input probes. GPUI Role::Alert
+maps to AT-SPI Notification (101) in the pinned AccessKit bridge; the initial
+wrong Alert(2) test assumption is retained as failed evidence. Earlier echo-only
+input evidence is explicitly superseded. No screen-reader actions, active
+desktop input or full accessibility acceptance are claimed.
+
+Root inspected the final settled screenshot: all four replicas show their
+different child ACKs and advance to sequence3. Capture deliberately waits 0.5s
+after host ACK observation; it cannot establish input-to-present latency.
+Earlier immediate screenshots were taken before the client's poll and remain
+retained rather than misrepresented as visible ACK proof.

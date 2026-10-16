@@ -57,6 +57,28 @@ def verify_embedded_fonts(app, manifest_path):
             'scope': 'exact font payloads present in selected executable; runtime family registration still tested inside namespace'}
 
 
+def recovery_issue(reply, journal, operation):
+    diagnostics = reply.get('recovery')
+    require(isinstance(diagnostics, dict), f'{operation} omitted recovery diagnostics')
+    issues = diagnostics.get('issues')
+    require(isinstance(issues, list), f'{operation} recovery issues were malformed')
+    match = next((issue for issue in issues if issue.get('journal') == journal), None)
+    require(match is not None, f'{operation} did not name {journal}')
+    require(isinstance(match.get('message'), str) and match['message'],
+            f'{operation} omitted the recovery reason')
+    return match['message']
+
+
+def shell_read_loop(recovery_warning):
+    if not recovery_warning:
+        return 'while IFS= read -r line; do printf \'%s\\n\' "$line"; done'
+    cases = ' '.join(
+        f"__PIGADE_RECOVERY_PROBE_{index}__) printf '%s\\n' '__PIGADE_RECOVERY_CHILD_ACK_{index}__' ;;"
+        for index in range(1, 5))
+    return ('while IFS= read -r line; do case "$line" in ' + cases +
+            ' *) printf \'%s\\n\' "$line" ;; esac; done')
+
+
 def wait_for(check, timeout=10):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -157,7 +179,7 @@ def gvariant_object_refs(output):
     return pairs
 
 
-def accessibility_probe(app_pid, bus_address, max_seconds=25):
+def accessibility_probe(app_pid, bus_address, expected_alert_reason=None, max_seconds=25):
     deadline = time.monotonic() + max_seconds
     calls = {}
 
@@ -200,7 +222,10 @@ def accessibility_probe(app_pid, bus_address, max_seconds=25):
 
     # The numeric role IDs are from the AT-SPI role enumeration. Keep the raw
     # value for every node and annotate product roles needed by this probe.
-    role_names = {23: 'frame', 54: 'status-bar', 60: 'terminal', 75: 'application',
+    # AccessKit Role::Alert maps to AT-SPI Notification (101) in the pinned
+    # accesskit_atspi_common bridge; AT-SPI Alert (2) is reserved for AlertDialog.
+    role_names = {2: 'alert', 23: 'frame', 54: 'status-bar', 60: 'terminal', 75: 'application',
+                  101: 'notification',
                   78: 'embedded', 83: 'heading'}
     max_nodes = 256
     max_depth = 12
@@ -277,6 +302,10 @@ def accessibility_probe(app_pid, bus_address, max_seconds=25):
                      'accessibleId': node['accessibleId'], 'role': node['role'],
                      'interfaces': node['interfaces'], 'childCount': node['childCount']}
                     for node in nodes]
+    alert_nodes = [node for node in nodes if node['role']['id'] == 101]
+    if expected_alert_reason is not None:
+        require(any(expected_alert_reason in node['name'] for node in alert_nodes),
+                'AT-SPI notification for AccessKit Role::Alert omitted the recovery warning reason')
     return {
         'status': 'passed' if app_nodes and terminal_nodes else 'failed',
         'scope': 'read-only AT-SPI bridge tree inspection of the actual isolated PigADE PID; no actions issued',
@@ -291,9 +320,18 @@ def accessibility_probe(app_pid, bus_address, max_seconds=25):
             'terminalCanvas': [{'index': node['index'], 'name': node['name'],
                                 'accessibleId': node['accessibleId'], 'role': node['role']}
                                for node in terminal_nodes],
+            'recoveryWarnings': [{'index': node['index'], 'name': node['name'],
+                                  'accessibleId': node['accessibleId'], 'role': node['role']}
+                                 for node in alert_nodes],
             'observedNodeSummary': node_summary,
         },
         'statusPropertiesSetOnPrivateSessionBus': ['org.a11y.Status.ScreenReaderEnabled=true'],
+        'pinnedBridgeRoleMapping': {
+            'source': 'accesskit_atspi_common 0.19.1, node.rs:93',
+            'accesskitRole': 'Alert',
+            'atspiRole': 'Notification',
+            'atspiRoleId': 101,
+        },
         'callCounts': calls,
         'limits': {'overallSeconds': max_seconds, 'maxNodes': max_nodes, 'maxDepth': max_depth,
                    'maxChildrenPerNode': max_children, 'maxRegistryRoots': 32,
@@ -332,7 +370,7 @@ def inside():
             process_groups.append(process.pid)
         return process
 
-    def request(command):
+    def request_response(command):
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(4)
             connection.connect('/artifacts/state/host.sock')
@@ -350,7 +388,10 @@ def inside():
             require(0 < length <= 8 * 1024**2, 'invalid host IPC length')
             reply = json.loads(read(length))
             require(reply['protocol'] == 2 and reply['error'] is None, f'host: {reply.get("error")}')
-            return reply['views']
+            return reply
+
+    def request(command):
+        return request_response(command)['views']
 
     try:
         runtime = Path('/run/pigade-test')
@@ -432,18 +473,46 @@ def inside():
             require(not any(forbidden in target for forbidden in ('/dev/input', '/dev/dri', '/dev/nvidia', '/run/user')), 'compositor has external display/device FD')
             fd_targets.append(target)
         report['compositor'] = {'pid': pid, 'uid': uid, 'socket': str(endpoint), 'fd_targets': fd_targets}
+        recovery_journal = 'bad.journal'
+        recovery_source = Path('/artifacts/state') / recovery_journal
+        recovery_source_bytes = b'PigADE isolated recovery fixture: intentionally malformed journal\n'
+        if config.get('recovery_warning'):
+            recovery_source.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            recovery_source.write_bytes(recovery_source_bytes)
+        recovery_source_sha_before = sha(recovery_source) if config.get('recovery_warning') else None
         host = start(['/pigade/host', 'serve', '/artifacts/state'])
         wait_for(lambda: Path('/artifacts/state/host.sock').is_socket() or host.poll() is not None)
         require(host.poll() is None, 'private host failed')
         specs = []
         for index in range(4):
+            shell_script = (
+                f"printf '\\033]2;Bash {index+1}\\007\\033[38;2;89;180;255mPigADE · Bash {index+1}\\033[0m\\r\\nРусский · é · 界\\r\\nA漢B xあ中한y · fi != ->\\r\\n\\033[1mA漢B xあ中한y · bold\\033[0m\\r\\n\\033[3mA漢B xあ中한y · italic\\033[0m\\r\\n\\033[1;3mA漢B xあ中한y · bold italic\\033[0m\\r\\n'; "
+                + shell_read_loop(config.get('recovery_warning', False)))
             spec = {'session': str(uuid.uuid4()), 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
-                    'executable': '/usr/bin/bash', 'args': ['--noprofile', '--norc', '-c',
-                    f"printf '\\033]2;Bash {index+1}\\007\\033[38;2;89;180;255mPigADE · Bash {index+1}\\033[0m\\r\\nРусский · é · 界\\r\\nA漢B xあ中한y · fi != ->\\r\\n\\033[1mA漢B xあ中한y · bold\\033[0m\\r\\n\\033[3mA漢B xあ中한y · italic\\033[0m\\r\\n\\033[1;3mA漢B xあ中한y · bold italic\\033[0m\\r\\n'; while IFS= read -r line; do printf '%s\\n' \"$line\"; done"],
+                    'executable': '/usr/bin/bash', 'args': ['--noprofile', '--norc', '-c', shell_script],
                     'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
             request({'command': 'launch', 'spec': spec})
             specs.append(spec)
-        initial = request({'command': 'list'})
+        initial_reply = request_response({'command': 'list'})
+        initial = initial_reply['views']
+        recovery_message = None
+        if config.get('recovery_warning'):
+            recovery_message = recovery_issue(initial_reply, recovery_journal, 'list')
+            poll_reply = request_response({'command': 'poll', 'known': []})
+            require(recovery_issue(poll_reply, recovery_journal, 'poll') == recovery_message,
+                    'list and poll recovery reasons differed')
+            source_unchanged = recovery_source.read_bytes() == recovery_source_bytes
+            require(source_unchanged,
+                    'host modified the malformed recovery source')
+            report['recoveryWarning'] = {
+                'journal': recovery_journal,
+                'message': recovery_message,
+                'sourceSha256Before': recovery_source_sha_before,
+                'sourceSha256After': sha(recovery_source),
+                'sourceBytesUnchanged': source_unchanged,
+                'listAndPollDiagnosticsMatch': True,
+                'omitted': initial_reply['recovery'].get('omitted'),
+            }
         initial_ids = sorted((v['session'], v['generation'], v['pid']) for v in initial)
         first = start(['/pigade/app', '/artifacts/state/host.sock'])
         # Wait for host acknowledgement of app-computed viewport dimensions.
@@ -466,11 +535,47 @@ def inside():
                 require(status_values[property_name],
                         f'private accessibility status property is not enabled: {property_name}')
             report['accessibilityProbe']['privateStatusValuesAfterActivation'] = status_values
-            accessibility_result = accessibility_probe(first.pid, private_a11y_address)
+            accessibility_result = accessibility_probe(
+                first.pid, private_a11y_address,
+                expected_alert_reason=(
+                    f'{recovery_journal} — {recovery_message.split()[0]}'
+                    if config.get('recovery_warning') and recovery_message.split() else None))
             report['accessibilityProbe'].update(accessibility_result)
             require(accessibility_result['status'] == 'passed',
                     'AT-SPI tree did not expose required PigADE application and terminal semantics')
         time.sleep(1)
+        if config.get('recovery_warning'):
+            require(len(initial) == 4 and all(v['state'] == 'running' for v in initial),
+                    'recovery fixture did not retain all four running PTYs')
+            for index, spec in enumerate(specs):
+                probe = f'__PIGADE_RECOVERY_PROBE_{index + 1}__'
+                # Each hosted shell is independently selected by stable IDs.
+                # The child emits a different ACK token; tty echo alone cannot pass.
+                # Input uses host protocol, with no desktop input.
+                response = request_response({'command': 'input', 'session': spec['session'],
+                                             'generation': spec['generation'],
+                                             'bytes': list(f'{probe}\n'.encode())})
+                require(response.get('error') is None, 'host rejected protocol input acknowledgement probe')
+            def input_echoed():
+                views = request({'command': 'list'})
+                rendered = {v['session']: ''.join(cell['text'] for cell in v['frame']['cells']) for v in views}
+                return all(f'__PIGADE_RECOVERY_CHILD_ACK_{index + 1}__' in rendered.get(spec['session'], '')
+                           for index, spec in enumerate(specs))
+            wait_for(input_echoed, timeout=8)
+            require(all(v['state'] == 'running' and v['storage_error'] is None
+                        for v in request({'command': 'list'})),
+                    'a healthy PTY stopped or became degraded during recovery warning')
+            report['recoveryWarning']['fourHealthyPtysRunning'] = True
+            report['recoveryWarning']['hostProtocolChildAcknowledged'] = True
+            report['recoveryWarning']['inputProbe'] = {
+                'submitted': '__PIGADE_RECOVERY_PROBE_N__',
+                'childOutput': '__PIGADE_RECOVERY_CHILD_ACK_N__',
+                'ackIsDifferentFromSubmittedTTYText': True,
+            }
+            # Allow the app's normal poll/paint cycle to show PTY output before
+            # capturing the recovery fixture; this is not a latency measurement.
+            time.sleep(.5)
+            report['recoveryWarning']['screenshotSettleSeconds'] = .5
         capture = start([sdk + '/root/usr/bin/weston-screenshooter'])
         require(capture.wait(timeout=10) == 0, 'private screenshot failed')
         images = list((artifacts / 'screenshots').glob('*.png'))
@@ -526,7 +631,8 @@ def outside(args):
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
     (output / 'run.json').write_text(json.dumps({'sdk': str(sdk), 'outer_namespaces': {name: os.readlink('/proc/self/ns/' + name) for name in NAMESPACES},
         'app_sha256': sha(args.app), 'host_sha256': sha(args.host), 'sdk_packages': manifest['packages'],
-        'accessibility_probe': args.accessibility, 'output_scale': args.scale,
+        'accessibility_probe': args.accessibility, 'recovery_warning': args.recovery_warning,
+        'output_scale': args.scale,
         'font_preflight': embedded_fonts}, indent=2) + '\n')
     (output / 'passwd').write_text(f'pigade:x:{os.getuid()}:{os.getgid()}:Isolated test:/home/test:/usr/bin/bash\n')
     (output / 'group').write_text(f'pigade:x:{os.getgid()}:\n')
@@ -563,4 +669,6 @@ if __name__ == '__main__':
                         help='fixed integer scale of the isolated output only (no host display changes)')
     parser.add_argument('--accessibility', action='store_true',
                         help='opt in to a private-bus, read-only AT-SPI tree inspection (not Orca/full acceptance)')
+    parser.add_argument('--recovery-warning', action='store_true',
+                        help='opt in to malformed-journal recovery, healthy PTY input and Alert coverage')
     sys.exit(outside(parser.parse_args()))

@@ -102,6 +102,7 @@ fn error_response(
         rejected_before_admission,
         catalog: None,
         catalog_notice: None,
+        recovery: None,
         selected: None,
         history_chunk: None,
     }
@@ -200,6 +201,7 @@ mod tests {
             rejected_before_admission: None,
             catalog: None,
             catalog_notice: None,
+            recovery: None,
             selected: None,
             history_chunk: None,
         })?;

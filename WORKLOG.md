@@ -769,3 +769,59 @@ Kept valid terminal generations visible when a CRC-valid journal tail contains a
 - Files: crates/session-host/src/lib.rs, crates/session-host/src/recovery_tests.rs, crates/session-host/tests/recovery.rs, docs/reports/runtime-and-replay-cache.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Red invalid-resize reproduction failed before fix; payload validation now precedes history.begin/model changes. Fresh workspace checks passed 130 tests, strict all-target Clippy, formatting and release bins/examples. Integration covers four bad tails, full/fast frames, source preservation and host reads. Root strengthened fixture to exceed10000hotrows and assert nonempty cold archive; targeted rerun passed. Separate exact checkpoint and partial UTF-8 continuation test passed for both recovery paths. Clean recovery oracle rejects degraded results.
 - Risks / next: Continue with visible diagnostics for journals whose header/profile cannot be recovered at all; global memory admission and complete MVP gates remain open.
+
+## 2026-10-16T23:38:32+00:00 — /root/recovery_slice_review
+
+Verify bounded persistent diagnostics for invalid journal artifacts while preserving healthy historical and live PTY sessions
+
+- Files: crates/session-host/tests/recovery.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/session-host/tests/recovery.rs; targeted unavailable-journals recovery test passed; semantic-tail regression passed; git diff --check -- crates/session-host/tests/recovery.rs
+- Risks / next: Root owns diagnostic implementation, broader integration checks, and commit.
+
+## 2026-10-16T23:39:43+00:00 — /root/terminal_memory_budget
+
+Added reference-weighted CellExtra census counters and checkpoint-import parser-driven COW regression
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, WORKLOG.md
+- Verification: cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=vendor/vte term::resources --lib (11 passed); no-default-features cargo check passed; Clippy passed with three documented upstream question_mark warnings forced to warnings; scoped diff-check passed
+- Risks / next: Counters expose COW fanout risk for root admission design; they are diagnostic and do not change unique payload estimates or introduce runtime policy
+
+## 2026-10-16T23:40:09+00:00 — /root/font_render_profile
+
+Parse bounded recovery diagnostics atomically and surface nonfatal recovery/history warnings in the app
+
+- Files: crates/app/src/protocol.rs, crates/app/src/main.rs
+- Verification: ./bootstrap.sh test --locked (28 passed), ./bootstrap.sh clippy --locked --all-targets -- -D warnings passed, ./bootstrap.sh fmt -- --check passed, ./bootstrap.sh build --locked passed; default binary /home/afterburner/Projects/PigADE/crates/app/target/debug/pigade-app sha256 f56f802635a1bb975d07b3b568a0253c8251e0fb2ebe2c3d5b0590e7a21e49d0; git diff --check passed
+- Risks / next: Root reruns isolated render/accessibility check against this app binary; recovery warning layout is compact and visible but requires visual review.
+
+## 2026-10-16T23:45:11+00:00 — /root/font_render_profile
+
+Add opt-in isolated malformed-journal recovery warning fixture with PTY and AT-SPI coverage
+
+- Files: scripts/isolated-render.py, scripts/test_isolated_render.py
+- Verification: python3 -m unittest scripts/test_isolated_render.py -v: 3 passed; python3 -m py_compile scripts/isolated-render.py scripts/test_isolated_render.py: passed; git diff --check -- scripts/isolated-render.py scripts/test_isolated_render.py: passed; isolated scale-1 --accessibility --recovery-warning run: render_and_reopen_pass with four protocol input echoes, list/poll recovery match and unchanged source hash, AT-SPI Role::Alert exported as Notification(101); app SHA 99567b416716a9012ed86875293e3a2209779f4f6e972b3f95db93775bd3679d, host SHA fface4d93ec786546c182c7fced9f8ee1199ac2529773c6e6785706f69a75c4a
+- Risks / next: Root to review screenshot and integrate; limits: private Weston/Pixman scale 1, AT-SPI bridge-tree only, no screen reader/keyboard/real GPU/platform acceptance. First failed role-id assumption is retained as evidence; successful mapping is documented in result.json.
+
+## 2026-10-16T23:48:00+00:00 — /root/font_render_profile
+
+Strengthen isolated recovery fixture with child-generated ACK tokens
+
+- Files: scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/recovery-warning-20261017/final-child-ack/run.json, crates/app/evidence/recovery-warning-20261017/final-child-ack/result.json, crates/app/evidence/recovery-warning-20261017/final-child-ack/preflight.json, crates/app/evidence/recovery-warning-20261017/final-child-ack/screenshots/wayland-screenshot-2026-10-16_23-47-44.png
+- Verification: Earlier proof observed tty-echoed command text only, not child-shell processing. Corrected fixture submits __PIGADE_RECOVERY_PROBE_N__ and waits for distinct __PIGADE_RECOVERY_CHILD_ACK_N__ generated by bash. python3 -m unittest scripts/test_isolated_render.py -v: 4 passed including executing the shell-loop test; python3 -m py_compile scripts/isolated-render.py scripts/test_isolated_render.py: passed; git diff --check scoped files: passed; final external isolated scale-1 run: render_and_reopen_pass, list/poll diagnostics matched, malformed source hash unchanged, four PTYs running and child ACKs observed, AT-SPI warning reason present (AccessKit Alert maps to Notification 101). App SHA 26027250ef4f1eb2de28ec60db217b1d15462f85e30a47124bf83ef4dc20dc47; host SHA fface4d93ec786546c182c7fced9f8ee1199ac2529773c6e6785706f69a75c4a.
+- Risks / next: Root to review curated final-child-ack screenshot/result. Earlier runtime artifacts remain outside repository. Scope is private Weston/Pixman scale 1; no screen reader, keyboard/IME, real GPU, or cross-platform accessibility acceptance.
+
+## 2026-10-16T23:48:48+00:00 — /root/font_render_profile
+
+Settle recovery fixture capture so child ACK output is visible in the rendered panes
+
+- Files: scripts/isolated-render.py, crates/app/evidence/recovery-warning-20261017/final-child-ack-present/run.json, crates/app/evidence/recovery-warning-20261017/final-child-ack-present/result.json, crates/app/evidence/recovery-warning-20261017/final-child-ack-present/preflight.json, crates/app/evidence/recovery-warning-20261017/final-child-ack-present/screenshots/wayland-screenshot-2026-10-16_23-48-36.png
+- Verification: Prior child ACK proof passed at the host but its immediate capture showed stale UI sequence 2 without the ACKs. Added recovery-fixture-only 0.5s settle (not a latency measurement). Fresh same-binary scale-1 isolated run passed; screenshot visibly contains all four probe and child-ACK lines, warning, and PTY seq 3. result.json state views seq 4 each. Diagnostics and malformed source hashes match; AT-SPI warning passed. App SHA 26027250ef4f1eb2de28ec60db217b1d15462f85e30a47124bf83ef4dc20dc47; host SHA fface4d93ec786546c182c7fced9f8ee1199ac2529773c6e6785706f69a75c4a. Python suite 4 passed; py_compile and scoped diff-check passed.
+- Risks / next: Root to visually inspect final-child-ack-present screenshot and sequence presentation. Same private scale-1 scope and accessibility limits remain.
+
+## 2026-10-16T23:49:11+00:00 — /root
+
+Expose bounded unavailable-artifact recovery notices without blocking healthy terminals; verify native warning and live replicas, strengthen shared-mark accounting evidence
+
+- Files: crates/session-host/src/recovery_diagnostics.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/recovery.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/recovery-warning-20261017, crates/terminal/examples/allocation_census.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, benchmarks/results/terminal-allocation-census-references.json, README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/runtime-and-replay-cache.md, docs/reports/terminal-memory-census.md
+- Verification: Fresh root workspace133tests +Python27tests, strictClippy/fmt/releasebins/examples passed; app29tests/clippy/build passed with localrejected-input gate restored; Alacritty163lib+45ref+no-default passed. Root verified finalisolated app26027250/hostfface4d9 screenshot: namedwarning and four distinctchildACKs/seqadvance, samegeneration/PIDreopen; nativeAlert maps Notification101. Initialroleassumption/echo-only/immediatecapture limitations retained. Fresh30sample census5fixtures preserves checkpoint bytes and prioruniqueestimates.
+- Risks / next: Commit reviewed slice; continue whole-event/global memory admission and remainingstage0 gates. Fullcorpus firsttwooracles done, thirdgenerating; actual24hsoak running, neither completed. No fullMVP/platform/700MiB claim.

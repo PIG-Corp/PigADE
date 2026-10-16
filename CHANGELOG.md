@@ -21,6 +21,8 @@
 - Bounded VTE callback and Term allocation censuses cover REP, partial parser state, both grids/cached rows, shared extras, links and metadata; release diagnostics measure traversal cost without running it per output event. Global memory admission is still pending.
 - Bundled terminal font aliases avoid ambiguous system-family selection; an offline reproducible generator preserves outlines/metrics/cmap and includes OFL attribution. The painter clips clusters to host-assigned spans. JP CJK forms are explicit; uncovered platform fallback and cross-platform parity remain unverified.
 - Invalid typed journal tails retain the last valid generation/model/history with a sequence-specific error instead of dropping the session. Full/fast recovery and hidden-state continuation regressions cover this path; raw sources are unchanged.
+- Unreadable/incompatible journal artifacts produce bounded nonfatal recovery warnings without fake sessions or blocking healthy terminals. Poll validation is atomic; notice-only updates preserve cached cells. Unix filename controls and extreme omission counts are covered.
+- Resource census now distinguishes shared allocation size from reference-weighted combining capacity; a checkpoint-import/VTE continuation regression demonstrates copy-on-write fanout. Whole-event/global admission is still open.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

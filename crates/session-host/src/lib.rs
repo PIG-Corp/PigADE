@@ -10,9 +10,11 @@ mod ipc_server;
 mod launch_gate;
 pub mod metrics;
 pub mod poll;
+pub mod recovery_diagnostics;
 #[cfg(test)]
 mod recovery_tests;
 mod replay_cache;
+pub use recovery_diagnostics::{RecoveryDiagnostics, RecoveryIssue};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -125,6 +127,8 @@ pub struct Response {
     pub catalog: Option<pigade_storage::Catalog>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_notice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryDiagnostics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<Vec<poll::SessionInfo>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,6 +298,7 @@ struct Host {
     sessions: Vec<Session>,
     metadata: MetadataStore,
     catalog_notice: Option<String>,
+    recovery: RecoveryDiagnostics,
     _lock: File,
 }
 
@@ -490,6 +495,7 @@ impl Host {
                 rejected_before_admission: None,
                 catalog: None,
                 catalog_notice: self.catalog_notice.clone(),
+                recovery: self.recovery.response(),
                 selected: Some(result.selected),
                 history_chunk: None,
             });
@@ -509,6 +515,7 @@ impl Host {
                     rejected_before_admission: None,
                     catalog: None,
                     catalog_notice: None,
+                    recovery: self.recovery.response(),
                     selected: None,
                     history_chunk: None,
                 });
@@ -521,6 +528,7 @@ impl Host {
             rejected_before_admission: None,
             catalog: Some(catalog),
             catalog_notice: self.catalog_notice.clone(),
+            recovery: self.recovery.response(),
             selected: None,
             history_chunk: None,
         })
@@ -550,6 +558,7 @@ impl Host {
             eprintln!("{notice}");
         }
         let mut sessions = Vec::new();
+        let mut recovery = RecoveryDiagnostics::default();
         for entry in fs::read_dir(&root)? {
             let path = entry?.path();
             if path.extension().is_some_and(|ext| ext == "journal") {
@@ -565,7 +574,10 @@ impl Host {
                             _history: history,
                         });
                     }
-                    Err(error) => eprintln!("history unavailable {}: {error:#}", path.display()),
+                    Err(error) => {
+                        recovery.record(&path, &error);
+                        eprintln!("history unavailable {}: {error:#}", path.display());
+                    }
                 }
             }
         }
@@ -590,6 +602,7 @@ impl Host {
             sessions,
             metadata,
             catalog_notice,
+            recovery,
             _lock: lock,
         })
     }
@@ -1336,6 +1349,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 rejected_before_admission: rejected_before_admission(&error),
                 catalog: None,
                 catalog_notice: host.catalog_notice.clone(),
+                recovery: host.recovery.response(),
                 selected: None,
                 history_chunk: None,
             },

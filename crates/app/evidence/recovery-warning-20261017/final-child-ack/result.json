@@ -1,0 +1,523 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "render_and_reopen_pass",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532954]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]",
+      "ipc": "ipc:[4026533017]",
+      "net": "net:[4026533022]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "accessibilityProbe": {
+    "status": "passed",
+    "launcher": "/usr/lib/at-spi-bus-launcher --launch-immediately --a11y=0 --screen-reader=0",
+    "privateSettingsBackend": "GSETTINGS_BACKEND=memory (launcher process only)",
+    "registry": {
+      "busName": "org.a11y.atspi.Registry",
+      "objectPath": "/org/a11y/atspi/accessible/root",
+      "applicationRootsForPigADE": [
+        [
+          ":1.3",
+          "/org/a11y/atspi/accessible/root"
+        ]
+      ]
+    },
+    "privateAccessibilityBusStarted": true,
+    "configuredOnlyAfterAppInitialization": true,
+    "privateStatusValuesAfterActivation": {
+      "IsEnabled": true,
+      "ScreenReaderEnabled": true
+    },
+    "scope": "read-only AT-SPI bridge tree inspection of the actual isolated PigADE PID; no actions issued",
+    "assertions": {
+      "pigadeApplicationFound": true,
+      "pigadeApplication": [
+        {
+          "index": 2,
+          "name": "PigADE",
+          "accessibleId": "pigade-root",
+          "role": {
+            "id": 78,
+            "name": "embedded"
+          }
+        }
+      ],
+      "terminalCanvasFound": true,
+      "terminalCanvas": [
+        {
+          "index": 4,
+          "name": "Терминал Bash 3 · running",
+          "accessibleId": "terminal-canvas",
+          "role": {
+            "id": 60,
+            "name": "terminal"
+          }
+        }
+      ],
+      "recoveryWarnings": [
+        {
+          "index": 5,
+          "name": "Восстановление: bad.journal — journal corruption at byte 0: UnsupportedVersion",
+          "accessibleId": "recovery-warning",
+          "role": {
+            "id": 101,
+            "name": "notification"
+          }
+        }
+      ],
+      "observedNodeSummary": [
+        {
+          "path": "/org/a11y/atspi/accessible/root",
+          "name": "app",
+          "accessibleId": "",
+          "role": {
+            "id": 75,
+            "name": "application"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Application"
+          ],
+          "childCount": 1
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/0",
+          "name": "",
+          "accessibleId": "",
+          "role": {
+            "id": 23,
+            "name": "frame"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 1
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/91084262912707324854519850532985634816",
+          "name": "PigADE",
+          "accessibleId": "pigade-root",
+          "role": {
+            "id": 78,
+            "name": "embedded"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 4
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/46214953197799150678164849185452457984",
+          "name": "PigADE",
+          "accessibleId": "",
+          "role": {
+            "id": 83,
+            "name": "heading"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 0
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/116836031715905645972172452792377540608",
+          "name": "Терминал Bash 3 · running",
+          "accessibleId": "terminal-canvas",
+          "role": {
+            "id": 60,
+            "name": "terminal"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 0
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/130434420136422072078800536981779513344",
+          "name": "Восстановление: bad.journal — journal corruption at byte 0: UnsupportedVersion",
+          "accessibleId": "recovery-warning",
+          "role": {
+            "id": 101,
+            "name": "notification"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 0
+        },
+        {
+          "path": "/org/a11y/atspi/accessible/0/158059769421216578348455614005605564416",
+          "name": "PigADE 0.0.1-dev · 4 сессий · Ctrl+Shift+Space, 1–4 — фокус",
+          "accessibleId": "",
+          "role": {
+            "id": 54,
+            "name": "status-bar"
+          },
+          "interfaces": [
+            "org.a11y.atspi.Accessible",
+            "org.a11y.atspi.Component"
+          ],
+          "childCount": 0
+        }
+      ]
+    },
+    "statusPropertiesSetOnPrivateSessionBus": [
+      "org.a11y.Status.ScreenReaderEnabled=true"
+    ],
+    "pinnedBridgeRoleMapping": {
+      "source": "accesskit_atspi_common 0.19.1, node.rs:93",
+      "accesskitRole": "Alert",
+      "atspiRole": "Notification",
+      "atspiRoleId": 101
+    },
+    "callCounts": {
+      "org.a11y.atspi.Registry /org/a11y/atspi/accessible/root org.a11y.atspi.Accessible.GetChildren": 1,
+      ":1.3 /org/a11y/atspi/accessible/root org.freedesktop.DBus.Properties.Get": 6,
+      ":1.3 /org/a11y/atspi/accessible/root org.a11y.atspi.Accessible.GetRole": 2,
+      ":1.3 /org/a11y/atspi/accessible/root org.a11y.atspi.Accessible.GetInterfaces": 2,
+      ":1.3 /org/a11y/atspi/accessible/root org.a11y.atspi.Accessible.GetChildAtIndex": 2,
+      ":1.3 /org/a11y/atspi/accessible/0/0 org.freedesktop.DBus.Properties.Get": 6,
+      ":1.3 /org/a11y/atspi/accessible/0/0 org.a11y.atspi.Accessible.GetRole": 2,
+      ":1.3 /org/a11y/atspi/accessible/0/0 org.a11y.atspi.Accessible.GetInterfaces": 2,
+      ":1.3 /org/a11y/atspi/accessible/0/0 org.a11y.atspi.Accessible.GetChildAtIndex": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/91084262912707324854519850532985634816 org.freedesktop.DBus.Properties.Get": 3,
+      ":1.3 /org/a11y/atspi/accessible/0/91084262912707324854519850532985634816 org.a11y.atspi.Accessible.GetRole": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/91084262912707324854519850532985634816 org.a11y.atspi.Accessible.GetInterfaces": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/91084262912707324854519850532985634816 org.a11y.atspi.Accessible.GetChildAtIndex": 4,
+      ":1.3 /org/a11y/atspi/accessible/0/46214953197799150678164849185452457984 org.freedesktop.DBus.Properties.Get": 3,
+      ":1.3 /org/a11y/atspi/accessible/0/46214953197799150678164849185452457984 org.a11y.atspi.Accessible.GetRole": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/46214953197799150678164849185452457984 org.a11y.atspi.Accessible.GetInterfaces": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/116836031715905645972172452792377540608 org.freedesktop.DBus.Properties.Get": 3,
+      ":1.3 /org/a11y/atspi/accessible/0/116836031715905645972172452792377540608 org.a11y.atspi.Accessible.GetRole": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/116836031715905645972172452792377540608 org.a11y.atspi.Accessible.GetInterfaces": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/130434420136422072078800536981779513344 org.freedesktop.DBus.Properties.Get": 3,
+      ":1.3 /org/a11y/atspi/accessible/0/130434420136422072078800536981779513344 org.a11y.atspi.Accessible.GetRole": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/130434420136422072078800536981779513344 org.a11y.atspi.Accessible.GetInterfaces": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/158059769421216578348455614005605564416 org.freedesktop.DBus.Properties.Get": 3,
+      ":1.3 /org/a11y/atspi/accessible/0/158059769421216578348455614005605564416 org.a11y.atspi.Accessible.GetRole": 1,
+      ":1.3 /org/a11y/atspi/accessible/0/158059769421216578348455614005605564416 org.a11y.atspi.Accessible.GetInterfaces": 1
+    },
+    "limits": {
+      "overallSeconds": 25,
+      "maxNodes": 256,
+      "maxDepth": 12,
+      "maxChildrenPerNode": 64,
+      "maxRegistryRoots": 32,
+      "maxResponseBytes": 65536,
+      "perCallSeconds": 2,
+      "treeRetrySeconds": 10,
+      "treeSnapshots": 2,
+      "treeWaitSeconds": 0.345
+    },
+    "nodes": [
+      {
+        "index": 0,
+        "parent": null,
+        "depth": 0,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/root",
+        "name": "app",
+        "accessibleId": "",
+        "role": {
+          "id": 75,
+          "name": "application"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Application"
+        ],
+        "childCount": 1,
+        "children": [
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/0"
+          }
+        ]
+      },
+      {
+        "index": 1,
+        "parent": 0,
+        "depth": 1,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/0",
+        "name": "",
+        "accessibleId": "",
+        "role": {
+          "id": 23,
+          "name": "frame"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 1,
+        "children": [
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/91084262912707324854519850532985634816"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "parent": 1,
+        "depth": 2,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/91084262912707324854519850532985634816",
+        "name": "PigADE",
+        "accessibleId": "pigade-root",
+        "role": {
+          "id": 78,
+          "name": "embedded"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 4,
+        "children": [
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/46214953197799150678164849185452457984"
+          },
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/116836031715905645972172452792377540608"
+          },
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/130434420136422072078800536981779513344"
+          },
+          {
+            "busName": ":1.3",
+            "objectPath": "/org/a11y/atspi/accessible/0/158059769421216578348455614005605564416"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "parent": 2,
+        "depth": 3,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/46214953197799150678164849185452457984",
+        "name": "PigADE",
+        "accessibleId": "",
+        "role": {
+          "id": 83,
+          "name": "heading"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 0,
+        "children": []
+      },
+      {
+        "index": 4,
+        "parent": 2,
+        "depth": 3,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/116836031715905645972172452792377540608",
+        "name": "Терминал Bash 3 · running",
+        "accessibleId": "terminal-canvas",
+        "role": {
+          "id": 60,
+          "name": "terminal"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 0,
+        "children": []
+      },
+      {
+        "index": 5,
+        "parent": 2,
+        "depth": 3,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/130434420136422072078800536981779513344",
+        "name": "Восстановление: bad.journal — journal corruption at byte 0: UnsupportedVersion",
+        "accessibleId": "recovery-warning",
+        "role": {
+          "id": 101,
+          "name": "notification"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 0,
+        "children": []
+      },
+      {
+        "index": 6,
+        "parent": 2,
+        "depth": 3,
+        "busName": ":1.3",
+        "objectPath": "/org/a11y/atspi/accessible/0/158059769421216578348455614005605564416",
+        "name": "PigADE 0.0.1-dev · 4 сессий · Ctrl+Shift+Space, 1–4 — фокус",
+        "accessibleId": "",
+        "role": {
+          "id": 54,
+          "name": "status-bar"
+        },
+        "interfaces": [
+          "org.a11y.atspi.Accessible",
+          "org.a11y.atspi.Component"
+        ],
+        "childCount": 0,
+        "children": []
+      }
+    ],
+    "notTested": [
+      "Orca or another screen reader",
+      "accessibility actions",
+      "keyboard operation",
+      "WCAG conformance",
+      "X11 bridge"
+    ]
+  },
+  "compositor": {
+    "pid": 35,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-2.log",
+      "/artifacts/weston-2.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[2673002]",
+      "socket:[2673002]"
+    ]
+  },
+  "recoveryWarning": {
+    "journal": "bad.journal",
+    "message": "journal corruption at byte 0: UnsupportedVersion",
+    "sourceSha256Before": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceSha256After": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceBytesUnchanged": true,
+    "listAndPollDiagnosticsMatch": true,
+    "omitted": 0,
+    "fourHealthyPtysRunning": true,
+    "hostProtocolChildAcknowledged": true,
+    "inputProbe": {
+      "submitted": "__PIGADE_RECOVERY_PROBE_N__",
+      "childOutput": "__PIGADE_RECOVERY_CHILD_ACK_N__",
+      "ackIsDifferentFromSubmittedTTYText": true
+    }
+  },
+  "output": {
+    "scale": 1,
+    "physical_pixels": [
+      1280,
+      800
+    ],
+    "logical_size_requested": [
+      1280,
+      800
+    ],
+    "scope": "one fixed integer-scale private software output; no fractional or multi-monitor claim"
+  },
+  "views": [
+    {
+      "session": "e3cf21a6-da86-44df-916a-0b8110177a2e",
+      "generation": "d740efc0-515f-40a0-b821-4abcda6f720b",
+      "pid": 42,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "4ef247f7-c2f2-47da-9745-8f815444a69a",
+      "generation": "26c83265-688a-41a7-9d4d-e7e01a5cd629",
+      "pid": 47,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "2efa8c4b-a7fc-4447-b6cb-961313d45f48",
+      "generation": "ff43cfc4-3149-4115-9c83-76f1f63efc8d",
+      "pid": 52,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "cebe3ace-c355-46a9-9b34-46cf86e68e51",
+      "generation": "898b6618-bfa7-4d0d-bf7b-0e9c40bbcd89",
+      "pid": 57,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "wayland-screenshot-2026-10-16_23-47-44.png",
+      "sha256": "59141882522210990d62929bcc73febcfb3801a15f6d97a833fbf928ce69f23e",
+      "bytes": 64168
+    }
+  ]
+}

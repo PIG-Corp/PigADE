@@ -510,6 +510,136 @@ fn semantically_invalid_crc_valid_tail_preserves_and_serves_last_good_prefix() -
 }
 
 #[test]
+fn unavailable_journals_are_reported_without_blocking_healthy_generations() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let valid_session = Uuid::new_v4();
+    let valid_generation = Uuid::new_v4();
+    let valid_header = JournalHeader {
+        session_id: valid_session,
+        generation: valid_generation,
+        profile: CORE_PROFILE.into(),
+        initial_rows: 8,
+        initial_cols: 40,
+    };
+    let valid_path = directory.path().join(format!("{valid_generation}.journal"));
+    let mut valid_journal = Journal::create(&valid_path, valid_header)?;
+    valid_journal.append(EventKind::Output, b"PRESERVED_HISTORY\r\n")?;
+    drop(valid_journal);
+
+    let invalid_header_path = directory.path().join("invalid\\header\n.journal");
+    fs::write(&invalid_header_path, b"not a PigADE journal")?;
+
+    let incompatible_session = Uuid::new_v4();
+    let incompatible_generation = Uuid::new_v4();
+    let incompatible_path = directory.path().join("unsupported-profile.journal");
+    let mut incompatible_journal = Journal::create(
+        &incompatible_path,
+        JournalHeader {
+            session_id: incompatible_session,
+            generation: incompatible_generation,
+            profile: "unsupported-core-profile".into(),
+            initial_rows: 8,
+            initial_cols: 40,
+        },
+    )?;
+    incompatible_journal.append(EventKind::Output, b"UNTRUSTED_PROFILE\r\n")?;
+    drop(incompatible_journal);
+
+    let originals = [
+        (&valid_path, fs::read(&valid_path)?),
+        (&invalid_header_path, fs::read(&invalid_header_path)?),
+        (&incompatible_path, fs::read(&incompatible_path)?),
+    ];
+    let mut host = TestHost::in_directory(directory)?;
+
+    let list = exchange(&host.socket(), Command::List)?;
+    ensure!(list.error.is_none(), "List failed: {:?}", list.error);
+    let views = list.views;
+    assert_eq!(
+        views.len(),
+        1,
+        "invalid artifacts must not create fake sessions"
+    );
+    assert_eq!(views[0].session, valid_session);
+    assert_eq!(views[0].generation, valid_generation);
+    assert!(views[0].pid.is_none());
+    assert!(views[0].frame.text().contains("PRESERVED_HISTORY"));
+
+    let diagnostics = list
+        .recovery
+        .context("List omitted unavailable-journal diagnostics")?;
+    assert_eq!(diagnostics.issues.len(), 2);
+    assert_eq!(diagnostics.omitted, 0);
+    for issue in &diagnostics.issues {
+        assert!(issue.journal.len() <= 1024);
+        assert!(issue.message.len() <= 1024);
+    }
+    let invalid_header_issue = diagnostics
+        .issues
+        .iter()
+        .find(|issue| issue.journal == "invalid%5Cheader%0A.journal")
+        .context("invalid header filename missing from diagnostics")?;
+    assert!(
+        invalid_header_issue.message.contains("journal corruption")
+            || invalid_header_issue.message.contains("UnsupportedVersion"),
+        "invalid header cause missing: {}",
+        invalid_header_issue.message
+    );
+    let incompatible_issue = diagnostics
+        .issues
+        .iter()
+        .find(|issue| issue.journal == "unsupported-profile.journal")
+        .context("unsupported profile filename missing from diagnostics")?;
+    assert!(
+        incompatible_issue
+            .message
+            .contains("incompatible terminal profile"),
+        "unsupported profile cause missing: {}",
+        incompatible_issue.message
+    );
+
+    let poll = exchange(&host.socket(), Command::Poll { known: vec![] })?;
+    ensure!(poll.error.is_none(), "Poll failed: {:?}", poll.error);
+    assert_eq!(poll.recovery.as_ref(), Some(&diagnostics));
+    assert_eq!(poll.selected.as_ref().map(Vec::len), Some(1));
+    assert_eq!(poll.views.len(), 1);
+    assert_eq!(poll.views[0].generation, valid_generation);
+
+    let spec = host.launch(
+        "/bin/sh",
+        vec![
+            "-c".into(),
+            "printf HEALTHY_PTY_READY; while IFS= read -r value; do printf 'ACK:%s\\n' \"$value\"; done"
+                .into(),
+        ],
+    )?;
+    host.wait_text(&spec, "HEALTHY_PTY_READY")?;
+    host.input(&spec, b"DIAGNOSTICS_DID_NOT_BLOCK\n")?;
+    let live = host.wait_text(&spec, "ACK:DIAGNOSTICS_DID_NOT_BLOCK")?;
+    assert_eq!(
+        live.pid,
+        host.owned_cli.first().map(|identity| identity.pid)
+    );
+    assert_eq!(
+        host.owned_cli.len(),
+        1,
+        "bad journals caused an extra CLI spawn"
+    );
+
+    let listed_again = exchange(&host.socket(), Command::List)?;
+    assert_eq!(listed_again.recovery.as_ref(), Some(&diagnostics));
+    for (path, bytes) in originals {
+        assert_eq!(
+            fs::read(path)?,
+            bytes,
+            "host changed source artifact {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn shell_survives_100_client_reopens_and_real_stty_resize() -> Result<()> {
     let mut host = TestHost::new()?;
     let spec = host.launch(

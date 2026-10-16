@@ -103,6 +103,7 @@ pub(crate) fn response(
         rejected_before_admission: rejection,
         catalog: None,
         catalog_notice: None,
+        recovery: None,
         selected: None,
         history_chunk,
     }

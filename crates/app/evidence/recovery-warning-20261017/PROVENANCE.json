@@ -1,0 +1,10 @@
+{
+  "original_runtime": "/home/afterburner/.local/state/pigade/isolated-recovery-warning-initial-20261017",
+  "curated_only": [
+    "run.json",
+    "result.json",
+    "preflight.json",
+    "screenshots/*.png"
+  ],
+  "limitation": "Initial success checks terminal input echo, not application-level ACK. A strengthened child-ACK fixture follows. Initial role-id2 expectation failure retained."
+}

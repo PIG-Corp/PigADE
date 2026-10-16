@@ -141,10 +141,17 @@ pub struct CensusLimits {
 pub struct AllocationCensus {
     pub cell_visits: usize,
     pub unique_cell_extras: usize,
+    /// Number of visited cells/cursor roots referencing a CellExtra Arc.
+    pub cell_extra_references: usize,
     pub unique_hyperlinks: usize,
     pub row_slots_capacity: usize,
     pub cell_slots_capacity: usize,
+    /// Zero-width Vec capacity counted once per distinct CellExtra allocation.
     pub zero_width_chars_capacity: usize,
+    /// Sum of zero-width Vec capacities per reference; shared Arcs count again.
+    pub reference_weighted_zero_width_capacity: usize,
+    /// Largest zero-width Vec capacity among referenced CellExtra allocations.
+    pub max_single_extra_zero_width_capacity: usize,
     pub hyperlink_id_bytes_capacity: usize,
     pub hyperlink_uri_bytes_capacity: usize,
     pub title_stack_slots_capacity: usize,
@@ -257,6 +264,20 @@ impl CensusBuilder {
             return;
         };
         let (zero_width_capacity, hyperlink) = extra.allocation_parts();
+        Self::add(
+            &mut self.result.cell_extra_references,
+            1,
+            &mut self.result.incomplete,
+        );
+        Self::add(
+            &mut self.result.reference_weighted_zero_width_capacity,
+            zero_width_capacity,
+            &mut self.result.incomplete,
+        );
+        self.result.max_single_extra_zero_width_capacity = self
+            .result
+            .max_single_extra_zero_width_capacity
+            .max(zero_width_capacity);
         if Self::identity(
             &mut self.result,
             self.limits,
@@ -381,6 +402,7 @@ mod tests {
     use crate::index::{Column, Line, Point};
     use crate::term::{Config, Dimensions};
     use serde::{Deserialize, Serialize};
+    use std::sync::Arc;
     use std::time::Duration;
     use vte::ansi::ProcessorCheckpointV1;
 
@@ -630,6 +652,108 @@ mod tests {
         assert_eq!(
             result.estimated_persistent_owned_bytes - baseline.estimated_persistent_owned_bytes,
             expected_delta
+        );
+    }
+
+    #[test]
+    fn imported_shared_marks_can_cow_into_large_new_allocations() {
+        // This caller-constructed state is deliberately adversarial; it is not
+        // asserted to be reachable through ordinary ANSI from a fresh Term.
+        let mut original = terminal();
+        let baseline = census(&original);
+        let mut shared = Cell::default();
+        for _ in 0..4096 {
+            shared.push_zerowidth('\u{301}');
+        }
+        for column in 0..4 {
+            original.grid[Point::new(Line(0), Column(column))] = shared.clone();
+        }
+        drop(shared);
+
+        let encoded = postcard::to_allocvec(&original.export_checkpoint()).unwrap();
+        let imported = postcard::from_bytes(&encoded).unwrap();
+        let mut restored = Term::from_checkpoint(imported, VoidListener).unwrap();
+        for column in 1..4 {
+            let original_first = original.grid[Point::new(Line(0), Column(0))]
+                .extra
+                .as_ref()
+                .unwrap();
+            let original_next = original.grid[Point::new(Line(0), Column(column))]
+                .extra
+                .as_ref()
+                .unwrap();
+            assert!(Arc::ptr_eq(original_first, original_next));
+            let first = restored.grid[Point::new(Line(0), Column(0))]
+                .extra
+                .as_ref()
+                .unwrap();
+            let next = restored.grid[Point::new(Line(0), Column(column))]
+                .extra
+                .as_ref()
+                .unwrap();
+            assert!(Arc::ptr_eq(first, next));
+        }
+
+        let before = census(&restored);
+        assert_eq!(
+            before.cell_extra_references,
+            baseline.cell_extra_references + 4
+        );
+        assert_eq!(before.unique_cell_extras, baseline.unique_cell_extras + 1);
+        assert_eq!(
+            before.reference_weighted_zero_width_capacity,
+            baseline.reference_weighted_zero_width_capacity
+                + 4 * before.max_single_extra_zero_width_capacity
+        );
+        assert!(before.max_single_extra_zero_width_capacity >= 4096);
+
+        // Position the VTE cursor so each zero-width character targets a
+        // different cell which initially shares the imported Arc allocation.
+        let input = "\x1b[1;2H\u{302}\x1b[1;3H\u{303}".as_bytes();
+        let mut original_parser = Processor::<TestTimeout>::new();
+        let mut restored_parser = Processor::<TestTimeout>::new();
+        original_parser.advance(&mut original, input);
+        restored_parser.advance(&mut restored, input);
+
+        let after = census(&restored);
+        assert_eq!(after.unique_cell_extras, before.unique_cell_extras + 2);
+        assert!(
+            after.zero_width_chars_capacity
+                >= before.zero_width_chars_capacity
+                    + 2 * before.max_single_extra_zero_width_capacity,
+            "two marks caused two large CellExtra Vec copies"
+        );
+        assert!(after.zero_width_chars_capacity - before.zero_width_chars_capacity > 4);
+        assert!(
+            after.reference_weighted_zero_width_capacity
+                > before.reference_weighted_zero_width_capacity
+        );
+        assert!(
+            after.max_single_extra_zero_width_capacity
+                >= before.max_single_extra_zero_width_capacity
+        );
+        let original_after = census(&original);
+        assert_eq!(after.unique_cell_extras, original_after.unique_cell_extras);
+        assert_eq!(
+            after.cell_extra_references,
+            original_after.cell_extra_references
+        );
+        assert_eq!(
+            after.reference_weighted_zero_width_capacity,
+            original_after.reference_weighted_zero_width_capacity
+        );
+        assert_eq!(
+            after.zero_width_chars_capacity,
+            original_after.zero_width_chars_capacity
+        );
+        assert_eq!(
+            after.max_single_extra_zero_width_capacity,
+            original_after.max_single_extra_zero_width_capacity
+        );
+        assert_eq!(
+            postcard::to_allocvec(&original.export_checkpoint()).unwrap(),
+            postcard::to_allocvec(&restored.export_checkpoint()).unwrap(),
+            "continued imported model must match source semantics"
         );
     }
 }

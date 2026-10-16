@@ -1,0 +1,65 @@
+{
+  "sdk": "/tmp/pigade-platform-sdk",
+  "outer_namespaces": {
+    "mnt": "mnt:[4026531832]",
+    "pid": "pid:[4026531836]",
+    "user": "user:[4026531837]",
+    "ipc": "ipc:[4026531839]",
+    "net": "net:[4026531833]"
+  },
+  "app_sha256": "26027250ef4f1eb2de28ec60db217b1d15462f85e30a47124bf83ef4dc20dc47",
+  "host_sha256": "fface4d93ec786546c182c7fced9f8ee1199ac2529773c6e6785706f69a75c4a",
+  "sdk_packages": [
+    {
+      "url": "https://archive.archlinux.org/packages/w/weston/weston-15.0.1-3-x86_64.pkg.tar.zst",
+      "bytes": 1524891,
+      "sha256": "92fe0bfe2cf1ae02105b0e6573f6695c6bbd4637c9a6b20299a6fea8c3d23b4d",
+      "signature_sha256": "f7f07f6ce4bfbda6f5607bdf082fd98dc4d67019897c94069934bd205c78efd5",
+      "signer": "83BC8889351B5DEBBB68416EB8AC08600F108CDF",
+      "license": "MIT"
+    },
+    {
+      "url": "https://archive.archlinux.org/packages/v/vulkan-swrast/vulkan-swrast-1:26.2.1-1-x86_64.pkg.tar.zst",
+      "bytes": 2436943,
+      "sha256": "08b9775e4743a64a94fd9591095cf4895d7ae17c3d43c2ba08fb9c8a1a91e752",
+      "signature_sha256": "782152ed4582198ff0c377b4a18853251abd0e75c7cd5a45d03c559a160d3d41",
+      "signer": "83BC8889351B5DEBBB68416EB8AC08600F108CDF",
+      "license": "MIT AND BSD-3-Clause AND SGI-B-2.0"
+    }
+  ],
+  "accessibility_probe": true,
+  "recovery_warning": true,
+  "output_scale": 1,
+  "font_preflight": {
+    "profile_id": "pigade-terminal-render-profile-aliases-v1",
+    "manifest_sha256": "f2a3ad82c22a5be1cf21c431ff04473b31b4cb4919a30c1379f957cb6edd82e3",
+    "embedded_faces": [
+      {
+        "path": "PigADETerminalMonoV1-Regular.ttf",
+        "bytes": 272016,
+        "sha256": "9eab97106f8af1e0f9c8617a36a8c5fec2b572764be997ae4224f6329ec7a9f8"
+      },
+      {
+        "path": "PigADETerminalMonoV1-Bold.ttf",
+        "bytes": 275904,
+        "sha256": "8eb93d5349b81f004c31118adacc8954f406e8f7ae8816fdd8e91548c8184104"
+      },
+      {
+        "path": "PigADETerminalMonoV1-Italic.ttf",
+        "bytes": 274972,
+        "sha256": "ee764684b2ac7e4c122ee2a7840823463bde9814857b5138b091f5a4fdca4b41"
+      },
+      {
+        "path": "PigADETerminalMonoV1-BoldItalic.ttf",
+        "bytes": 277940,
+        "sha256": "740f80d509a5d5440304680adeddccf4efa21f12ece97fd8e5ed13d3e9cb65f2"
+      },
+      {
+        "path": "PigADETerminalCJKJPV1-Regular.otf",
+        "bytes": 16424284,
+        "sha256": "62eae011b3edc1d1ec57616330b51931a912768fe74dcda3b012ce290fb029f4"
+      }
+    ],
+    "scope": "exact font payloads present in selected executable; runtime family registration still tested inside namespace"
+  }
+}

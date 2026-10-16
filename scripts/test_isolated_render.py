@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -47,6 +48,30 @@ class EmbeddedFontTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'source differs'):
                 RENDER.verify_embedded_fonts(binary, manifest)
 
+
+class RecoveryWarningTests(unittest.TestCase):
+    def test_recovery_reason_is_required_for_the_named_journal(self):
+        reply = {'recovery': {'issues': [
+            {'journal': 'broken.journal', 'message': 'invalid journal header'}], 'omitted': 0}}
+        self.assertEqual(RENDER.recovery_issue(reply, 'broken.journal', 'list'),
+                         'invalid journal header')
+        with self.assertRaisesRegex(RuntimeError, 'did not name'):
+            RENDER.recovery_issue(reply, 'other.journal', 'poll')
+
+    def test_recovery_child_ack_is_distinct_from_tty_echo_probe(self):
+        probe = '__PIGADE_RECOVERY_PROBE_1__\n'
+        child_ack = '__PIGADE_RECOVERY_CHILD_ACK_1__'
+        acknowledged = subprocess.run(
+            ['/bin/bash', '--noprofile', '--norc', '-c', RENDER.shell_read_loop(True)],
+            input=probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=2, check=True)
+        echoed_only = subprocess.run(
+            ['/bin/bash', '--noprofile', '--norc', '-c', RENDER.shell_read_loop(False)],
+            input=probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=2, check=True)
+        self.assertIn(child_ack, acknowledged.stdout)
+        self.assertNotIn(child_ack, echoed_only.stdout)
+        self.assertIn(probe.rstrip(), echoed_only.stdout)
 
 if __name__ == '__main__':
     unittest.main()

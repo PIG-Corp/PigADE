@@ -4,7 +4,9 @@ mod input;
 mod protocol;
 use gpui::{prelude::*, *};
 use gpui_platform::application;
-use protocol::{Cell, CommandFailure, View, command, request};
+use protocol::{
+    Cell, CommandFailure, Poll, PollChanges, RecoveryDiagnostics, View, command, request,
+};
 use serde_json::{Value, json};
 use std::{
     ops::Range,
@@ -19,8 +21,10 @@ const GAP: f32 = 6.;
 #[derive(Clone, Default)]
 struct State {
     revision: u64,
+    views_revision: u64,
     views: Vec<View>,
     error: Option<String>,
+    recovery: Option<RecoveryDiagnostics>,
 }
 impl State {
     fn fail(&mut self, error: String) {
@@ -29,6 +33,106 @@ impl State {
             self.revision = self.revision.wrapping_add(1);
         }
     }
+}
+
+struct StateUpdate {
+    revision: u64,
+    views_revision: u64,
+    views: Option<Vec<View>>,
+    error: Option<String>,
+    recovery: Option<RecoveryDiagnostics>,
+}
+
+fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
+    (current.revision != shared.revision).then(|| StateUpdate {
+        revision: shared.revision,
+        views_revision: shared.views_revision,
+        views: (current.views_revision != shared.views_revision).then(|| shared.views.clone()),
+        error: shared.error.clone(),
+        recovery: shared.recovery.clone(),
+    })
+}
+
+fn apply_state_update(state: &mut State, update: StateUpdate) {
+    state.revision = update.revision;
+    state.error = update.error;
+    state.recovery = update.recovery;
+    if let Some(views) = update.views {
+        state.views_revision = update.views_revision;
+        state.views = views;
+    }
+}
+
+fn can_send_to_view(view: &View, state: &State, local_error: Option<&str>) -> bool {
+    view.state == "running"
+        && state.error.is_none()
+        && local_error.is_none()
+        && view.storage_error.is_none()
+}
+
+fn apply_poll(state: &mut State, reply: Poll) -> Result<PollChanges, String> {
+    let changes = protocol::merge_poll(&mut state.views, &mut state.recovery, reply)?;
+    if changes.views {
+        state.views_revision = state.views_revision.wrapping_add(1);
+    }
+    if changes.views || changes.recovery {
+        state.revision = state.revision.wrapping_add(1);
+    }
+    Ok(changes)
+}
+
+fn short_notice_part(value: &str, limit: usize) -> String {
+    let mut chars = value.chars().map(|character| {
+        if character.is_control() {
+            ' '
+        } else {
+            character
+        }
+    });
+    let mut part = chars.by_ref().take(limit).collect::<String>();
+    if chars.next().is_some() {
+        part.push('…');
+    }
+    part.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn recovery_warning(
+    recovery: Option<&RecoveryDiagnostics>,
+    selected_storage_error: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(recovery) = recovery {
+        if let Some(issue) = recovery.issues.first() {
+            let journal = short_notice_part(&issue.journal, 32);
+            let reason = short_notice_part(&issue.message, 72);
+            let reason = if reason.is_empty() {
+                "причина не указана"
+            } else {
+                &reason
+            };
+            parts.push(format!("Восстановление: {journal} — {reason}"));
+            let extra =
+                (recovery.issues.len().saturating_sub(1) as u64).saturating_add(recovery.omitted);
+            if extra > 0 {
+                parts.push(format!("ещё {extra} проблем"));
+            }
+        } else if recovery.omitted > 0 {
+            parts.push(format!(
+                "Восстановление: скрыто проблем {}",
+                recovery.omitted
+            ));
+        }
+    }
+    if let Some(reason) = selected_storage_error {
+        let reason = short_notice_part(reason, 72);
+        let reason = if reason.is_empty() {
+            "причина не указана"
+        } else {
+            &reason
+        };
+        parts.push(format!("История сессии: {reason}"));
+    }
+    (!parts.is_empty()).then(|| short_notice_part(&parts.join(" · "), 160))
 }
 
 fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
@@ -61,9 +165,8 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
             match protocol::poll(&socket, &known) {
                 Ok(reply) => {
                     let mut state = output.lock().unwrap();
-                    match protocol::merge_poll(&mut state.views, reply) {
-                        Ok(true) => state.revision = state.revision.wrapping_add(1),
-                        Ok(false) => (),
+                    match apply_poll(&mut state, reply) {
+                        Ok(_) => (),
                         Err(error) => state.fail(error),
                     }
                 }
@@ -100,12 +203,15 @@ impl CanvasApp {
                     .update(cx, |this, cx| {
                         let next = {
                             let shared = this.shared.lock().unwrap();
-                            (this.state.revision != shared.revision).then(|| shared.clone())
+                            state_update(&this.state, &shared)
                         };
                         if let Some(next) = next {
-                            this.state = next;
-                            this.selected =
-                                this.selected.min(this.state.views.len().saturating_sub(1));
+                            let views_changed = next.views.is_some();
+                            apply_state_update(&mut this.state, next);
+                            if views_changed {
+                                this.selected =
+                                    this.selected.min(this.state.views.len().saturating_sub(1));
+                            }
                             cx.notify();
                         }
                     })
@@ -139,7 +245,7 @@ impl CanvasApp {
             return;
         }
         if let Some(view) = self.state.views.get(self.selected) {
-            if view.state != "running" || self.error().is_some() || view.storage_error.is_some() {
+            if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
                 return;
             }
             let mut value = command(view, "input");
@@ -450,6 +556,13 @@ impl Render for CanvasApp {
                 )
             }
         });
+        let recovery_warning = recovery_warning(
+            self.state.recovery.as_ref(),
+            self.state
+                .views
+                .get(selected)
+                .and_then(|view| view.storage_error.as_deref()),
+        );
         div()
             .id("pigade-root")
             .accessibility_id("pigade-root")
@@ -528,16 +641,36 @@ impl Render for CanvasApp {
                         .size_full(),
                     ),
             )
-            .child(
-                div()
-                    .id("session-status")
-                    .role(Role::Status)
-                    .aria_label(status.clone())
-                    .h(px(24.))
-                    .px(px(12.))
-                    .text_color(rgb(0xb0b8c5))
-                    .child(status),
-            )
+            .child({
+                let mut footer = div().flex().flex_col();
+                if let Some(warning) = recovery_warning {
+                    footer = footer.child(
+                        div()
+                            .id("recovery-warning")
+                            .accessibility_id("recovery-warning")
+                            .role(Role::Alert)
+                            .aria_label(warning.clone())
+                            .h(px(22.))
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .text_color(rgb(0xffd18a))
+                            .child(warning),
+                    );
+                }
+                footer.child(
+                    div()
+                        .id("session-status")
+                        .role(Role::Status)
+                        .aria_label(status.clone())
+                        .h(px(24.))
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .text_color(rgb(0xb0b8c5))
+                        .child(status),
+                )
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -838,12 +971,117 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
-    use super::protocol::Cell;
+    use super::protocol::{Cell, RecoveryDiagnostics, RecoveryIssue, View};
     use super::{
-        CellPaint, PaneGeometry, cell_paint_order, color, glyph_span_bounds, glyph_span_cells,
-        project_panels, terminal_line_height,
+        CellPaint, PaneGeometry, State, apply_poll, apply_state_update, can_send_to_view,
+        cell_paint_order, color, glyph_span_bounds, glyph_span_cells, project_panels,
+        recovery_warning, state_update, terminal_line_height,
     };
     use gpui::{Bounds, point, px, size};
+    use serde_json::json;
+
+    fn view(storage_error: Option<&str>) -> View {
+        serde_json::from_value(json!({
+            "session":"s",
+            "generation":"g",
+            "sequence":1,
+            "state":"running",
+            "recovery_path":"live",
+            "pid":1,
+            "storage_error":storage_error,
+            "frame":{
+                "geometry":{"rows":1,"cols":1},
+                "cells":[{"text":"x","fg":"Named(Foreground)","bg":"Named(Background)","flags":0,"underline":null,"hyperlink":null}],
+                "hyperlinks":[],"cursor":[0,0],"cursor_style":"Block","modes":0,
+                "colors":"","history_lines":0,"sync_pending_bytes":0,"title":""
+            }
+        }))
+        .unwrap()
+    }
+
+    fn recovery() -> RecoveryDiagnostics {
+        RecoveryDiagnostics {
+            issues: vec![RecoveryIssue {
+                journal: "session-7.journal".into(),
+                message: "checkpoint cannot be read".into(),
+            }],
+            omitted: 0,
+        }
+    }
+
+    #[test]
+    fn recovery_notice_updates_revision_without_replacing_cached_cells() {
+        let mut ui_state = State {
+            revision: 1,
+            views_revision: 1,
+            views: vec![view(None)],
+            ..State::default()
+        };
+        let mut shared = State {
+            revision: 1,
+            views_revision: 1,
+            views: ui_state.views.clone(),
+            ..State::default()
+        };
+        let cell_ptr = ui_state.views[0].frame.cells.as_ptr();
+        let selected = shared.views[0].known();
+        let changes = apply_poll(
+            &mut shared,
+            super::protocol::Poll {
+                selected: vec![selected],
+                views: vec![],
+                recovery: Some(recovery()),
+            },
+        )
+        .unwrap();
+        assert!(!changes.views);
+        assert!(changes.recovery);
+        assert_eq!(shared.revision, 2);
+        assert_eq!(shared.views_revision, 1);
+
+        let update = state_update(&ui_state, &shared).unwrap();
+        assert!(update.views.is_none());
+        apply_state_update(&mut ui_state, update);
+        assert_eq!(ui_state.views[0].frame.cells.as_ptr(), cell_ptr);
+        assert_eq!(ui_state.recovery, Some(recovery()));
+    }
+
+    #[test]
+    fn recovery_and_selected_history_warnings_are_visible_and_nonfatal() {
+        let mut state = State {
+            recovery: Some(recovery()),
+            ..State::default()
+        };
+        let healthy = view(None);
+        assert!(can_send_to_view(&healthy, &state, None));
+        assert!(!can_send_to_view(
+            &healthy,
+            &state,
+            Some("input not admitted")
+        ));
+        let warning = recovery_warning(state.recovery.as_ref(), None).unwrap();
+        assert!(warning.contains("session-7.journal"));
+        assert!(warning.contains("checkpoint cannot be read"));
+
+        let unavailable_history = view(Some("cold history archive is unavailable"));
+        assert!(!can_send_to_view(&unavailable_history, &state, None));
+        let warning = recovery_warning(None, unavailable_history.storage_error.as_deref()).unwrap();
+        assert!(warning.contains("cold history archive is unavailable"));
+        assert!(can_send_to_view(&healthy, &state, None));
+
+        state.error = Some("host connection lost".into());
+        assert!(!can_send_to_view(&healthy, &state, None));
+    }
+
+    #[test]
+    fn recovery_warning_saturates_untrusted_omission_counts() {
+        let mut diagnostics = recovery();
+        diagnostics.issues.push(diagnostics.issues[0].clone());
+        diagnostics.omitted = u64::MAX;
+        let warning = recovery_warning(Some(&diagnostics), None).unwrap();
+        assert!(warning.contains(&u64::MAX.to_string()));
+    }
+
     #[test]
     fn signed_font_descent_keeps_complete_extent_and_device_line_height() {
         let negative = terminal_line_height(px(12.), px(-4.));

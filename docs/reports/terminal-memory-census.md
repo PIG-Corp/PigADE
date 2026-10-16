@@ -54,3 +54,20 @@ The census is tested for shared/distinct Arc ownership, copy-on-write extras,
 inactive row caches, all cursor roots, metadata-capacity deltas, work-limit
 exhaustion and unchanged checkpoints. Global heap admission, storage quotas and
 the SPEC 700 MiB product budget remain open release blockers.
+
+The follow-on census exposes total CellExtra references, reference-weighted
+combining capacity and the largest single extra capacity. The weighted field
+intentionally counts shared storage more than once: it describes potential
+copy-on-write fanout, not additional currently allocated memory. Unique payload
+estimates remain unchanged. A defensive regression imports a valid checkpoint
+with four cells sharing 4,096 marks, then sends two combining characters through
+the actual VTE parser to different cells. Those two marks create two large
+unique Vec allocations; source and restored checkpoints still match. This is
+caller-constructed/imported state, not evidence of normal ANSI reachability.
+
+Fresh release samples with these fields are preserved separately in
+[`terminal-allocation-census-references.json`](../../benchmarks/results/terminal-allocation-census-references.json).
+The five payload estimates match the original diagnostic; p95 traversal costs
+are 0.018/2.766/6.179/0.018/1.742 ms in fixture order. Concurrent long runs remain
+active, so neither set proves isolated performance. A policy based only on
+incoming mark bytes would miss the demonstrated fanout and is not installed.

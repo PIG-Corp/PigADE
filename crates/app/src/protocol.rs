@@ -9,6 +9,8 @@ use std::{
 };
 
 pub const LIMIT: usize = 8 * 1024 * 1024;
+pub const MAX_RECOVERY_ISSUES: usize = 16;
+pub const MAX_RECOVERY_TEXT_BYTES: usize = 1024;
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Geometry {
     pub rows: u16,
@@ -77,6 +79,45 @@ struct Response {
     rejected_before_admission: Option<String>,
     #[serde(default)]
     selected: Option<Vec<Known>>,
+    #[serde(default)]
+    recovery: Option<RecoveryDiagnostics>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RecoveryDiagnostics {
+    pub issues: Vec<RecoveryIssue>,
+    pub omitted: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RecoveryIssue {
+    pub journal: String,
+    pub message: String,
+}
+
+fn validate_recovery(recovery: Option<&RecoveryDiagnostics>) -> Result<(), String> {
+    let Some(recovery) = recovery else {
+        return Ok(());
+    };
+    if recovery.issues.len() > MAX_RECOVERY_ISSUES {
+        return Err("too many recovery diagnostics".into());
+    }
+    for issue in &recovery.issues {
+        if issue.journal.is_empty()
+            || issue.journal.len() > MAX_RECOVERY_TEXT_BYTES
+            || issue.journal == "."
+            || issue.journal == ".."
+            || issue.journal.contains('/')
+            || issue.journal.contains('\\')
+            || issue.journal.chars().any(char::is_control)
+        {
+            return Err("invalid recovery journal basename".into());
+        }
+        if issue.message.len() > MAX_RECOVERY_TEXT_BYTES {
+            return Err("recovery diagnostic message exceeds limit".into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +192,7 @@ fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
     if response.protocol != 2 {
         return Err("incompatible host protocol".into());
     }
+    validate_recovery(response.recovery.as_ref())?;
     if response.error.is_some() {
         return Ok(response);
     }
@@ -176,26 +218,45 @@ fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
 pub struct Poll {
     pub selected: Vec<Known>,
     pub views: Vec<View>,
+    pub recovery: Option<RecoveryDiagnostics>,
 }
-pub fn poll(socket: &Path, known: &[Known]) -> Result<Poll, String> {
-    let reply = request_response(socket, json!({"command":"poll", "known":known}))?;
+
+fn poll_response(reply: Response) -> Result<Poll, String> {
     if let Some(error) = reply.error {
         return Err(error);
     }
+    validate_recovery(reply.recovery.as_ref())?;
     Ok(Poll {
         selected: reply
             .selected
             .ok_or("Host does not support conditional cell polling")?,
         views: reply.views,
+        recovery: reply.recovery,
     })
+}
+
+pub fn poll(socket: &Path, known: &[Known]) -> Result<Poll, String> {
+    let reply = request_response(socket, json!({"command":"poll", "known":known}))?;
+    poll_response(reply)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PollChanges {
+    pub views: bool,
+    pub recovery: bool,
 }
 
 /// Validate the whole replica update before moving any cached frame. Unchanged
 /// cells stay in the cache; removals and new generations follow the host list.
-pub fn merge_poll(current: &mut Vec<View>, reply: Poll) -> Result<bool, String> {
+pub fn merge_poll(
+    current: &mut Vec<View>,
+    recovery: &mut Option<RecoveryDiagnostics>,
+    reply: Poll,
+) -> Result<PollChanges, String> {
     if reply.selected.len() > 4 || reply.views.len() > 4 {
         return Err("Too many selected terminal frames".into());
     }
+    validate_recovery(reply.recovery.as_ref())?;
     let key = |known: &Known| (known.session.clone(), known.generation.clone());
     let mut selected = std::collections::HashSet::new();
     for info in &reply.selected {
@@ -230,29 +291,36 @@ pub fn merge_poll(current: &mut Vec<View>, reply: Poll) -> Result<bool, String> 
     {
         return Err("Unselected terminal frame".into());
     }
-    let changed = !reply.views.is_empty()
+    let views_changed = !reply.views.is_empty()
         || current.len() != reply.selected.len()
         || current
             .iter()
             .zip(&reply.selected)
             .any(|(v, info)| v.known() != *info);
-    if !changed {
-        return Ok(false);
-    }
-    let mut old = std::mem::take(current);
-    let mut updates = reply.views;
-    for info in reply.selected {
-        if let Some(index) = updates.iter().position(|v| key(&v.known()) == key(&info)) {
-            current.push(updates.swap_remove(index));
-        } else {
-            let index = old
-                .iter()
-                .position(|v| key(&v.known()) == key(&info))
-                .expect("validated cached replica");
-            current.push(old.swap_remove(index));
+    let recovery_changed = recovery.as_ref() != reply.recovery.as_ref();
+    let changes = PollChanges {
+        views: views_changed,
+        recovery: recovery_changed,
+    };
+    if changes.views {
+        let mut old = std::mem::take(current);
+        let mut updates = reply.views;
+        for info in reply.selected {
+            if let Some(index) = updates.iter().position(|v| key(&v.known()) == key(&info)) {
+                current.push(updates.swap_remove(index));
+            } else {
+                let index = old
+                    .iter()
+                    .position(|v| key(&v.known()) == key(&info))
+                    .expect("validated cached replica");
+                current.push(old.swap_remove(index));
+            }
         }
     }
-    Ok(true)
+    if changes.recovery {
+        *recovery = reply.recovery;
+    }
+    Ok(changes)
 }
 
 pub fn command(view: &View, name: &str) -> Value {
@@ -270,6 +338,17 @@ mod tests {
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),
             selected: None,
+            recovery: None,
+        }
+    }
+
+    fn diagnostics(journal: &str, message: &str) -> RecoveryDiagnostics {
+        RecoveryDiagnostics {
+            issues: vec![RecoveryIssue {
+                journal: journal.into(),
+                message: message.into(),
+            }],
+            omitted: 0,
         }
     }
 
@@ -312,64 +391,187 @@ mod tests {
     #[test]
     fn unchanged_poll_reuses_the_existing_cell_allocation() {
         let mut cached = vec![fixture()];
+        let mut recovery = None;
         let cells = cached[0].frame.cells.as_ptr();
         let selected = vec![cached[0].known()];
-        assert!(
-            !merge_poll(
+        assert_eq!(
+            merge_poll(
                 &mut cached,
+                &mut recovery,
                 Poll {
                     selected,
-                    views: vec![]
+                    views: vec![],
+                    recovery: None,
                 }
             )
-            .unwrap()
+            .unwrap(),
+            PollChanges::default()
         );
         assert_eq!(cells, cached[0].frame.cells.as_ptr());
+    }
+
+    #[test]
+    fn older_host_response_without_recovery_field_is_compatible() {
+        let response: Response = serde_json::from_value(json!({
+            "protocol": 2,
+            "views": [],
+            "error": null
+        }))
+        .unwrap();
+        assert_eq!(response.recovery, None);
+    }
+
+    #[test]
+    fn poll_response_preserves_recovery_from_an_empty_host_list() {
+        let response: Response = serde_json::from_value(json!({
+            "protocol": 2,
+            "views": [],
+            "error": null,
+            "selected": [],
+            "recovery": {
+                "issues": [{"journal":"bad.journal", "message":"unreadable index"}],
+                "omitted": 2
+            }
+        }))
+        .unwrap();
+        let poll = poll_response(response).unwrap();
+        assert!(poll.views.is_empty());
+        assert!(poll.selected.is_empty());
+        assert_eq!(poll.recovery.unwrap().omitted, 2);
+    }
+
+    #[test]
+    fn recovery_diagnostics_are_carried_even_when_there_are_no_views() {
+        let recovery = diagnostics("session-7.journal", "checkpoint could not be read");
+        let poll = Poll {
+            selected: vec![],
+            views: vec![],
+            recovery: Some(recovery.clone()),
+        };
+        let mut cached = Vec::new();
+        let mut current_recovery = None;
+        assert_eq!(
+            merge_poll(&mut cached, &mut current_recovery, poll).unwrap(),
+            PollChanges {
+                views: false,
+                recovery: true,
+            }
+        );
+        assert!(cached.is_empty());
+        assert_eq!(current_recovery, Some(recovery));
+    }
+
+    #[test]
+    fn recovery_diagnostics_reject_excess_count_and_utf8_byte_lengths() {
+        let too_many = RecoveryDiagnostics {
+            issues: (0..=MAX_RECOVERY_ISSUES)
+                .map(|index| RecoveryIssue {
+                    journal: format!("{index}.journal"),
+                    message: "bad journal".into(),
+                })
+                .collect(),
+            omitted: 0,
+        };
+        assert!(validate_recovery(Some(&too_many)).is_err());
+
+        let long_name = diagnostics(&"a".repeat(MAX_RECOVERY_TEXT_BYTES + 1), "bad journal");
+        assert!(validate_recovery(Some(&long_name)).is_err());
+
+        let long_message = diagnostics("session.journal", &"漢".repeat(342));
+        assert!(long_message.issues[0].message.len() > MAX_RECOVERY_TEXT_BYTES);
+        assert!(validate_recovery(Some(&long_message)).is_err());
+
+        for basename in ["../session.journal", "folder\\session.journal", ".."] {
+            assert!(validate_recovery(Some(&diagnostics(basename, "bad journal"))).is_err());
+        }
+        let boundary = diagnostics(
+            &"a".repeat(MAX_RECOVERY_TEXT_BYTES),
+            &"m".repeat(MAX_RECOVERY_TEXT_BYTES),
+        );
+        assert!(validate_recovery(Some(&boundary)).is_ok());
+    }
+
+    #[test]
+    fn invalid_poll_preserves_cached_views_and_previous_diagnostics() {
+        let expected = vec![fixture()];
+        let mut recovery = Some(diagnostics("old.journal", "old warning"));
+        let previous_recovery = recovery.clone();
+        let mut regression = fixture();
+        regression.sequence = 0;
+        let invalid = Poll {
+            selected: vec![regression.known()],
+            views: vec![regression],
+            recovery: Some(diagnostics("new.journal", "new warning")),
+        };
+        let mut cached = expected.clone();
+        assert!(merge_poll(&mut cached, &mut recovery, invalid).is_err());
+        assert_eq!(cached, expected);
+        assert_eq!(recovery, previous_recovery);
+
+        let invalid_diagnostics = Poll {
+            selected: vec![cached[0].known()],
+            views: vec![],
+            recovery: Some(diagnostics("bad.journal", &"x".repeat(1025))),
+        };
+        assert!(merge_poll(&mut cached, &mut recovery, invalid_diagnostics).is_err());
+        assert_eq!(cached, expected);
+        assert_eq!(recovery, previous_recovery);
     }
     #[test]
     fn lifecycle_changes_without_output_replace_the_replica() {
         let mut cached = vec![fixture()];
+        let mut recovery = None;
         let mut next = cached[0].clone();
         next.state = "degraded".into();
         next.storage_error = Some("disk full".into());
         assert!(
             merge_poll(
                 &mut cached,
+                &mut recovery,
                 Poll {
                     selected: vec![next.known()],
-                    views: vec![next.clone()]
+                    views: vec![next.clone()],
+                    recovery: None,
                 }
             )
             .unwrap()
+            .views
         );
         assert_eq!(cached, vec![next]);
     }
     #[test]
     fn new_generation_can_start_at_a_lower_sequence() {
         let mut cached = vec![fixture()];
+        let mut recovery = None;
         let mut next = fixture();
         next.generation = "new".into();
         next.sequence = 0;
         assert!(
             merge_poll(
                 &mut cached,
+                &mut recovery,
                 Poll {
                     selected: vec![next.known()],
-                    views: vec![next.clone()]
+                    views: vec![next.clone()],
+                    recovery: None,
                 }
             )
             .unwrap()
+            .views
         );
         assert_eq!(cached, vec![next]);
         assert!(
             merge_poll(
                 &mut cached,
+                &mut recovery,
                 Poll {
                     selected: vec![],
-                    views: vec![]
+                    views: vec![],
+                    recovery: None,
                 }
             )
             .unwrap()
+            .views
         );
         assert!(cached.is_empty());
     }
@@ -382,18 +584,22 @@ mod tests {
             Poll {
                 selected: vec![regression.known()],
                 views: vec![regression],
+                recovery: None,
             },
             Poll {
                 selected: vec![fixture().known(), fixture().known()],
                 views: vec![],
+                recovery: None,
             },
             Poll {
                 selected: vec![],
                 views: vec![fixture()],
+                recovery: None,
             },
             Poll {
                 selected: vec![fixture().known()],
                 views: vec![fixture(), fixture()],
+                recovery: None,
             },
             Poll {
                 selected: vec![Known {
@@ -401,12 +607,15 @@ mod tests {
                     ..fixture().known()
                 }],
                 views: vec![],
+                recovery: None,
             },
         ];
         for reply in invalid {
             let mut cached = expected.clone();
-            assert!(merge_poll(&mut cached, reply).is_err());
+            let mut recovery = None;
+            assert!(merge_poll(&mut cached, &mut recovery, reply).is_err());
             assert_eq!(cached, expected);
+            assert_eq!(recovery, None);
         }
     }
 }

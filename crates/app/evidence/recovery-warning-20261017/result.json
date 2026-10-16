@@ -1,0 +1,88 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "failed",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532954]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]",
+      "ipc": "ipc:[4026533017]",
+      "net": "net:[4026533022]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "accessibilityProbe": {
+    "status": "pending",
+    "launcher": "/usr/lib/at-spi-bus-launcher --launch-immediately --a11y=0 --screen-reader=0",
+    "privateSettingsBackend": "GSETTINGS_BACKEND=memory (launcher process only)",
+    "registry": "/usr/lib/at-spi2-registryd --use-gnome-session",
+    "privateAccessibilityBusStarted": true,
+    "configuredOnlyAfterAppInitialization": true,
+    "privateStatusValuesAfterActivation": {
+      "IsEnabled": true,
+      "ScreenReaderEnabled": true
+    }
+  },
+  "compositor": {
+    "pid": 35,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-2.log",
+      "/artifacts/weston-2.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[2653874]",
+      "socket:[2653874]"
+    ]
+  },
+  "recoveryWarning": {
+    "journal": "bad.journal",
+    "message": "journal corruption at byte 0: UnsupportedVersion",
+    "sourceSha256Before": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceSha256After": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceBytesUnchanged": true,
+    "listAndPollDiagnosticsMatch": true,
+    "omitted": 0
+  },
+  "error": "AT-SPI Alert did not expose the recovery warning reason"
+}

@@ -214,3 +214,10 @@ Arc-header estimate, but excludes allocator metadata, alignment, fragmentation,
 generic listeners, history observers, parser state and transient copies. A
 complete scan is not an upper bound on terminal or process memory and makes no
 claim about physical allocator overhead or heap/RSS usage.
+It additionally reports CellExtra reference count, per-reference-weighted mark
+capacity (which intentionally counts shared storage once per reference), and
+the largest single CellExtra mark capacity. A bounded test constructs a shared
+marks Arc in a caller-built Term, round-trips it through a valid checkpoint,
+then uses the pinned VTE Processor to mutate two cells and exercise copy-on-
+write. This demonstrates a conservative accounting case, not that ordinary
+ANSI output from a fresh terminal creates that sharing pattern.
