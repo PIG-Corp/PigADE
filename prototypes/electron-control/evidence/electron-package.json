@@ -1,6 +1,0 @@
-{
-  "version": "44.8.0",
-  "license": "MIT",
-  "dist.integrity": "sha512-Yn2tJ335l8MGRJj86vaAYq1MOidtiw9eXdmHX6p3ecHQWwucsMMBxDzqUrYnXEHyqdc/IhOh2KGHzmizJvzd3Q==",
-  "repository.url": "git+https://github.com/electron/electron.git"
-}

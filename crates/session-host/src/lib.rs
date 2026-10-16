@@ -1,0 +1,1040 @@
+//! Linux prototype: authenticated local IPC and durable, per-generation terminal actors.
+mod catalog;
+#[doc(hidden)]
+pub mod checkpoint;
+pub mod input;
+pub use catalog::LayoutAction;
+mod ipc_server;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail, ensure};
+use pigade_storage::{
+    EventKind, Journal, JournalHeader, JournalReader, MetadataStore, ProcessIdentity,
+};
+use pigade_terminal::{CORE_PROFILE, Frame, Geometry, Terminal};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use uuid::Uuid;
+
+pub const PROTOCOL: u32 = 2;
+const IPC_LIMIT: usize = 8 * 1024 * 1024;
+const OUTPUT_CHUNK: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Launch {
+    pub session: Uuid,
+    pub generation: Uuid,
+    pub operation: Uuid,
+    pub executable: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub geometry: Geometry,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum Command {
+    List,
+    Catalog,
+    CatalogApply {
+        batch: pigade_storage::CatalogBatch,
+    },
+    LayoutEdit {
+        expected_revision: u64,
+        action: LayoutAction,
+    },
+    Launch {
+        spec: Launch,
+    },
+    Snapshot {
+        session: Uuid,
+        generation: Uuid,
+    },
+    Input {
+        session: Uuid,
+        generation: Uuid,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        session: Uuid,
+        generation: Uuid,
+        geometry: Geometry,
+    },
+    Stop {
+        session: Uuid,
+        generation: Uuid,
+    },
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Request {
+    pub protocol: u32,
+    pub command: Command,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct View {
+    pub session: Uuid,
+    pub generation: Uuid,
+    pub sequence: u64,
+    pub state: String,
+    pub recovery_path: String,
+    pub pid: Option<u32>,
+    pub storage_error: Option<String>,
+    pub frame: Frame,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Response {
+    pub protocol: u32,
+    pub views: Vec<View>,
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<pigade_storage::Catalog>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_notice: Option<String>,
+}
+
+struct MessageBuffer(Vec<u8>);
+impl Write for MessageBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = self
+            .0
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("IPC length overflow"))?;
+        if length > IPC_LIMIT {
+            return Err(std::io::Error::other("IPC payload too large"));
+        }
+        if length > self.0.capacity() {
+            let capacity = self
+                .0
+                .capacity()
+                .saturating_mul(2)
+                .max(length)
+                .min(IPC_LIMIT);
+            self.0
+                .try_reserve_exact(capacity - self.0.len())
+                .map_err(std::io::Error::other)?;
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn send<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+    let mut buffer = MessageBuffer(Vec::new());
+    serde_json::to_writer(&mut buffer, value)?;
+    let bytes = buffer.0;
+    stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
+    stream.write_all(&bytes)?;
+    Ok(())
+}
+pub fn receive<T: DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
+    let mut length = [0; 4];
+    stream.read_exact(&mut length)?;
+    let length = u32::from_le_bytes(length) as usize;
+    ensure!(length > 0 && length <= IPC_LIMIT, "invalid IPC length");
+    let mut bytes = vec![0; length];
+    stream.read_exact(&mut bytes)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+pub fn request(socket: &Path, command: Command) -> Result<Response> {
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    send(
+        &mut stream,
+        &Request {
+            protocol: PROTOCOL,
+            command,
+        },
+    )?;
+    receive(&mut stream)
+}
+pub(crate) fn peer_pid(stream: &UnixStream) -> Result<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: all pointers reference initialized storage of the advertised size.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    ensure!(result == 0, "peer credentials unavailable");
+    // SAFETY: getuid has no preconditions.
+    ensure!(
+        credentials.uid == unsafe { libc::getuid() },
+        "foreign user endpoint"
+    );
+    Ok(credentials.pid as u32)
+}
+pub fn identity(pid: u32) -> Result<ProcessIdentity> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let rest = stat.rsplit_once(") ").context("invalid process stat")?.1;
+    let ticks = rest
+        .split_whitespace()
+        .nth(19)
+        .context("missing process start time")?
+        .parse()?;
+    Ok(ProcessIdentity {
+        boot_id: fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+            .trim()
+            .to_owned(),
+        pid,
+        start_ticks: ticks,
+    })
+}
+fn private_directory(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)?;
+    let meta = fs::symlink_metadata(path)?;
+    use std::os::unix::fs::MetadataExt;
+    ensure!(
+        meta.is_dir() && meta.uid() == unsafe { libc::getuid() },
+        "unsafe state directory"
+    );
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+struct Session {
+    view: Arc<Mutex<View>>,
+    commands: mpsc::SyncSender<Action>,
+    input: Option<input::InputWriter>,
+    control: mpsc::SyncSender<Control>,
+}
+#[derive(Clone)]
+enum Action {
+    Output(Vec<u8>),
+    SyncTimeout,
+    Resize(Geometry),
+    ReadError(String),
+    Eof,
+}
+enum Control {
+    Stop,
+}
+struct ActorConfig {
+    geometry: Geometry,
+    root: PathBuf,
+    control: mpsc::Receiver<Control>,
+}
+struct Host {
+    root: PathBuf,
+    sessions: Vec<Session>,
+    metadata: MetadataStore,
+    catalog_notice: Option<String>,
+    _lock: File,
+}
+
+fn restore(path: &Path, fast: bool) -> Result<View> {
+    Ok(restore_model(path, fast)?.0)
+}
+
+fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
+    let mut reader = JournalReader::open(path)?;
+    let header = reader.header().clone();
+    ensure!(
+        header.profile == CORE_PROFILE,
+        "incompatible terminal profile; source preserved"
+    );
+    let mut terminal = Terminal::new(
+        Geometry::new(header.initial_rows, header.initial_cols)?,
+        false,
+    );
+    let mut sequence = 0;
+    let mut recovery_path = "full-journal".to_owned();
+    let mut recovery_warnings = Vec::new();
+    let selection = if fast {
+        checkpoint::latest(
+            path.parent().context("journal parent")?,
+            &header,
+            fs::metadata(path)?.len(),
+        )?
+    } else {
+        checkpoint::Selection {
+            loaded: None,
+            warnings: Vec::new(),
+        }
+    };
+    recovery_warnings.extend(selection.warnings);
+    if let Some(saved) = selection.loaded {
+        match reader.resume_after_checkpoint(saved.sequence, saved.offset) {
+            Ok(tail) => {
+                reader = tail;
+                terminal = saved.terminal;
+                sequence = saved.sequence;
+                recovery_path = "checkpoint-tail".into();
+            }
+            Err(error) => {
+                eprintln!("checkpoint watermark rejected; full replay: {error:#}");
+                reader = JournalReader::open(path)?;
+            }
+        }
+    }
+    let mut storage_error = (!recovery_warnings.is_empty()).then(|| recovery_warnings.join("; "));
+    loop {
+        let event = match reader.next_event() {
+            Ok(Some(event)) => event,
+            Ok(None) => break,
+            Err(error) => {
+                storage_error = Some(format!("recovered valid prefix only: {error:#}"));
+                break;
+            }
+        };
+        match event.kind {
+            EventKind::Output => {
+                terminal.output(&event.payload);
+            }
+            EventKind::Resize => terminal.resize(serde_json::from_slice(&event.payload)?),
+            EventKind::SyncTimeout => terminal.sync_timeout(),
+            EventKind::Exit => (),
+        }
+        sequence = event.sequence;
+    }
+    let view = View {
+        session: header.session_id,
+        generation: header.generation,
+        sequence,
+        state: "history".into(),
+        recovery_path,
+        pid: None,
+        storage_error,
+        frame: terminal.frame(),
+    };
+    Ok((view, terminal))
+}
+impl Host {
+    fn dispatch(&mut self, command: Command) -> Result<Response> {
+        let catalog = match command {
+            Command::Catalog => catalog::read_metadata(&self.metadata)?,
+            Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, batch)?,
+            Command::LayoutEdit {
+                expected_revision,
+                action,
+            } => catalog::layout_edit(&mut self.metadata, expected_revision, action)?,
+            terminal => {
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: self.handle(terminal)?,
+                    error: None,
+                    catalog: None,
+                    catalog_notice: None,
+                });
+            }
+        };
+        Ok(Response {
+            protocol: PROTOCOL,
+            views: Vec::new(),
+            error: None,
+            catalog: Some(catalog),
+            catalog_notice: self.catalog_notice.clone(),
+        })
+    }
+    fn open(root: PathBuf) -> Result<Self> {
+        private_directory(&root)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(root.join("host.lock"))?;
+        // SAFETY: flock borrows a valid descriptor for the duration of the call.
+        ensure!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+            "another host owns this state"
+        );
+        let mut metadata = MetadataStore::open(root.join("metadata.sqlite"))?;
+        let catalog_notice = match catalog::migrate_legacy_layout(&mut metadata) {
+            Ok(notice) => notice,
+            Err(error) => Some(format!(
+                "Catalog recovery requires a compatible reader; originals preserved: {error:#}"
+            )),
+        };
+        if let Some(notice) = &catalog_notice {
+            eprintln!("{notice}");
+        }
+        let mut sessions = Vec::new();
+        for entry in fs::read_dir(&root)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "journal") {
+                match restore(&path, true) {
+                    Ok(view) => {
+                        let (tx, _rx) = mpsc::sync_channel(1);
+                        let (control, _) = mpsc::sync_channel(1);
+                        sessions.push(Session {
+                            view: Arc::new(Mutex::new(view)),
+                            commands: tx,
+                            input: None,
+                            control,
+                        });
+                    }
+                    Err(error) => eprintln!("history unavailable {}: {error:#}", path.display()),
+                }
+            }
+        }
+        // Never spawn on recovery. Every unfinished launch remains locked for investigation.
+        for record in metadata.list_launches()? {
+            if !matches!(record.state, pigade_storage::LaunchState::Exited) {
+                metadata.mark_unknown(
+                    record.operation_id,
+                    "host restarted: reconcile process identity before any launch",
+                )?;
+                for session in &sessions {
+                    let mut view = session.view.lock().expect("view lock");
+                    if view.generation == record.generation {
+                        view.state = "launch_outcome_unknown".into();
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            root,
+            sessions,
+            metadata,
+            catalog_notice,
+            _lock: lock,
+        })
+    }
+    fn handle(&mut self, command: Command) -> Result<Vec<View>> {
+        for record in self.metadata.list_launches()? {
+            if record.state == pigade_storage::LaunchState::Running
+                && self.sessions.iter().any(|s| {
+                    let v = s.view.lock().expect("view lock");
+                    v.generation == record.generation && v.state == "exited"
+                })
+            {
+                self.metadata.mark_exited(record.operation_id)?;
+                for session in &mut self.sessions {
+                    if session.view.lock().expect("view lock").generation == record.generation {
+                        session.input = None;
+                    }
+                }
+            }
+        }
+        if let Command::Launch { spec } = command {
+            return self.launch(spec);
+        }
+        if matches!(command, Command::List) {
+            return Ok(self
+                .sessions
+                .iter()
+                .map(|s| s.view.lock().expect("view lock").clone())
+                .collect());
+        }
+        let (id, generation) = match &command {
+            Command::Snapshot {
+                session,
+                generation,
+            }
+            | Command::Input {
+                session,
+                generation,
+                ..
+            }
+            | Command::Resize {
+                session,
+                generation,
+                ..
+            }
+            | Command::Stop {
+                session,
+                generation,
+            } => (*session, *generation),
+            _ => unreachable!(),
+        };
+        let session = self
+            .sessions
+            .iter()
+            .find(|s| {
+                let v = s.view.lock().expect("view lock");
+                v.session == id && v.generation == generation
+            })
+            .context("unknown session generation")?;
+        match command {
+            Command::Input { bytes, .. } => {
+                ensure!(bytes.len() <= OUTPUT_CHUNK, "input exceeds limit");
+                session
+                    .input
+                    .as_ref()
+                    .context("historical terminal is read-only")?
+                    .try_write(bytes)?;
+            }
+            Command::Resize { geometry, .. } => {
+                Geometry::new(geometry.rows, geometry.cols)?;
+                session.commands.try_send(Action::Resize(geometry))?;
+            }
+            Command::Stop { .. } => session.control.try_send(Control::Stop)?,
+            _ => (),
+        }
+        Ok(vec![session.view.lock().expect("view lock").clone()])
+    }
+    fn launch(&mut self, spec: Launch) -> Result<Vec<View>> {
+        Geometry::new(spec.geometry.rows, spec.geometry.cols)?;
+        ensure!(self.sessions.len() < 32, "prototype limit: 32 generations");
+        ensure!(
+            spec.executable.is_absolute() && spec.executable.is_file(),
+            "absolute executable required"
+        );
+        ensure!(
+            spec.cwd.is_absolute() && spec.cwd.is_dir(),
+            "cwd unavailable"
+        );
+        ensure!(
+            spec.args.len() <= 128 && spec.args.iter().map(String::len).sum::<usize>() <= 16384,
+            "argv exceeds bounds"
+        );
+        if let Some(existing) = self.metadata.get_launch(spec.operation)? {
+            ensure!(
+                existing.session_id == spec.session && existing.generation == spec.generation,
+                "operation identity mismatch"
+            );
+            let view = self.sessions.iter().find_map(|s| {
+                let v = s.view.lock().expect("view lock");
+                (v.generation == spec.generation).then(|| v.clone())
+            });
+            return Ok(vec![view.context(
+                "existing launch has no attachable frame; outcome must be reconciled",
+            )?]);
+        }
+        let nonce = Uuid::new_v4();
+        let begin =
+            self.metadata
+                .begin_launch(spec.session, spec.generation, spec.operation, nonce)?;
+        ensure!(
+            begin.created,
+            "operation already exists; no duplicate spawn"
+        );
+        let path = self.root.join(format!("{}.journal", spec.generation));
+        let journal = Journal::create(
+            &path,
+            JournalHeader {
+                session_id: spec.session,
+                generation: spec.generation,
+                profile: CORE_PROFILE.into(),
+                initial_rows: spec.geometry.rows,
+                initial_cols: spec.geometry.cols,
+            },
+        )?;
+        let handshake_path = self.root.join(format!("{}.gate", spec.operation));
+        let listener = UnixListener::bind(&handshake_path)?;
+        listener.set_nonblocking(true)?;
+        let pair = native_pty_system().openpty(pty_size(spec.geometry))?;
+        let mut builder = CommandBuilder::new(std::env::current_exe()?);
+        builder.arg("__helper");
+        builder.arg(&handshake_path);
+        builder.arg(nonce.to_string());
+        builder.arg(&spec.executable);
+        builder.args(&spec.args);
+        builder.cwd(&spec.cwd);
+        builder.env("TERM", "xterm-256color");
+        builder.env("COLORTERM", "truecolor");
+        let mut child = pair.slave.spawn_command(builder)?;
+        drop(pair.slave);
+        let child_pid = child.process_id().context("helper pid unavailable")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut gate = loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    ensure!(peer_pid(&stream)? == child_pid, "unexpected helper peer");
+                    break stream;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        self.metadata
+                            .mark_unknown(spec.operation, "helper handshake timeout")?;
+                        bail!("helper handshake timeout");
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+        gate.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let hello: String = receive(&mut gate)?;
+        ensure!(hello == nonce.to_string(), "wrong launch nonce");
+        self.metadata
+            .register_helper(spec.operation, identity(child_pid)?)?;
+        self.metadata.permit_exec(spec.operation)?;
+        send(&mut gate, &nonce.to_string())?;
+        drop(gate);
+        fs::remove_file(&handshake_path)?;
+        self.metadata.mark_running(spec.operation)?;
+        let view = Arc::new(Mutex::new(View {
+            session: spec.session,
+            generation: spec.generation,
+            sequence: 0,
+            state: "running".into(),
+            recovery_path: "live".into(),
+            pid: Some(child_pid),
+            storage_error: None,
+            frame: Terminal::new(spec.geometry, false).frame(),
+        }));
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = input::InputWriter::new(pair.master.take_writer()?);
+        let (control_tx, control_rx) = mpsc::sync_channel(1);
+        let reader_tx = tx.clone();
+        thread::spawn(move || {
+            loop {
+                let mut bytes = vec![0; OUTPUT_CHUNK];
+                match reader.read(&mut bytes) {
+                    Ok(0) => {
+                        let _ = reader_tx.send(Action::Eof);
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.raw_os_error() == Some(libc::EIO) => {
+                        let _ = reader_tx.send(Action::Eof);
+                        break;
+                    }
+                    Err(error) => {
+                        let _ = reader_tx.send(Action::ReadError(error.to_string()));
+                        break;
+                    }
+                    Ok(n) => {
+                        bytes.truncate(n);
+                        if reader_tx.send(Action::Output(bytes)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let actor_view = view.clone();
+        let actor_root = self.root.clone();
+        let actor_writer = writer.clone();
+        thread::spawn(move || {
+            actor(
+                rx,
+                pair.master,
+                actor_writer,
+                child,
+                journal,
+                actor_view,
+                ActorConfig {
+                    geometry: spec.geometry,
+                    root: actor_root,
+                    control: control_rx,
+                },
+            )
+        });
+        self.sessions.push(Session {
+            view: view.clone(),
+            commands: tx,
+            input: Some(writer),
+            control: control_tx,
+        });
+        Ok(vec![view.lock().expect("view lock").clone()])
+    }
+}
+fn pty_size(g: Geometry) -> PtySize {
+    PtySize {
+        rows: g.rows,
+        cols: g.cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+fn coalesce_output(
+    action: Action,
+    rx: &mpsc::Receiver<Action>,
+    deferred: &mut Option<Action>,
+) -> Action {
+    let Action::Output(mut bytes) = action else {
+        return action;
+    };
+    debug_assert!(deferred.is_none());
+    while bytes.len() < OUTPUT_CHUNK {
+        match rx.try_recv() {
+            Ok(Action::Output(next)) if bytes.len() + next.len() <= OUTPUT_CHUNK => {
+                bytes.extend_from_slice(&next)
+            }
+            Ok(next) => {
+                *deferred = Some(next);
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    Action::Output(bytes)
+}
+
+#[cfg(test)]
+mod batching_tests {
+    use super::*;
+    #[test]
+    fn adjacent_output_batches_are_bounded_and_never_cross_resize_or_eof() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        tx.send(Action::Output(vec![b'b'; 6000])).unwrap();
+        tx.send(Action::Resize(Geometry::new(12, 80).unwrap()))
+            .unwrap();
+        tx.send(Action::Output(vec![b'c'; 6000])).unwrap();
+        tx.send(Action::Eof).unwrap();
+        let mut deferred = None;
+        let Action::Output(bytes) =
+            coalesce_output(Action::Output(vec![b'a'; 6000]), &rx, &mut deferred)
+        else {
+            panic!()
+        };
+        assert_eq!(bytes, [vec![b'a'; 6000], vec![b'b'; 6000]].concat());
+        assert!(matches!(deferred.take(), Some(Action::Resize(_))));
+        let Action::Output(bytes) = coalesce_output(rx.try_recv().unwrap(), &rx, &mut deferred)
+        else {
+            panic!()
+        };
+        assert_eq!(bytes, vec![b'c'; 6000]);
+        assert!(matches!(deferred, Some(Action::Eof)));
+        assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn oversized_next_chunk_is_retained_and_low_volume_never_waits() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        tx.send(Action::Output(vec![b'b'; 10000])).unwrap();
+        let mut deferred = None;
+        let Action::Output(bytes) =
+            coalesce_output(Action::Output(vec![b'a'; 10000]), &rx, &mut deferred)
+        else {
+            panic!()
+        };
+        assert_eq!(bytes, vec![b'a'; 10000]);
+        let Action::Output(next) = deferred.take().unwrap() else {
+            panic!()
+        };
+        assert_eq!(next, vec![b'b'; 10000]);
+        assert!(
+            matches!(coalesce_output(Action::Output(vec![1]),&rx,&mut deferred),Action::Output(bytes) if bytes==vec![1])
+        );
+    }
+}
+
+/// Bounds dirty recovery tails by data, event count, measured model work and
+/// idle wall time. Work is a scheduling heuristic, not a recovery budget claim.
+struct CheckpointProgress {
+    receipt: Option<pigade_storage::Receipt>,
+    bytes: usize,
+    events: u32,
+    model_work: Duration,
+    clock: Instant,
+}
+impl Default for CheckpointProgress {
+    fn default() -> Self {
+        Self {
+            receipt: None,
+            bytes: 0,
+            events: 0,
+            model_work: Duration::ZERO,
+            clock: Instant::now(),
+        }
+    }
+}
+impl CheckpointProgress {
+    fn observe(&mut self, receipt: pigade_storage::Receipt, payload: usize, work: Duration) {
+        self.receipt = Some(receipt);
+        self.bytes += 33 + payload;
+        self.events += 1;
+        self.model_work += work;
+    }
+    fn publish(
+        &mut self,
+        force: bool,
+        root: &Path,
+        header: &JournalHeader,
+        terminal: &Terminal,
+    ) -> Result<()> {
+        let due = self.events > 0
+            && (force
+                || self.bytes >= 16 * 1024 * 1024
+                || self.events >= 1024
+                || self.model_work >= Duration::from_millis(125)
+                || self.clock.elapsed() >= Duration::from_secs(5));
+        if due {
+            checkpoint::publish(
+                root,
+                header,
+                self.receipt.context("checkpoint lacks durable receipt")?,
+                terminal,
+            )?;
+            self.bytes = 0;
+            self.events = 0;
+            self.model_work = Duration::ZERO;
+            self.clock = Instant::now();
+        }
+        Ok(())
+    }
+}
+
+fn actor(
+    rx: mpsc::Receiver<Action>,
+    master: Box<dyn MasterPty + Send>,
+    writer: input::InputWriter,
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    mut journal: Journal,
+    view: Arc<Mutex<View>>,
+    config: ActorConfig,
+) {
+    let mut terminal = Terminal::new(config.geometry, true);
+    let mut deferred = None;
+    let mut checkpoints = CheckpointProgress::default();
+    let mut query_responses: Vec<u8> = Vec::new();
+    let mut query_response_offset = 0;
+    loop {
+        if let Ok(Control::Stop) = config.control.try_recv() {
+            let _ = child.kill();
+        }
+        if !query_responses.is_empty() {
+            let end = (query_response_offset + input::MAX_INPUT_BYTES).min(query_responses.len());
+            match writer.try_write(query_responses[query_response_offset..end].to_vec()) {
+                Ok(()) => {
+                    query_response_offset = end;
+                    if end == query_responses.len() {
+                        query_responses.clear();
+                        query_response_offset = 0;
+                    } else {
+                        continue;
+                    }
+                }
+                Err(input::InputWriteError::Full) => {
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(error) => {
+                    let mut v = view.lock().expect("view lock");
+                    v.storage_error = Some(format!("PTY query response failed: {error}"));
+                    v.state = "degraded".into();
+                    drop(v);
+                    loop {
+                        std::hint::black_box((&query_responses, &rx, &master));
+                        wait_degraded(&config.control, &mut *child);
+                    }
+                }
+            }
+        }
+        let mut action = if let Some(action) = deferred.take() {
+            action
+        } else {
+            match rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(a) => a,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if terminal.sync_timeout_due() {
+                        Action::SyncTimeout
+                    } else {
+                        // A quiet terminal still checkpoints its last dirty state
+                        // after five seconds; no synthetic model event is needed.
+                        if let Err(error) =
+                            checkpoints.publish(false, &config.root, journal.header(), &terminal)
+                        {
+                            let mut current = view.lock().expect("view lock");
+                            current.storage_error =
+                                Some(format!("idle checkpoint failed: {error:#}"));
+                            current.state = "degraded".into();
+                            drop(current);
+                            loop {
+                                wait_degraded(&config.control, &mut *child);
+                            }
+                        }
+                        continue;
+                    }
+                }
+                Err(_) => break,
+            }
+        };
+        if (terminal.sync_timeout_due()
+            || matches!(&action, Action::Eof) && terminal.sync_timeout_pending())
+            && !matches!(&action, Action::SyncTimeout)
+        {
+            deferred = Some(action);
+            action = Action::SyncTimeout;
+        }
+        // Merge only already-queued adjacent output. This amortizes fsync and
+        // frame construction without waiting, dropping bytes or crossing resize,
+        // EOF or ordered timer boundaries. At most one next action is retained.
+        action = coalesce_output(action, &rx, &mut deferred);
+        let pending_action = action.clone();
+        let result = (|| -> Result<bool> {
+            // Closing all slave descriptors is not proof the process exited.
+            // Keep priority Stop serviceable instead of blocking in child.wait().
+            if matches!(&action, Action::Eof) && child.try_wait()?.is_none() {
+                deferred = Some(Action::Eof);
+                thread::sleep(Duration::from_millis(2));
+                return Ok(true);
+            }
+            let (kind, payload, resize) = match action {
+                Action::ReadError(error) => bail!("PTY output read failure: {error}"),
+                Action::SyncTimeout => (EventKind::SyncTimeout, Vec::new(), None),
+                Action::Output(bytes) => (EventKind::Output, bytes, None),
+                Action::Resize(g) => (EventKind::Resize, serde_json::to_vec(&g)?, Some(g)),
+                Action::Eof => (EventKind::Exit, Vec::new(), None),
+            };
+            // One pending chunk plus the bounded reader queue. On failure no model publication.
+            if let Some(g) = resize {
+                master.resize(pty_size(g))?;
+            }
+            let receipt = journal.append(kind, &payload)?;
+            let model_start = Instant::now();
+            match kind {
+                EventKind::Output => terminal.output(&payload),
+                EventKind::SyncTimeout => terminal.sync_timeout(),
+                EventKind::Resize => {
+                    let g = resize.expect("resize geometry");
+                    terminal.resize(g);
+                }
+                EventKind::Exit => (),
+            }
+            checkpoints.observe(receipt, payload.len(), model_start.elapsed());
+            checkpoints.publish(
+                kind == EventKind::Exit,
+                &config.root,
+                journal.header(),
+                &terminal,
+            )?;
+            let responses = terminal.take_responses();
+            if !responses.is_empty() {
+                ensure!(
+                    responses.len() <= 16 * 1024 * 1024,
+                    "terminal query response budget exceeded"
+                );
+                query_responses = responses;
+            }
+            let mut current = view.lock().expect("view lock");
+            current.sequence = receipt.sequence;
+            current.frame = terminal.frame();
+            if kind == EventKind::Exit {
+                current.state = "exited".into();
+                return Ok(false);
+            }
+            Ok(true)
+        })();
+        match result {
+            Ok(true) => (),
+            Ok(false) => break,
+            Err(error) => {
+                let mut current = view.lock().expect("view lock");
+                current.storage_error = Some(format!("{error:#}"));
+                current.state = "degraded".into();
+                // Preserve the durable prefix and stop reading. No further publication/commands.
+                drop(current);
+                loop {
+                    std::hint::black_box((&pending_action, &rx, &master));
+                    wait_degraded(&config.control, &mut *child);
+                }
+            }
+        }
+    }
+}
+
+fn wait_degraded(control: &mpsc::Receiver<Control>, child: &mut dyn portable_pty::Child) {
+    if let Ok(Control::Stop) = control.recv_timeout(Duration::from_millis(100)) {
+        let _ = child.kill();
+    }
+}
+
+pub fn serve(root: PathBuf) -> Result<()> {
+    let mut host = Host::open(root.clone())?;
+    let jobs = ipc_server::bind(&root.join("host.sock"))?;
+    for job in jobs {
+        let response = match host.dispatch(job.request.command) {
+            Ok(response) => response,
+            Err(error) => Response {
+                protocol: PROTOCOL,
+                views: Vec::new(),
+                error: Some(format!("{error:#}")),
+                catalog: None,
+                catalog_notice: host.catalog_notice.clone(),
+            },
+        };
+        let _ = job.reply.try_send(response);
+    }
+    Ok(())
+}
+
+/// No CLI can exec until the host durably registers this helper's OS identity.
+pub fn helper(socket: &Path, nonce: &str, executable: &Path, args: &[String]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    let mut stream = UnixStream::connect(socket)?;
+    peer_pid(&stream)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    send(&mut stream, &nonce)?;
+    let permission: String = receive(&mut stream)?;
+    ensure!(permission == nonce, "exec denied");
+    drop(stream);
+    let error = std::process::Command::new(executable).args(args).exec();
+    Err(error.into())
+}
+
+pub fn replay_journal(path: &Path) -> Result<View> {
+    restore(path, false)
+}
+
+/// Fast, generation-bound recovery; full replay remains an independent oracle.
+pub fn recover_journal(path: &Path) -> Result<View> {
+    restore(path, true)
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecoveryVerification {
+    pub profile: &'static str,
+    pub sequence: u64,
+    pub recovery_path: String,
+    pub full_replay_ms: f64,
+    pub checkpoint_tail_ms: f64,
+    pub semantic_checkpoint_bytes: usize,
+    pub complete_state_equal: bool,
+    pub frame_equal: bool,
+}
+
+/// Read-only correctness oracle for an immutable, finished journal. Compare the
+/// complete model/parser bytes, not a screenshot or a digest of visible cells.
+pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
+    let start = Instant::now();
+    let (full_view, full) = restore_model(path, false)?;
+    let full_replay_ms = start.elapsed().as_secs_f64() * 1000.;
+    let start = Instant::now();
+    let (fast_view, fast) = restore_model(path, true)?;
+    let checkpoint_tail_ms = start.elapsed().as_secs_f64() * 1000.;
+    ensure!(
+        full_view.storage_error.is_none() && fast_view.storage_error.is_none(),
+        "recovery has storage warnings; verification cannot pass"
+    );
+    ensure!(
+        fast_view.recovery_path == "checkpoint-tail",
+        "no valid checkpoint: fast recovery not exercised"
+    );
+    ensure!(
+        full_view.sequence == fast_view.sequence,
+        "recovery watermark differs"
+    );
+    let expected = full.checkpoint()?;
+    let recovered = fast.checkpoint()?;
+    ensure!(
+        expected == recovered,
+        "complete terminal/parser state differs"
+    );
+    ensure!(full_view.frame == fast_view.frame, "cell frame differs");
+    Ok(RecoveryVerification {
+        profile: CORE_PROFILE,
+        sequence: full_view.sequence,
+        recovery_path: fast_view.recovery_path,
+        full_replay_ms,
+        checkpoint_tail_ms,
+        semantic_checkpoint_bytes: expected.len(),
+        complete_state_equal: true,
+        frame_equal: true,
+    })
+}

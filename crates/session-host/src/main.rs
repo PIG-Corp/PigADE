@@ -1,0 +1,82 @@
+use anyhow::{Context, Result};
+use pigade_session_host::{Command, Launch};
+use pigade_terminal::Geometry;
+use std::path::PathBuf;
+use uuid::Uuid;
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--version") => {
+            println!("PigADE {} (stage-0 prototype)", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("serve") => {
+            pigade_session_host::serve(PathBuf::from(args.get(1).context("serve STATE_DIRECTORY")?))
+        }
+        Some("__helper") => pigade_session_host::helper(
+            std::path::Path::new(args.get(1).context("socket")?),
+            args.get(2).context("nonce")?,
+            std::path::Path::new(args.get(3).context("executable")?),
+            &args[4..],
+        ),
+        Some("replay") => {
+            println!(
+                "{}",
+                serde_json::to_string(&pigade_session_host::replay_journal(
+                    std::path::Path::new(args.get(1).context("replay JOURNAL")?)
+                )?)?
+            );
+            Ok(())
+        }
+        Some("verify-recovery") => {
+            println!(
+                "{}",
+                serde_json::to_string(&pigade_session_host::verify_recovery(
+                    std::path::Path::new(args.get(1).context("verify-recovery JOURNAL")?)
+                )?)?
+            );
+            Ok(())
+        }
+        Some("list") => call(&args, Command::List),
+        Some("launch") => {
+            let cwd = std::fs::canonicalize(
+                args.get(2)
+                    .context("launch SOCKET CWD EXECUTABLE [ARGS...]")?,
+            )?;
+            let executable = std::fs::canonicalize(args.get(3).context("executable")?)?;
+            call(
+                &args,
+                Command::Launch {
+                    spec: Launch {
+                        session: Uuid::new_v4(),
+                        generation: Uuid::new_v4(),
+                        operation: Uuid::new_v4(),
+                        executable,
+                        args: args[4..].to_vec(),
+                        cwd,
+                        geometry: Geometry::new(24, 80)?,
+                    },
+                },
+            )
+        }
+        Some("request") => call(
+            &args,
+            serde_json::from_str(args.get(2).context("request SOCKET JSON_COMMAND")?)?,
+        ),
+        _ => anyhow::bail!(
+            "PigADE stage-0 host (not MVP)\nserve STATE_DIRECTORY\nlist SOCKET\nlaunch SOCKET CWD /absolute/executable [ARGS...]\nrequest SOCKET JSON_COMMAND\nreplay JOURNAL"
+        ),
+    }
+}
+fn call(args: &[String], command: Command) -> Result<()> {
+    let response = pigade_session_host::request(
+        std::path::Path::new(args.get(1).context("socket path")?),
+        command,
+    )?;
+    println!("{}", serde_json::to_string(&response)?);
+    if let Some(error) = response.error {
+        anyhow::bail!(error);
+    }
+    Ok(())
+}

@@ -1,6 +1,9 @@
 **/target/
+**/.upstream/
 **/node_modules/
 **/dist/
 *.sock
 *.sqlite*
 *.journal
+
+**/__pycache__/

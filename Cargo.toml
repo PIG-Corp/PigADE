@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/terminal", "crates/storage", "crates/session-host", "crates/layout"]
+resolver = "2"
+exclude = ["vendor/vte", "vendor/alacritty_terminal", "crates/app"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+version = "0.0.1-dev"
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
+crc32fast = "1.5"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tempfile = "3.23"
+alacritty_terminal = { version = "=0.26.0", features = ["serde"] }
+portable-pty = "=0.9.0"
+libc = "0.2"
+postcard = {version="=1.1.3", default-features=false, features=["alloc", "use-std"]}
+pigade-terminal = { path = "crates/terminal" }
+pigade-storage = { path = "crates/storage" }
+pigade-layout = { path = "crates/layout" }
+
+[patch.crates-io]
+vte = { path = "vendor/vte" }
+alacritty_terminal = {path="vendor/alacritty_terminal"}

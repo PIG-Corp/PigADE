@@ -1,0 +1,84 @@
+{
+  "captured_at": "2026-10-16T19:43:43.692266+00:00",
+  "scope": "PTY launch of --version/--help only; not interactive TUI, context, auth, or resume certification",
+  "probes": [
+    {
+      "cli": "claude",
+      "argv": [
+        "--version"
+      ],
+      "state": "exited",
+      "session": "eb1044c4-dd4d-4253-b491-a250c1b6ba3a",
+      "generation": "46c434a1-80b3-4a08-bd82-4d130c8be8db",
+      "durable_sequence": 2,
+      "elapsed_ms": 51.120633999744314,
+      "journal_bytes": 445,
+      "version_text": "2.1.259 (Claude Code)"
+    },
+    {
+      "cli": "claude",
+      "argv": [
+        "--help"
+      ],
+      "state": "exited",
+      "session": "2a681495-ee32-4e59-8eb5-6242a400d254",
+      "generation": "ac299a20-227d-4437-8c39-c61f825cd92d",
+      "durable_sequence": 12,
+      "elapsed_ms": 230.49257599996054,
+      "journal_bytes": 17460,
+      "version_text": null
+    },
+    {
+      "cli": "codex",
+      "argv": [
+        "--version"
+      ],
+      "state": "exited",
+      "session": "54f0cb78-ad85-4694-8895-dfd9e1eb993f",
+      "generation": "426acfbc-fba5-4966-baa8-d65947ff0603",
+      "durable_sequence": 2,
+      "elapsed_ms": 54.72758399992017,
+      "journal_bytes": 441,
+      "version_text": "codex-cli 0.162.1"
+    },
+    {
+      "cli": "codex",
+      "argv": [
+        "--help"
+      ],
+      "state": "exited",
+      "session": "adf9980f-e26b-4a23-a537-acd5ec1a3136",
+      "generation": "6c831a3f-e2b1-4cdc-bd5d-ad82d06d48a9",
+      "durable_sequence": 12,
+      "elapsed_ms": 78.21986499993727,
+      "journal_bytes": 6580,
+      "version_text": null
+    },
+    {
+      "cli": "opencode",
+      "argv": [
+        "--version"
+      ],
+      "state": "exited",
+      "session": "ac42029e-2046-47c8-abca-bebfa0265d2b",
+      "generation": "65452245-2543-4551-98cd-9c2e0d35b36b",
+      "durable_sequence": 2,
+      "elapsed_ms": 441.68665100005455,
+      "journal_bytes": 431,
+      "version_text": "1.18.22"
+    },
+    {
+      "cli": "opencode",
+      "argv": [
+        "--help"
+      ],
+      "state": "exited",
+      "session": "1e285949-f2eb-41b8-8380-268d5da9d549",
+      "generation": "06f2c375-c708-430c-9c42-c407a1cc7864",
+      "durable_sequence": 7,
+      "elapsed_ms": 462.5592190000134,
+      "journal_bytes": 5917,
+      "version_text": null
+    }
+  ]
+}

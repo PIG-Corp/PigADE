@@ -9,13 +9,79 @@
         └── Панели: Claude Code, Codex, OpenCode, shell и другие CLI
 ```
 
-Главные требования: удобный tiling как в оконном менеджере, корректный терминал, надёжное восстановление и быстрый спокойный интерфейс в Apple style.
+Текущая версия: **dev 0.0.1** (`0.0.1-dev`, [VERSION](VERSION)). Реализуется **этап 0 — технический прототип**. Готового MVP пока нет; критерии SPEC не ослаблены. В host реализованы каталог проектов/воркспейсов/вкладок и независимая модель tiling с сохранённым undo/redo. Их полный UI, подготовка Git worktree и контекст/адаптеры ещё не завершены. Прототип не является Linux beta.
 
-## Документация
+## Перед работой
 
-- [SPEC.md](SPEC.md) — продуктовая и техническая спецификация, границы первой версии, архитектура, критерии приёмки и план реализации.
-- [DESIGN.md](DESIGN.md) — дизайн-контракт: структура экранов, визуальный язык, компоненты, состояния и доступность.
+- [AGENTS.md](AGENTS.md) — обязательные правила для каждого агента, включая собственную запись в общий журнал.
+- [SPEC.md](SPEC.md) — поведение, архитектура, этапы и критерии приёмки; прочитать полностью.
+- [DESIGN.md](DESIGN.md) — UX, визуальный язык и доступность; прочитать полностью.
+- [Карта проекта](docs/PROJECT_MAP.md), [текущий handoff](docs/AGENT_HANDOFF.md), [WORKLOG](WORKLOG.md), [CHANGELOG](CHANGELOG.md), [версии](docs/VERSIONING.md).
 
-Статус: **спецификация v0.1, 17.10.2026**. Реализации и результатов бенчмарков пока нет. Технический стек предложен с обязательными проверками до его окончательной фиксации.
+## Что уже можно проверить
 
-Восстановление различает сохранённое изображение и историю терминала, переподключение к живому процессу и штатное продолжение диалога агента после перезагрузки компьютера. Подробные гарантии описаны в [разделе 8 спецификации](SPEC.md#8-сохранение-и-восстановление).
+Native Rust host запускает реальные процессы через portable-pty. Единственная модель alacritty/VTE находится в host; output/resize/timer events получают sequence и generation, сохраняются с CRC и fsync до публикации клеток. Есть bounded очереди, отдельный input writer, private Unix IPC, durable launch intent/helper/OS identity gate и блокировка неизвестного исхода запуска. После потери host восстановление историческое; процессы и задания сами не повторяются.
+
+Экспериментальный полный checkpoint объединяет Term/Grid и parser/processor: оба экрана, историю, курсоры, modes, tabstops, цвета, частичные UTF-8/CSI/OSC, synchronized buffer и логический timer. Ссылки и cell extras используют общие таблицы. Сохранение — temporary file → fsync → rename → directory fsync. Корректность проверяется продолжением после checkpoint, а не сходством картинки. Журнал не удаляется; долгосрочная bounded recovery/compaction ещё не сертифицирована.
+
+[Приложение PigADE](crates/app/README.md) использует GPUI и получает клеточную реплику Rust host. Собственного ANSI-парсера в UI нет. Отдельные контрольные приложения удалены по решению пользователя; история раннего сравнения сохранена в Git. Это рабочее направление разработки, с открытыми gate корректности и платформенной поддержки.
+
+## Сборка и проверки
+
+Проверенная среда: Linux x86_64, Rust/Cargo 1.98.1, C compiler для bundled SQLite. Для UI нужны системные библиотеки GPUI из его официального Linux setup. Другие compiler/distro/platform версии не сертифицированы. Cargo.lock в корне и crates/app/Cargo.lock фиксируют зависимости host и UI. Лицензия продукта пока не выбрана; лицензии vendored компонентов сохранены, GPL terminal-код Zed не заимствован.
+
+```sh
+cargo build --release --workspace --bins --examples
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python3 scripts/check-version.py
+```
+
+Для UI: `crates/app/bootstrap.sh build --locked` и `crates/app/bootstrap.sh test --locked`. Bootstrap проверяет SHA-256 закреплённого GPUI archive. Он только собирает код, без открытия окон. `bash scripts/check.sh` выполняет проверки host/model workspace. Полные vendor/regression-команды и фактические результаты находятся в patch notes и отчётах.
+
+## Запуск Rust host
+
+Без systemd, в отдельном терминале:
+
+```sh
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/pigade/dev-0.0.1"
+target/release/pigade-session-host serve "${XDG_STATE_HOME:-$HOME/.local/state}/pigade/dev-0.0.1"
+```
+
+Управляемый user service, отдельный от UI:
+
+```sh
+bash scripts/start-dev-host.sh
+systemctl --user status pigade-dev-host
+```
+
+Пример реального shell в host:
+
+```sh
+target/release/pigade-session-host launch \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/pigade/dev-0.0.1/host.sock" \
+  "$PWD" /usr/bin/bash --noprofile --norc
+```
+
+`list SOCKET`, `request SOCKET JSON_COMMAND`, `replay JOURNAL` и `verify-recovery JOURNAL` — диагностический интерфейс. Input/resize/stop требуют точные session/generation UUID. `replay` не исполняет команды и terminal side effects. `verify-recovery` сравнивает полные модели полного replay и checkpoint+tail; нужен завершённый или неизменяемый журнал. Историческая панель не принимает ввод. Версия: `target/release/pigade-session-host --version`.
+
+Остановка user service завершает его дочерние процессы; это отдельное явное действие: `systemctl --user stop pigade-dev-host`. Закрытие UI отличается от остановки host. После сбоя неизвестные launch intents остаются заблокированы; автоматического нового shell/resume нет.
+
+## Измерения и ограничения
+
+```sh
+python3 scripts/hardware-manifest.py
+python3 scripts/run-component-benchmark.py \
+  --directory "${XDG_STATE_HOME:-$HOME/.local/state}/pigade/benchmarks"
+python3 scripts/probe-cli-pty.py \
+  --directory "${XDG_STATE_HOME:-$HOME/.local/state}/pigade/probes"
+```
+
+Benchmark требует durable filesystem, отклоняет tmpfs и измеряет компоненты без GPU/UI; его числа не равны input-to-present. CLI probe запускает только `--version`/`--help` через реальный PTY, не выполняет AI-задачи и не сертифицирует resume. Нагрузочная проверка: `python3 scripts/stress-pty.py --directory /absolute/durable/path`. Она не открывает UI и не является input-to-present benchmark. [Текущий отчёт о проверках](docs/reports/verification-0.0.1-dev.md) содержит результаты и точные пробелы.
+
+Сырые результаты: [benchmarks/results](benchmarks/results), [CLI matrix](docs/compatibility/CLI.md), [ADR](docs/adr), [отчёты](docs/reports).
+
+Приложение вручную запускается как `crates/app/target/debug/pigade-app /absolute/state/host.sock` после запуска host. Закрытие окна не завершает host. Автоматизация окон/ввода на активном desktop запрещена; platform tests требуют изолированного compositor/VM.
+
+Открыты gate полной истории, cold index, VM reboot, 24h real-time soak, реальные диалоги трёх AI CLI/две версии каждого, GPUI grid renderer, Wayland/X11, IME/clipboard/fractional scale и accessibility, product performance и сквозной MVP-сценарий. Наличие исходников и зелёные короткие тесты не означает прохождение этих проверок.

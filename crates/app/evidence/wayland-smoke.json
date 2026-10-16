@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "scope": "debug Wayland four-shell UI kill/reopen; not platform gate",
+  "state_path": "/tmp/pigade-native-smoke-vn2681wx",
+  "host_pid": 253989,
+  "ui_pid": 255457,
+  "views": [
+    {
+      "session": "36a71f09-a8de-496f-bae4-5628b7bd9f7a",
+      "generation": "a9263b47-d550-430e-b4d6-57442e1c0d81",
+      "pid": 253993,
+      "sequence": 17,
+      "geometry": {
+        "rows": 14,
+        "cols": 54
+      }
+    },
+    {
+      "session": "cadcfb3b-5130-4bed-81d7-9205d76d4522",
+      "generation": "a48d33a7-d84b-4db4-ad55-e1a19d4165d8",
+      "pid": 254001,
+      "sequence": 17,
+      "geometry": {
+        "rows": 14,
+        "cols": 54
+      }
+    },
+    {
+      "session": "6bfe6d90-edee-4fea-a800-5954b1db5c14",
+      "generation": "b3713f53-a8a1-4218-829d-17b43d8c721c",
+      "pid": 254007,
+      "sequence": 18,
+      "geometry": {
+        "rows": 14,
+        "cols": 54
+      }
+    },
+    {
+      "session": "1b4e0cad-e460-4a4c-b95f-9f06fcd1ec91",
+      "generation": "2b7712f8-cf42-47dd-b119-29e37af1e2f3",
+      "pid": 254027,
+      "sequence": 20,
+      "geometry": {
+        "rows": 14,
+        "cols": 54
+      }
+    }
+  ]
+}

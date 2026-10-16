@@ -1,0 +1,20 @@
+{
+  "status": "failed",
+  "scope": "own native Wayland surface keyboard diagnostic",
+  "attempts": [
+    {
+      "delay_ms": 0,
+      "wait_seconds": 0.5,
+      "visible_output_prefix": "prin",
+      "log": "/tmp/pigade-native-keyboard-smoke.log"
+    },
+    {
+      "delay_ms": 100,
+      "wait_seconds": 2,
+      "visible_output_prefix": "printf",
+      "log": "/tmp/pigade-native-keyboard-smoke-final.log"
+    }
+  ],
+  "cause": "unresolved; no keyboard acceptance",
+  "automation": "stopped immediately on root emergency message; no lingering owned processes"
+}

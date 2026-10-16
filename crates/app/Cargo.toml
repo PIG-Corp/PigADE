@@ -1,0 +1,13 @@
+[package]
+name = "pigade-app"
+version = "0.0.1-dev"
+edition = "2024"
+publish = false
+
+[workspace]
+exclude = [".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624", ".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624/crates/gpui"]
+
+[dependencies]
+gpui = { path = ".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624/crates/gpui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }

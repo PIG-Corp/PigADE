@@ -1,0 +1,28 @@
+{
+  "namespaces": {
+    "mnt": "mnt:[4026532955]",
+    "pid": "pid:[4026532961]",
+    "user": "user:[4026533017]",
+    "ipc": "ipc:[4026532960]",
+    "net": "net:[4026532963]"
+  },
+  "uid": 1000,
+  "devices": [
+    "ptmx",
+    "pts",
+    "shm",
+    "core",
+    "fd",
+    "stderr",
+    "stdout",
+    "stdin",
+    "tty",
+    "urandom",
+    "random",
+    "full",
+    "zero",
+    "null"
+  ],
+  "runtime_mode": "0700",
+  "host_display_and_devices_absent": true
+}

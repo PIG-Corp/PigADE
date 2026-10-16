@@ -4,6 +4,14 @@
 Execute authorized local work through implementation and verification. Do not ask permission for ordinary reversible edit/test steps. Use native subagents for independent bounded tasks when useful. Preserve other agents' edits and assign file ownership before parallel writes.
 <!-- END AUTONOMY DIRECTIVE -->
 
+## User-selected subagent model
+
+The user requires **gpt-6-luna** for subagents. Explicitly select `model="gpt-6-luna"` when spawning, with `fork_turns="none"` and a self-contained bounded task. Use a model-overridable role; fixed-model specialist roles cannot satisfy this preference. Do not reactivate an older child on a different model. The lead remains responsible for integration and verification.
+
+## Desktop isolation — mandatory incident guard
+
+Do not run keyboard/mouse injection (wtype, ydotool, xdotool), change compositor focus/workspaces, or open automated UI test windows on the user's active desktop. Product implementation authorization does not authorize these actions. UI automation requires a verified isolated compositor/display or a VM; an environment label alone is not isolation proof. Never alter monitor modes, desktop zoom or user configuration as part of product tests. The 2026-10-17 live-input incident enabled desktop zoom and triggered application shortcuts; the legacy native smoke script is disabled. Read docs/reports/desktop-incident.md before any platform testing.
+
 ## Start here
 
 1. Read this file, README.md, SPEC.md and DESIGN.md completely before changing product behavior.
@@ -15,7 +23,7 @@ Execute authorized local work through implementation and verification. Do not as
 
 **Every agent that changes code, tests, configuration or documentation MUST append its own entry to WORKLOG.md before finishing or handing off.** Record agent ID, concrete change, owned files, actual verification result (or explicit gap), risks and next step. Backfill work performed earlier in the current run. Do not claim another agent's verification as your own.
 
-Use `python3 scripts/log-change.py --agent <id> --summary '<change>' --files <paths...> --validation '<actual commands/results>' --next '<risks/next step>'`. The helper locks the shared file so concurrent entries cannot overwrite each other. Do not rewrite, truncate or reorder history; corrections are new entries. The lead agent integrates and owns final verification and commits.
+Use `python3 scripts/log-change.py --agent <id> --summary '<change>' --files <paths...> --validation '<actual commands/results>' --next '<risks/next step>'`. The helper locks the shared file so concurrent entries cannot overwrite each other. Do not rewrite, truncate or reorder history; corrections are new entries. The lead agent integrates and owns final verification and commits. The repository pre-commit hook requires a newly appended WORKLOG entry and aligned first-party versions; do not bypass it with --no-verify.
 
 Before ending a milestone, the lead updates docs/AGENT_HANDOFF.md and docs/PROJECT_MAP.md when needed, adds a meaningful CHANGELOG.md entry, checks `git diff --check`, and commits a coherent tested slice. Never commit credentials, runtime state, node_modules, target outputs, or diagnostic data from provider authentication/history directories. Do not amend/rewrite commits or undo another agent's changes without a concrete task requirement.
 
@@ -31,6 +39,6 @@ Before ending a milestone, the lead updates docs/AGENT_HANDOFF.md and docs/PROJE
 
 ## Verification
 
-Rust baseline: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build --release --workspace --examples`. Also verify modified vendored crates with their targeted tests and documented patch provenance. Electron control commands are in its README. Benchmarks must use the recorded actual hardware and durable filesystem; `/tmp` here is tmpfs and cannot prove NVMe fsync performance. No fabricated VM reboot, 24h soak, GPU, IME or accessibility results.
+Rust baseline: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build --release --workspace --bins --examples`. Also verify modified vendored crates with their targeted tests and documented patch provenance. The native application has a separate pinned GPUI dependency workspace under crates/app; use its build commands. Separate control stands were removed by user request. Benchmarks must use the recorded actual hardware and durable filesystem; `/tmp` here is tmpfs and cannot prove NVMe fsync performance. No fabricated VM reboot, 24h soak, GPU, IME or accessibility results.
 
 Subagents report scope expansion/shared-file conflicts upward; they do not recursively coordinate other lanes. Keep updates concise. Stop only at verified completion, explicit cancellation, or an objective blocker with reproducible evidence and a concrete next step.

@@ -1,0 +1,10 @@
+{
+  "name": "partial-utf8-followed-by-ascii-and-next-multibyte-codepoint",
+  "upstream": "vte=0.15.0",
+  "upstream_commit": "3b3da71c34cc1256c7e20981cf03f8eb95e08ffc",
+  "bytes_hex": "c3 a9 20 e7 95 8c",
+  "chunk_lengths": [1, 5],
+  "expected_printable_text": "é 界",
+  "observed_unpatched_printable_text": "é界",
+  "observed_date": "2026-10-17"
+}

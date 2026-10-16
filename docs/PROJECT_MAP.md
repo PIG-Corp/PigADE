@@ -1,27 +1,30 @@
 # Project map — 0.0.1-dev
 
-Read [AGENTS.md](../AGENTS.md) first. Product/UX contracts are [SPEC.md](../SPEC.md) and [DESIGN.md](../DESIGN.md); do not weaken them to match current implementation.
+Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and the [handoff](AGENT_HANDOFF.md). New subagents must explicitly use gpt-6-luna. Read current git status and WORKLOG before editing.
 
-| Location | Responsibility / current status |
+| Location | Responsibility |
 |---|---|
-| Cargo.toml / Cargo.lock | Rust workspace, exact resolved dependency graph; first-party version from VERSION |
-| crates/terminal | Sole host-side alacritty/VTE adapter, validated geometry, cell DTO, explicit timer events, experimental complete checkpoint envelope and continuation tests |
-| crates/storage | CRC/sequence/generation-framed append-only journal, fsync receipts, corruption prefix scanner, SQLite WAL/FULL launch state machine and locks |
-| crates/session-host | Independent Linux PTY actors, bounded queues, private versioned Unix IPC, startup helper/identity gate, historical replay; not a production service yet |
-| crates/session-host/tests/recovery.rs | Actual PTY/process tests: input/resize, 100 reconnects, 1,000 resizes, host kill, helper gate |
-| vendor/vte | Pinned 0.15.0 with documented UTF-8 fix, explicit parser/processor state experiment and OSC cap; retain licenses |
-| vendor/alacritty_terminal | Pinned 0.26.0 with explicit complete Term/Grid checkpoint experiment; retain Apache license |
-| prototypes/electron-control | Mandatory comparative stack; independent Node/xterm host and four cell-replica panels. Tests include known serialize failures, real PTY, UI reopen and screenshots. Not production fallback approval |
-| tests/fixtures/terminal | Captures/reproducers and machine-readable terminal examples |
-| benchmarks/results | Actual hardware manifest and scoped component measurements, never inferred UI budgets |
-| docs/adr / docs/research | Evidence-backed decisions/proposals, pinned upstream source/licensing, open recovery gate |
-| docs/reports | Verification/review findings and exact gaps |
-| docs/compatibility | Installed CLI version/help evidence; provider context/resume remains uncertified |
-| scripts | Reproducible tooling, mandatory shared-history append helper |
-| VERSION / CHANGELOG.md / WORKLOG.md | Product version / milestone history / per-agent detailed engineering history |
+| Cargo.toml/Cargo.lock | Host/storage/terminal/layout workspace; locked dependencies; canonical first-party version |
+| crates/terminal | Sole ANSI/core adapter, validated geometry, ordered timers, cell DTOs and full checkpoint envelope |
+| crates/storage | CRC/sequence/generation journal, fsync receipts, SQLite sole-writer schema3, launch locks, catalog CAS and migration backups |
+| crates/layout | Platform-neutral tiling transactions, geometry/focus projection and schema1 persistent100undo/redo |
+| crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, catalog/layout command routes |
+| crates/session-host/src/catalog.rs | Authoritative layout/projection validation and atomic persistence; explicit legacy projection import |
+| crates/session-host/tests | Real PTY/reconnect/resize/kill/Stop/query-burst and durable placement scenarios |
+| crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
+| crates/app/bootstrap.sh | Immutable GPUI source+SHA verification and headless build; ignored .upstream source cache |
+| crates/app/evidence | Historical smoke and current isolated render/reopen proof; never a platform-certification claim |
+| vendor/vte |0.15.0 maintained UTF8/full-parser-state/OSC-bound patches, original licenses |
+| vendor/alacritty_terminal |0.26.0 explicit Term/Grid export/import and allocation-aware pools; borrowed canonical row export |
+| tests/fixtures/terminal | Boundary/UTF8 reproducers; real captured upstream fixtures also live under vendor tests/ref |
+| benchmarks/results | Hardware manifest, component timings, failed-before and improved60s4-stream runs |
+| scripts/isolated-render.py | Tests actual app inside verified private namespaces, software renderer and private display; no active-desktop access/input injection |
+| scripts/prepare-platform-sdk.py | Signed local-only Weston/Lavapipe extraction; no system installation |
+| docs/adr/research/reports/compatibility | Decisions, evidence, reviews, exact CLI support gaps and next recovery work |
+| VERSION/CHANGELOG/WORKLOG | Version, coherent milestone history, every agent's own append-only engineering log |
 
-No product-level projects/workspaces/tabs/tiling/context UI is implemented yet; broad work waits for SPEC stage-0 gate. A renderer screenshot is not a native terminal or recovery certification.
+Separate control applications were removed by user request. The initial Electron comparison remains only in Git history6b9ed5c and a historical research note. There is no Electron/npm runtime in PigADE.
 
-## Interaction and ownership
+The catalog and tiling contracts are implemented headlessly; full product hierarchy/tiling UI, Git/worktree preparation, context/adapters and release gates remain incomplete. Do not mistake the four-session surface for the MVP. Stage0 gate remains open, particularly cold-history and aggregate memory proof.
 
-Read the handoff and current `git status`; never assume a clean checkout or reset it. Assign bounded paths for parallel work. Current contributors own independent areas; root integrates. Append your own change entry before handing off, including failed checks. Keep runtime journals/credentials outside Git and the product repository. State paths are explicit in prototype launch commands. Use test-only temporary directories and identity-checked cleanup for subprocesses; never kill unrelated CLI processes.
+Assign explicit bounded ownership for parallel edits; preserve others' changes. Each modifying agent appends its own WORKLOG entry using scripts/log-change.py. Root integrates/tests/commits. Never commit runtime databases/journals, auth/history, build outputs or .upstream. Never automate the user's active desktop; read the incident/isolation reports first.

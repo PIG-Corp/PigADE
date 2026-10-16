@@ -1,0 +1,56 @@
+{
+  "checkpoint_bytes_per_session": [
+    9981015,
+    9981015,
+    9981015,
+    9981015
+  ],
+  "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+  "durable_output_commit": {
+    "p50_ms": 0.848494,
+    "p95_ms": 1.425155,
+    "p99_ms": 2.5638979999999996,
+    "samples": 320
+  },
+  "elapsed_seconds": 23.837358764,
+  "kind": "stage-0 component benchmark; release; warm filesystem cache; no UI/GPU",
+  "lines_per_session": 10240,
+  "not_measured": [
+    "input-to-present",
+    "frame_time",
+    "cold_start",
+    "long_history_checkpoint",
+    "24h_soak",
+    "GPU_memory",
+    "VM_reboot"
+  ],
+  "output_bytes": 3153920,
+  "parse_output_chunk": {
+    "p50_ms": 0.208314,
+    "p95_ms": 0.450462,
+    "p99_ms": 1.000101,
+    "samples": 320
+  },
+  "resizes_per_session": 1000,
+  "sessions": 4,
+  "single_session_checkpoint_restore_plus_frame": {
+    "p50_ms": 49.891351,
+    "p95_ms": 52.726593,
+    "p99_ms": 54.397562,
+    "samples": 40
+  },
+  "single_session_full_replay_with_frame_and_grid_comparison": {
+    "p50_ms": 312.528472,
+    "p95_ms": 324.54152600000003,
+    "p99_ms": 329.556782,
+    "samples": 40
+  },
+  "captured_at": "2026-10-16T19:43:28.087161+00:00",
+  "product_version": "0.0.1-dev",
+  "filesystem": "btrfs",
+  "benchmark_process_peak_rss_kib": 151960,
+  "benchmark_process_user_seconds": 19.617837,
+  "benchmark_process_system_seconds": 0.904258,
+  "runner_wall_seconds": 23.849038979999932,
+  "scope_warning": "Component process only; no UI, IPC presentation, GPU, concurrent32sessions, long-history or soak certification."
+}

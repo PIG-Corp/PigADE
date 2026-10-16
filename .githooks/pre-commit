@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+python3 scripts/check-version.py
+python3 scripts/check-worklog.py
+git diff --cached --check

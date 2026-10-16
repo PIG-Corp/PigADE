@@ -1,0 +1,4 @@
+# Raw terminal captures contain meaningful CR, tabs, ANSI and trailing spaces.
+# Preserve byte-for-byte fixtures; never normalize or whitespace-fix them.
+*.recording binary
+*.vte binary
