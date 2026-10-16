@@ -241,3 +241,35 @@ Marked raw terminal capture fixtures binary to preserve CR/ANSI/trailing-space b
 - Files: .gitattributes
 - Verification: No fixture bytes changed; binary attributes prevent newline normalization and textual whitespace rewrites. Cached whitespace check rerunning with diagnostics captured.
 - Risks / next: Commit reviewed native foundation; continue strict whitespace checking first-party sources and textual docs.
+
+## 2026-10-16T20:36:31+00:00 — /root/archive_storage
+
+Added bounded derived cold-history archive rows with fragment CRCs, generation/profile header, event-level fsync commits, valid-prefix streaming and poison-on-uncertain-write behavior
+
+- Files: crates/storage/src/archive.rs
+- Verification: cargo test -p pigade-storage archive: 6 passed; cargo clippy -p pigade-storage --all-targets -- -D warnings passed; rustfmt --edition 2024 --check crates/storage/src/archive.rs passed; git diff --check passed. cargo fmt -p pigade-storage --check reports only root-owned crates/storage/src/lib.rs module ordering.
+- Risks / next: Root integrates durable journal-event ordering and checkpoint binding; archive remains derived only, with no SQLite/index/segmentation/pruning or terminal parsing. Root should format the concurrent lib.rs module registration before package-wide fmt check.
+
+## 2026-10-16T20:38:50+00:00 — root
+
+Started cold-history foundation after native milestone: adopted bounded-hot/archive semantic ADR and added borrowed normal-grid retirement hooks without changing Row layout or enabling production archival.
+
+- Files: vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/grid/resize.rs, vendor/alacritty_terminal/src/grid/checkpoint.rs, vendor/alacritty_terminal/src/grid/history_tests.rs, vendor/alacritty_terminal/src/term/mod.rs, crates/terminal/src/lib.rs, crates/storage/src/lib.rs, docs/adr/0005-bounded-hot-state-and-cold-archive.md, vendor/alacritty_terminal/PIGADE_PATCH.md
+- Verification: Targeted3core retirement tests passed: chronological scroll/history-limit, width-overflow+hot equivalence and reset singleepoch. Initial newtest compile failures (Row notiterable and Cell resetdiscriminant Color) corrected in fixtures; workspacecheck passes. Composed normal/alt/inactive-resize observer equality running; fullbaseline pending. Newarchive performer explicitly gpt-6-luna, owns archive.rs.
+- Risks / next: Complete committed-watermark archive-reader guard, then integrate typed row encoding/segmentation/index/versionedcheckpoint roots; no production archive or long-history acceptance claimed.
+
+## 2026-10-16T20:39:30+00:00 — /root/archive_storage
+
+Added receipt-bounded archive reading that verifies identity, boundary, final row ordinal, source sequence and checksum before exposing that row; enforced same source event sequence across row fragments and removed rustfmt skip compressions
+
+- Files: crates/storage/src/archive.rs
+- Verification: cargo test -p pigade-storage archive: 7 passed; cargo clippy -p pigade-storage --all-targets -- -D warnings passed; cargo fmt -p pigade-storage and cargo fmt -p pigade-storage --check passed; git diff --check passed.
+- Risks / next: Root must persist/bind only fsync ArchiveReceipt offsets for checkpoint readers. ArchiveReader::open and scan_valid_prefix are diagnostic CRC-prefix paths, not durability proof; archive remains derived and unindexed.
+
+## 2026-10-16T20:47:45+00:00 — root
+
+Integrated Luna archive primitive and borrowed normal-history hooks; repaired truncated-file reread handling and clarified complete-row versus durable receipt API names; retained resize false-positive reproducers as permanent tests.
+
+- Files: crates/storage/src/archive.rs, crates/storage/src/lib.rs, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/grid, vendor/alacritty_terminal/src/term/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, docs/adr/0005-bounded-hot-state-and-cold-archive.md, docs/reports/cold-history-foundation.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Fresh workspace81/81 tests, strict workspace Clippy, fmt and release build passed. Core151/151 lib and45/45 reference tests passed; no-default-features check passed. Crate-local Clippy passes with only three explicitly documented unchanged upstream question_mark warnings. Five Grid retirement regressions and complete composed hot/parser byte equality pass. Git diff --check and version alignment pass.
+- Risks / next: Archive remains derived/unindexed and unattached to host: typed cells/extras/links and palette provenance, continuation state, segments/lazy index, durable roots and archive+hot replay/fault integration next. Aggregate memory,4x1GiB/100kresizes,VM,24h,platform and fullMVP gates remain open. All new children used user-required gpt-6-luna; no active desktop automation.

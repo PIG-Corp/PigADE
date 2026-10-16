@@ -2,6 +2,7 @@
 //!
 //! A journal receipt is produced only after fsync. Callers may publish terminal
 //! model changes only after obtaining it. Recovery never modifies source bytes.
+pub mod archive;
 mod catalog;
 mod journal;
 mod launch;

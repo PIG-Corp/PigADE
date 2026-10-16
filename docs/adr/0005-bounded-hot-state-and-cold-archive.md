@@ -1,0 +1,13 @@
+# ADR0005 — Bounded hot state with a separate immutable archive
+
+Date:2026-10-17. Status: accepted implementation direction; archive/recovery acceptance remains open.
+
+SPEC defines bounded hot history and lazy cold history. Keep the pinned core's10,000-row hot-state/reflow semantics and retain retired normal-screen rows in a host-owned immutable cell archive. Full replay and checkpoint+tail must reproduce both components. This is explicitly not an infinite in-memory Grid: retired rows do not silently re-enter the live viewport after later resizing. Archive reading may reflow documented logical fragments for display/copy; it never mutates the live terminal or reparses ANSI in the UI.
+
+Store original cells, attributes, extra characters, link identity, row occupancy and soft-wrap information. Retire before scroll reuse, width-shrink overflow, explicit history-limit reduction, saved-history clear and reset. Follow the normal Grid through alternate-screen swaps; alternate redraw is not ordinary scrollback. Retain clear/reset epoch boundaries. A logical line can span more than the hot window, so storage must support bounded fragments rather than buffering a whole logical line.
+
+The first implementation slice introduces borrowed runtime retirement notifications and a generic derived fragment store. These do not enable production archival or change the existing hot checkpoint schema/profile. Their tests must prove observer-enabled and disabled hot/parser checkpoints remain byte-identical. Runtime sinks are not serialized; immutable archive root/watermark, lineage and continuation state must be added to a versioned envelope before host integration is accepted.
+
+Durability remains raw-event fsync → sole model update with bounded provisional archive writes → archive/index durability → frame/checkpoint publication. Append without fsync cannot grant a display/recovery receipt. Readers used for display must stay within an authenticated generation-bound committed watermark; diagnostic CRC-complete prefixes alone are not evidence of fsync. Preserve uncertain/torn originals and rebuild derived data from the retained raw journal instead of silently deleting or inventing history.
+
+No competing SQLite writers, raw-journal pruning or full-archive startup scan is approved by this slice. Segmentation, lazy range index, index commit roots, orphan recovery, archive/copy/search APIs and aggregate memory admission still require implementation and fault tests. Global hot/extras/reflow/export/import memory remains a separate blocker. The4×1GiB/100kresize, VM reboot and24h gates are unchanged.

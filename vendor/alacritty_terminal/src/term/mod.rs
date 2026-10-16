@@ -657,6 +657,19 @@ impl<T> Term<T> {
         &mut self.grid
     }
 
+    /// Attach runtime cold-history notifications only to the normal grid. The
+    /// observer follows that grid across alternate-screen swaps and resizing.
+    pub fn set_history_observer(
+        &mut self,
+        observer: Option<Arc<dyn crate::grid::HistoryObserver<Cell>>>,
+    ) {
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.set_history_observer(observer);
+        } else {
+            self.grid.set_history_observer(observer);
+        }
+    }
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         let old_cols = self.columns();

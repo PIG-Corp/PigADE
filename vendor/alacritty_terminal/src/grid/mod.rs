@@ -2,6 +2,7 @@
 
 use std::cmp::{max, min};
 use std::ops::{Bound, Deref, Index, IndexMut, Range, RangeBounds};
+use std::sync::Arc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -17,9 +18,32 @@ mod row;
 mod storage;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod history_tests;
 
 pub use self::row::Row;
 use self::storage::Storage;
+
+/// Why rows leave the bounded normal-screen state. Runtime observers are not
+/// semantic checkpoint fields and never change the grid's existing behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryRetirement {
+    Scroll,
+    WidthReflow,
+    HistoryLimit,
+    Clear,
+    Reset,
+}
+
+/// Borrowed synchronous notification before cells are reused/discarded.
+///
+/// Consumers must stream into bounded storage, latch failures without panicking,
+/// and never retain borrowed rows. Callbacks do not authorize publication: the
+/// host still commits derived data before displaying the corresponding frame.
+pub trait HistoryObserver<T>: std::fmt::Debug + Send + Sync {
+    fn row(&self, row: &Row<T>, columns: usize, reason: HistoryRetirement);
+    fn boundary(&self, _reason: HistoryRetirement) {}
+}
 
 pub trait GridCell: Sized {
     /// Check if the cell contains any content.
@@ -137,12 +161,16 @@ pub struct Grid<T> {
 
     /// Maximum number of lines in history.
     max_scroll_limit: usize,
+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    history_observer: Option<Arc<dyn HistoryObserver<T>>>,
 }
 
 impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn new(lines: usize, columns: usize, max_scroll_limit: usize) -> Grid<T> {
         Grid {
             raw: Storage::with_capacity(lines, columns),
+            history_observer: None,
             max_scroll_limit,
             display_offset: 0,
             saved_cursor: Cursor::default(),
@@ -156,7 +184,13 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
-            self.raw.shrink_lines(current_history_size - history_size);
+            let retired = current_history_size - history_size;
+            self.notify_history_rows(
+                -(current_history_size as i32),
+                -(current_history_size as i32) + retired as i32,
+                HistoryRetirement::HistoryLimit,
+            );
+            self.raw.shrink_lines(retired);
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -272,6 +306,12 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         // Only rotate the entire history if the active region starts at the top.
         if region.start == 0 {
+            let history = self.history_size();
+            let retired = positions.saturating_sub(self.max_scroll_limit - history);
+            self.notify_history_rows(
+                -(history as i32), -(history as i32) + retired as i32,
+                HistoryRetirement::Scroll,
+            );
             // Create scrollback for the new lines.
             self.increase_scroll_limit(positions);
 
@@ -340,7 +380,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         T: ResetDiscriminant<D>,
         D: PartialEq,
     {
+        self.notify_history_rows(
+            -(self.history_size() as i32), self.lines as i32, HistoryRetirement::Reset,
+        );
+        self.notify_history_boundary(HistoryRetirement::Reset);
+        // clear_history below is bookkeeping for this reset, not a second epoch.
+        let observer = self.history_observer.take();
         self.clear_history();
+        self.history_observer = observer;
 
         self.saved_cursor = Cursor::default();
         self.cursor = Cursor::default();
@@ -355,6 +402,24 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 }
 
 impl<T> Grid<T> {
+    pub fn set_history_observer(&mut self, observer: Option<Arc<dyn HistoryObserver<T>>>) {
+        self.history_observer = observer;
+    }
+
+    fn notify_history_rows(&self, start: i32, end: i32, reason: HistoryRetirement) {
+        if let Some(observer) = &self.history_observer {
+            for line in start..end {
+                observer.row(&self[Line(line)], self.columns, reason);
+            }
+        }
+    }
+
+    fn notify_history_boundary(&self, reason: HistoryRetirement) {
+        if let Some(observer) = &self.history_observer {
+            observer.boundary(reason);
+        }
+    }
+
     /// Reset a visible region within the grid.
     pub fn reset_region<D, R: RangeBounds<Line>>(&mut self, bounds: R)
     where
@@ -383,6 +448,8 @@ impl<T> Grid<T> {
 
     #[inline]
     pub fn clear_history(&mut self) {
+        self.notify_history_rows(-(self.history_size() as i32), 0, HistoryRetirement::Clear);
+        self.notify_history_boundary(HistoryRetirement::Clear);
         // Explicitly purge all lines from history.
         self.raw.shrink_lines(self.history_size());
 

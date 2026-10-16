@@ -145,3 +145,14 @@ removing raw history.
 ## Profile-aware upstream reference fixture
 
 The first full `--test ref` run passed44/45: the hyperlink capture expected process-global anonymous IDs `0_alacritty`/`1_alacritty`, while this maintained profile deliberately uses checkpointed per-Term IDs `0_pigade`/`1_pigade`. Root adapted only those six generated-ID occurrences in tests/ref/hyperlinks/grid.json. Explicit user IDs, URI strings, ordinal distinction, cells, attrs and every other golden field remain unchanged; no comparison was skipped or weakened. The original JSON is reconstructed by reversing those two exact substitutions. SHA-256 original:06c611d988bc376b05af48bbe4a83244ef62202a6ae71676b75a9759e8e90214; profile fixture:442de602c7cc1021397027225e60d5e3c32e4756244a95f4fe6711cd9f4924b8. Fresh full reference run:45/45. This is a documented downstream fixture adaptation, not a claim that unmodified upstream snapshots use PigADE IDs.
+
+## Experimental borrowed history notifications
+
+A runtime-only HistoryObserver follows the normal grid, including while alternate screen is active. Borrowed rows are reported before full-history scroll reuse, width-reflow overflow, history-limit reduction, clear and reset. Reset reports its retained history+viewport once and suppresses the internal clear's duplicate epoch. Observer fields are skipped by serde and rebuilt unattached by checkpoint import; Row memory layout and Storage::swap are unchanged. No production archive is enabled by this API and no existing hot-state semantics/profile change is intended. Grid regressions compare chronological retirement plus retained cells to a larger-history reference at the retirement boundary; composed tests compare complete hot/parser checkpoints with/without an observer. See ADR0005 for the bounded-hot/archive distinction and remaining acceptance work.
+
+Retirement slice verification (2026-10-17): five Grid regressions additionally
+cover height growth and width-growth cursor overflow without spurious archival;
+the composed wrapper crosses the10k hot-row boundary and compares complete hot
+Term/parser bytes with an observer, including inactive normal resize, clear and
+reset. This adds five core tests to the previous146, without changing schema2.
+Production sinks/encoding/roots are still absent.

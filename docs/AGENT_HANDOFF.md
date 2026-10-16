@@ -18,16 +18,16 @@ Actual native app renders host cells only; at most4 sessions, current temporary 
 
 ## Fresh evidence
 
-- Root workspace72 tests pass (13layout,17hostunit,8realPTY/recovery,1saturatedinput,23storage,10terminal), strictworkspaceclippy, fmt and release build.
+- Root workspace81 tests pass (13layout,17hostunit,8realPTY/recovery,1saturatedinput,31storage,11terminal), strictworkspaceclippy, fmt and release build.
 - App13 headless tests and strictclippy/build passed; two upstream GPUI float future warnings remain. No Windows/macOS/X11 runtime claim.
-- Vendor VTE56 tests; Alacritty146lib plus45reference fixtures. Hyperlink golden adapts only generated anonymous-ID suffixes to the explicit per-Term profile; provenance/hash documented, no comparison removed.
+- Vendor VTE56 tests; Alacritty151lib plus45reference fixtures. Hyperlink golden adapts only generated anonymous-ID suffixes to the explicit per-Term profile; provenance/hash documented, no comparison removed.
 - Actualapp isolated bwrap/Weston15.0.1/Pixman+Lavapipe26.2.1 render+UIkill/reopen passed with same4shellPIDs/generations and69×15acknowledgedgeometry. Private namespaces/socketpeer/FD/device checks recorded. No host desktop socket/input/GPU access or keyboard injection.
 - 60s four1MiB/s streams: every byteCRC and complete checkpoint-tail/fullreplay state matches; producer-rate target passes aftercoalescing. Host sampledRSS30,334,976bytes;112ACK observations p50=30.414,p95=67.648,p99=113.127ms. This is input-to-durable-snapshot observation, **not input-to-present**; full performance gate remains open. Failed prior throughput run retained.
 - Independent reviewer re-executed v2migration and oversized-wire defects and approved their repairs. Latest query-burst addition separately passes realPTY+complete-state equality.
 
 ## Next critical work
 
-1. Adopt explicit cold-archive versus unlimited-grid reflow ADR and implement deterministic retirement hooks+bounded immutable archive/index. See research/cold-history-plan.md. Do not add fields to Row without repairing Storage::swap's unsafe fixed-size assumption.
+1. ADR0005 adopted bounded-hot/archive semantics. Borrowed normal-grid retirement hooks and the bounded PIGARC01 fragment primitive exist, with no production sink attached. See reports/cold-history-foundation.md for exact scope. Next: typed row/extra/link encoding and palette provenance, continuation metadata, segments/lazy index and versioned checkpoint roots, then archive+hot replay equality and fault tests. Do not add fields to Row without repairing Storage::swap's unsafe fixed-size assumption.
 2. Global heap/admission budget and checkpoint/recovery scheduler: current128MiBencoded cap is not total heap; combining marks and shrink reflow still have transient/allocation risks. Fix before long-history/resource acceptance.
 3. Execute4×1GiB+100kresizes, record bytes-read bounded recovery, fault boundaries, VM reboot and separate24hsoak. None completed.
 4. Isolated native input/IME/clipboard/accessibility/X11/scale/GPU checks; current software screenshot proves rendering/reopen only. A compatible Weston input driver is not yet verified. Never fall back to the active desktop.

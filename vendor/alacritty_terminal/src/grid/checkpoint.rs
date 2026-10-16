@@ -158,6 +158,7 @@ impl GridCheckpointV1 {
             .collect::<Result<Vec<_>, CheckpointError>>()?;
         Ok(Grid {
             raw: Storage::from_checkpoint_rows(rows, self.lines),
+            history_observer: None,
             columns: self.columns,
             lines: self.lines,
             display_offset: self.display_offset,

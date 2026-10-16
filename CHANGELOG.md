@@ -9,6 +9,7 @@
 - Pure tiling with stable UUIDs, atomic cross-workspace transfers and persistent100undo/redo; schema3 catalog CAS and backed-up legacy migrations.
 - Allocation-aware checkpoint export/decode, all-event/idle checkpoint cadence, bounded output batching and chunked query replies.
 - Verified private software-Wayland rendering/reopen and measured4-stream throughput; complete MVP/performance gates remain open.
+- Bounded-hot/cold-archive ADR, normal-grid retirement notifications and a derived fragment-file primitive with fsync receipts and bounded readers; host archival integration remains pending.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

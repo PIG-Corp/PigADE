@@ -206,6 +206,19 @@ impl Terminal {
             responses: Vec::new(),
         }
     }
+    /// Runtime-only normal-history observer; this does not enable archive
+    /// persistence or change the authoritative hot-state checkpoint schema.
+    pub fn set_history_observer(
+        &mut self,
+        observer: Option<
+            Arc<
+                dyn alacritty_terminal::grid::HistoryObserver<alacritty_terminal::term::cell::Cell>,
+            >,
+        >,
+    ) {
+        self.term.set_history_observer(observer);
+    }
+
     /// Complete semantic state export for the pinned experimental core pair.
     /// Runtime sinks/damage and wall-clock deadlines are deliberately reconstructed.
     pub fn checkpoint(&self) -> Result<Vec<u8>> {
@@ -544,5 +557,77 @@ mod tests {
         b.output(b"\x1b[?1049l");
         assert_eq!(a.frame(), b.frame());
         assert!(a.frame().text().contains("normal"));
+    }
+    #[test]
+    fn retirement_observer_preserves_hot_state_and_follows_normal_grid() {
+        use alacritty_terminal::{
+            grid::{HistoryObserver, HistoryRetirement, Row},
+            index::Column,
+            term::cell::Cell as CoreCell,
+        };
+        #[derive(Debug, Default)]
+        struct Sink {
+            rows: Mutex<usize>,
+            samples: Mutex<Vec<String>>,
+            boundaries: Mutex<usize>,
+        }
+        impl HistoryObserver<CoreCell> for Sink {
+            fn row(&self, row: &Row<CoreCell>, columns: usize, _: HistoryRetirement) {
+                assert_eq!(row.len(), columns);
+                *self.rows.lock().unwrap() += 1;
+                let mut samples = self.samples.lock().unwrap();
+                if samples.len() < 3 {
+                    samples.push((0..columns).map(|column| row[Column(column)].c).collect());
+                }
+            }
+            fn boundary(&self, _: HistoryRetirement) {
+                *self.boundaries.lock().unwrap() += 1;
+            }
+        }
+        let sink = Arc::new(Sink::default());
+        let geometry = Geometry::new(4, 40).unwrap();
+        let mut observed = Terminal::new(geometry, false);
+        let mut reference = Terminal::new(geometry, false);
+        observed.set_history_observer(Some(sink.clone()));
+        let body = (0..5500)
+            .map(|line| format!("line{line:05} Русский 界 {}\r\n", "abcd".repeat(8)))
+            .collect::<String>();
+        observed.output(body.as_bytes());
+        reference.output(body.as_bytes());
+        assert!(*sink.rows.lock().unwrap() > 0);
+        assert!(sink.samples.lock().unwrap()[0].starts_with("line00000"));
+        assert_eq!(
+            observed.checkpoint().unwrap(),
+            reference.checkpoint().unwrap()
+        );
+        let rows = *sink.rows.lock().unwrap();
+        let alternate = format!("\x1b[?1049h{}", "alternate redraw\r\n".repeat(100));
+        observed.output(alternate.as_bytes());
+        reference.output(alternate.as_bytes());
+        assert_eq!(
+            *sink.rows.lock().unwrap(),
+            rows,
+            "alternate redraw is not normal scrollback"
+        );
+        let geometry = Geometry::new(4, 20).unwrap();
+        observed.resize(geometry);
+        reference.resize(geometry);
+        assert!(
+            *sink.rows.lock().unwrap() > rows,
+            "inactive normal width reflow also retires rows"
+        );
+        assert_eq!(
+            observed.checkpoint().unwrap(),
+            reference.checkpoint().unwrap()
+        );
+        for tail in [b"\x1b[?1049l".as_slice(), b"\x1b[3J", b"\x1bc"] {
+            observed.output(tail);
+            reference.output(tail);
+            assert_eq!(
+                observed.checkpoint().unwrap(),
+                reference.checkpoint().unwrap()
+            );
+        }
+        assert!(*sink.boundaries.lock().unwrap() >= 2);
     }
 }
