@@ -1,0 +1,50 @@
+{
+  "binary_sha256": "b7f0b12410b81d5bd6e484f835d465a9567c72466106072ead080d76014f1fd9",
+  "binary_source": "/home/afterburner/Projects/PigADE/target/release/examples/history_corpus",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "pigade-session-host",
+    "--example",
+    "history_corpus"
+  ],
+  "builder_stdout": "",
+  "command": [
+    "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-b79af464-32b8-4a3f-9820-e41b8ea50c77/history_corpus.frozen",
+    "--directory",
+    "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-b79af464-32b8-4a3f-9820-e41b8ea50c77",
+    "--sessions",
+    "4",
+    "--output-bytes",
+    "1048576",
+    "--resize-events",
+    "100",
+    "--logical-hours",
+    "24.0",
+    "--seed",
+    "1",
+    "--verify"
+  ],
+  "completed_unix": 1792189195.4886603,
+  "created_unix": 1792189195.4778812,
+  "estimated_bytes_required": 587202560,
+  "exit_code": 1,
+  "filesystem": "btrfs",
+  "free_bytes_before_run": 186886225920,
+  "frozen_binary": "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-b79af464-32b8-4a3f-9820-e41b8ea50c77/history_corpus.frozen",
+  "limitations": [
+    "Logical hours are metadata only; no 24-hour elapsed soak is performed.",
+    "No VM reboot, UI/GPU, PTY, provider CLI, authentication, or resume claim is made.",
+    "Full recovery verification is omitted unless --verify is supplied.",
+    "Available space is checked; no filesystem quota is configured or claimed.",
+    "The run directory is private and retained even if generation fails."
+  ],
+  "mountpoint": "/home",
+  "schema": 1,
+  "space_estimate_basis": "12x requested raw output plus 512 MiB; conservative preflight estimate, not a filesystem quota.",
+  "status": "builder_failed",
+  "verification_requested": true
+}

@@ -1,0 +1,271 @@
+{
+  "schema": 1,
+  "status": "recovery_verified",
+  "created_utc": "2026-10-16T21:58:04Z",
+  "nonce": "6896832464a14ab3946beca62457886b",
+  "directory": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad",
+  "filesystem": "btrfs",
+  "image": {
+    "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "filename": "alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "size_bytes": 157220864,
+    "sha512": "6b9928cea1c6243affb8a9b09eba6046cd090e8bdb7141fbf0c8f2649c4a99d62e12cda289da41f99de82ce2b3e3780772dd594eaee3693cb49691d81cbe5d4b",
+    "official_signature_valid": true,
+    "signer_fingerprint": "F26ADFADBAE702EF7AF637459DA7EF23BFFCDF22"
+  },
+  "binary": {
+    "source": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+    "sha256": "ca4cab88f758823dcda263fe62e3426e254de3f5496250e7eb98db7f008670c6",
+    "ldd": "\tlinux-vdso.so.1 (0x00007fdbf3f76000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007fdbf3f16000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007fdbf38c9000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007fdbf3600000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007fdbf3f78000)\n",
+    "libraries": [
+      {
+        "soname": "libgcc_s.so.1",
+        "source": "/usr/lib/libgcc_s.so.1",
+        "sha256": "e618cb9c90c2eb3a1dad1cfea5b6c1eebcf2e799ad805976f4ae47bdd61c716a"
+      },
+      {
+        "soname": "libm.so.6",
+        "source": "/usr/lib/libm.so.6",
+        "sha256": "965106704753eefe8c31ae7da6daba3ead3d18c52b19b5fcc41178bcc4aa999d"
+      },
+      {
+        "soname": "libc.so.6",
+        "source": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "soname": "ld-linux-x86-64.so.2",
+        "source": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)"
+  },
+  "sdk_manifest": "/tmp/pigade-vm-sdk/evidence/manifest.json",
+  "sdk": {
+    "qemu": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/qemu-system-x86_64",
+    "qemu_data_dir": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu",
+    "bios": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu/bios-256k.bin",
+    "mcopy": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/mcopy",
+    "mformat": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/mformat"
+  },
+  "artifacts": {
+    "disk": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/guest-disk.qcow2",
+    "seed": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/nocloud-seed.img",
+    "stage": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/stage",
+    "serial_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/serial.log",
+    "qemu_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/qemu.log",
+    "qmp_socket": "/tmp/p-q-l0khmw3y/q",
+    "qmp_socket_directory": "/tmp/p-q-l0khmw3y"
+  },
+  "isolation": {
+    "network": "none",
+    "display": "none",
+    "input_devices": "none",
+    "host_mounts": [
+      "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/stage"
+    ],
+    "state": "owned guest disk"
+  },
+  "scope": "actual guest reboot and synthetic PTY recovery; not provider AI resume or power-loss acceptance",
+  "qemu": {
+    "pid": 670320,
+    "identity": [
+      "d639535a-367c-4655-8316-12063ad08144",
+      670320,
+      1188099
+    ],
+    "command": [
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/qemu-system-x86_64",
+      "-name",
+      "pigade-vm-recovery",
+      "-machine",
+      "pc",
+      "-accel",
+      "kvm",
+      "-L",
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu",
+      "-cpu",
+      "host",
+      "-smp",
+      "2",
+      "-m",
+      "1024M",
+      "-bios",
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu/bios-256k.bin",
+      "-smbios",
+      "type=1,manufacturer=Amazon,serial=ds=nocloud",
+      "-nodefaults",
+      "-no-user-config",
+      "-display",
+      "none",
+      "-monitor",
+      "none",
+      "-serial",
+      "file:/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/serial.log",
+      "-parallel",
+      "none",
+      "-qmp",
+      "unix:/tmp/p-q-l0khmw3y/q,server=on,wait=off",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/guest-disk.qcow2,format=qcow2,if=ide,index=0",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/nocloud-seed.img,format=raw,if=ide,index=1",
+      "-virtfs",
+      "local,path=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T215804Z-2fac6aad/stage,mount_tag=pigade_stage,security_model=none,readonly=on",
+      "-nic",
+      "none",
+      "-boot",
+      "order=c"
+    ],
+    "environment_keys": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "LD_LIBRARY_PATH",
+      "PATH",
+      "QEMU_DATA_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+    ]
+  },
+  "guest_result": {
+    "cli_invocations_after_retry": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "cli_invocations_before_retry": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "first_boot_id": "f8fd52e8-934f-4c62-a709-ccf80183773c",
+    "nonce": "6896832464a14ab3946beca62457886b",
+    "scope": "synthetic PTY + actual guest reboot; no provider AI/task resume",
+    "second_boot_id": "ed04debc-d22a-4f06-9a31-fe924fcb5a1b",
+    "sessions": [
+      {
+        "checkpoint_sequence": 19,
+        "frame_sha256": "b1ea03234660b740ccc7ceb25e0cdceff6cf89f6164a94db80482101f3362c9c",
+        "generation": "362c42c8-4f7f-4c51-b9a6-68b0ac24a41d",
+        "input_refused": true,
+        "operation": "079fcf02-eaea-4229-a56b-4a00c3acd9f4",
+        "retry_pid": null,
+        "sequence": 19,
+        "session": "77f086fb-1988-4d4f-840d-d98c0cd4eb22",
+        "state": "launch_outcome_unknown",
+        "verify_recovery": {
+          "archive_comparison_ms": 93.151442,
+          "checkpoint_tail_journal_bytes_read": 356,
+          "checkpoint_tail_ms": 68.948615,
+          "cold_archive_format": "row2,index1,retirement1",
+          "cold_history_equal": true,
+          "cold_history_records": 2467,
+          "complete_state_equal": true,
+          "frame_equal": true,
+          "full_journal_bytes_read": 377422,
+          "full_replay_ms": 50.860037,
+          "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+          "recovery_path": "checkpoint-tail",
+          "semantic_checkpoint_bytes": 9710195,
+          "sequence": 19
+        }
+      },
+      {
+        "checkpoint_sequence": 18,
+        "frame_sha256": "64299ddc296bbbf15b516a72182a679fb927d547a48c77dd0cfdf667ecba8496",
+        "generation": "57af0f11-abeb-414f-8548-717a22452cfe",
+        "input_refused": true,
+        "operation": "c8bb30f2-609d-466a-a1ab-97fb289d78ca",
+        "retry_pid": null,
+        "sequence": 18,
+        "session": "9bcfc35d-a523-4b26-a58e-bba975582e0c",
+        "state": "launch_outcome_unknown",
+        "verify_recovery": {
+          "archive_comparison_ms": 93.183162,
+          "checkpoint_tail_journal_bytes_read": 356,
+          "checkpoint_tail_ms": 65.887944,
+          "cold_archive_format": "row2,index1,retirement1",
+          "cold_history_equal": true,
+          "cold_history_records": 2467,
+          "complete_state_equal": true,
+          "frame_equal": true,
+          "full_journal_bytes_read": 377389,
+          "full_replay_ms": 47.000617,
+          "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+          "recovery_path": "checkpoint-tail",
+          "semantic_checkpoint_bytes": 9710195,
+          "sequence": 18
+        }
+      },
+      {
+        "checkpoint_sequence": 14,
+        "frame_sha256": "412a9916a27c9efa9c5a54f865197fe67f679326d7c7880d05e352d893f2d983",
+        "generation": "8e34d0c1-2dd0-4603-ad29-8c4cd2d4b66e",
+        "input_refused": true,
+        "operation": "dd84ec43-1579-410a-a808-288e9267e809",
+        "retry_pid": null,
+        "sequence": 14,
+        "session": "5718466e-af61-4216-9515-464ce2a91d40",
+        "state": "launch_outcome_unknown",
+        "verify_recovery": {
+          "archive_comparison_ms": 92.79728700000001,
+          "checkpoint_tail_journal_bytes_read": 356,
+          "checkpoint_tail_ms": 65.80576,
+          "cold_archive_format": "row2,index1,retirement1",
+          "cold_history_equal": true,
+          "cold_history_records": 2467,
+          "complete_state_equal": true,
+          "frame_equal": true,
+          "full_journal_bytes_read": 377257,
+          "full_replay_ms": 46.849455,
+          "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+          "recovery_path": "checkpoint-tail",
+          "semantic_checkpoint_bytes": 9710195,
+          "sequence": 14
+        }
+      },
+      {
+        "checkpoint_sequence": 15,
+        "frame_sha256": "bc19cc52f8ce04cd1dac13c97200d2e11f07660a12ded1e0f47f053eab48772b",
+        "generation": "dced5b71-b9e9-474d-bafd-105b52150713",
+        "input_refused": true,
+        "operation": "36f82f1a-1266-4336-a4ad-9be48f223f96",
+        "retry_pid": null,
+        "sequence": 15,
+        "session": "015e76b4-3ded-46e1-aa0a-5932265d28c0",
+        "state": "launch_outcome_unknown",
+        "verify_recovery": {
+          "archive_comparison_ms": 92.33529999999999,
+          "checkpoint_tail_journal_bytes_read": 356,
+          "checkpoint_tail_ms": 67.15807699999999,
+          "cold_archive_format": "row2,index1,retirement1",
+          "cold_history_equal": true,
+          "cold_history_records": 2467,
+          "complete_state_equal": true,
+          "frame_equal": true,
+          "full_journal_bytes_read": 377290,
+          "full_replay_ms": 47.323463000000004,
+          "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+          "recovery_path": "checkpoint-tail",
+          "semantic_checkpoint_bytes": 9710195,
+          "sequence": 15
+        }
+      }
+    ],
+    "status": "recovery_verified"
+  },
+  "guest_boot_ids": [
+    "f8fd52e8-934f-4c62-a709-ccf80183773c",
+    "ed04debc-d22a-4f06-9a31-fe924fcb5a1b"
+  ],
+  "qmp_last_status": {
+    "status": "running",
+    "running": true
+  },
+  "serial_sha256": "dda290dae866bda626c36e01e9ab5b362bb394960684e029c866096f4cd50183",
+  "qemu_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

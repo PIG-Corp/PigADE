@@ -294,6 +294,7 @@ impl OrderState {
 /// event-level durability boundary and is valid only between complete rows.
 pub struct ArchiveWriter {
     file: File,
+    logical_position: u64,
     header: ArchiveHeader,
     order: OrderState,
     poisoned: bool,
@@ -324,6 +325,9 @@ impl ArchiveWriter {
         prefix.extend_from_slice(&bytes);
         file.write_all(&prefix)?;
         file.write_all(&crc32fast::hash(&prefix).to_le_bytes())?;
+        let logical_position = (prefix.len() as u64)
+            .checked_add(4)
+            .context("archive header offset exhausted")?;
         file.sync_all()?;
         let parent = path
             .parent()
@@ -332,6 +336,7 @@ impl ArchiveWriter {
         File::open(parent)?.sync_all()?;
         Ok(Self {
             file,
+            logical_position,
             header,
             order: OrderState::default(),
             poisoned: false,
@@ -385,7 +390,7 @@ impl ArchiveWriter {
             payload: payload.to_vec(),
         };
         let mut next_order = self.order;
-        let record_start = self.file.stream_position()?;
+        let record_start = self.logical_position;
         next_order.accept(&fragment, record_start)?;
         let mut frame = Vec::with_capacity(RECORD_HEADER_BYTES + payload.len());
         frame.extend_from_slice(&source_event_sequence.to_le_bytes());
@@ -400,6 +405,9 @@ impl ArchiveWriter {
         let checksum = hasher.finalize();
         frame.extend_from_slice(&checksum.to_le_bytes());
         frame.extend_from_slice(payload);
+        let end_offset = record_start
+            .checked_add(frame.len() as u64)
+            .context("archive offset exhausted")?;
         self.poisoned = true;
         match fault {
             #[cfg(test)]
@@ -409,6 +417,7 @@ impl ArchiveWriter {
             }
             _ => self.file.write_all(&frame)?,
         }
+        self.logical_position = end_offset;
         self.order = next_order;
         if fragment_offset == 0 {
             self.current_row_start = Some(record_start);
@@ -417,7 +426,7 @@ impl ArchiveWriter {
             self.complete_since_commit = true;
             self.latest_complete = Some(ArchiveRowLocation {
                 start_offset: self.current_row_start.take().unwrap_or(record_start),
-                end_offset: self.file.stream_position()?,
+                end_offset,
                 row_ordinal,
                 source_event_sequence,
                 last_fragment_checksum: checksum,
@@ -429,7 +438,8 @@ impl ArchiveWriter {
 
     /// Current append position, useful for constructing durable index entries.
     pub fn position(&mut self) -> Result<u64> {
-        Ok(self.file.stream_position()?)
+        ensure!(!self.poisoned, "archive writer poisoned by uncertain write");
+        Ok(self.logical_position)
     }
 
     /// Most recently completed row. This remains provisional until the caller
@@ -460,7 +470,7 @@ impl ArchiveWriter {
         #[cfg(not(test))]
         let _ = fail_sync;
         self.file.sync_all()?;
-        let end_offset = self.file.stream_position()?;
+        let end_offset = self.logical_position;
         let location = self.latest_complete.unwrap();
         self.complete_since_commit = false;
         self.poisoned = false;
@@ -883,6 +893,48 @@ mod tests {
     }
 
     #[test]
+    fn logical_positions_match_single_multifragment_and_empty_rows() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("archive");
+        let h = header();
+        let mut writer = ArchiveWriter::create(&path, h.clone())?;
+        let header_end = std::fs::metadata(&path)?.len();
+        assert_eq!(writer.position()?, header_end);
+
+        writer.append_fragment(1, 1, 0, true, b"single")?;
+        let single = writer.last_complete_row().unwrap();
+        assert_eq!(single.start_offset, header_end);
+        assert_eq!(single.end_offset, std::fs::metadata(&path)?.len());
+        assert_eq!(writer.position()?, single.end_offset);
+
+        writer.append_fragment(2, 2, 0, false, b"multi-")?;
+        assert_eq!(writer.position()?, std::fs::metadata(&path)?.len());
+        writer.append_fragment(2, 2, 6, true, b"fragment")?;
+        let multi = writer.last_complete_row().unwrap();
+        assert_eq!(multi.start_offset, single.end_offset);
+        assert_eq!(multi.end_offset, std::fs::metadata(&path)?.len());
+        assert_eq!(writer.position()?, multi.end_offset);
+
+        writer.append_fragment(3, 3, 0, true, b"")?;
+        let empty = writer.last_complete_row().unwrap();
+        assert_eq!(empty.start_offset, multi.end_offset);
+        assert_eq!(empty.end_offset, std::fs::metadata(&path)?.len());
+        let receipt = writer.commit()?;
+        assert_eq!(receipt.end_offset, empty.end_offset);
+
+        let mut reader = ArchiveReader::open_row(&path, &h, single)?;
+        assert_eq!(reader.next_fragment()?.unwrap().payload, b"single");
+        let mut reader = ArchiveReader::open_row(&path, &h, multi)?;
+        assert_eq!(reader.next_fragment()?.unwrap().payload, b"multi-");
+        assert_eq!(reader.next_fragment()?.unwrap().payload, b"fragment");
+        let mut reader = ArchiveReader::open_row(&path, &h, empty)?;
+        let fragment = reader.next_fragment()?.unwrap();
+        assert!(fragment.payload.is_empty());
+        assert!(fragment.final_fragment);
+        Ok(())
+    }
+
+    #[test]
     fn incomplete_row_is_not_exposed_and_prefix_is_preserved() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("archive");
@@ -988,6 +1040,7 @@ mod tests {
             w.append_fragment_impl(1, 1, 0, true, b"torn", Some(WriteFault::AfterBytes(9)))
                 .is_err()
         );
+        assert!(w.position().is_err());
         assert!(
             w.append_fragment(1, 1, 0, true, b"cannot continue")
                 .is_err()

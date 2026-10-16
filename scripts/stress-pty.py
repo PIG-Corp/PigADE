@@ -218,7 +218,7 @@ def run(args):
               'status': 'running', 'sessions': [], 'resources': [], 'errors': [],
               'scope': 'Actual release PTY/host/fsync/IPC/checkpoint workload; no UI/GPU/provider processes. ACK is input-to-durable-snapshot-observed, NOT input-to-present.',
               'not_measured': ['UI present/frame time', 'GPU memory', 'queue high-water instrumentation', 'VM reboot', '24h soak', '1GiB cold-history gate'],
-              'bounded_implementation_limits': {'output_chunk_bytes': 16384, 'actor_queue_items': 8,
+              'bounded_implementation_limits': {'PTY_read_chunk_bytes': 16384, 'output_event_batch_bytes': 65536, 'output_collection_window_microseconds': 250, 'actor_queue_items': 8,
                   'input_queue_items': 8, 'input_chunk_bytes': 16384, 'priority_control_items': 1,
                   'IPC_workers': 16, 'IPC_jobs': 16, 'IPC_message_limit_bytes': MAX_IPC,
                   'note': 'Source limits, not measured occupancy; one in-flight chunk per worker/reader plus retained bounded query/deferred buffers.'},

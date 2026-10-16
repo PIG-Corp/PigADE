@@ -1,0 +1,12 @@
+{
+  "full_retained_directory": "/home/afterburner/.local/state/pigade/long-history-smoke/retained-integration/long-history-run-8abb681f-3d7d-4731-999f-eef870685a2d",
+  "copied_evidence_files": [
+    "build.stdout.log",
+    "build.stderr.log",
+    "builder.stdout.log",
+    "builder.stderr.log",
+    "runner.json",
+    "long-history-125e205f-941c-48a4-9ac3-fc794bdba692/manifest.json"
+  ],
+  "note": "Binary, journals, checkpoints and archives retained outside Git; evidence manifests/logs copied without rewriting original paths."
+}

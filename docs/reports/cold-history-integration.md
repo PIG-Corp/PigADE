@@ -68,14 +68,18 @@ queue occupancy, or latency-to-present budgets.
 
 ## Verification evidence
 
-The latest fresh root workspace run recorded by the integrating agent passed
-111 tests: 13 layout, 28 host library, 4 checkpoint-retention, 11 recovery, 1
-slow-input, 34 storage and 20 terminal tests. Fresh strict workspace Clippy and
-format checks also passed in that run. This report records that integrated run;
-the documentation pass did not rerun it. The latest recorded standalone vendor
-run (151 Alacritty library tests and 45 reference cases) and GPUI app run (13
-tests) are prior evidence and were not fresh in this integration. None establishes
-platform acceptance.
+The fresh root run passed 120 workspace tests, including real-PTY
+integration tests and conditional-poll coverage.
+Fresh vendor verification passed 152 Alacritty library tests and 45 reference
+cases. Workspace fmt, strict Clippy and release build passed. The native
+application passed 17 tests, all-target strict Clippy and build (with two known upstream GPUI float-future
+warnings). The isolated conditional-poll UI run rendered and reopened four
+views at 69×15 with stable PIDs/generations; the root visually checked the
+screenshot. Evidence is in
+[`conditional-poll-20261017`](../../crates/app/evidence/conditional-poll-20261017/).
+The GPUI relink SIGBUS was traced to `EDQUOT` under `/tmp`; the build passed
+after moving its cache. These checks do not establish GPU or platform
+acceptance.
 
 ### Short 5-second diagnostic
 
@@ -99,7 +103,7 @@ took 5.05–5.44 seconds. The post-checkpoint-cache run
 also missed the rate target. These failed artifacts remain useful and must not
 be overwritten or described as passes.
 
-### Current 60-second workload: correctness passes, rate target fails
+### Earlier 60-second workload: correctness passes, rate target fails
 
 [`native-cold-history-60s.json`](../../benchmarks/results/native-cold-history-60s.json)
 contains the full normal-history workload: four concurrent producers, 60 MiB
@@ -112,6 +116,81 @@ records. Actual journal-read counters show full replay read 63,105,903 to
 peak RSS was 218,689,536 bytes for the release host. This
 run excludes UI/GPU/provider processes and measures no input-to-present latency.
 Its 60 MiB corpus does not exercise the SPEC's 4×1 GiB/100,000-resize gate.
+
+### Previous no-wait 64 KiB batching: correctness passes, rate target fails
+
+This measured implementation coalesced up to 64 KiB of already-available output
+while each PTY read remained capped at 16 KiB. Queue capacity remained eight.
+This prior version added no collection window. The short artifact
+[`native-cold-history-5s-64k-batch.json`](../../benchmarks/results/native-cold-history-5s-64k-batch.json)
+meets the 5-second producer rate (4.9845 seconds per 5 MiB body) with exact
+journal, hot/parser and all 35,728 cold-record equality.
+
+The latest 60-second artifact
+[`native-cold-history-60s-64k-batch.json`](../../benchmarks/results/native-cold-history-60s-64k-batch.json)
+retains exact data and full-replay/checkpoint-tail equality, including all
+539,088 cold records per session. Its four 60 MiB producer bodies complete in
+66.41–67.09 seconds, so the 60-second producer-rate target remains missed,
+although this improves the earlier 77.43–78.06-second run. Per-stream cumulative
+metrics report about 11.56–12.45 seconds in journal fsync and 25.79–27.49 seconds
+in archive commit. This normal-history mode has no input-latency claim; it also
+does not measure UI presentation. No durability step was removed to obtain the
+improvement.
+
+### 250 μs collection-window run
+
+[`native-cold-history-60s-250us-batch.json`](../../benchmarks/results/native-cold-history-60s-250us-batch.json)
+records a 250 μs collection-window variant with exact recovery, but producer
+body times were 62.275–62.517 seconds and missed the 60-second rate target.
+
+### 64 KiB index-batch run: producer rate passes; host deadline and latency do not
+
+The newer [`native-cold-history-60s-index-batch.json`](../../benchmarks/results/native-cold-history-60s-index-batch.json)
+uses a bounded 64 KiB index buffer, preserves archive-data fsync before
+index-fsync, and uses logical archive offsets to avoid per-row `lseek`. All four
+60 MiB producer bodies completed in 59.9845–59.9846 seconds. Journal CRCs,
+complete hot/parser/frame state and all 539,088 cold records per session
+matched full replay. The producer body-rate predicate passed in all streams.
+Host exit was observed at 60.118–60.400 seconds, so the host-exit deadline
+failed; producer maximum schedule lateness was 7.1–7.5 seconds. No input latency
+was sampled. Host peak sampled RSS was 218,050,560 bytes, excluding Python
+producers, UI, GPU and provider processes. This is not steady-rate, latency,
+total-memory or SPEC long-history acceptance.
+
+The separate [`native-idle-8-sessions.json`](../../benchmarks/results/native-idle-8-sessions.json)
+host-only diagnostic sampled 0.0% steady CPU and 319,963,136-byte peak RSS with
+complete recovery equality for all eight sessions. It excludes UI/GPU/provider
+and producer processes and is not a total product idle-resource result.
+
+### Alternate-screen throughput and input check
+
+[`native-tui-60s-index-batch.json`](../../benchmarks/results/native-tui-60s-index-batch.json)
+records four alternate-screen PTYs producing 60 MiB each in 59.9845–59.9859 s.
+Producer/journal CRCs and complete recovery comparison passed. All 116 input
+ACKs were observed: p50 27.04 ms, p95 42.91 ms, p99 59.07 ms. These are
+host-snapshot observations, not UI input-to-present measurements. Peak sampled
+host RSS was 30,949,376 bytes. Exit observation at 60.015–60.025 s missed the
+strict 60 s exit deadline; that deadline includes trailing output, exit and
+polling after the final scheduled body chunk. This alternate-screen workload
+does not replace normal-history or product performance acceptance.
+
+### Small corpus and soak smoke runs
+
+The latest frozen corpus run
+([`run 29039a7a`](../../benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721/runner.json))
+passed four 1 MiB sessions with 100 resizes each, a common-root comparison,
+3,199 cold rows per session and complete hot/frame/cold equality. It covered
+partial final UTF-8/CSI and alternate-screen, OSC8 and synchronized-output
+checkpoints, plus streamed SHA-256 and a per-event logical 24-hour timeline.
+Logical time is metadata, not elapsed time. The 1 GiB corpus and real-time
+24-hour soak remain open. See [`long-history.py`](../../scripts/long-history.py)
+and [`history_corpus.rs`](../../crates/session-host/examples/history_corpus.rs).
+
+The corrected `scripts/soak-pty.py` then passed a 10-second four-session
+functionality run in 10.036 seconds: each session acknowledged input, processed
+three resizes, retained valid journal CRCs, and passed the full recovery oracle.
+An earlier attempt failed before measurement with a `NameError`; that artifact
+was retained. The successful short run is not a 24-hour real-time soak.
 
 ### 12-session host memory diagnostic
 
@@ -152,19 +231,31 @@ history mode intentionally does not measure input ACK latency.
 
 ## Remaining gates
 
-- Improve the normal-history 60-second producer throughput without weakening
-  raw journal/archive/index/checkpoint durability or exact replay equality.
+- Evaluate the index-batch run against steady-rate, host-exit and latency
+  requirements without weakening durability or exact replay equality; retain
+  the 250 μs rate miss and earlier failed results.
 - Complete user-facing paginated history, copy/search, quota reporting and
   cleanup of private replay-cache orphans.
 - Establish total live/reflow/export/import heap admission, not only host RSS.
 - Run the SPEC's four 1 GiB streams with 100,000 resizes per session, bounded
   checkpoint-tail bytes read, complete record equality, and the applicable
   fault matrix.
-- Complete the isolated VM reboot test. The pinned signed Arch QEMU SDK and
-  reboot harness are prepared, and an initial headless guest reached its Linux
-  root mount. No successful reboot or AI conversation-resume result is available.
+- The synthetic cold-history portion of an isolated two-boot VM run now passes
+  for four sessions × 2,467 rows; see [VM reboot evidence](vm-reboot.md). Provider
+  conversation resume, product layout restoration and power-loss behavior are
+  still untested, so SPEC REC-03 remains open.
 - Run a separate 24-hour real-time soak and the remaining isolated UI/platform,
   renderer/GPU, IME/clipboard/accessibility and real provider-version checks.
 
-Stage 0 remains open. A green short diagnostic, a host-only memory pass, or
-prepared VM tooling does not close these gates.
+Stage 0 remains open. A green short diagnostic, a host-only memory pass, or a
+partial synthetic VM recovery does not close these gates.
+
+### Live-model oracle extension
+
+The current corpus verifier also compares the original generating live model
+with both recovery paths: complete checkpoint bytes, frame, history continuation
+state, generation and every canonical cold record. The fresh
+[`long-history-live-smoke`](../../benchmarks/results/long-history-live-smoke/)
+run passed all three comparisons for four 1 MiB sessions and 100 resizes each.
+A regression rejects mismatched same-generation live history. Earlier artifacts
+without `live_*` fields only certify full replay versus checkpoint-tail.

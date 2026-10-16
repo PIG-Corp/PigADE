@@ -417,3 +417,131 @@ Follow-up review: freeze the corpus executable inside each run before hashing an
 - Files: crates/session-host/examples/history_corpus.rs, scripts/long-history.py
 - Verification: rustfmt --edition 2024 --check crates/session-host/examples/history_corpus.rs; PYTHONPYCACHEPREFIX=/tmp/pigade-long-history-pycache python3 -m py_compile scripts/long-history.py; python3 scripts/long-history.py --help; freeze helper copied the current example into a private mode-0700 file and its recorded SHA-256 matched the copy; no corpus workload rerun.
 - Risks / next: Root owns integration and the full corpus run. The earlier small-run recovery evidence applies to unchanged corpus event-generation/recovery logic; this follow-up changed the manifest label and runner binary/space safeguards only. The preflight estimate is not an enforced filesystem quota.
+
+## 2026-10-16T21:50:33+00:00 — /root/real_time_soak
+
+Added retained-state real-time four-PTY soak runner with durable JSONL sampling, generation-scoped IPC exercises and full output CRC verification
+
+- Files: scripts/soak-pty.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/soak-pty.py; python3 scripts/soak-pty.py --help; embedded producer compile; git diff --check -- scripts/soak-pty.py (passed); runtime soak intentionally not started per lead instruction
+- Risks / next: Lead reviews and runs 10-second functionality smoke after main performance benchmark; no 24-hour soak executed, so REC-08 remains open
+
+## 2026-10-16T21:51:36+00:00 — /root/conditional_poll
+
+Added bounded conditional host-view polling metadata and focused helper tests; selects four sessions by stable UUID order and only clones views whose generation, sequence, state, PID, or storage error differs from the client watermark.
+
+- Files: crates/session-host/src/poll.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/poll.rs and git diff --check -- crates/session-host/src/poll.rs passed; Rust compilation/tests not run because lead requested the current 60s performance/resource window remain undisturbed.
+- Risks / next: Root registers and integrates the new poll module and IPC command, then owns compilation, focused tests, and integrated verification.
+
+## 2026-10-16T21:52:26+00:00 — /root/conditional_poll
+
+Corrected polling identity to use exact session-generation pairs, allowing multiple retained generations for one session; removed PollResult PartialEq, which View does not implement, and added a historical-generation regression test.
+
+- Files: crates/session-host/src/poll.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/poll.rs and git diff --check -- crates/session-host/src/poll.rs passed; compilation/tests intentionally left to root during integration.
+- Risks / next: Root integrates and owns compilation, tests, and final verification.
+
+## 2026-10-16T21:52:36+00:00 — /root/real_time_soak
+
+Hardened real-time PTY soak verification, bounded evidence, producer handshakes and frozen executable durability
+
+- Files: scripts/soak-pty.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/soak-pty.py; python3 scripts/soak-pty.py --help; embedded producer compile; git diff --check -- scripts/soak-pty.py WORKLOG.md (passed); runtime workload not started per lead direction
+- Risks / next: Lead to run only after requested VM run and confirm runtime-smoke window; 24-hour soak remains unexecuted and REC-08 open
+
+## 2026-10-16T21:56:19+00:00 — /root/real_time_soak
+
+Fixed stale producer_started runtime NameError and verified four-session 10-second soak with full recovery oracle
+
+- Files: scripts/soak-pty.py, WORKLOG.md
+- Verification: Initial root-authorized run failed before measurement with NameError: producer_started; its artifact was retained at /home/afterburner/.local/state/pigade/soak/soak-20261016T215447Z-d3ff5eca. Removed stale event reference and stale summary key; python3 -m py_compile scripts/soak-pty.py; 10-second run with --sample-seconds 2 --verify completed in 10.036s; all four journal CRCs and full recovery (checkpoint-tail, complete model/frame/cold history) passed; each session acknowledged input and processed 3 resizes; 5 samples/session recorded checkpoint age and sequence lag; output artifacts retained at /home/afterburner/.local/state/pigade/soak/soak-20261016T215546Z-596983b0; git diff --check passed
+- Risks / next: Root reviews result; no 24-hour soak was run and REC-08 remains open
+
+## 2026-10-16T22:03:19+00:00 — /root/cold_history_docs
+
+Updated cold-history and VM recovery documentation with current 250us collector status and verified synthetic cold reboot
+
+- Files: README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/cold-history-integration.md, docs/reports/vm-reboot.md
+- Verification: git diff --check on owned docs and WORKLOG passed; relative Markdown links resolved; Python manifest assertions passed for vm-reboot-cold-history.json (two distinct boot IDs, four sessions with 2,467 cold records and complete hot/frame/cold equality, 356-byte checkpoint tails, unchanged invocation markers); no tests run by this documentation agent
+- Risks / next: Current 250us output collector still needs fresh 5s/60s throughput artifacts; final app all-target Clippy and isolated render/reopen remain pending; 1-GiB corpus, 24h soak, provider/layout acceptance and MVP gates remain open
+
+## 2026-10-16T22:04:34+00:00 — /root/cold_history_docs
+
+Updated handoff, project map, changelog, README and cold-history report with completed workspace/app verification and isolated UI render/reopen evidence
+
+- Files: README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/cold-history-integration.md
+- Verification: git diff --check passed; conditional-poll evidence result.json reports render_and_reopen_pass; relative Markdown links checked; no code tests run by documentation agent
+- Risks / next: Await fresh 250us 5s/60s benchmark result; 1GiB corpus, 24h soak, provider/layout and platform gates remain open
+
+## 2026-10-16T22:08:00+00:00 — /root/live_memory_review
+
+Bounded width-shrink reflow with rolling retained rows and Unicode/reference regression
+
+- Files: vendor/alacritty_terminal/src/grid/resize.rs, vendor/alacritty_terminal/src/grid/row.rs, vendor/alacritty_terminal/src/grid/history_tests.rs
+- Verification: Not run: root requested no compile/tests while 60-second benchmark is active; diff inspection only
+- Risks / next: Root review, then run focused vendor regression and verify formatting after benchmark window; combining-mark live growth/global admission remain open
+
+## 2026-10-16T22:11:09+00:00 — /root/archive_logical_offsets
+
+Track archive append offsets in memory to avoid per-fragment seek syscalls while preserving poisoning and commit boundaries
+
+- Files: crates/storage/src/archive.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage archive::tests (10 passed); cargo clippy -p pigade-storage --all-targets -- -D warnings (passed)
+- Risks / next: No known risks; lead owns integration and final workspace verification
+
+## 2026-10-16T22:15:38+00:00 — /root/long_history_corpus
+
+Follow-up review: colocated all generated session artifacts under the single corpus recovery root and added a generation/profile-bound, versioned JSONL logical event timeline with a per-event SHA-256.
+
+- Files: crates/session-host/examples/history_corpus.rs, scripts/long-history.py
+- Verification: rustfmt; strict targeted example Clippy; locked release example build; Python compile; git diff --check; one agreed 4-session 1 MiB/100-resize --verify smoke on btrfs passed. All four journals, checkpoints, and history roots were colocated. Every timeline had 215 monotonic sequence/kind entries from 0 to 86400000000000 ns, and SyncTimeout was exactly 200000000 ns after sync begin; stored SHA-256 matched. Per session: requested 1048576 output bytes, 100 resizes, 3199 cold records, and complete state/frame/all-record equality; checkpoint-tail read 404/1058242 journal bytes.
+- Risks / next: Root owns the 4-session 1 GiB/100000-resize corpus and SPEC budget/recovery assessment. This 1 MiB smoke is functionality evidence only; logical timestamps are synthetic and no real 24 h soak or filesystem quota is established.
+
+## 2026-10-16T22:20:56+00:00 — /root/long_history_corpus
+
+Added four distinct final checkpoint boundary recipes, separate ending byte/event metrics, and per-sequence monotonic logical timelines with exact 200 ms synchronized-output timeout pairs
+
+- Files: crates/session-host/examples/history_corpus.rs, scripts/long-history.py
+- Verification: cargo fmt --all --check; cargo clippy --locked -p pigade-session-host --example history_corpus -- -D warnings; python3 -m py_compile scripts/long-history.py; python3 scripts/long-history.py --directory /home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent --sessions 4 --output-bytes 1048576 --resize-events 100 --logical-hours 24 --verify (passed: 4/4 checkpoint-tail; complete state, frame, and cold-history equality; timeline SHA-256 and endpoints matched; each sync timeout exactly 200000000 ns after its begin)
+- Risks / next: Root owns large 4-session corpus and performance/SPEC assessment; smoke is functionality evidence only, logical schedule is synthetic, no 24-hour elapsed soak or filesystem quota
+
+## 2026-10-16T22:23:35+00:00 — /root/cold_history_docs
+
+Reconciled current cold-history performance, idle and long-history smoke evidence across handoff and project docs
+
+- Files: README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/cold-history-integration.md
+- Verification: Parsed new benchmark and corpus JSON artifacts; verified producer/body/exit/lateness ranges, full recovery flags and four-session smoke parameters; relative Markdown links and git diff --check passed; no builds/tests run by documentation agent
+- Risks / next: Lead to complete fresh full workspace rerun; 1GiB/100000-resize corpus, real 24h soak, input latency, global combining heap bound, provider/layout/platform and MVP gates remain open
+
+## 2026-10-16T22:25:04+00:00 — /root/gpui_accessibility_upgrade
+
+Recorded decision to upgrade the existing GPUI application to an upstream revision with Linux accessibility integration
+
+- Files: docs/adr/0007-gpui-accessibility-platform-upgrade.md, WORKLOG.md
+- Verification: git diff --check -- docs/adr/0007-gpui-accessibility-platform-upgrade.md passed; no application build or platform test run because this initial scope is documentation only and app edits require lead go-ahead
+- Risks / next: Await lead review/go before changing app manifests, bootstrap, lockfile or constructor; AT-SPI/Orca runtime acceptance remains open and requires isolated platform environment
+
+## 2026-10-16T22:25:12+00:00 — /root/long_history_corpus
+
+Extended the recovery oracle to prove full replay and checkpoint-tail state/frame/history equality against the originating live Terminal and History
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/history/tests.rs, crates/session-host/examples/history_corpus.rs
+- Verification: cargo fmt --all --check; cargo test --locked -p pigade-session-host cold_records_and_hot_parser_match_full_replay_checkpoint_and_live -- --nocapture (1 passed); cargo clippy --locked -p pigade-session-host --all-targets -- -D warnings; python3 scripts/long-history.py --directory /home/afterburner/.local/state/pigade/long-history-smoke --sessions 4 --output-bytes 1048576 --resize-events 100 --logical-hours 24 --verify (passed: all 4 checkpoint-tail; full/fast/live state, frame, and cold-history equality true)
+- Risks / next: Root owns larger SPEC corpus and integration/commit; this small smoke verifies functionality only, not long-duration performance.
+
+## 2026-10-16T22:25:52+00:00 — /root/gpui_accessibility_upgrade
+
+Corrected GPUI archive SHA-256 from cached archive verification and added pinned upstream source/license references
+
+- Files: docs/adr/0007-gpui-accessibility-platform-upgrade.md, WORKLOG.md
+- Verification: sha256sum /home/afterburner/.cache/pigade/gpui/322cd509dcccaee1f6bc44725d270598ae8171ad.tar.gz returned 27e6a724515cb6e6fa8a456098d075bfa2a50b4f6145491105555e56de2d256d; git diff --check passed; no app build or platform test run
+- Risks / next: App migration remains held until lead authorizes after baseline commit; recheck resolved component license graph during integration
+
+## 2026-10-16T22:26:43+00:00 — /root
+
+Integrated conditional cell polling, bounded durable output/index batching, archive logical offsets and width-reflow scratch; verified cold-history reboot and started full corpus/real-time soak
+
+- Files: crates/app/src/main.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/history.rs, crates/session-host/src/history/tests.rs, crates/session-host/tests/recovery.rs, crates/storage/src/archive.rs, vendor/alacritty_terminal/src/grid/resize.rs, vendor/alacritty_terminal/src/grid/row.rs, vendor/alacritty_terminal/src/grid/history_tests.rs, scripts/vm-reboot.py, scripts/stress-pty.py, scripts/long-history.py, scripts/soak-pty.py, docs/AGENT_HANDOFF.md, docs/reports/cold-history-integration.md, benchmarks/results
+- Verification: Fresh workspace fmt, strict all-target Clippy, 120 tests and release bins/examples pass. Vendor 152 library +45 reference tests and no-default-features check pass with documented patched VTE config (initial command omitted patch and failed; corrected). App17 tests/strictClippy/build and private software-render UI kill/reopen passed earlier in this integration. Actual two-boot VM four cold histories matched. Normal-history 60s producer bodies59.9845s all539088coldrecords exact; up to7.5s schedulelateness, exitdeadlinefail. TUI60s116ACK p95=42.91ms p99=59.07ms CRC/recoverypass; notUIpresent. Headlessidle8PTY60s0CPUticks. Full4x1GiB100kresizes and24hsoak now running, notpassed. Moved full smoke runtime outsideGit, retained evidence only. LinkerSIGBUS investigated as/tmpEDQUOT; task-owned cache movedhome, normalbuildpassed.
+- Risks / next: Continue actual corpus/soak, same-app GPUI accessibility upgrade perADR0007; global live-extra admission, product history UI/quota, platform/CLI/MVP gates remain open. Never automate active desktop.

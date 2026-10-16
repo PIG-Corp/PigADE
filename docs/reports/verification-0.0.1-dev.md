@@ -2,6 +2,11 @@
 
 Date2026-10-17. This is a development checkpoint, not MVP/beta acceptance. SPEC gate10.4 remains open. Separate control applications were removed by explicit user instruction; the tests below exercise PigADE itself.
 
+This page preserves an earlier foundation snapshot. Current integrated counts,
+archive/reboot results and remaining gates are in the [handoff](../AGENT_HANDOFF.md),
+[cold-history report](cold-history-integration.md) and [VM report](vm-reboot.md).
+The measurements and unverified list below describe that earlier snapshot.
+
 ## Executed checks
 
 Root workspace: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build --release --workspace --bins --examples`.72tests pass:13layout,17hostunit,8realPTY/recovery,1saturatedinput,23storage,10terminal. Includes100client reopens,1000realresizes, UI-independent lifecycle, hostSIGKILL/no duplicate launch, quiet/timer/resize-only checkpoints,20kquery replies,50persistedundo/redo and60crossworkspace transfers preserving the running process.

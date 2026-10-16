@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "status": "failed",
+  "created_utc": "2026-10-16T21:45:05Z",
+  "nonce": "6dfb9b07e9bd48a3ac57d003f56e89f1",
+  "directory": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa",
+  "filesystem": "btrfs",
+  "image": {
+    "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "filename": "alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "size_bytes": 157220864,
+    "sha512": "6b9928cea1c6243affb8a9b09eba6046cd090e8bdb7141fbf0c8f2649c4a99d62e12cda289da41f99de82ce2b3e3780772dd594eaee3693cb49691d81cbe5d4b",
+    "official_signature_valid": true,
+    "signer_fingerprint": "F26ADFADBAE702EF7AF637459DA7EF23BFFCDF22"
+  },
+  "binary": {
+    "source": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+    "sha256": "bc43e723f51c8b7888b41d8eb9e369acb0a69cfb96caa875990ba60f27d5d106",
+    "ldd": "\tlinux-vdso.so.1 (0x00007fef01211000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007fef011b1000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007fef00ac9000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007fef00800000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007fef01213000)\n",
+    "libraries": [
+      {
+        "soname": "libgcc_s.so.1",
+        "source": "/usr/lib/libgcc_s.so.1",
+        "sha256": "e618cb9c90c2eb3a1dad1cfea5b6c1eebcf2e799ad805976f4ae47bdd61c716a"
+      },
+      {
+        "soname": "libm.so.6",
+        "source": "/usr/lib/libm.so.6",
+        "sha256": "965106704753eefe8c31ae7da6daba3ead3d18c52b19b5fcc41178bcc4aa999d"
+      },
+      {
+        "soname": "libc.so.6",
+        "source": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "soname": "ld-linux-x86-64.so.2",
+        "source": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)"
+  },
+  "sdk_manifest": "/tmp/pigade-vm-sdk/evidence/manifest.json",
+  "sdk": {
+    "qemu": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/qemu-system-x86_64",
+    "qemu_data_dir": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu",
+    "bios": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu/bios-256k.bin",
+    "mcopy": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/mcopy",
+    "mformat": "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/mformat"
+  },
+  "artifacts": {
+    "disk": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/guest-disk.qcow2",
+    "seed": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/nocloud-seed.img",
+    "stage": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/stage",
+    "serial_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/serial.log",
+    "qemu_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/qemu.log",
+    "qmp_socket": "/tmp/p-q-escsj95u/q",
+    "qmp_socket_directory": "/tmp/p-q-escsj95u"
+  },
+  "isolation": {
+    "network": "none",
+    "display": "none",
+    "input_devices": "none",
+    "host_mounts": [
+      "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/stage"
+    ],
+    "state": "owned guest disk"
+  },
+  "scope": "actual guest reboot and synthetic PTY recovery; not provider AI resume or power-loss acceptance",
+  "qemu": {
+    "pid": 637689,
+    "identity": [
+      "d639535a-367c-4655-8316-12063ad08144",
+      637689,
+      1110257
+    ],
+    "command": [
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/bin/qemu-system-x86_64",
+      "-name",
+      "pigade-vm-recovery",
+      "-machine",
+      "pc",
+      "-accel",
+      "kvm",
+      "-L",
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu",
+      "-cpu",
+      "host",
+      "-smp",
+      "2",
+      "-m",
+      "1024M",
+      "-bios",
+      "/tmp/pigade-vm-sdk/root/qemu-b8886d85c9d7e897/usr/share/qemu/bios-256k.bin",
+      "-nodefaults",
+      "-no-user-config",
+      "-display",
+      "none",
+      "-monitor",
+      "none",
+      "-serial",
+      "file:/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/serial.log",
+      "-parallel",
+      "none",
+      "-qmp",
+      "unix:/tmp/p-q-escsj95u/q,server=on,wait=off",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/guest-disk.qcow2,format=qcow2,if=ide,index=0",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/nocloud-seed.img,format=raw,if=ide,index=1,readonly=on",
+      "-virtfs",
+      "local,path=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/stage,mount_tag=pigade_stage,security_model=none,readonly=on",
+      "-nic",
+      "none",
+      "-boot",
+      "order=c"
+    ],
+    "environment_keys": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "LD_LIBRARY_PATH",
+      "PATH",
+      "QEMU_DATA_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+    ]
+  },
+  "error": "QEMU exited early with 1; inspect /home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214505Z-397358aa/qemu.log",
+  "serial_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "qemu_log_tail": "qemu-system-x86_64: Block node is read-only\n"
+}

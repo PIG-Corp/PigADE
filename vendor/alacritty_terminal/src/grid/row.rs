@@ -122,6 +122,17 @@ impl<T> Row<T> {
         self.inner.len()
     }
 
+    /// Release excess cell capacity after a row has been reflowed.
+    #[inline]
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.inner.shrink_to_fit();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
     /// Upper bound of cells modified since the last reset. It is semantic
     /// metadata, not the trimmed text length; borrowed archive encoders need it.
     #[inline]

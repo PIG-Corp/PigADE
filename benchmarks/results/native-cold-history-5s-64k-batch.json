@@ -1,0 +1,471 @@
+{
+  "captured_at": "2026-10-16T21:49:49.316899+00:00",
+  "product_version": "0.0.1-dev",
+  "protocol": 2,
+  "filesystem": "btrfs",
+  "directory_parent": "/home/afterburner/.local/state/pigade/benchmarks",
+  "target": {
+    "streams": 4,
+    "seconds": 5,
+    "body_bytes_per_second_per_stream": 1048576
+  },
+  "status": "integrity_pass",
+  "sessions": [
+    {
+      "stream": 0,
+      "session": "0ac0b08f-d66a-4f5a-8427-ad67c0ca0636",
+      "generation": "1e2262c0-4cfc-4939-ab34-9ca62ebc6204",
+      "pid": 648044,
+      "ACK_observations_ms": [],
+      "ACK_errors": [],
+      "pipeline_metrics": {
+        "events": 576,
+        "output_bytes": 5242989,
+        "journal_fsync_ns": 739842655,
+        "model_apply_ns": 465071626,
+        "archive_commit_ns": 1315878631,
+        "checkpoint_ns": 376325679,
+        "frame_publish_ns": 577719134,
+        "checkpoints": 4
+      },
+      "cold_history_summary": {
+        "records": 35728,
+        "retired_rows": 35728,
+        "epoch": 0,
+        "digest": 1454372493
+      },
+      "archive_bytes": 14623088,
+      "archive_index_bytes": 2286656,
+      "sequence": 576,
+      "event_counts": {
+        "1": 575,
+        "2": 0,
+        "3": 0,
+        "4": 1
+      },
+      "output_bytes": 5242989,
+      "counted_output_bytes_before_trailer": 5242910,
+      "output_crc32": "9efd9051",
+      "journal_bytes": 5262353,
+      "journal_framing_and_producer_crc_valid": true,
+      "producer_start_ns": 11386251812175,
+      "producer_body_write_seconds": 4.984522016,
+      "producer_max_schedule_lateness_ms": 30.220111,
+      "producer_body_bytes": 5242880,
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "full_replay_frame_equivalent": true,
+      "complete_recovery_verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 576,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 433.587762,
+        "checkpoint_tail_ms": 64.302886,
+        "semantic_checkpoint_bytes": 9690125,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 35728,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 1276.569476,
+        "full_journal_bytes_read": 5262353,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "full_replay_seconds": 2.3988159720011026,
+      "producer_body_MiB_per_second": 1.0031052092758979,
+      "observed_exit_seconds_from_producer_start": 5.112790898,
+      "observed_exit_body_MiB_per_second": 0.9779394658905137,
+      "producer_completed_body_within_target_seconds": true,
+      "host_exit_observed_within_target_seconds": false,
+      "ACK_percentiles_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "stream": 1,
+      "session": "95f3cd3b-3f86-469d-835e-bbea22b6351c",
+      "generation": "8375a7c1-7785-48b1-8d7e-c6e0a5c2f7b3",
+      "pid": 648051,
+      "ACK_observations_ms": [],
+      "ACK_errors": [],
+      "pipeline_metrics": {
+        "events": 483,
+        "output_bytes": 5242990,
+        "journal_fsync_ns": 698738303,
+        "model_apply_ns": 458040036,
+        "archive_commit_ns": 938253565,
+        "checkpoint_ns": 1171697445,
+        "frame_publish_ns": 472492046,
+        "checkpoints": 4
+      },
+      "cold_history_summary": {
+        "records": 35728,
+        "retired_rows": 35728,
+        "epoch": 0,
+        "digest": 3723037564
+      },
+      "archive_bytes": 14623088,
+      "archive_index_bytes": 2286656,
+      "sequence": 483,
+      "event_counts": {
+        "1": 482,
+        "2": 0,
+        "3": 0,
+        "4": 1
+      },
+      "output_bytes": 5242990,
+      "counted_output_bytes_before_trailer": 5242910,
+      "output_crc32": "cec0d638",
+      "journal_bytes": 5259285,
+      "journal_framing_and_producer_crc_valid": true,
+      "producer_start_ns": 11386256832117,
+      "producer_body_write_seconds": 4.984513469,
+      "producer_max_schedule_lateness_ms": 305.845617,
+      "producer_body_bytes": 5242880,
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "full_replay_frame_equivalent": true,
+      "complete_recovery_verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 483,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 447.84067500000003,
+        "checkpoint_tail_ms": 67.66926099999999,
+        "semantic_checkpoint_bytes": 9690125,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 35728,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 1273.2036719999999,
+        "full_journal_bytes_read": 5259285,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "full_replay_seconds": 2.433683306999228,
+      "producer_body_MiB_per_second": 1.0031069293114192,
+      "observed_exit_seconds_from_producer_start": 5.202743965,
+      "observed_exit_body_MiB_per_second": 0.9610313391618148,
+      "producer_completed_body_within_target_seconds": true,
+      "host_exit_observed_within_target_seconds": false,
+      "ACK_percentiles_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "stream": 2,
+      "session": "d523a20c-e984-43ac-b63e-166243c3354b",
+      "generation": "34a6c996-3cc2-44ca-84b4-6e60c8588558",
+      "pid": 648059,
+      "ACK_observations_ms": [],
+      "ACK_errors": [],
+      "pipeline_metrics": {
+        "events": 537,
+        "output_bytes": 5242990,
+        "journal_fsync_ns": 713965643,
+        "model_apply_ns": 466331575,
+        "archive_commit_ns": 1123183523,
+        "checkpoint_ns": 883811685,
+        "frame_publish_ns": 536272069,
+        "checkpoints": 4
+      },
+      "cold_history_summary": {
+        "records": 35728,
+        "retired_rows": 35728,
+        "epoch": 0,
+        "digest": 2605910830
+      },
+      "archive_bytes": 14623088,
+      "archive_index_bytes": 2286656,
+      "sequence": 537,
+      "event_counts": {
+        "1": 536,
+        "2": 0,
+        "3": 0,
+        "4": 1
+      },
+      "output_bytes": 5242990,
+      "counted_output_bytes_before_trailer": 5242910,
+      "output_crc32": "3e871c83",
+      "journal_bytes": 5261067,
+      "journal_framing_and_producer_crc_valid": true,
+      "producer_start_ns": 11386261454103,
+      "producer_body_write_seconds": 4.984534109,
+      "producer_max_schedule_lateness_ms": 225.402946,
+      "producer_body_bytes": 5242880,
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "full_replay_frame_equivalent": true,
+      "complete_recovery_verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 537,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 434.769974,
+        "checkpoint_tail_ms": 67.260055,
+        "semantic_checkpoint_bytes": 9690125,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 35728,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 1281.2819339999999,
+        "full_journal_bytes_read": 5261067,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "full_replay_seconds": 2.409762895998938,
+      "producer_body_MiB_per_second": 1.003102775637963,
+      "observed_exit_seconds_from_producer_start": 5.286530897,
+      "observed_exit_body_MiB_per_second": 0.9457998255221397,
+      "producer_completed_body_within_target_seconds": true,
+      "host_exit_observed_within_target_seconds": false,
+      "ACK_percentiles_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "stream": 3,
+      "session": "f648a799-620e-4758-aeb4-eade3bcab063",
+      "generation": "78372e80-daf3-4b36-af49-31969b4fdceb",
+      "pid": 648066,
+      "ACK_observations_ms": [],
+      "ACK_errors": [],
+      "pipeline_metrics": {
+        "events": 524,
+        "output_bytes": 5242990,
+        "journal_fsync_ns": 653226581,
+        "model_apply_ns": 468378712,
+        "archive_commit_ns": 1261646105,
+        "checkpoint_ns": 996504689,
+        "frame_publish_ns": 513899341,
+        "checkpoints": 4
+      },
+      "cold_history_summary": {
+        "records": 35728,
+        "retired_rows": 35728,
+        "epoch": 0,
+        "digest": 269874911
+      },
+      "archive_bytes": 14623088,
+      "archive_index_bytes": 2286656,
+      "sequence": 524,
+      "event_counts": {
+        "1": 523,
+        "2": 0,
+        "3": 0,
+        "4": 1
+      },
+      "output_bytes": 5242990,
+      "counted_output_bytes_before_trailer": 5242910,
+      "output_crc32": "6eba5aea",
+      "journal_bytes": 5260638,
+      "journal_framing_and_producer_crc_valid": true,
+      "producer_start_ns": 11386267397266,
+      "producer_body_write_seconds": 4.984523117,
+      "producer_max_schedule_lateness_ms": 191.437283,
+      "producer_body_bytes": 5242880,
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "full_replay_frame_equivalent": true,
+      "complete_recovery_verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 524,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 427.491259,
+        "checkpoint_tail_ms": 64.185603,
+        "semantic_checkpoint_bytes": 9690125,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 35728,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 1281.3859320000001,
+        "full_journal_bytes_read": 5260638,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "full_replay_seconds": 2.3982971479999833,
+      "producer_body_MiB_per_second": 1.0031049877062892,
+      "observed_exit_seconds_from_producer_start": 5.369174059,
+      "observed_exit_body_MiB_per_second": 0.9312419275398276,
+      "producer_completed_body_within_target_seconds": true,
+      "host_exit_observed_within_target_seconds": false,
+      "ACK_percentiles_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    }
+  ],
+  "resources": [
+    {
+      "wall_seconds": 0.0011142839994136011,
+      "host_RSS_bytes": 31387648,
+      "host_CPU_seconds": 0.1
+    },
+    {
+      "wall_seconds": 0.25133678000020154,
+      "host_RSS_bytes": 58134528,
+      "host_CPU_seconds": 0.29
+    },
+    {
+      "wall_seconds": 0.5015414219997183,
+      "host_RSS_bytes": 81760256,
+      "host_CPU_seconds": 0.47
+    },
+    {
+      "wall_seconds": 0.7517599509992579,
+      "host_RSS_bytes": 107880448,
+      "host_CPU_seconds": 0.64
+    },
+    {
+      "wall_seconds": 1.0019756540004892,
+      "host_RSS_bytes": 141623296,
+      "host_CPU_seconds": 0.82
+    },
+    {
+      "wall_seconds": 1.254212390000248,
+      "host_RSS_bytes": 141762560,
+      "host_CPU_seconds": 1.12
+    },
+    {
+      "wall_seconds": 1.5044156399999338,
+      "host_RSS_bytes": 142213120,
+      "host_CPU_seconds": 1.44
+    },
+    {
+      "wall_seconds": 1.7546143109993864,
+      "host_RSS_bytes": 142426112,
+      "host_CPU_seconds": 1.76
+    },
+    {
+      "wall_seconds": 2.0048346429994126,
+      "host_RSS_bytes": 171294720,
+      "host_CPU_seconds": 2.08
+    },
+    {
+      "wall_seconds": 2.2550479719993746,
+      "host_RSS_bytes": 184475648,
+      "host_CPU_seconds": 2.44
+    },
+    {
+      "wall_seconds": 2.5052663299993583,
+      "host_RSS_bytes": 154550272,
+      "host_CPU_seconds": 2.92
+    },
+    {
+      "wall_seconds": 2.755521447999854,
+      "host_RSS_bytes": 154550272,
+      "host_CPU_seconds": 3.24
+    },
+    {
+      "wall_seconds": 3.005758863000665,
+      "host_RSS_bytes": 154558464,
+      "host_CPU_seconds": 3.54
+    },
+    {
+      "wall_seconds": 3.2560733129994333,
+      "host_RSS_bytes": 185077760,
+      "host_CPU_seconds": 3.93
+    },
+    {
+      "wall_seconds": 3.506233301000975,
+      "host_RSS_bytes": 155418624,
+      "host_CPU_seconds": 4.39
+    },
+    {
+      "wall_seconds": 3.756457911000325,
+      "host_RSS_bytes": 155820032,
+      "host_CPU_seconds": 4.73
+    },
+    {
+      "wall_seconds": 4.006701837999572,
+      "host_RSS_bytes": 155820032,
+      "host_CPU_seconds": 5.05
+    },
+    {
+      "wall_seconds": 4.25908779800011,
+      "host_RSS_bytes": 187330560,
+      "host_CPU_seconds": 5.43
+    },
+    {
+      "wall_seconds": 4.5093631740001,
+      "host_RSS_bytes": 212901888,
+      "host_CPU_seconds": 5.89
+    },
+    {
+      "wall_seconds": 4.75954326000101,
+      "host_RSS_bytes": 156135424,
+      "host_CPU_seconds": 6.41
+    },
+    {
+      "wall_seconds": 5.009728466000524,
+      "host_RSS_bytes": 186834944,
+      "host_CPU_seconds": 6.83
+    },
+    {
+      "wall_seconds": 5.259946644000593,
+      "host_RSS_bytes": 179679232,
+      "host_CPU_seconds": 7.15
+    }
+  ],
+  "errors": [],
+  "scope": "Actual normal-screen PTY/host/fsync/cold-history workload; no UI/GPU/provider processes; no input latency claim.",
+  "not_measured": [
+    "UI present/frame time",
+    "GPU memory",
+    "queue high-water instrumentation",
+    "VM reboot",
+    "24h soak",
+    "1GiB cold-history gate",
+    "input ACK latency (normal-history workload)"
+  ],
+  "bounded_implementation_limits": {
+    "PTY_read_chunk_bytes": 16384,
+    "output_event_batch_bytes": 65536,
+    "actor_queue_items": 8,
+    "input_queue_items": 8,
+    "input_chunk_bytes": 16384,
+    "priority_control_items": 1,
+    "IPC_workers": 16,
+    "IPC_jobs": 16,
+    "IPC_message_limit_bytes": 8388608,
+    "note": "Source limits, not measured occupancy; one in-flight chunk per worker/reader plus retained bounded query/deferred buffers."
+  },
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "e63650b16c9b05c5c381e3392cbfce8e6e45151f2dbabe364c50a9a4512463e6",
+    "crates/session-host/src/input.rs": "763cc543d947fc28fe839a3ca7b70eeb8613a514f400bac6fff86d9970127387",
+    "crates/session-host/src/ipc_server.rs": "ea1db644ec1b36fe70163d478e01b40417f4c5eedd31c9f151998e40d36bb632",
+    "crates/session-host/src/history.rs": "e8aa364c8fb037be50a023889b65928e4819678f7395773d19a1c3a4a772b4a8",
+    "crates/terminal/src/history.rs": "c652478699787e882da3ab3d20ac62e98b39588e56732221ee07464f181bb746",
+    "crates/storage/src/archive.rs": "c655ef7728a3e8ab0c07d3390b26ae03a3a75dc9c983e3a515efb5e5bd8988fd"
+  },
+  "screen_mode": "normal_with_cold_history",
+  "binary_sha256": "88f9efa735b947607fab80ddd46e1abf7e658878ad8ceb6550c45caeba578912",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "host_pid": 648040,
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    648040,
+    1138602
+  ],
+  "resource_sample_interval_seconds": 0.25,
+  "resource_scope": "Main host process RSS/CPU includes every native host thread; Python PTY child processes and Python harness excluded.",
+  "host_peak_sampled_RSS_bytes": 212901888,
+  "host_CPU_seconds_during_workload": 7.050000000000001,
+  "host_average_logical_CPU_percent": 134.0317778325967,
+  "ACK_percentiles_ms": {
+    "p50": null,
+    "p95": null,
+    "p99": null
+  },
+  "ACK_sample_count": 0,
+  "percentile_method": "nearest rank; input command start to snapshot observing parsed+durable ACK; includes IPC/poll lag, excludes present",
+  "all_journals_and_producer_output_valid": true,
+  "all_full_replay_frames_equal": true,
+  "all_checkpoint_tail_full_models_equal": true,
+  "all_cold_history_records_equal": true,
+  "target_producer_rate_achieved_all_streams": true,
+  "target_host_exit_observed_within_deadline_all_streams": false,
+  "host_log_tail": "",
+  "runner_wall_seconds_including_replay": 15.451076654000644
+}

@@ -271,7 +271,7 @@ def build_shell_command(index):
     template = (
         "printf '%s\\n' '__INDEX__' >> /var/lib/pigade-vm/cli-invocations; sync; "
         "printf '\\033[?1049h\\033[2J\\033[HBOOT-__INDEX__-ALT-雪\\033[?1049l\\r\\n'; "
-        "i=0; while [ $i -lt 10025 ]; do printf 'row-%d-雪-\\033[32mgreen\\033[0m\\r\\n' $i; i=$((i+1)); done; "
+        "i=0; while [ $i -lt 12500 ]; do printf 'row-%d-雪-\\033[32mgreen\\033[0m\\r\\n' $i; i=$((i+1)); done; "
         "printf 'DONE-__INDEX__\\r\\n'; IFS= read -r answer; printf 'AFTER:%s\\r\\n' \"$answer\""
     )
     return template.replace('__INDEX__', str(index))
@@ -294,9 +294,11 @@ def first_boot(boot_id):
         for spec in ready:
             view = snap(spec)
             if 'DONE-' + str(ready.index(spec)) not in txt(view): complete = False
+            if view.get('history', {}).get('retired_rows', 0) == 0: complete = False
             seq = checkpoint_sequence(spec['generation'])
             if seq != view['sequence']: complete = False
             baselines.append({'spec':spec, 'sequence':view['sequence'], 'frame_sha256':frame_hash(view),
+                              'history':view.get('history'),
                               'journal_bytes':(STATE/(spec['generation']+'.journal')).stat().st_size,
                               'checkpoint_sequence':seq})
         if complete: break
@@ -331,6 +333,7 @@ def second_boot(boot_id):
                'recovered process is falsely live or was restarted')
         ensure(view['sequence'] == item['sequence'], 'durable journal watermark changed across reboot')
         ensure(frame_hash(view) == item['frame_sha256'], 'recovered frame changed across reboot')
+        ensure(view.get('history') == item['history'], 'cold-history continuation changed across reboot')
         check_seq = checkpoint_sequence(spec['generation'])
         ensure(check_seq == item['checkpoint_sequence'], 'checkpoint watermark changed across reboot')
         verification = subprocess.run(['/usr/local/bin/pigade-session-host', 'verify-recovery',
@@ -341,6 +344,7 @@ def second_boot(boot_id):
         proof = json.loads(verification.stdout)
         ensure(proof.get('complete_state_equal') and proof.get('frame_equal') and proof.get('cold_history_equal'),
                'full/checkpoint recovery equality failed')
+        ensure(proof.get('cold_history_records', 0) > 0, 'reboot fixture did not exercise cold history')
         refused = ipc({'command':'input', 'session':spec['session'], 'generation':spec['generation'],
                        'bytes':list(b'FORBIDDEN\n')}, allow_error=True)
         ensure(refused.get('error') is not None, 'historical session accepted input')
@@ -523,11 +527,17 @@ def run_vm_with_qmp(run_dir: Path, manifest: dict, args, qmp: Path) -> int:
     command = [str(qemu), '-name','pigade-vm-recovery', '-machine','pc', '-accel','kvm',
                '-L',str(sdk['qemu_data_dir']),
                '-cpu','host', '-smp','2', '-m','1024M', '-bios',str(sdk['seabios_bios_256k']),
+               # Alpine's official cloud image enables its serial userspace
+               # console for this DMI manufacturer. No host identity is exposed.
+               '-smbios','type=1,manufacturer=Amazon,serial=ds=nocloud',
                '-nodefaults', '-no-user-config', '-display','none', '-monitor','none',
                '-serial','file:'+manifest['artifacts']['serial_log'], '-parallel','none',
                '-qmp',f'unix:{qmp},server=on,wait=off',
                '-drive',f"file={manifest['artifacts']['disk']},format=qcow2,if=ide,index=0",
-               '-drive',f"file={manifest['artifacts']['seed']},format=raw,if=ide,index=1,media=cdrom,readonly=on",
+               # Raw FAT uses 512-byte disk sectors; presenting it as ATAPI
+               # CD-ROM made the guest fail to mount it. The private disposable
+               # seed is a regular disk, mounted read-only by cloud-init itself.
+               '-drive',f"file={manifest['artifacts']['seed']},format=raw,if=ide,index=1",
                '-virtfs',f"local,path={manifest['artifacts']['stage']},mount_tag=pigade_stage,security_model=none,readonly=on",
                '-nic','none', '-boot','order=c']
     with (run_dir/'qemu.log').open('ab', buffering=0) as log:

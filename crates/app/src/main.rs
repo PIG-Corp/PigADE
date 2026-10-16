@@ -15,10 +15,19 @@ use std::{
 const FONT_SIZE: f32 = 14.;
 const HEADER: f32 = 32.;
 const GAP: f32 = 6.;
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default)]
 struct State {
+    revision: u64,
     views: Vec<View>,
     error: Option<String>,
+}
+impl State {
+    fn fail(&mut self, error: String) {
+        if self.error.is_none() {
+            self.error = Some(error);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
 }
 
 fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
@@ -33,33 +42,27 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
                     output
                         .lock()
                         .unwrap()
-                        .error
-                        .get_or_insert_with(|| format!("Команда: исход неизвестен: {e}"));
+                        .fail(format!("Команда: исход неизвестен: {e}"));
                 }
             }
-            match request(&socket, json!({"command":"list"})) {
-                Ok(mut views) => {
-                    views.sort_by(|a, b| a.session.cmp(&b.session));
-                    views.truncate(4);
+            let known = output
+                .lock()
+                .unwrap()
+                .views
+                .iter()
+                .map(View::known)
+                .collect::<Vec<_>>();
+            match protocol::poll(&socket, &known) {
+                Ok(reply) => {
                     let mut state = output.lock().unwrap();
-                    // Full immutable frames can skip sequences; reject regressions per generation.
-                    if views.iter().any(|v| {
-                        state.views.iter().any(|old| {
-                            old.session == v.session
-                                && old.generation == v.generation
-                                && old.sequence > v.sequence
-                        })
-                    }) {
-                        state
-                            .error
-                            .get_or_insert_with(|| "Host sequence regression".into());
-                    } else {
-                        state.views = views;
+                    match protocol::merge_poll(&mut state.views, reply) {
+                        Ok(true) => state.revision = state.revision.wrapping_add(1),
+                        Ok(false) => (),
+                        Err(error) => state.fail(error),
                     }
                 }
                 Err(e) => {
-                    let mut state = output.lock().unwrap();
-                    state.error.get_or_insert(e);
+                    output.lock().unwrap().fail(e);
                 }
             }
             thread::sleep(Duration::from_millis(50));
@@ -89,8 +92,11 @@ impl CanvasApp {
                     .await;
                 if weak
                     .update(cx, |this, cx| {
-                        let next = this.shared.lock().unwrap().clone();
-                        if this.state != next {
+                        let next = {
+                            let shared = this.shared.lock().unwrap();
+                            (this.state.revision != shared.revision).then(|| shared.clone())
+                        };
+                        if let Some(next) = next {
                             this.state = next;
                             this.selected =
                                 this.selected.min(this.state.views.len().saturating_sub(1));

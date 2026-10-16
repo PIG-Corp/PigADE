@@ -21,6 +21,7 @@ use std::{
 const INDEX_MAGIC: &[u8; 8] = b"PIGIDX01";
 const INDEX_HEADER: u64 = 64;
 const INDEX_SLOT: u64 = 64;
+const INDEX_BUFFER_BYTES: usize = 64 * 1024;
 const SEGMENT_TARGET: u64 = 8 * 1024 * 1024;
 const METADATA_LIMIT: usize = 32 * 1024;
 const RECORD_LIMIT: usize = MAX_ROW_BYTES + METADATA_LIMIT + 4;
@@ -247,6 +248,9 @@ struct Store {
     reference: StoreRoot,
     header: ArchiveHeader,
     index: File,
+    // Provisional slots are bounded and written together. This buffer is not a
+    // durability receipt; every event still commits data before index fsync.
+    index_buffer: Vec<u8>,
     writer: Option<ArchiveWriter>,
     segment: u64,
     dirty: bool,
@@ -285,6 +289,7 @@ impl Store {
             },
             header: h,
             index,
+            index_buffer: Vec::with_capacity(INDEX_BUFFER_BYTES),
             writer: None,
             segment: 0,
             dirty: false,
@@ -344,7 +349,11 @@ impl Store {
                 .context("archive row incomplete")?,
         };
         let bytes = entry.bytes();
-        self.index.write_all(&bytes)?;
+        if self.index_buffer.len() == INDEX_BUFFER_BYTES {
+            self.index.write_all(&self.index_buffer)?;
+            self.index_buffer.clear();
+        }
+        self.index_buffer.extend_from_slice(&bytes);
         self.reference.entries = self
             .reference
             .entries
@@ -360,6 +369,8 @@ impl Store {
                 .as_mut()
                 .context("missing history writer")?
                 .commit()?;
+            self.index.write_all(&self.index_buffer)?;
+            self.index_buffer.clear();
             #[cfg(test)]
             if self.fail_before_index_sync {
                 anyhow::bail!("injected failure after archive data fsync, before index fsync");

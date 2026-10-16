@@ -24,6 +24,13 @@ PIGCP002 checkpoint. Encoding or storage failure latches degradation and stops
 further publication; bounded queues retain pending output and backpressure the PTY.
 Source raw journals are retained.
 
+Index slots use a bounded 64 KiB staging buffer instead of one write per row.
+Provisional buffers may flush before the data barrier, but never authorize a
+root. Commit fsyncs archive data, writes remaining slots, then fsyncs the index;
+only then may a checkpoint/frame reference it. Archive file addresses advance
+with checked successful writes under the exclusive writer rather than issuing
+per-row seek syscalls. Neither optimization removes a durability barrier.
+
 PIGROW02 stores typed cell data with per-cell attribute deltas, canonical UTF-8
 scalars, explicit flags/extra characters and row-local hyperlink pooling. It
 preserves occupancy and soft-wrap flags; no ANSI parser is added outside the

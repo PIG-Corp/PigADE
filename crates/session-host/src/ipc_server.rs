@@ -98,6 +98,7 @@ fn error_response(error: impl Into<String>) -> Response {
         error: Some(error.into()),
         catalog: None,
         catalog_notice: None,
+        selected: None,
     }
 }
 
@@ -177,6 +178,7 @@ mod tests {
             error: None,
             catalog: None,
             catalog_notice: None,
+            selected: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;

@@ -4,6 +4,13 @@ The native GPUI application displays cell replicas from the independent Rust ses
 
 This is the application under development, not a separate comparison stand. Terminal/recovery/platform gates remain open; the fixed session view is not the completed project/workspace/tab interface.
 
+Idle updates use conditional polling: the host returns only selection metadata
+when generation/sequence/lifecycle state is unchanged. Cached cell allocations
+are retained, and the UI checks a lightweight revision before cloning or
+notifying GPUI. This requires a current host with the additive `poll` command;
+an older host produces an explicit protocol/capability error, never an automatic
+host restart. This is not yet the full hierarchy/visibility subscription model.
+
 ## Build and headless verification
 
 Install Rust and the official GPUI Linux prerequisites documented in [the recorded source check](../../docs/research/gpui-source-check/README.md). From the repository root:
@@ -34,6 +41,6 @@ Click a panel to focus it. Ctrl+Shift+Space enters PigADE management mode; 1–4
 
 ## Known limits
 
-The UI displays at most four sessions, with one/two/three/four-pane projection. Full tiling, projects/workspaces/tabs, drag/drop, terminal selection, clipboard, mouse reporting and indexed history are pending integration. Full JSON frames are polled every50ms; there is no release input-to-present, frame-time, idle CPU/GPU or RSS acceptance measurement. Cell flags/basic colors are rendered, but palette overrides, precise decorations/cursor shapes and Unicode shaping require fixtures and pixel checks. Light theme, accessibility tree, real IME, X11, scaling/multi-monitor and GPU-loss checks are open. Historical Wayland smoke evidence predates the isolation guard and is not platform certification.
+The UI displays at most four sessions, with one/two/three/four-pane projection. Full tiling, projects/workspaces/tabs, drag/drop, terminal selection, clipboard, mouse reporting and indexed history are pending integration. Selection metadata is polled every 50 ms; complete JSON cell frames are sent only after the generation watermark changes. There is no release input-to-present, frame-time, idle CPU/GPU or RSS acceptance measurement. Cell flags/basic colors are rendered, but palette overrides, precise decorations/cursor shapes and Unicode shaping require fixtures and pixel checks. Light theme, accessibility tree, real IME, X11, scaling/multi-monitor and GPU-loss checks are open. Historical Wayland smoke evidence predates the isolation guard and is not platform certification.
 
 Automated windows, focus manipulation and keyboard/mouse injection on the active user desktop are forbidden. The unsafe smoke script has been removed. Future UI automation requires a verified isolated compositor or VM. Read [the incident report](../../docs/reports/desktop-incident.md) before platform work; do not reuse its historical actions as test instructions.

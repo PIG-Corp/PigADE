@@ -110,6 +110,66 @@ fn shrink_overflow_plus_hot_rows_matches_large_history_reference_once() {
 }
 
 #[test]
+fn dense_width_shrink_streams_retirement_and_preserves_unicode_grid_state() {
+    fn fill(row: &mut Row<Cell>, label: char) {
+        for column in 0..row.len() {
+            row[Column(column)].c = label;
+        }
+        row[Column(7)].push_zerowidth('\u{301}');
+        row[Column(1021)].c = '界';
+        row[Column(1021)].flags.insert(Flags::WIDE_CHAR);
+        row[Column(1022)].c = ' ';
+        row[Column(1022)].flags.insert(Flags::WIDE_CHAR_SPACER);
+    }
+    fn prepare(max_history: usize) -> Grid<Cell> {
+        let mut grid = Grid::<Cell>::new(2, 1024, max_history);
+        fill(&mut grid[Line(0)], 'A');
+        for label in ['B', 'C', 'D', 'E', 'F', 'G'] {
+            fill(&mut grid[Line(1)], label);
+            grid.scroll_up::<_>(&(Line(0)..Line(2)), 1);
+        }
+        grid.cursor.point = Point::new(Line(0), Column(1023));
+        grid.cursor.input_needs_wrap = true;
+        grid.saved_cursor.point = Point::new(Line(1), Column(1022));
+        grid.scroll_display(Scroll::Top);
+        grid
+    }
+    fn chronological(grid: &Grid<Cell>) -> Vec<Vec<Cell>> {
+        (-(grid.history_size() as i32)..grid.lines as i32)
+            .map(|line| grid[Line(line)].into_iter().cloned().collect())
+            .collect()
+    }
+
+    let mut bounded = prepare(8);
+    let mut reference = prepare(5000);
+    let sink = Arc::new(Rows::<Cell>::default());
+    bounded.set_history_observer(Some(sink.clone()));
+
+    bounded.resize::<_>(true, 2, 2);
+    reference.resize::<_>(true, 2, 2);
+
+    let retired = sink.rows.lock().unwrap();
+    assert!(!retired.is_empty());
+    assert!(retired.iter().all(|(reason, columns, _)| {
+        *reason == HistoryRetirement::WidthReflow && *columns == 2
+    }));
+    let mut combined: Vec<Vec<Cell>> = retired.iter().map(|(_, _, row)| row.clone()).collect();
+    combined.extend(chronological(&bounded));
+    assert_eq!(combined, chronological(&reference));
+    // Independent reference keeps every generated row, then trims only after
+    // reflow, matching the previous algorithm's publication boundary.
+    reference.update_history(8);
+    assert_eq!(bounded, reference);
+    assert_eq!(bounded.cursor, reference.cursor);
+    assert_eq!(bounded.saved_cursor, reference.saved_cursor);
+    assert_eq!(bounded.display_offset(), reference.display_offset());
+    for line in -(bounded.history_size() as i32)..bounded.lines as i32 {
+        assert_eq!(bounded[Line(line)].occupied(), reference[Line(line)].occupied());
+        assert!(bounded[Line(line)].capacity() <= 2);
+    }
+}
+
+#[test]
 fn reset_records_one_epoch_and_does_not_double_archive_history() {
     let sink = Arc::new(Rows::<usize>::default());
     let mut grid = Grid::<usize>::new(2, 2, 2);

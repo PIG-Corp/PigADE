@@ -8,6 +8,7 @@ pub use catalog::LayoutAction;
 mod ipc_server;
 mod launch_gate;
 pub mod metrics;
+pub mod poll;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -30,6 +31,11 @@ use uuid::Uuid;
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
+// Bound each already-queued output group independently of the PTY read size.
+// Ordered control events remain boundaries. A short collection deadline lets
+// the PTY reader finish a burst split across several kernel reads.
+const OUTPUT_BATCH: usize = 64 * 1024;
+const OUTPUT_BATCH_WINDOW: Duration = Duration::from_micros(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
@@ -45,6 +51,9 @@ pub struct Launch {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     List,
+    Poll {
+        known: Vec<poll::Known>,
+    },
     Catalog,
     CatalogApply {
         batch: pigade_storage::CatalogBatch,
@@ -106,6 +115,8 @@ pub struct Response {
     pub catalog: Option<pigade_storage::Catalog>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_notice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<Vec<poll::SessionInfo>>,
 }
 
 struct MessageBuffer(Vec<u8>);
@@ -378,6 +389,18 @@ fn restore_model(
 }
 impl Host {
     fn dispatch(&mut self, command: Command) -> Result<Response> {
+        if let Command::Poll { known } = command {
+            self.reconcile_exits()?;
+            let result = poll::poll(self.sessions.iter().map(|s| s.view.as_ref()), &known)?;
+            return Ok(Response {
+                protocol: PROTOCOL,
+                views: result.views,
+                error: None,
+                catalog: None,
+                catalog_notice: self.catalog_notice.clone(),
+                selected: Some(result.selected),
+            });
+        }
         let catalog = match command {
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
             Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, batch)?,
@@ -392,6 +415,7 @@ impl Host {
                     error: None,
                     catalog: None,
                     catalog_notice: None,
+                    selected: None,
                 });
             }
         };
@@ -401,6 +425,7 @@ impl Host {
             error: None,
             catalog: Some(catalog),
             catalog_notice: self.catalog_notice.clone(),
+            selected: None,
         })
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -470,7 +495,16 @@ impl Host {
             _lock: lock,
         })
     }
-    fn handle(&mut self, command: Command) -> Result<Vec<View>> {
+    fn reconcile_exits(&mut self) -> Result<()> {
+        // The actor cannot write SQLite. Poll metadata only when an attached
+        // generation has actually exited; idle polls do not scan launch rows.
+        if !self
+            .sessions
+            .iter()
+            .any(|s| s.input.is_some() && s.view.lock().expect("view lock").state == "exited")
+        {
+            return Ok(());
+        }
         for record in self.metadata.list_launches()? {
             if record.state == pigade_storage::LaunchState::Running
                 && self.sessions.iter().any(|s| {
@@ -486,6 +520,10 @@ impl Host {
                 }
             }
         }
+        Ok(())
+    }
+    fn handle(&mut self, command: Command) -> Result<Vec<View>> {
+        self.reconcile_exits()?;
         if let Command::Launch { spec } = command {
             return self.launch(spec);
         }
@@ -730,16 +768,29 @@ fn coalesce_output(
         return action;
     };
     debug_assert!(deferred.is_none());
-    while bytes.len() < OUTPUT_CHUNK {
-        match rx.try_recv() {
-            Ok(Action::Output(next)) if bytes.len() + next.len() <= OUTPUT_CHUNK => {
+    let deadline = Instant::now() + OUTPUT_BATCH_WINDOW;
+    while bytes.len() < OUTPUT_BATCH {
+        let next = match rx.try_recv() {
+            Ok(next) => Some(next),
+            Err(mpsc::TryRecvError::Empty) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    None
+                } else {
+                    rx.recv_timeout(remaining).ok()
+                }
+            }
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        match next {
+            Some(Action::Output(next)) if bytes.len() + next.len() <= OUTPUT_BATCH => {
                 bytes.extend_from_slice(&next)
             }
-            Ok(next) => {
+            Some(next) => {
                 *deferred = Some(next);
                 break;
             }
-            Err(_) => break,
+            None => break,
         }
     }
     Action::Output(bytes)
@@ -748,6 +799,28 @@ fn coalesce_output(
 #[cfg(test)]
 mod batching_tests {
     use super::*;
+    #[test]
+    fn backlog_groups_only_four_read_chunks_without_consuming_the_fifth() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        for byte in 1..=4 {
+            tx.send(Action::Output(vec![byte; OUTPUT_CHUNK])).unwrap();
+        }
+        let mut deferred = None;
+        let Action::Output(bytes) =
+            coalesce_output(Action::Output(vec![0; OUTPUT_CHUNK]), &rx, &mut deferred)
+        else {
+            panic!()
+        };
+        assert_eq!(bytes.len(), OUTPUT_BATCH);
+        for (byte, chunk) in bytes.as_chunks::<OUTPUT_CHUNK>().0.iter().enumerate() {
+            assert!(chunk.iter().all(|b| *b == byte as u8));
+        }
+        assert!(deferred.is_none());
+        assert!(
+            matches!(rx.try_recv().unwrap(), Action::Output(bytes) if bytes == vec![4; OUTPUT_CHUNK])
+        );
+        assert!(rx.try_recv().is_err());
+    }
     #[test]
     fn adjacent_output_batches_are_bounded_and_never_cross_resize_or_eof() {
         let (tx, rx) = mpsc::sync_channel(8);
@@ -773,20 +846,22 @@ mod batching_tests {
         assert!(rx.try_recv().is_err());
     }
     #[test]
-    fn oversized_next_chunk_is_retained_and_low_volume_never_waits() {
+    fn oversized_next_chunk_is_retained_and_low_volume_is_not_dropped() {
         let (tx, rx) = mpsc::sync_channel(8);
-        tx.send(Action::Output(vec![b'b'; 10000])).unwrap();
+        tx.send(Action::Output(vec![b'b'; OUTPUT_CHUNK])).unwrap();
         let mut deferred = None;
-        let Action::Output(bytes) =
-            coalesce_output(Action::Output(vec![b'a'; 10000]), &rx, &mut deferred)
-        else {
+        let Action::Output(bytes) = coalesce_output(
+            Action::Output(vec![b'a'; OUTPUT_BATCH - 1]),
+            &rx,
+            &mut deferred,
+        ) else {
             panic!()
         };
-        assert_eq!(bytes, vec![b'a'; 10000]);
+        assert_eq!(bytes, vec![b'a'; OUTPUT_BATCH - 1]);
         let Action::Output(next) = deferred.take().unwrap() else {
             panic!()
         };
-        assert_eq!(next, vec![b'b'; 10000]);
+        assert_eq!(next, vec![b'b'; OUTPUT_CHUNK]);
         assert!(
             matches!(coalesce_output(Action::Output(vec![1]),&rx,&mut deferred),Action::Output(bytes) if bytes==vec![1])
         );
@@ -956,9 +1031,9 @@ fn actor(
             deferred = Some(action);
             action = Action::SyncTimeout;
         }
-        // Merge only already-queued adjacent output. This amortizes fsync and
-        // frame construction without waiting, dropping bytes or crossing resize,
-        // EOF or ordered timer boundaries. At most one next action is retained.
+        // Collect adjacent output within a 250us scheduling window. This
+        // amortizes fsync and frame construction without dropping bytes or
+        // crossing resize, EOF or ordered timers. One next action is retained.
         action = coalesce_output(action, &rx, &mut deferred);
         let pending_action = action.clone();
         let result = (|| -> Result<bool> {
@@ -1082,6 +1157,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
                 error: Some(format!("{error:#}")),
                 catalog: None,
                 catalog_notice: host.catalog_notice.clone(),
+                selected: None,
             },
         };
         let _ = job.reply.try_send(response);
@@ -1124,6 +1200,12 @@ pub struct RecoveryVerification {
     pub frame_equal: bool,
     pub cold_history_records: u64,
     pub cold_history_equal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_state_equal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_frame_equal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_cold_history_equal: Option<bool>,
     pub archive_comparison_ms: f64,
     pub full_journal_bytes_read: u64,
     pub checkpoint_tail_journal_bytes_read: u64,
@@ -1134,6 +1216,23 @@ pub struct RecoveryVerification {
 /// temporary derived archives; it never rewrites source journals/checkpoints.
 /// Compare complete model/parser bytes and every cold record, not screen digests.
 pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
+    verify_recovery_inner(path, None)
+}
+
+/// Compare full replay and checkpoint-tail recovery with the still-live model
+/// and durable history source that produced the journal.
+pub fn verify_recovery_against_live(
+    path: &Path,
+    live_terminal: &Terminal,
+    live_history: &history::History,
+) -> Result<RecoveryVerification> {
+    verify_recovery_inner(path, Some((live_terminal, live_history)))
+}
+
+fn verify_recovery_inner(
+    path: &Path,
+    live: Option<(&Terminal, &history::History)>,
+) -> Result<RecoveryVerification> {
     let start = Instant::now();
     let (full_view, full, full_history) = restore_model(path, false)?;
     let full_replay_ms = start.elapsed().as_secs_f64() * 1000.;
@@ -1165,13 +1264,41 @@ pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
         full_history.state() == fast_history.state(),
         "cold-history continuation state differs"
     );
+    let (live_state_equal, live_frame_equal) = if let Some((live_terminal, live_history)) = live {
+        let live_state_equal = live_terminal.checkpoint()? == expected;
+        ensure!(
+            live_state_equal,
+            "live terminal/parser state differs from replay"
+        );
+        let live_frame_equal = live_terminal.frame() == full_view.frame;
+        ensure!(live_frame_equal, "live cell frame differs from replay");
+        let live_checkpoint = live_history.checkpoint()?;
+        ensure!(
+            live_checkpoint.root.directory == format!("{}.history", full_view.generation),
+            "live cold history belongs to a different generation"
+        );
+        ensure!(
+            live_history.state() == full_history.state(),
+            "live cold-history continuation state differs from replay"
+        );
+        (Some(true), Some(true))
+    } else {
+        (None, None)
+    };
     // CRCs are not an equality proof: compare every canonical encoded record.
     let comparison_start = Instant::now();
     for ordinal in 0..full_history.state().next_entry {
+        let canonical = full_history.record(ordinal)?;
         ensure!(
-            full_history.record(ordinal)? == fast_history.record(ordinal)?,
+            canonical == fast_history.record(ordinal)?,
             "cold-history record {ordinal} differs"
         );
+        if let Some((_, live_history)) = live {
+            ensure!(
+                canonical == live_history.record(ordinal)?,
+                "live cold-history record {ordinal} differs"
+            );
+        }
     }
     Ok(RecoveryVerification {
         profile: CORE_PROFILE,
@@ -1184,6 +1311,9 @@ pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
         frame_equal: true,
         cold_history_records: full_history.state().next_entry,
         cold_history_equal: true,
+        live_state_equal,
+        live_frame_equal,
+        live_cold_history_equal: live.map(|_| true),
         archive_comparison_ms: comparison_start.elapsed().as_secs_f64() * 1000.,
         full_journal_bytes_read: full_view.recovery_journal_bytes_read,
         checkpoint_tail_journal_bytes_read: fast_view.recovery_journal_bytes_read,

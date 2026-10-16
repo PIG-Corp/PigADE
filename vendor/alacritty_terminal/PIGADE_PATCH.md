@@ -168,3 +168,21 @@ Observer attachment provides the current palette before any retired row. These
 runtime notifications remain outside the schema2 hot checkpoint wire format.
 Archive durability and complete hot/parser/cold-record comparisons live in the
 host tests; full resource, platform and release gates remain open.
+
+## Bounded width-shrink scratch (2026-10-17)
+
+Width shrink previously materialized every reflowed row, then retained only
+history-limit plus visible rows. Dense 1024-column rows narrowed to two columns
+could therefore create millions of intermediate rows. Shrink now keeps a rolling
+deque of at most `max_scroll_limit + lines` completed rows and retires displaced
+rows oldest first. Completed rows release excess cell capacity; Row's fields and
+the four-word Storage::swap ABI assumption remain unchanged. Both grids, saved
+cursor, occupancy, wrap flags and archive order keep their previous semantics.
+
+A dense Unicode/wide-cell regression compares streamed retirement plus retained
+rows with an independently untruncated reference, then trims that reference and
+compares hot grid/cursors/display offset and occupancy. Per-row capacity is also
+checked. Root ran 152 library tests, 45 reference cases and the no-serde check.
+The original grid, one row being split, parser state and checkpoint transients
+still consume memory: this is a local scratch bound, not total heap admission.
+Live combining marks and aggregate session memory remain open resource gates.

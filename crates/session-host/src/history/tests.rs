@@ -32,6 +32,41 @@ fn apply(
 }
 
 #[test]
+fn provisional_index_slots_are_bounded_and_commit_after_data() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let source = source();
+    let history = History::live(root.path(), &source)?;
+    let cell = HistoryCell {
+        c: 'Ж',
+        ..HistoryCell::default()
+    };
+    let row = HistoryRow::from_vec(vec![cell; 40], 40);
+    history.begin(1)?;
+    for _ in 0..1300 {
+        history.row(&row, 40, HistoryRetirement::Scroll);
+    }
+    let path = root
+        .path()
+        .join(format!("{}.history/rows.index", source.generation));
+    {
+        let inner = history.inner.lock().unwrap();
+        assert!(inner.store.index_buffer.len() <= INDEX_BUFFER_BYTES);
+        assert!(fs::metadata(&path)?.len() < INDEX_HEADER + 1300 * INDEX_SLOT);
+    }
+    assert!(history.checkpoint().is_err());
+    assert!(history.record(1299).is_err());
+    history.commit()?;
+    assert_eq!(fs::metadata(&path)?.len(), INDEX_HEADER + 1300 * INDEX_SLOT);
+    assert!(history.inner.lock().unwrap().store.index_buffer.is_empty());
+    let checkpoint = history.checkpoint()?;
+    validate_checkpoint(root.path(), &source, &checkpoint)?;
+    let (metadata, restored) = decode_record(&history.record(1299)?)?;
+    assert_eq!(metadata.kind, Kind::Row);
+    assert_eq!(restored.unwrap().cells[0].c, 'Ж');
+    Ok(())
+}
+
+#[test]
 fn cold_records_and_hot_parser_match_full_replay_checkpoint_and_live() -> Result<()> {
     let root = tempfile::tempdir()?;
     let source = source();
@@ -133,6 +168,13 @@ fn cold_records_and_hot_parser_match_full_replay_checkpoint_and_live() -> Result
     );
     let proof = crate::verify_recovery(&path)?;
     assert!(proof.complete_state_equal && proof.frame_equal);
+    let live_proof = crate::verify_recovery_against_live(&path, &terminal, &history)?;
+    assert_eq!(live_proof.live_state_equal, Some(true));
+    assert_eq!(live_proof.live_frame_equal, Some(true));
+    assert_eq!(live_proof.live_cold_history_equal, Some(true));
+    let wrong_root = tempfile::tempdir()?;
+    let wrong_history = History::live(wrong_root.path(), &source)?;
+    assert!(crate::verify_recovery_against_live(&path, &terminal, &wrong_history).is_err());
     let header_bytes = pigade_storage::JournalReader::open(&path)?.bytes_read();
     assert_eq!(proof.full_journal_bytes_read, fs::metadata(&path)?.len());
     assert_eq!(

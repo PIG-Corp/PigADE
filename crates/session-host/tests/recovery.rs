@@ -189,6 +189,80 @@ impl Drop for TestHost {
 }
 
 #[test]
+fn conditional_poll_keeps_idle_cells_private_and_reports_exit_and_reopen() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let spec = host.launch(
+        "/bin/sh",
+        vec!["-c".into(), "printf 'POLL_READY\\n'; read answer".into()],
+    )?;
+    host.wait_text(&spec, "POLL_READY")?;
+    let first = exchange(&host.socket(), Command::Poll { known: vec![] })?;
+    ensure!(
+        first.error.is_none() && first.views.len() == 1,
+        "first poll frame missing"
+    );
+    let known = first
+        .selected
+        .context("poll selection missing")?
+        .into_iter()
+        .map(|v| v.known())
+        .collect::<Vec<_>>();
+    let idle = exchange(
+        &host.socket(),
+        Command::Poll {
+            known: known.clone(),
+        },
+    )?;
+    ensure!(
+        idle.error.is_none() && idle.views.is_empty(),
+        "idle poll retransmitted cells"
+    );
+    ensure!(
+        idle.selected.as_ref().context("selection missing")?[0].known() == known[0],
+        "idle watermark changed"
+    );
+    host.input(&spec, b"done\n")?;
+    let exited = wait_for(|| {
+        let response = exchange(
+            &host.socket(),
+            Command::Poll {
+                known: known.clone(),
+            },
+        )?;
+        ensure!(
+            response.error.is_none(),
+            "poll failed: {:?}",
+            response.error
+        );
+        Ok(response.views.into_iter().find(|v| v.state == "exited"))
+    })?;
+    ensure!(
+        exited.generation == spec.generation,
+        "generation changed on exit"
+    );
+    let known = vec![pigade_session_host::poll::Known {
+        session: exited.session,
+        generation: exited.generation,
+        sequence: exited.sequence,
+        state: exited.state,
+        pid: exited.pid,
+        storage_error: exited.storage_error,
+    }];
+    host.kill_host()?;
+    host.start()?;
+    let recovered = exchange(&host.socket(), Command::Poll { known })?;
+    ensure!(
+        recovered.error.is_none() && recovered.views.len() == 1,
+        "reopen lifecycle update missing"
+    );
+    ensure!(
+        recovered.views[0].generation == spec.generation && recovered.views[0].pid.is_none(),
+        "reopen spawned a process"
+    );
+    Ok(())
+}
+
+#[test]
 fn shell_survives_100_client_reopens_and_real_stty_resize() -> Result<()> {
     let mut host = TestHost::new()?;
     let spec = host.launch(

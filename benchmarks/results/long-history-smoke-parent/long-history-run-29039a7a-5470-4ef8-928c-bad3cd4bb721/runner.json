@@ -1,0 +1,50 @@
+{
+  "binary_sha256": "b6e03fb4302eb28dcc8e9abf895a37ab8cff824b13fdd6595592225984049b42",
+  "binary_source": "/home/afterburner/Projects/PigADE/target/release/examples/history_corpus",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "pigade-session-host",
+    "--example",
+    "history_corpus"
+  ],
+  "builder_stdout": "{\n  \"corpus_directory\": \"/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721/long-history-059bbcba-d5a7-4161-90ae-6387a7bf17ac\",\n  \"manifest\": \"/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721/long-history-059bbcba-d5a7-4161-90ae-6387a7bf17ac/manifest.json\"\n}",
+  "command": [
+    "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721/history_corpus.frozen",
+    "--directory",
+    "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721",
+    "--sessions",
+    "4",
+    "--output-bytes",
+    "1048576",
+    "--resize-events",
+    "100",
+    "--logical-hours",
+    "24.0",
+    "--seed",
+    "1",
+    "--verify"
+  ],
+  "completed_unix": 1792189248.9479814,
+  "created_unix": 1792189245.4071631,
+  "estimated_bytes_required": 587202560,
+  "exit_code": 0,
+  "filesystem": "btrfs",
+  "free_bytes_before_run": 186876817408,
+  "frozen_binary": "/home/afterburner/Projects/PigADE/benchmarks/results/long-history-smoke-parent/long-history-run-29039a7a-5470-4ef8-928c-bad3cd4bb721/history_corpus.frozen",
+  "limitations": [
+    "Logical hours are metadata only; no 24-hour elapsed soak is performed.",
+    "No VM reboot, UI/GPU, PTY, provider CLI, authentication, or resume claim is made.",
+    "Full recovery verification is omitted unless --verify is supplied.",
+    "Available space is checked; no filesystem quota is configured or claimed.",
+    "The run directory is private and retained even if generation fails."
+  ],
+  "mountpoint": "/home",
+  "schema": 1,
+  "space_estimate_basis": "12x requested raw output plus 512 MiB; conservative preflight estimate, not a filesystem quota.",
+  "status": "completed",
+  "verification_requested": true
+}

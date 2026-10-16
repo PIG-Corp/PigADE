@@ -1,6 +1,7 @@
 //! Grid resize and reflow.
 
 use std::cmp::{Ordering, max, min};
+use std::collections::VecDeque;
 use std::mem;
 
 use crate::index::{Boundary, Column, Line};
@@ -251,7 +252,20 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             self.cursor.point.column += 1;
         }
 
-        let mut new_raw = Vec::with_capacity(self.raw.len());
+        let retained = self.max_scroll_limit + self.lines;
+        let observer = self.history_observer.clone();
+        let mut new_raw = VecDeque::with_capacity(min(retained, self.raw.len()));
+        let push_row = |new_raw: &mut VecDeque<Row<T>>, mut row: Row<T>| {
+            row.shrink_to_fit();
+            if new_raw.len() == retained {
+                if let Some(retired) = new_raw.pop_front() {
+                    if let Some(observer) = &observer {
+                        observer.row(&retired, columns, super::HistoryRetirement::WidthReflow);
+                    }
+                }
+            }
+            new_raw.push_back(row);
+        };
         let mut buffered: Option<Vec<T>> = None;
 
         let mut rows = self.raw.take_all();
@@ -280,7 +294,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                             Vec::new()
                         } else {
                             // Since it fits, just push the existing line without any reflow.
-                            new_raw.push(row);
+                            push_row(&mut new_raw, row);
                             break;
                         }
                     },
@@ -302,7 +316,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 if len > 0 && wrapped[len - 1].flags().contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     if len == 1 {
                         row[Column(columns - 1)].flags_mut().insert(Flags::WRAPLINE);
-                        new_raw.push(row);
+                        push_row(&mut new_raw, row);
                         break;
                     } else {
                         // Remove the leading spacer from the end of the wrapped row.
@@ -311,10 +325,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                     }
                 }
 
-                new_raw.push(row);
+                push_row(&mut new_raw, row);
 
                 // Set line as wrapped if cells got removed.
-                if let Some(cell) = new_raw.last_mut().and_then(|r| r.last_mut()) {
+                if let Some(cell) = new_raw.back_mut().and_then(|r| r.last_mut()) {
                     cell.flags_mut().insert(Flags::WRAPLINE);
                 }
 
@@ -363,16 +377,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             }
         }
 
-        // Reverse iterator and use it as the new grid storage.
-        let mut reversed: Vec<Row<T>> = new_raw.drain(..).rev().collect();
-        let retained = self.max_scroll_limit + self.lines;
-        if let Some(observer) = &self.history_observer {
-            for row in reversed[retained.min(reversed.len())..].iter().rev() {
-                observer.row(row, columns, super::HistoryRetirement::WidthReflow);
-            }
-        }
-        reversed.truncate(retained);
-        self.raw.replace_inner(reversed);
+        // The deque contains the newest `retained` rows in chronological order.
+        // Reverse it to restore grid storage order without materializing discarded rows.
+        self.raw.replace_inner(new_raw.into_iter().rev().collect());
 
         // Clamp display offset in case some lines went off.
         self.display_offset = min(self.display_offset, self.history_size());
