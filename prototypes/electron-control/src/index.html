@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PigADE — контрольный прототип</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><strong>PigADE</strong><span>Контрольный Electron/xterm прототип · этап 0</span><button id="theme">Тема</button></header>
+<div class="notice">Технический стенд. История и live различаются; production launch/checkpoint gate не пройден.</div>
+<nav aria-label="Терминальные панели"><button id="shell">Открыть shell</button><button id="python">Открыть Python</button><button id="reconnect">Переподключить UI</button><span id="connection" role="status">Подключение…</span></nav>
+<main id="panes" aria-label="Четыре терминальные панели"></main>
+<footer>Выделение и копирование — стандартные команды ОС. Ввод — только в выбранную live-панель. До четырёх процессов.</footer>
+<script src="renderer.js"></script>
+</body>
+</html>

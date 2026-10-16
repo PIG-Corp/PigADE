@@ -1,0 +1,10 @@
+{
+  "observedAt": "2026-10-16T19:18:39.459Z",
+  "resizeRequests": 1000,
+  "appliedResizes": 999,
+  "fullReplayEquivalent": true,
+  "elapsedMs": 83.67171300000001,
+  "totalJournalBytes": 269275,
+  "node": "v26.8.1",
+  "caveat": "Host/fsync/parse smoke timing, not UI resize latency. Output is a shell fixture, not a certified AI CLI."
+}

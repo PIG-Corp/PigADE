@@ -1,0 +1,48 @@
+{
+  "observedAt": "2026-10-16T19:18:46.284Z",
+  "electron": "44.8.0",
+  "chrome": "152.0.7977.167",
+  "node": "24.22.0",
+  "platform": "linux",
+  "sessionType": "wayland",
+  "display": ":0",
+  "waylandDisplay": "wayland-1",
+  "uiCreationAndFourLaunchMs": 1016.0331990000001,
+  "uiCloseReopenSameIdentities": true,
+  "panels": 4,
+  "metrics": [
+    {
+      "pid": 136358,
+      "type": "Browser",
+      "memory": {
+        "workingSetSize": 204340,
+        "peakWorkingSetSize": 204780
+      }
+    },
+    {
+      "pid": 136402,
+      "type": "GPU",
+      "memory": {
+        "workingSetSize": 121792,
+        "peakWorkingSetSize": 134076
+      }
+    },
+    {
+      "pid": 136404,
+      "type": "Utility",
+      "memory": {
+        "workingSetSize": 89584,
+        "peakWorkingSetSize": 89584
+      }
+    },
+    {
+      "pid": 136455,
+      "type": "Tab",
+      "memory": {
+        "workingSetSize": 163356,
+        "peakWorkingSetSize": 163356
+      }
+    }
+  ],
+  "caveat": "Software-rendered window smoke/screenshot on current session; no IME, accessibility, present latency or platform certification."
+}

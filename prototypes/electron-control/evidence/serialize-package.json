@@ -1,0 +1,6 @@
+{
+  "version": "0.14.0",
+  "license": "MIT",
+  "dist.integrity": "sha512-uteyTU1EkrQa2Ux6P/uFl2fzmXI46jy5uoQMKEOM0fKTyiW7cSn0WrFenHm5vO5uEXX/GpwW/FgILvv3r0WbkA==",
+  "repository.url": "git+https://github.com/xtermjs/xterm.js.git#master"
+}

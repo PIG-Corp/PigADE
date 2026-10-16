@@ -1,0 +1,424 @@
+{
+  "observedAt": "2026-10-16T19:18:39.289Z",
+  "node": "v26.8.1",
+  "platform": "linux",
+  "versions": {
+    "headless": "6.0.0",
+    "serialize": "0.14.0"
+  },
+  "scope": "Observable API state plus behavioral continuations; not proof of full hidden state.",
+  "results": [
+    {
+      "fixture": "plain-completed",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": true,
+      "expectation": true,
+      "checkpointBytes": 19,
+      "liveHash": "2ec6649ff35ec65687b7745f25d41e698237371eac1bcdbc185e51ca5990d53d",
+      "replayHash": "2ec6649ff35ec65687b7745f25d41e698237371eac1bcdbc185e51ca5990d53d",
+      "serializeTailHash": "2ec6649ff35ec65687b7745f25d41e698237371eac1bcdbc185e51ca5990d53d",
+      "firstDifferences": []
+    },
+    {
+      "fixture": "utf8-mid-codepoint",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 0,
+      "liveHash": "45cdfec4a2b04a969064e12f5f5334e04b187d357c03a45f1d57c878a0f7d641",
+      "replayHash": "45cdfec4a2b04a969064e12f5f5334e04b187d357c03a45f1d57c878a0f7d641",
+      "serializeTailHash": "f015b50b2aafe8b246fc1123a6fbc368feee3613e0547a4faea31fc57f2d42e8",
+      "firstDifferences": [
+        {
+          "path": ".normal.cursorX",
+          "live": 1,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.0.cells.0.chars",
+          "live": "Ж",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.0.cells.0.code",
+          "live": 1046,
+          "serializeTail": 0
+        }
+      ]
+    },
+    {
+      "fixture": "csi-mid-parameter",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 6,
+      "liveHash": "173b39d9e1b0589273b1cb87eced8e7e60c906d928db94c1a9424a82a8fad25d",
+      "replayHash": "173b39d9e1b0589273b1cb87eced8e7e60c906d928db94c1a9424a82a8fad25d",
+      "serializeTailHash": "39bb30634ca9ee49b5ba9a514b8c7949f108acabc1add03d5441ad0c9fe308ac",
+      "firstDifferences": [
+        {
+          "path": ".normal.cursorX",
+          "live": 9,
+          "serializeTail": 14
+        },
+        {
+          "path": ".normal.lines.0.cells.6.chars",
+          "live": "R",
+          "serializeTail": "3"
+        },
+        {
+          "path": ".normal.lines.0.cells.6.code",
+          "live": 82,
+          "serializeTail": 51
+        },
+        {
+          "path": ".normal.lines.0.cells.6.fgMode",
+          "live": 50331648,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.0.cells.6.fg",
+          "live": 16719872,
+          "serializeTail": -1
+        },
+        {
+          "path": ".normal.lines.0.cells.7.chars",
+          "live": "E",
+          "serializeTail": "2"
+        },
+        {
+          "path": ".normal.lines.0.cells.7.code",
+          "live": 69,
+          "serializeTail": 50
+        },
+        {
+          "path": ".normal.lines.0.cells.7.fgMode",
+          "live": 50331648,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.0.cells.7.fg",
+          "live": 16719872,
+          "serializeTail": -1
+        },
+        {
+          "path": ".normal.lines.0.cells.8.chars",
+          "live": "D",
+          "serializeTail": ";"
+        },
+        {
+          "path": ".normal.lines.0.cells.8.code",
+          "live": 68,
+          "serializeTail": 59
+        },
+        {
+          "path": ".normal.lines.0.cells.8.fgMode",
+          "live": 50331648,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.0.cells.8.fg",
+          "live": 16719872,
+          "serializeTail": -1
+        },
+        {
+          "path": ".normal.lines.0.cells.9.chars",
+          "live": "",
+          "serializeTail": "0"
+        },
+        {
+          "path": ".normal.lines.0.cells.9.code",
+          "live": 0,
+          "serializeTail": 48
+        },
+        {
+          "path": ".normal.lines.0.cells.10.chars",
+          "live": "",
+          "serializeTail": "m"
+        },
+        {
+          "path": ".normal.lines.0.cells.10.code",
+          "live": 0,
+          "serializeTail": 109
+        },
+        {
+          "path": ".normal.lines.0.cells.11.chars",
+          "live": "",
+          "serializeTail": "R"
+        },
+        {
+          "path": ".normal.lines.0.cells.11.code",
+          "live": 0,
+          "serializeTail": 82
+        },
+        {
+          "path": ".normal.lines.0.cells.12.chars",
+          "live": "",
+          "serializeTail": "E"
+        }
+      ]
+    },
+    {
+      "fixture": "osc-mid-payload",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 0,
+      "liveHash": "326d0614d6fa28708d8b692f39339582f5a465e29a6fec470faba11a669ac734",
+      "replayHash": "326d0614d6fa28708d8b692f39339582f5a465e29a6fec470faba11a669ac734",
+      "serializeTailHash": "00004a56af903ddc3eda8b1650a76a8e3e4ba772a41eb72ad22fc13af63af6b4",
+      "firstDifferences": [
+        {
+          "path": ".normal.lines.0.cells.0.underline",
+          "live": true,
+          "serializeTail": false
+        },
+        {
+          "path": ".normal.lines.0.cells.1.underline",
+          "live": true,
+          "serializeTail": false
+        },
+        {
+          "path": ".normal.lines.0.cells.2.underline",
+          "live": true,
+          "serializeTail": false
+        },
+        {
+          "path": ".normal.lines.0.cells.3.underline",
+          "live": true,
+          "serializeTail": false
+        }
+      ]
+    },
+    {
+      "fixture": "normal-alt-normal",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 34,
+      "liveHash": "0e46305e38ab2961934e5e1bf9dd9194db6aecff32a81a729a89ab838333376a",
+      "replayHash": "0e46305e38ab2961934e5e1bf9dd9194db6aecff32a81a729a89ab838333376a",
+      "serializeTailHash": "944a780b569e7e64818d4764c0d5401d45658d3f16d36f953038d3541f254157",
+      "firstDifferences": [
+        {
+          "path": ".normal.lines.0.cells.6.fgMode",
+          "live": 0,
+          "serializeTail": 16777216
+        },
+        {
+          "path": ".normal.lines.0.cells.6.fg",
+          "live": -1,
+          "serializeTail": 1
+        }
+      ]
+    },
+    {
+      "fixture": "saved-cursor",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 9,
+      "liveHash": "d2dc614929a440fcab1e8d0cf2f2cb706feac7d9591a7c7ba5a152aa0d3e517c",
+      "replayHash": "d2dc614929a440fcab1e8d0cf2f2cb706feac7d9591a7c7ba5a152aa0d3e517c",
+      "serializeTailHash": "35e497f4e446896707cab10cee0a8a5598d58c259bc044ae55fdf749674f979e",
+      "firstDifferences": [
+        {
+          "path": ".normal.cursorX",
+          "live": 4,
+          "serializeTail": 1
+        },
+        {
+          "path": ".normal.lines.0.cells.0.chars",
+          "live": "o",
+          "serializeTail": "!"
+        },
+        {
+          "path": ".normal.lines.0.cells.0.code",
+          "live": 111,
+          "serializeTail": 33
+        },
+        {
+          "path": ".normal.lines.0.cells.3.chars",
+          "live": "!",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.0.cells.3.code",
+          "live": 33,
+          "serializeTail": 0
+        }
+      ]
+    },
+    {
+      "fixture": "custom-tabstop",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 0,
+      "liveHash": "ffb6a815a20078ab6ccdb88ad1fca99b43e02a63c9d0266ae32bc48be0bcb3bd",
+      "replayHash": "ffb6a815a20078ab6ccdb88ad1fca99b43e02a63c9d0266ae32bc48be0bcb3bd",
+      "serializeTailHash": "8f04c5d40d1f2d5de99aeec835aa04ddf2221f04fa4e98cf3532f24aa1193306",
+      "firstDifferences": [
+        {
+          "path": ".normal.cursorX",
+          "live": 5,
+          "serializeTail": 9
+        },
+        {
+          "path": ".normal.lines.0.cells.4.chars",
+          "live": "X",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.0.cells.4.code",
+          "live": 88,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.0.cells.8.chars",
+          "live": "",
+          "serializeTail": "X"
+        },
+        {
+          "path": ".normal.lines.0.cells.8.code",
+          "live": 0,
+          "serializeTail": 88
+        }
+      ]
+    },
+    {
+      "fixture": "scroll-region",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": false,
+      "expectation": false,
+      "checkpointBytes": 14,
+      "liveHash": "e09c9daffa2f51228ae2cb106bbb8e010d06a5275c8ecce8cf369ba7e8441638",
+      "replayHash": "e09c9daffa2f51228ae2cb106bbb8e010d06a5275c8ecce8cf369ba7e8441638",
+      "serializeTailHash": "d17f958fec222b087c6643963cd10a05c8a950fa44787c0db3b41dbe32ab1081",
+      "firstDifferences": [
+        {
+          "path": ".normal.cursorY",
+          "live": 3,
+          "serializeTail": 4
+        },
+        {
+          "path": ".normal.lines.1.cells.0.chars",
+          "live": "3",
+          "serializeTail": "2"
+        },
+        {
+          "path": ".normal.lines.1.cells.0.code",
+          "live": 51,
+          "serializeTail": 50
+        },
+        {
+          "path": ".normal.lines.2.cells.0.chars",
+          "live": "4",
+          "serializeTail": "3"
+        },
+        {
+          "path": ".normal.lines.2.cells.0.code",
+          "live": 52,
+          "serializeTail": 51
+        },
+        {
+          "path": ".normal.lines.3.cells.0.chars",
+          "live": "T",
+          "serializeTail": "4"
+        },
+        {
+          "path": ".normal.lines.3.cells.0.code",
+          "live": 84,
+          "serializeTail": 52
+        },
+        {
+          "path": ".normal.lines.3.cells.1.chars",
+          "live": "A",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.3.cells.1.code",
+          "live": 65,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.3.cells.2.chars",
+          "live": "I",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.3.cells.2.code",
+          "live": 73,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.3.cells.3.chars",
+          "live": "L",
+          "serializeTail": ""
+        },
+        {
+          "path": ".normal.lines.3.cells.3.code",
+          "live": 76,
+          "serializeTail": 0
+        },
+        {
+          "path": ".normal.lines.4.cells.0.chars",
+          "live": "",
+          "serializeTail": "T"
+        },
+        {
+          "path": ".normal.lines.4.cells.0.code",
+          "live": 0,
+          "serializeTail": 84
+        },
+        {
+          "path": ".normal.lines.4.cells.1.chars",
+          "live": "",
+          "serializeTail": "A"
+        },
+        {
+          "path": ".normal.lines.4.cells.1.code",
+          "live": 0,
+          "serializeTail": 65
+        },
+        {
+          "path": ".normal.lines.4.cells.2.chars",
+          "live": "",
+          "serializeTail": "I"
+        },
+        {
+          "path": ".normal.lines.4.cells.2.code",
+          "live": 0,
+          "serializeTail": 73
+        },
+        {
+          "path": ".normal.lines.4.cells.3.chars",
+          "live": "",
+          "serializeTail": "L"
+        }
+      ]
+    },
+    {
+      "fixture": "modes",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": true,
+      "expectation": true,
+      "checkpointBytes": 33,
+      "liveHash": "ceb46f3e393e0fa0ec56a905fe490718774f8b7cfadfdb7b0cc16acbeb489082",
+      "replayHash": "ceb46f3e393e0fa0ec56a905fe490718774f8b7cfadfdb7b0cc16acbeb489082",
+      "serializeTailHash": "ceb46f3e393e0fa0ec56a905fe490718774f8b7cfadfdb7b0cc16acbeb489082",
+      "firstDifferences": []
+    },
+    {
+      "fixture": "unicode-resize",
+      "fullReplayEquivalent": true,
+      "serializeTailEquivalent": true,
+      "expectation": true,
+      "checkpointBytes": 40,
+      "liveHash": "91c3208e42aab138e5bdfddad221174cbc63283a685a8e8496f99fb91cc36658",
+      "replayHash": "91c3208e42aab138e5bdfddad221174cbc63283a685a8e8496f99fb91cc36658",
+      "serializeTailHash": "91c3208e42aab138e5bdfddad221174cbc63283a685a8e8496f99fb91cc36658",
+      "firstDifferences": []
+    }
+  ]
+}

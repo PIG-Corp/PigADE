@@ -1,0 +1,58 @@
+{
+  "observedAt": "2026-10-16T19:17:36.793Z",
+  "packages": [
+    {
+      "name": "@xterm/headless",
+      "version": "6.0.0",
+      "license": "MIT",
+      "repository": "https://github.com/xtermjs/xterm.js",
+      "licenseSha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+      "commit": "f447274f430fd22513f6adbf9862d19524471c04"
+    },
+    {
+      "name": "@xterm/addon-serialize",
+      "version": "0.14.0",
+      "license": "MIT",
+      "repository": "https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize",
+      "licenseSha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+      "commit": "f447274f430fd22513f6adbf9862d19524471c04"
+    },
+    {
+      "name": "node-pty",
+      "version": "1.1.0",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "git://github.com/microsoft/node-pty.git"
+      },
+      "licenseSha256": "a3d60eaf32d2fb09c9d82ef39f14bd6e2c0f3ca7de30daa827486c0d6f8b6e9f",
+      "commit": null
+    },
+    {
+      "name": "electron",
+      "version": "44.8.0",
+      "license": "MIT",
+      "repository": "https://github.com/electron/electron",
+      "licenseSha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d",
+      "commit": null
+    }
+  ],
+  "officialSources": [
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/addons/addon-serialize/README.md",
+      "finding": "Serializes terminal framebuffer; describes experimental addon. Not a complete terminal/parser checkpoint contract."
+    },
+    {
+      "url": "https://github.com/xtermjs/xterm.js/blob/6.0.0/addons/addon-serialize/typings/addon-serialize.d.ts",
+      "finding": "API exports rows, cursor, optional modes and alt buffer; test probes required for hidden parser state."
+    },
+    {
+      "url": "https://www.electronjs.org/docs/latest/tutorial/process-model",
+      "finding": "BrowserWindow renderer lifetime is tied to window; independent host must not be renderer-owned."
+    },
+    {
+      "url": "https://github.com/microsoft/node-pty/tree/v1.1.0",
+      "finding": "Real PTY spawn/resize and pause/resume APIs; raw Buffer delivery enabled by encoding:null."
+    }
+  ]
+}
