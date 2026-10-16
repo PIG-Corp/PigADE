@@ -74,11 +74,44 @@ struct Response {
     views: Vec<View>,
     error: Option<String>,
     #[serde(default)]
+    rejected_before_admission: Option<String>,
+    #[serde(default)]
     selected: Option<Vec<Known>>,
 }
 
-pub fn request(socket: &Path, command: Value) -> Result<Vec<View>, String> {
-    Ok(request_response(socket, command)?.views)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandFailure {
+    NotAdmitted { code: String, message: String },
+    OutcomeUnknown(String),
+}
+
+impl std::fmt::Display for CommandFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAdmitted { message, .. } | Self::OutcomeUnknown(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+pub fn request(socket: &Path, command: Value) -> Result<Vec<View>, CommandFailure> {
+    let response = request_response(socket, command).map_err(CommandFailure::OutcomeUnknown)?;
+    command_result(response)
+}
+
+fn command_result(response: Response) -> Result<Vec<View>, CommandFailure> {
+    if let Some(message) = response.error {
+        return if response.rejected_before_admission.as_deref() == Some("queue_full") {
+            Err(CommandFailure::NotAdmitted {
+                code: "queue_full".into(),
+                message,
+            })
+        } else {
+            Err(CommandFailure::OutcomeUnknown(message))
+        };
+    }
+    Ok(response.views)
 }
 
 fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
@@ -118,8 +151,8 @@ fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
     if response.protocol != 2 {
         return Err("incompatible host protocol".into());
     }
-    if let Some(error) = &response.error {
-        return Err(error.clone());
+    if response.error.is_some() {
+        return Ok(response);
     }
     for view in &response.views {
         let geometry = &view.frame.geometry;
@@ -146,6 +179,9 @@ pub struct Poll {
 }
 pub fn poll(socket: &Path, known: &[Known]) -> Result<Poll, String> {
     let reply = request_response(socket, json!({"command":"poll", "known":known}))?;
+    if let Some(error) = reply.error {
+        return Err(error);
+    }
     Ok(Poll {
         selected: reply
             .selected
@@ -226,6 +262,40 @@ pub fn command(view: &View, name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn error_response(error: &str, rejection: Option<&str>) -> Response {
+        Response {
+            protocol: 2,
+            views: Vec::new(),
+            error: Some(error.into()),
+            rejected_before_admission: rejection.map(str::to_owned),
+            selected: None,
+        }
+    }
+
+    #[test]
+    fn explicit_queue_full_marker_is_typed_as_not_admitted() {
+        assert_eq!(
+            command_result(error_response("queue full", Some("queue_full"))),
+            Err(CommandFailure::NotAdmitted {
+                code: "queue_full".into(),
+                message: "queue full".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn unmarked_and_unknown_rejections_remain_outcome_unknown() {
+        for rejection in [None, Some("future_code")] {
+            assert_eq!(
+                command_result(error_response("request may have been applied", rejection)),
+                Err(CommandFailure::OutcomeUnknown(
+                    "request may have been applied".into()
+                ))
+            );
+        }
+    }
+
     fn fixture() -> View {
         let value = json!({"session":"s","generation":"g","sequence":1,"state":"running","recovery_path":"live","pid":1,"storage_error":null,"frame":{"geometry":{"rows":1,"cols":1},"cells":[{"text":"界","fg":"Named(Foreground)","bg":"Named(Background)","flags":32,"underline":null,"hyperlink":0}],"hyperlinks":[["id","https://example.org"]],"cursor":[0,0],"cursor_style":"Block","modes":0,"colors":"","history_lines":0,"sync_pending_bytes":0,"title":""}});
         serde_json::from_value(value).unwrap()

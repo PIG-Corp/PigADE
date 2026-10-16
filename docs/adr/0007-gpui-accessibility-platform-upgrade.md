@@ -1,6 +1,6 @@
 # ADR 0007 — Upgrade the existing GPUI application for native accessibility
 
-Date: 2026-10-17. Status: accepted development direction; implementation and platform acceptance are pending.
+Date: 2026-10-17. Status: integrated in development; Linux accessibility bridge verified in isolation, broader platform acceptance pending.
 
 ## Context
 
@@ -22,8 +22,18 @@ The observed component licensing is compatible with continued evaluation while P
 
 ## Consequences and acceptance boundary
 
-After implementation, the app will follow the newer GPUI platform API and carry a new pinned source/lockfile graph. Linux builds must compile the same app against the new pin. Headless unit tests, formatting, Clippy and builds can run without opening windows.
+The app follows the newer GPUI platform API and carries its new pinned source/lockfile graph. The locked Linux build, 17 app tests and strict Clippy pass. An isolated Weston/Pixman + Lavapipe run also renders and reopens four live generations without replacing processes. Headless unit tests, formatting, Clippy and builds can run without opening windows.
 
 Wayland and X11 builds or source-level AccessKit presence are not accessibility acceptance. The project still needs isolated runtime checks that inspect the Linux accessibility tree and exercise it with AT-SPI and Orca on Wayland and X11. Those tests require a verified isolated compositor or VM. No keyboard or mouse injection, focus/workspace manipulation, or automated window launch may occur on the user's active desktop; see [the desktop incident report](../reports/desktop-incident.md). Until those checks pass, native Linux accessibility and the broader platform gate remain open.
 
 This change does not claim WCAG conformance, full keyboard access, screen-reader usability, GPU correctness, or macOS/Windows support. DESIGN.md remains the product accessibility target; the new upstream dependency is an enabling platform change, not evidence that the target is met.
+
+## Resolved dependency evidence
+
+The [Linux dependency inventory](../research/gpui-322cd509-linux-licenses.md)
+records 481 reachable packages, the exact metadata command, declared license
+expressions and remaining notice/source obligations. This is a target-filtered
+declaration inventory, not legal certification or a scan of every native library.
+An isolated read-only AT-SPI probe observes the named PigADE semantic tree;
+its exact role mapping and evidence are recorded separately. It does not test
+Orca, keyboard navigation, all four panes or accessible history/search.

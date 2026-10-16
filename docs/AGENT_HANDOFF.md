@@ -62,11 +62,11 @@ tiling UI, Git/worktree preparation and context/adapters are pending.
 
 ## Fresh evidence and limits
 
-- The fresh root run passed 120 workspace tests, including real-PTY
-  integration tests and conditional-poll coverage. Fresh vendor verification passed 152 Alacritty library tests and 45
+- The fresh root run passed 128 workspace tests, including real-PTY
+  integration tests and conditional-poll coverage. Fresh vendor verification passed 162 Alacritty library tests and 45
   reference cases. Workspace fmt, strict Clippy and release build passed. The
-  app's 17 tests, all-target strict Clippy
-  and build passed (with two known upstream GPUI float-future warnings). A fresh
+  app's 21 tests, all-target strict Clippy
+  and build passed. A fresh
   isolated software-rendered UI run rendered and reopened four views at 69×15
   with the same PIDs/generations; root visually checked the screenshot for text,
   focus and clipping. This does not establish GPU or platform acceptance.
@@ -142,8 +142,9 @@ prepared harness as completion of a SPEC gate. Preserve failed measurements.
 1. Evaluate the index-batch run against steady-rate, host-exit and latency
    requirements; retain the 250 μs rate miss and earlier failed runs. Do not
    weaken durability or correctness to meet producer rate.
-2. Implement and verify paginated history/copy/search, quota reporting and
-   cleanup for private replay-cache orphans. Keep raw journals as source data.
+2. Build product history paging/copy/search on the asynchronous canonical
+   record API; add quota reporting. Leased replay-cache cleanup is integrated.
+   Keep raw journals as source data.
 3. Measure total live/reflow/export/import allocations and set a global
    admission/heap budget; the current host-only 12-session result is necessary
    evidence, not product acceptance.
@@ -179,7 +180,75 @@ UI presentation. Full model comparison against the generating live instance is
 now opt-in via `verify_recovery_against_live`; earlier JSON without `live_*`
 fields does not include that third oracle.
 
-ADR0007 selects a same-app GPUI source upgrade to enable native Linux
-accessibility; implementation/build/runtime acceptance is still pending. The
-previous source pin lacks AccessKit. No platform acceptance follows from source
-presence or a dependency upgrade.
+ADR0007 records the integrated same-app GPUI upgrade and the isolated native
+AT-SPI bridge proof. The previous source pin lacks AccessKit. Complete
+screen-reader/platform acceptance remains pending.
+
+## New integration slice in progress
+
+The same app now builds against GPUI `322cd509dcccaee1f6bc44725d270598ae8171ad`.
+The isolated read-only AT-SPI probe sees the PigADE root, heading, selected
+terminal and status nodes; see `reports/accessibility-atspi-20261017.md`. The
+terminal has no Text/Action interface yet, so this does not satisfy accessible
+history, Orca or ACC-01. A pinned Linux Rust-dependency license inventory is in
+`research/gpui-322cd509-linux-licenses.{md,json}`; native/system library and
+cross-platform distribution obligations are outside that inventory.
+
+The first actual 24h soak failed after 104.13 s on a full resize queue. That
+failed artifact is preserved as `benchmarks/results/soak-initial-104s-queue-rejection.json`.
+The host now tags only proven pre-admission queue rejection. The soak retries
+only such resize rejections with a bounded deadline; input/launch/unknown
+outcomes are not retried. A new actual 24h attempt is running at
+`/home/afterburner/.local/state/pigade/soak/soak-20261016T224310Z-0f87d77e`
+(tool session 86044). At 1,981.94 s it recorded 391 ACKs and 645 resizes per
+PTY, with explicit bounded resize admission retries and host RSS 281,661,440
+bytes. This is a progress sample, not completion or a total memory claim.
+The full corpus remains running at
+`/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef`
+(tool session 65474). It has advanced to the second journal (about 896 MB at
+the latest inspection); the first journal reached the requested 1 GiB plus
+framing and its oracle completed. All four manifest results and successful
+runner completion remain required before acceptance.
+
+Long durable paths now support `serve STATE --runtime PRIVATE_SHORT_DIRECTORY`.
+Both namespaces stay exclusively locked. Marked, leased private replay caches
+have bounded background orphan maintenance; see `reports/runtime-and-replay-cache.md`.
+Unknown/unmarked/source objects remain preserved. Root added a regression for
+unknown source-like files even inside a marked orphan. Chunked canonical record
+reads are integrated with two workers/four queued tasks, exact watermarks and
+no host-command-thread cold I/O. A real-PTY FIFO fault test proves another
+session can accept input while a cold read is blocked. This is not a user-facing
+history viewer. An independent Luna review found no actionable bug and reran
+42 host tests plus the targeted cold-history/runtime integration tests.
+
+`recovery-canonical-tail-smoke.json` records exact canonical tail reads and
+unchanged sources for the small corpus. `vm-reboot-corpus-small.json` proves
+that same four-session fixture recovers across two real guest boots with exact
+frames and all six tail records. The full 1 GiB/recovery percentile gate is
+still open. `scripts/vm-reboot.py` requires a completed corpus and same-binary
+reference; small fixtures need the explicit diagnostic override. Its new
+private data disk is serial-checked before formatting. The signed local SDK
+with qemu-img is `/tmp/pigade-vm-sdk-qemu-img-20261017/evidence/manifest.json`;
+the older SDK lacks qemu-img. See `reports/vm-reboot.md` for commands and failed
+attempts. Python verification now runs 25 tests, including stale-font-build,
+unknown-outcome
+retry safety and pidfd-scoped cleanup after post-spawn failure.
+
+The app font profile is integrated with bundled JetBrains Mono and Noto
+CJK JP, liga/calt disabled, host-cell span clipping and unique internal OFL
+family aliases. Root review proved upstream family names can resolve a system
+copy despite add_fonts success; alias derivation/collision checks address that
+ambiguity. Root caught a stale `/tmp` build in the first visual attempts and
+marked those artifacts invalid for font proof. Fresh runs verify all five exact
+embedded payloads before window creation, then pass render/AT-SPI/reopen at 100%
+and 200% private output scales using app SHA275e47a1…; root inspected both
+screenshots. See `reports/font-render-profile.md` and ADR0008. Do not claim
+deterministic unsupported-codepoint fallback, fractional-scale or native
+platform parity. CORE_PROFILE remains unchanged for the frozen corpus.
+
+VTE callback and bounded Term capacity censuses are integrated without changing
+accepted terminal semantics. The release actual-model diagnostic measures
+1.2M-cell traversal p95 3.486 ms and resized-model p95 6.537 ms under concurrent
+work. It is absent from the output/frame loop; see `reports/terminal-memory-census.md`.
+This is not an allocator/RSS bound. Whole-event admission and a shared global
+budget, including checkpoint/frame/reflow/import/export transients, remain open.

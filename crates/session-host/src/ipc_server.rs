@@ -18,7 +18,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 
-use crate::{PROTOCOL, Request, Response, peer_pid, receive, send};
+use crate::{CommandRejection, PROTOCOL, Request, Response, peer_pid, receive, send};
 
 const CONNECTION_LIMIT: usize = 16;
 const JOB_LIMIT: usize = 16;
@@ -91,14 +91,34 @@ impl Drop for ConnectionSlot {
     }
 }
 
-fn error_response(error: impl Into<String>) -> Response {
+fn error_response(
+    error: impl Into<String>,
+    rejected_before_admission: Option<CommandRejection>,
+) -> Response {
     Response {
         protocol: PROTOCOL,
         views: Vec::new(),
         error: Some(error.into()),
+        rejected_before_admission,
         catalog: None,
         catalog_notice: None,
         selected: None,
+        history_chunk: None,
+    }
+}
+
+fn reply_or_unknown(result: std::result::Result<Response, mpsc::RecvTimeoutError>) -> Response {
+    match result {
+        Ok(response) => response,
+        // The request may have been committed; callers must reconcile rather
+        // than treating this as a safe retry signal.
+        Err(mpsc::RecvTimeoutError::Timeout) => error_response(
+            "host response timed out; operation outcome may be unknown",
+            None,
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            error_response("host response lost; operation outcome may be unknown", None)
+        }
     }
 }
 
@@ -113,41 +133,42 @@ fn process_connection(mut stream: UnixStream, jobs: SyncSender<Job>) -> Result<(
             // Do not echo malformed user payloads into diagnostics.
             send(
                 &mut stream,
-                &error_response("invalid request framing or payload"),
+                &error_response("invalid request framing or payload", None),
             )?;
             return Ok(());
         }
     };
     if request.protocol != PROTOCOL {
-        send(&mut stream, &error_response("unsupported IPC protocol"))?;
+        send(
+            &mut stream,
+            &error_response("unsupported IPC protocol", None),
+        )?;
         return Ok(());
     }
     let (reply, receiver) = mpsc::sync_channel(1);
     match jobs.try_send(Job { request, reply }) {
         Ok(()) => (),
         Err(mpsc::TrySendError::Full(_)) => {
-            send(&mut stream, &error_response("host command queue full"))?;
+            send(
+                &mut stream,
+                &error_response(
+                    "host command queue full; command was not admitted",
+                    Some(CommandRejection::QueueFull),
+                ),
+            )?;
             return Ok(());
         }
         Err(mpsc::TrySendError::Disconnected(_)) => {
             send(
                 &mut stream,
-                &error_response("host command handler unavailable"),
+                &error_response("host command handler unavailable", None),
             )?;
             return Ok(());
         }
     }
-    let response = match receiver.recv_timeout(REPLY_TIMEOUT) {
-        Ok(response) => response,
-        // Timeout does not cancel or retry a possibly committed command. Its
-        // operation ID remains the caller's reconciliation/idempotency boundary.
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            error_response("host response timed out; operation outcome may be unknown")
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            error_response("host response lost; operation outcome may be unknown")
-        }
-    };
+    // Timeout does not cancel or retry a possibly committed command. Its
+    // operation ID remains the caller's reconciliation/idempotency boundary.
+    let response = reply_or_unknown(receiver.recv_timeout(REPLY_TIMEOUT));
     send(&mut stream, &response)?;
     Ok(())
 }
@@ -176,9 +197,11 @@ mod tests {
             protocol: PROTOCOL,
             views: Vec::new(),
             error: None,
+            rejected_before_admission: None,
             catalog: None,
             catalog_notice: None,
             selected: None,
+            history_chunk: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -230,9 +253,20 @@ mod tests {
         )?;
         let response: Response = receive(&mut client)?;
         assert!(response.error.unwrap().contains("queue full"));
+        assert_eq!(
+            response.rejected_before_admission,
+            Some(CommandRejection::QueueFull)
+        );
         worker.join().unwrap()?;
         assert!(receiver.try_recv().is_ok());
         assert!(receiver.try_recv().is_err());
         Ok(())
+    }
+
+    #[test]
+    fn ambiguous_reply_timeout_never_claims_pre_admission_rejection() {
+        let response = reply_or_unknown(Err(mpsc::RecvTimeoutError::Timeout));
+        assert!(response.error.unwrap().contains("outcome may be unknown"));
+        assert_eq!(response.rejected_before_admission, None);
     }
 }

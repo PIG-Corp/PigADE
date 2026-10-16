@@ -545,3 +545,211 @@ Integrated conditional cell polling, bounded durable output/index batching, arch
 - Files: crates/app/src/main.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/history.rs, crates/session-host/src/history/tests.rs, crates/session-host/tests/recovery.rs, crates/storage/src/archive.rs, vendor/alacritty_terminal/src/grid/resize.rs, vendor/alacritty_terminal/src/grid/row.rs, vendor/alacritty_terminal/src/grid/history_tests.rs, scripts/vm-reboot.py, scripts/stress-pty.py, scripts/long-history.py, scripts/soak-pty.py, docs/AGENT_HANDOFF.md, docs/reports/cold-history-integration.md, benchmarks/results
 - Verification: Fresh workspace fmt, strict all-target Clippy, 120 tests and release bins/examples pass. Vendor 152 library +45 reference tests and no-default-features check pass with documented patched VTE config (initial command omitted patch and failed; corrected). App17 tests/strictClippy/build and private software-render UI kill/reopen passed earlier in this integration. Actual two-boot VM four cold histories matched. Normal-history 60s producer bodies59.9845s all539088coldrecords exact; up to7.5s schedulelateness, exitdeadlinefail. TUI60s116ACK p95=42.91ms p99=59.07ms CRC/recoverypass; notUIpresent. Headlessidle8PTY60s0CPUticks. Full4x1GiB100kresizes and24hsoak now running, notpassed. Moved full smoke runtime outsideGit, retained evidence only. LinkerSIGBUS investigated as/tmpEDQUOT; task-owned cache movedhome, normalbuildpassed.
 - Risks / next: Continue actual corpus/soak, same-app GPUI accessibility upgrade perADR0007; global live-extra admission, product history UI/quota, platform/CLI/MVP gates remain open. Never automate active desktop.
+
+## 2026-10-16T22:31:51+00:00 — /root/replay_cache_cleanup
+
+Added locked, profile-bound private replay-cache ownership and bounded fail-closed orphan collection with same-parent no-replace quarantine; tests cover live lease, SIGKILL orphan, invalid/foreign markers, symlinks and unsafe parent
+
+- Files: crates/session-host/src/replay_cache.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/replay_cache.rs; cargo test --locked -p pigade-session-host replay_cache::tests -- --nocapture --test-threads=1 (5 passed; compile emitted expected dead_code warnings before History/Host integration)
+- Risks / next: Root integrates ReplayCache into History and invokes cleanup under host lock; root owns integrated verification. Cleanup is bounded by 256 parent entries and 512 cache files per pass and does not establish any quota guarantee.
+
+## 2026-10-16T22:33:13+00:00 — /root/gpui_accessibility_upgrade
+
+Upgraded the existing GPUI application to the pinned AccessKit-capable upstream revision and migrated platform API call sites
+
+- Files: crates/app/Cargo.toml, crates/app/Cargo.lock, crates/app/bootstrap.sh, crates/app/README.md, crates/app/src/main.rs, WORKLOG.md
+- Verification: GPUI archive SHA-256 verified; bootstrap fmt -- --check passed; bootstrap build --locked passed; bootstrap test --locked passed (17 tests); strict bootstrap clippy --locked --all-targets -- -D warnings passed; python3 scripts/check-version.py and git diff --check passed; no window or desktop input used
+- Risks / next: AT-SPI/Orca runtime inspection on isolated Wayland and X11 remains unverified; broader transitive license audit remains incomplete; lead owns integrated verification and commit
+
+## 2026-10-16T22:35:57+00:00 — /root/gpui_accessibility_upgrade
+
+Inventoried locked Linux GPUI app dependency license metadata and documented GPL/LGPL expression review
+
+- Files: docs/research/gpui-322cd509-linux-licenses.json, docs/research/gpui-322cd509-linux-licenses.md, WORKLOG.md
+- Verification: cargo metadata --locked --format-version 1 --filter-platform x86_64-unknown-linux-gnu captured outside repo; independent traversal matched all 481 reachable packages; JSON assertions and python3 -m json.tool passed; git diff --check passed; no build or GUI test run in this licensing slice
+- Risks / next: One optional GPL expression (Apache-2.0 OR GPL-2.0-only), no LGPL; one MPL-2.0 package requires separate review; product license remains unknown; no automatic dependency removal recommended
+
+## 2026-10-16T22:38:43+00:00 — /root/command_admission
+
+Added structured pre-admission queue-full responses for resize, input, and IPC job saturation; stress harness exposes typed rejections and soak retries only resize queue-full within a ten-second deadline
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, scripts/stress-pty.py, scripts/soak-pty.py
+- Verification: cargo test -p pigade-session-host ipc_server::tests -- --nocapture (4 passed); cargo clippy --workspace --all-targets -- -D warnings (passed); cargo build --release -p pigade-session-host --bin pigade-session-host (passed); cargo fmt --all -- --check; python3 scripts/check-version.py; python3 -m py_compile scripts/stress-pty.py scripts/soak-pty.py; queue-full retry helper smoke retried explicit queue_full once and propagated ambiguous TimeoutError without retry; 7-second four-session soak --verify completed, full recovery and CRC passed, 2 resizes/session, no retry required; git diff --check passed
+- Risks / next: No 24-hour soak rerun; prior failed run remains preserved outside Git. Lead reviews/integrates typed admission contract; longer soak remains open.
+
+## 2026-10-16T22:39:24+00:00 — /root/command_admission
+
+Persisted bounded per-sample resize queue-full retry count and wait summaries in the existing fsynced soak progress stream
+
+- Files: scripts/soak-pty.py
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-admission-pycache python3 -m py_compile scripts/stress-pty.py scripts/soak-pty.py; second 7-second four-session --verify soak completed with full recovery and CRC; each fsynced progress sample contained four bounded retry-count/wait summaries; git diff --check passed
+- Risks / next: Lead reviews/integrates; no retry was needed in the soak, so only the helper simulation exercised the queue-full retry path.
+
+## 2026-10-16T22:46:03+00:00 — /root/font_profile
+
+Prepared a reproducible JetBrains Mono primary-font candidate and documented the CJK fallback width blocker
+
+- Files: docs/research/terminal-font-profile.md, crates/app/assets/fonts/jetbrains-mono-v2.304
+- Verification: python3 -m json.tool on asset-manifest.json; inline fontTools 4.63.0 checks passed for each bundled face sample coverage and M/box advances; Noto CJK JP metrics reproduced mismatch; SHA-256 and byte counts matched every manifest entry; trailing-whitespace check passed; no app build, tests, GUI, or platform claims
+- Risks / next: Lead integrates or declines bundled primary files and chooses a CJK policy only after exact cell-advance/render fixtures; CORE_PROFILE remains font=unfixed-prototype
+
+## 2026-10-16T22:47:57+00:00 — /root/font_profile
+
+Corrected CJK span rationale from lead review; recorded current per-cell paint behavior and added an optional Noto JP Regular fallback candidate
+
+- Files: docs/research/terminal-font-profile.md, crates/app/assets/fonts/jetbrains-mono-v2.304, crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004
+- Verification: Read paint_panel: host-indexed origin, whole-cluster GPUI shaping, TextAlign::Left, pane viewport mask only, no per-cell clip/centering. Verified official Noto Sans Mono CJK JP v2.004 release ZIP size/SHA and included OFL. python3 -m json.tool and per-file manifest size/SHA checks passed; fontTools 4.63.0 verified bundled JBM script samples and Noto JP CJK samples/advances; trailing whitespace passed. No app build, GUI, platform, or pixel tests.
+- Risks / next: Lead chooses explicit CJK region policy and baseline/placement/span-clipping behavior; JP forms remain opt-in only. No exact natural-advance equality requirement; CORE_PROFILE remains unchanged.
+
+## 2026-10-16T22:50:28+00:00 — /root/gpui_accessibility_upgrade
+
+Added opt-in isolated AT-SPI tree probe with bounded async-tree polling and recorded native-bridge evidence/report
+
+- Files: scripts/isolated-render.py, crates/app/evidence/accessibility-atspi-20261017, docs/reports/accessibility-atspi-20261017.md, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-render.py; --help and three JSON parse checks passed; git diff --check passed; opt-in isolated run at /home/afterburner/.local/state/pigade/isolated-accessibility/atspi-20261017-pass-final passed render/reopen and AT-SPI assertions (6 nodes, 47 D-Bus calls, 2 snapshots, 0.366s tree wait), private namespaces/device-free preflight verified
+- Risks / next: Bridge exposure verified only in private headless Wayland harness; no Orca, input/actions, WCAG assessment, X11, or full accessibility acceptance
+
+## 2026-10-16T22:50:58+00:00 — /root/gpui_accessibility_upgrade
+
+Reran bounded AT-SPI probe after annotating the bridge Frame role and refreshed curated evidence
+
+- Files: scripts/isolated-render.py, crates/app/evidence/accessibility-atspi-20261017, docs/reports/accessibility-atspi-20261017.md, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-render.py; latest opt-in isolated run at /home/afterburner/.local/state/pigade/isolated-accessibility/atspi-20261017-pass-final2 passed render/reopen and accessibility assertions; 6 nodes, 47 calls, 2 snapshots, 0.354s tree wait; git diff --check passed
+- Risks / next: Only the private headless Wayland native bridge tree was verified; screen-reader operation and wider accessibility acceptance remain unverified
+
+## 2026-10-16T22:51:24+00:00 — /root/history_record_chunks
+
+Added source-preserving bounded canonical history record chunks with exact sequence guarding and prefix/private-tail coverage
+
+- Files: crates/session-host/src/history.rs, crates/session-host/src/history/tests.rs, WORKLOG.md
+- Verification: cargo fmt --all --check; cargo test --locked -p pigade-session-host history::tests -- --nocapture (5 passed); cargo clippy --locked --workspace --all-targets -- -D warnings; git diff --check
+- Risks / next: Root integrates the host IPC command; returned chunks are capped at 64 KiB, while record lookup still materializes one codec-bounded row up to 16 MiB.
+
+## 2026-10-16T22:53:37+00:00 — /root/command_admission
+
+Classified app IPC command failures as explicitly not admitted only for recognized queue_full responses; surfaced distinct Russian status wording while preserving sticky errors and no-retry behavior
+
+- Files: crates/app/src/protocol.rs, crates/app/src/main.rs
+- Verification: crates/app/bootstrap.sh fmt -- --check passed; crates/app/bootstrap.sh test --locked passed (19 tests); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings passed; crates/app/bootstrap.sh build --locked passed; python3 scripts/check-version.py and git diff --check passed; no desktop automation used
+- Risks / next: Lead reviews/integrates alongside concurrent app accessibility edits; request failures remain sticky and no UI retry path was added.
+
+## 2026-10-16T22:55:12+00:00 — /root/terminal_memory_budget
+
+Added cloneable VTE processor census primitives and REP aggregation callback; added terminal resource census for input, zero-width, title, hyperlink, and title-stack callback counts
+
+- Files: vendor/vte/src/ansi.rs, vendor/vte/PIGADE-PATCH.md, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/src/term/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md
+- Verification: cargo test --manifest-path vendor/vte/Cargo.toml --features ansi --lib (55 passed); cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --lib --config patch.crates-io.vte.path=... (156 passed before overflow helper); focused terminal census tests (5 passed); cargo check --manifest-path vendor/alacritty_terminal/Cargo.toml --no-default-features --config patch.crates-io.vte.path=... (passed); VTE clippy strict passed; Alacritty clippy passed with 3 documented upstream question_mark warnings; rustfmt --check resources.rs passed; ANSI rustfmt check reports only pre-existing compact checkpoint helper formatting; git diff --check passed
+- Risks / next: Root can integrate resource census into whole-event pre-admission; census duplicates bounded pending parser state (up to 2 MiB sync and 64 KiB OSC) and reports counts only, not heap usage or an admission policy
+
+## 2026-10-16T23:02:25+00:00 — /root/vm_large_corpus_plan
+
+Added optional isolated corpus-backed two-boot VM mode with completion/hash/reference preflight, read-only private staging, serial-verified writable guest data disk, and exact frame plus canonical checkpoint-tail comparison; preserved synthetic command path
+
+- Files: scripts/vm-reboot.py, scripts/test_vm_reboot.py
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-vm-reboot-pycache python3 -m py_compile scripts/vm-reboot.py scripts/test_vm_reboot.py; python3 -m unittest discover -s scripts -p test_vm_reboot.py -v (11 passed); git diff --check -- scripts/vm-reboot.py scripts/test_vm_reboot.py; no QEMU prepare/boot or corpus copy performed
+- Risks / next: Parent reviews changes and reference API integration; run only with explicit parent go after fresh completed corpus and same-binary recover-corpus result exist
+
+## 2026-10-16T23:03:21+00:00 — /root/vm_large_corpus_plan
+
+Corrected corpus guest IPC to connect through the dedicated short runtime endpoint required by serve --runtime
+
+- Files: scripts/vm-reboot.py, scripts/test_vm_reboot.py
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-vm-reboot-pycache python3 -m py_compile scripts/vm-reboot.py scripts/test_vm_reboot.py; python3 -m unittest discover -s scripts -p test_vm_reboot.py -v (12 passed); git diff --check -- scripts/vm-reboot.py scripts/test_vm_reboot.py; no VM or corpus copy performed
+- Risks / next: Parent reviews final diff and then authorizes any VM preparation/run separately
+
+## 2026-10-16T23:05:41+00:00 — /root/terminal_memory_budget
+
+Corrected incidental rustfmt recursion from the prior census slice by restoring formatting-only changes in unassigned vendored cell and search modules
+
+- Files: vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/src/term/search.rs, WORKLOG.md
+- Verification: Inspected both diffs and confirmed they contained only rustfmt line wrapping/comma-style changes; git restore returned both paths to HEAD and follow-up git diff is empty
+- Risks / next: Read-only review of dynamic terminal resource-accounting design completed separately; no admission code changed
+
+## 2026-10-16T23:07:24+00:00 — /root/vm_large_corpus_plan
+
+Fixed corpus fixture staging to copy only explicit files, allowed only recognized Host runtime artifacts while excluding them from stage, corrected guest path references, and made startup readiness probe the selected runtime endpoint
+
+- Files: scripts/vm-reboot.py, scripts/test_vm_reboot.py
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-vm-reboot-pycache python3 -m py_compile scripts/vm-reboot.py scripts/test_vm_reboot.py; python3 -m unittest discover -s scripts -p test_vm_reboot.py -v (16 passed); git diff --check -- scripts/vm-reboot.py scripts/test_vm_reboot.py; no VM launch or corpus copy
+- Risks / next: Ready for parent review and explicit root small-corpus smoke authorization
+
+## 2026-10-16T23:09:33+00:00 — /root/font_render_profile
+
+Pinned the app-level JetBrains Mono terminal render profile, disabled liga/calt, and clipped glyph clusters to host cell spans
+
+- Files: crates/app/src/font.rs, crates/app/src/main.rs, crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json, crates/app/assets/fonts/render-profile.json, docs/research/terminal-font-profile.md
+- Verification: crates/app/bootstrap.sh test --locked (21 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); crates/app/bootstrap.sh build --locked (passed); crates/app/bootstrap.sh fmt -- --check (passed); JSON validation and git diff --check passed; no GUI or desktop automation
+- Risks / next: Profile remains separate from CORE_PROFILE; root should run isolated renderer adjacency fixtures for regular/bold/italic, combining clusters and wide glyphs at requested sizes/scales. CJK policy and platform fallback identity remain unpinned/unaccepted.
+
+## 2026-10-16T23:09:41+00:00 — /root/vm_large_corpus_plan
+
+Pinned the official Arch qemu-img 11.1.2-1 package in the private VM SDK, recorded the extracted binary and version, and documented package verification/provenance
+
+- Files: scripts/prepare-vm-sdk.py, docs/research/vm-sdk-qemu-img.md
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-vm-sdk-pycache python3 -m py_compile scripts/prepare-vm-sdk.py; python3 scripts/prepare-vm-sdk.py --prepare --directory /tmp/pigade-vm-sdk-qemu-img-20261017 (ready; 14 packages; no unresolved ldd); manifest assertion confirmed qemu-img version 11.1.2, pinned SHA-256 and David Runge primary signer; python3 scripts/check-version.py; git diff --check -- scripts/prepare-vm-sdk.py docs/research/vm-sdk-qemu-img.md; no package installation or VM launch
+- Risks / next: Use /tmp/pigade-vm-sdk-qemu-img-20261017/evidence/manifest.json for the separately authorized corpus VM preflight
+
+## 2026-10-16T23:11:22+00:00 — /root/terminal_memory_budget
+
+Added bounded persistent terminal allocation census over screens, cached rows, cursor templates, extras, hyperlinks, titles, and config storage
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/grid/row.rs, vendor/alacritty_terminal/src/grid/storage.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, WORKLOG.md
+- Verification: cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=vendor/vte term::resources --lib (9 passed); full vendor library tests (161 passed); reference tests (45 passed); no-default-features cargo check passed; Clippy passed with the 3 documented upstream question_mark warnings forced to warning; git diff --check passed
+- Risks / next: Root integrates any caller scheduling or policy; census is bounded by caller-supplied visits and unique Arc identities, is read-only, and is not heap/RSS accounting or output-loop admission
+
+## 2026-10-16T23:11:29+00:00 — /root/font_render_profile
+
+Applied root decision to pin Noto Sans Mono CJK JP Regular as explicit default JP-regional fallback and updated the separate app render profile; CORE_PROFILE remains unchanged
+
+- Files: crates/app/src/font.rs, crates/app/src/main.rs, crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json, crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004/asset-manifest.json, crates/app/assets/fonts/render-profile.json, docs/research/terminal-font-profile.md
+- Verification: crates/app/bootstrap.sh test --locked (21 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); crates/app/bootstrap.sh build --locked (passed); crates/app/bootstrap.sh fmt -- --check (passed); font manifest/profile JSON and asset byte-count/SHA-256 checks passed; git diff --check passed; no GUI automation
+- Risks / next: App profile now fixes JP regional CJK forms for covered glyphs; fallback style parity, uncovered glyph platform fallback and glyph ink/baseline remain unverified. Root should run isolated-render with A漢B and xあ中한y adjacency output; semantic CORE_PROFILE/corpus migration remains a separate future gate.
+
+## 2026-10-16T23:12:47+00:00 — /root/terminal_memory_budget
+
+Extended terminal allocation census to account for tab-stop, keyboard-mode and damage-line Vec capacities and clarified its scoped-estimate limits
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, WORKLOG.md
+- Verification: cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=vendor/vte term::resources --lib (10 passed); no-default-features cargo check passed; Clippy passed with three documented upstream question_mark warnings forced to warnings; scoped git diff --check passed
+- Risks / next: Root can proceed with runtime policy integration; complete census remains a scoped payload-capacity estimate and is not an upper bound on total memory
+
+## 2026-10-16T23:18:25+00:00 — /root/font_render_profile
+
+Use reproducible unique OFL-compliant aliases for bundled terminal font faces and narrow identity claims
+
+- Files: crates/app/src/font.rs, crates/app/src/main.rs, crates/app/assets/fonts/derived-terminal-v1, scripts/prepare-terminal-fonts.py, crates/app/assets/fonts/render-profile.json, docs/research/terminal-font-profile.md
+- Verification: ./bootstrap.sh test --locked (21 passed), ./bootstrap.sh clippy --locked --all-targets -- -D warnings (passed), ./bootstrap.sh build --locked (passed), ./bootstrap.sh fmt -- --check (passed), scripts/prepare-terminal-fonts.py --verify (byte-identical fresh regeneration with outline/metric/cmap preservation), JSON checks and git diff --check passed
+- Risks / next: Root runs isolated renderer fixture; unsupported glyph platform fallback, visual span/baseline acceptance, and macOS/Windows behavior remain unverified.
+
+## 2026-10-16T23:18:27+00:00 — /root
+
+Integrated short locked runtime sockets, source-preserving asynchronous history reads, typed admission failures, leased cache maintenance and real corpus-backed two-boot VM diagnostics; measured bounded model-census costs
+
+- Files: crates/session-host/src/history_read.rs, crates/session-host/src/replay_cache.rs, crates/session-host/src/history.rs, crates/session-host/src/lib.rs, crates/session-host/tests/recovery.rs, crates/session-host/tests/slow_input.rs, crates/session-host/src/main.rs, crates/terminal/src/lib.rs, crates/terminal/examples/allocation_census.rs, scripts/recover-corpus.py, scripts/vm-reboot.py, scripts/test_vm_reboot.py, scripts/test_soak_admission.py, scripts/check.sh, scripts/soak-pty.py, scripts/isolated-render.py, README.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/reports/runtime-and-replay-cache.md, docs/reports/vm-reboot.md, docs/reports/terminal-memory-census.md, benchmarks/results
+- Verification: bash scripts/check.sh passed (128 Rust tests, 23 Python tests, strict all-target Clippy, fmt, release bins/examples, version/whitespace); patched Alacritty 162 lib +45 reference +no-default passed; VTE57 +no-default passed earlier in same slice; one-cycle exact canonical-tail recovery passed319.16ms, small corpus VM real2boots passed exactframes/all6tailrecords and sourcehashes; actual-model census5fixtures30samples with unchangedcheckpoints; independent Luna review reran42host+targetedPTYtests; prepared SDK/tool/identity failures retained/repaired and regression-tested
+- Risks / next: Root finishes uniquefontalias integration and isolatedvisual check before commit; full4x1GiB/100kresize corpus and actual24hsoak remainrunning/frozen, notpassed; globaladmission/UIhistory/platform/provider/fullMVP gates remain open
+
+## 2026-10-16T23:21:55+00:00 — /root/font_render_profile
+
+Remove stale DSIG from derived JP font and generate accurate routed redistribution notice
+
+- Files: scripts/prepare-terminal-fonts.py, crates/app/assets/fonts/derived-terminal-v1, crates/app/assets/fonts/render-profile.json, docs/research/terminal-font-profile.md
+- Verification: python3 scripts/prepare-terminal-fonts.py --verify passed with byte-identical regeneration; manifest/source/output notice JSON checks passed; confirmed source DSIG has zero signature records and derived OTF has no DSIG; ./bootstrap.sh test --locked (21 passed), clippy --locked --all-targets -- -D warnings, build --locked, fmt -- --check, and git diff --check passed
+- Risks / next: Root reruns isolated renderer against the rebuilt app payload; cross-platform font selection and unsupported glyph fallback remain unverified.
+
+## 2026-10-16T23:26:56+00:00 — /root
+
+Verified uniquely aliased embedded font payloads and native AT-SPI/reopen in isolated100%/200% software outputs; invalidated stale-target visual evidence and added preflight regression
+
+- Files: crates/app/src/main.rs, crates/app/src/font.rs, crates/app/assets/fonts, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/font-profile-20261017, crates/app/evidence/font-profile-stale-build-20261017, docs/reports/font-render-profile.md, docs/adr/0008-bundled-terminal-font-identities.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Root app21tests/alltargetstrictClippy/fmt pass; childlockedbuildpass and selectedbinary275e47a1 has all5exactfontpayloads; root freshgenerator--verify byte-identical; Python25tests pass inclstalebinary/manifest; isolated actualapp scale1(1280x800,69x13) andscale2(2560x1600,73x14) render/AT-SPI/reopen pass samePID/generation andmanualimageinspection; previouswrongcache8b248 invalidated/preserved ratherthan claimed; firstscaleharness5120capturefailure retained/corrected
+- Risks / next: Commit coherent integration afterfinalwhitespace/version checks; stillnoIME/fractional/nativeGPU/crossplatform/OrcaText/700MiBglobaladmission/fullMVPacceptance; continuefoundationgates and frozenlongruns
+
+## 2026-10-16T23:28:03+00:00 — /root
+
+Preserved upstream font license and authors bytes during staged whitespace verification
+
+- Files: .gitattributes, WORKLOG.md
+- Verification: Staged diff check identified original trailing spaces in four upstream/reproduced legal files; exact-path attributes retain their bytes and disable only end-of-line whitespace warnings for those files. Other whitespace checks and the pre-commit hook remain enabled.
+- Risks / next: Recheck staged diff and commit the verified integration; do not normalize source license hashes.

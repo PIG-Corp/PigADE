@@ -46,6 +46,13 @@ pub struct Hyperlink {
 }
 
 impl Hyperlink {
+    pub(crate) fn allocation_identity(&self) -> *const () {
+        Arc::as_ptr(&self.inner).cast()
+    }
+
+    pub(crate) fn allocation_capacities(&self) -> (usize, usize) {
+        (self.inner.id.capacity(), self.inner.uri.capacity())
+    }
     #[cfg(feature = "serde")]
     pub(crate) fn checkpoint_identity(&self) -> *const () {
         Arc::as_ptr(&self.inner).cast()
@@ -168,6 +175,16 @@ impl CellExtra {
         hyperlink: Option<Hyperlink>,
     ) -> Self {
         Self { zerowidth, underline_color, hyperlink }
+    }
+}
+
+impl CellExtra {
+    pub(crate) fn allocation_identity(&self) -> *const () {
+        self as *const Self as *const ()
+    }
+
+    pub(crate) fn allocation_parts(&self) -> (usize, Option<&Hyperlink>) {
+        (self.zerowidth.capacity(), self.hyperlink.as_ref())
     }
 }
 

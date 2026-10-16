@@ -1,0 +1,686 @@
+{
+  "schema": 1,
+  "status": "recovery_verified",
+  "created_utc": "2026-10-16T23:11:23Z",
+  "nonce": "ba1ced2119614cfa989546455d2509d8",
+  "directory": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c",
+  "filesystem": "btrfs",
+  "image": {
+    "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "filename": "alpine-3.24.2-x86_64-cloudinit-r2.qcow2",
+    "size_bytes": 157220864,
+    "sha512": "6b9928cea1c6243affb8a9b09eba6046cd090e8bdb7141fbf0c8f2649c4a99d62e12cda289da41f99de82ce2b3e3780772dd594eaee3693cb49691d81cbe5d4b",
+    "official_signature_valid": true,
+    "signer_fingerprint": "F26ADFADBAE702EF7AF637459DA7EF23BFFCDF22"
+  },
+  "binary": {
+    "source": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+    "sha256": "bec7446dea046f5c26d116c67d34509b04a392a37fb4f0af2b4a2b0f590a2bf1",
+    "ldd": "\tlinux-vdso.so.1 (0x00007f827e29d000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f827e23d000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f827e106000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f827d800000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007f827e29f000)\n",
+    "libraries": [
+      {
+        "soname": "libgcc_s.so.1",
+        "source": "/usr/lib/libgcc_s.so.1",
+        "sha256": "e618cb9c90c2eb3a1dad1cfea5b6c1eebcf2e799ad805976f4ae47bdd61c716a"
+      },
+      {
+        "soname": "libm.so.6",
+        "source": "/usr/lib/libm.so.6",
+        "sha256": "965106704753eefe8c31ae7da6daba3ead3d18c52b19b5fcc41178bcc4aa999d"
+      },
+      {
+        "soname": "libc.so.6",
+        "source": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "soname": "ld-linux-x86-64.so.2",
+        "source": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)"
+  },
+  "sdk_manifest": "/tmp/pigade-vm-sdk-qemu-img-20261017/evidence/manifest.json",
+  "sdk": {
+    "qemu": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/bin/qemu-system-x86_64",
+    "qemu_data_dir": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/share/qemu",
+    "bios": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/share/qemu/bios-256k.bin",
+    "mcopy": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/bin/mcopy",
+    "mformat": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/bin/mformat",
+    "qemu_img": "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/bin/qemu-img",
+    "qemu_img_version": "qemu-img version 11.1.2"
+  },
+  "artifacts": {
+    "disk": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/guest-disk.qcow2",
+    "seed": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/nocloud-seed.img",
+    "stage": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/stage",
+    "corpus_fixture": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/corpus-source",
+    "corpus_data_disk": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/corpus-data.qcow2",
+    "serial_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/serial.log",
+    "qemu_log": "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/qemu.log",
+    "qmp_socket": "/tmp/p-q-wq66zpbm/q",
+    "qmp_socket_directory": "/tmp/p-q-wq66zpbm"
+  },
+  "data_disk": {
+    "virtual_size_bytes": 68719476736,
+    "format": "qcow2",
+    "device_serial": "pgd-data-ba1ced21",
+    "host_space_preflight_bytes": 8688981640,
+    "guest_state": "full writable corpus copy and recovery-derived metadata"
+  },
+  "corpus": {
+    "source": "/home/afterburner/.local/state/pigade/long-history-smoke/long-history-run-adfb8318-d41a-4baa-8d41-e09c502e8a7e/long-history-011783ee-b953-401f-aa3c-f33911f21263",
+    "reference": "/home/afterburner/.local/state/pigade/recovery-tail-smoke-20261017/result.json",
+    "reference_sha256": "5beadbe5901d6206e74d2b1ae873d85504702a9eb2c55a2852717734555cb012",
+    "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+    "source_bytes": 49523524,
+    "fixture_files": 29,
+    "source_inventory": {
+      "00000000-0000-0001-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "e60390d551b0e9f5795e8529561fc5f4bde32af68dac3ad9a7eb03aee16cf5c3"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "64b8a9937d0e9124bea0f9d9eaca25d7fe74c61602ef470e37e5989e13db8b38"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000215.checkpoint": {
+        "bytes": 9812216,
+        "sha256": "fd72679e8e03ea18cb02323faa353ccce11e30972425fc461a3565f25e690ad9"
+      },
+      "00000000-0000-0001-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "4697ddf8724b9ee530f7b1aa9ad789db51f6012b22d217a1ffe5332da8142ff3"
+      },
+      "00000000-0000-0001-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "cc51a3e79b14f6acdc84a5b12eb050d1ced9b6ebeafbb966fd7ad3a66457849f"
+      },
+      "00000000-0000-0001-0000-504947434445.journal": {
+        "bytes": 1058278,
+        "sha256": "2ad69850feb48b0a3bb22860d64bd98b73a879d81b223a0563293a7e8079ad2b"
+      },
+      "00000000-0000-0001-0000-504947434445.timeline.jsonl": {
+        "bytes": 19235,
+        "sha256": "942b86faf1606fb93253d428a90eaf7614bbd340488542c1c3536a4c72de93c7"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ff8c86158a0a2efe7b9f4c1dbe6d28b6f4457b0c9a8fb529fab716f8a18d39d4"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "2b3e46c84dcd6f3db3bb196acb58e84004a9ffa8c2af8c77554f1f9f19e85c5e"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812137,
+        "sha256": "4cc30b0b64ac550d8e8a83509b2ea3bb7c0809c39d10ebc2be8fbcc8f5ed2f2e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1139588,
+        "sha256": "ce8d8c0fffa385afd1627798d7100762547f366521ea623bf49a2ebc7646808e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/rows.index": {
+        "bytes": 204672,
+        "sha256": "532f16e60924e65fc0e4a24caac3443e662f80ccc124b40ce0d7a2e02e2413e1"
+      },
+      "00000000-0000-0002-0000-504947434445.journal": {
+        "bytes": 1058334,
+        "sha256": "84977d28b74cccff680ad9ae0fffeb826c98eff378204a8e5b8bc174c25bf533"
+      },
+      "00000000-0000-0002-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "61b9c194b53a490913756449d28214dc97a79f6b0e8db7093317f39d5a8bfc13"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "7541141ffd3a8f0668d70ae0e6f9de86078a8fa784d196279f27a98f46616779"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "73bd30fe61f8b616673b7cc60efc23b4311cfcc41d681b6a7e31a07ebe5f3372"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812259,
+        "sha256": "659a127fb16f82c1b76a67e288abc729ec846e6c4f81c52724d5b00ec80fd24e"
+      },
+      "00000000-0000-0003-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "48aa97adf520387a566acbc64e1c93969df6a8e818569d1f5d8f38298300e95d"
+      },
+      "00000000-0000-0003-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "c34e85359cbdf8bfc0a2bba1d28aea8633c1477d1d7ec2c01f051a642c0303fb"
+      },
+      "00000000-0000-0003-0000-504947434445.journal": {
+        "bytes": 1058361,
+        "sha256": "f280931c01d30914a75491c849be1a6227b56cc6093f3bd70d95c9a70abcff1a"
+      },
+      "00000000-0000-0003-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "4ac1385f70021a60b4e77ac16096e95d8c553f3ecf67a859f917cdca65c0be8f"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "d6bf688bcb2fd418bf9bb15722054db07c340c0ee716935d48126b4106c7204a"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ef9a95b0557e87384fe0497953abf5a213bdb7147023effbf93ee9efaf273ce7"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812249,
+        "sha256": "42161de9b7da9ad0e36f3e6a3c5a86eff66a5459af5fd41ba1781209933f0474"
+      },
+      "00000000-0000-0004-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "592d9e2c88e257f3002a7ce03455b967014fec5cfde61d6d2c41f5873d56358e"
+      },
+      "00000000-0000-0004-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "2462f324b512cc57d3eeb3f06132e717b0771c6342f1029cafcf0351029882bf"
+      },
+      "00000000-0000-0004-0000-504947434445.journal": {
+        "bytes": 1058387,
+        "sha256": "48143d6c7d9160090e1d0cbeedcc70ec482b2e2ff49bee97fa08bf22a7a0795b"
+      },
+      "00000000-0000-0004-0000-504947434445.timeline.jsonl": {
+        "bytes": 19427,
+        "sha256": "a53e286e08ecf32a0e1e065bbc1d3f292fbddea8a7dda20961511cafeb310a54"
+      },
+      "manifest.json": {
+        "bytes": 9397,
+        "sha256": "bb236e755837a6860dedd74964400132cd3e8bf72e2cd4f2b98a399341602499"
+      }
+    },
+    "fixture_inventory": {
+      "00000000-0000-0001-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "e60390d551b0e9f5795e8529561fc5f4bde32af68dac3ad9a7eb03aee16cf5c3"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "64b8a9937d0e9124bea0f9d9eaca25d7fe74c61602ef470e37e5989e13db8b38"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000215.checkpoint": {
+        "bytes": 9812216,
+        "sha256": "fd72679e8e03ea18cb02323faa353ccce11e30972425fc461a3565f25e690ad9"
+      },
+      "00000000-0000-0001-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "4697ddf8724b9ee530f7b1aa9ad789db51f6012b22d217a1ffe5332da8142ff3"
+      },
+      "00000000-0000-0001-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "cc51a3e79b14f6acdc84a5b12eb050d1ced9b6ebeafbb966fd7ad3a66457849f"
+      },
+      "00000000-0000-0001-0000-504947434445.journal": {
+        "bytes": 1058278,
+        "sha256": "2ad69850feb48b0a3bb22860d64bd98b73a879d81b223a0563293a7e8079ad2b"
+      },
+      "00000000-0000-0001-0000-504947434445.timeline.jsonl": {
+        "bytes": 19235,
+        "sha256": "942b86faf1606fb93253d428a90eaf7614bbd340488542c1c3536a4c72de93c7"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ff8c86158a0a2efe7b9f4c1dbe6d28b6f4457b0c9a8fb529fab716f8a18d39d4"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "2b3e46c84dcd6f3db3bb196acb58e84004a9ffa8c2af8c77554f1f9f19e85c5e"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812137,
+        "sha256": "4cc30b0b64ac550d8e8a83509b2ea3bb7c0809c39d10ebc2be8fbcc8f5ed2f2e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1139588,
+        "sha256": "ce8d8c0fffa385afd1627798d7100762547f366521ea623bf49a2ebc7646808e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/rows.index": {
+        "bytes": 204672,
+        "sha256": "532f16e60924e65fc0e4a24caac3443e662f80ccc124b40ce0d7a2e02e2413e1"
+      },
+      "00000000-0000-0002-0000-504947434445.journal": {
+        "bytes": 1058334,
+        "sha256": "84977d28b74cccff680ad9ae0fffeb826c98eff378204a8e5b8bc174c25bf533"
+      },
+      "00000000-0000-0002-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "61b9c194b53a490913756449d28214dc97a79f6b0e8db7093317f39d5a8bfc13"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "7541141ffd3a8f0668d70ae0e6f9de86078a8fa784d196279f27a98f46616779"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "73bd30fe61f8b616673b7cc60efc23b4311cfcc41d681b6a7e31a07ebe5f3372"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812259,
+        "sha256": "659a127fb16f82c1b76a67e288abc729ec846e6c4f81c52724d5b00ec80fd24e"
+      },
+      "00000000-0000-0003-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "48aa97adf520387a566acbc64e1c93969df6a8e818569d1f5d8f38298300e95d"
+      },
+      "00000000-0000-0003-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "c34e85359cbdf8bfc0a2bba1d28aea8633c1477d1d7ec2c01f051a642c0303fb"
+      },
+      "00000000-0000-0003-0000-504947434445.journal": {
+        "bytes": 1058361,
+        "sha256": "f280931c01d30914a75491c849be1a6227b56cc6093f3bd70d95c9a70abcff1a"
+      },
+      "00000000-0000-0003-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "4ac1385f70021a60b4e77ac16096e95d8c553f3ecf67a859f917cdca65c0be8f"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "d6bf688bcb2fd418bf9bb15722054db07c340c0ee716935d48126b4106c7204a"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ef9a95b0557e87384fe0497953abf5a213bdb7147023effbf93ee9efaf273ce7"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812249,
+        "sha256": "42161de9b7da9ad0e36f3e6a3c5a86eff66a5459af5fd41ba1781209933f0474"
+      },
+      "00000000-0000-0004-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "592d9e2c88e257f3002a7ce03455b967014fec5cfde61d6d2c41f5873d56358e"
+      },
+      "00000000-0000-0004-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "2462f324b512cc57d3eeb3f06132e717b0771c6342f1029cafcf0351029882bf"
+      },
+      "00000000-0000-0004-0000-504947434445.journal": {
+        "bytes": 1058387,
+        "sha256": "48143d6c7d9160090e1d0cbeedcc70ec482b2e2ff49bee97fa08bf22a7a0795b"
+      },
+      "00000000-0000-0004-0000-504947434445.timeline.jsonl": {
+        "bytes": 19427,
+        "sha256": "a53e286e08ecf32a0e1e065bbc1d3f292fbddea8a7dda20961511cafeb310a54"
+      },
+      "manifest.json": {
+        "bytes": 9397,
+        "sha256": "bb236e755837a6860dedd74964400132cd3e8bf72e2cd4f2b98a399341602499"
+      }
+    },
+    "small_diagnostic": true,
+    "fixture_unchanged_after_guest": true,
+    "fixture_inventory_after": {
+      "00000000-0000-0001-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "e60390d551b0e9f5795e8529561fc5f4bde32af68dac3ad9a7eb03aee16cf5c3"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "64b8a9937d0e9124bea0f9d9eaca25d7fe74c61602ef470e37e5989e13db8b38"
+      },
+      "00000000-0000-0001-0000-504947434445.00000000000000000215.checkpoint": {
+        "bytes": 9812216,
+        "sha256": "fd72679e8e03ea18cb02323faa353ccce11e30972425fc461a3565f25e690ad9"
+      },
+      "00000000-0000-0001-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "4697ddf8724b9ee530f7b1aa9ad789db51f6012b22d217a1ffe5332da8142ff3"
+      },
+      "00000000-0000-0001-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "cc51a3e79b14f6acdc84a5b12eb050d1ced9b6ebeafbb966fd7ad3a66457849f"
+      },
+      "00000000-0000-0001-0000-504947434445.journal": {
+        "bytes": 1058278,
+        "sha256": "2ad69850feb48b0a3bb22860d64bd98b73a879d81b223a0563293a7e8079ad2b"
+      },
+      "00000000-0000-0001-0000-504947434445.timeline.jsonl": {
+        "bytes": 19235,
+        "sha256": "942b86faf1606fb93253d428a90eaf7614bbd340488542c1c3536a4c72de93c7"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ff8c86158a0a2efe7b9f4c1dbe6d28b6f4457b0c9a8fb529fab716f8a18d39d4"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "2b3e46c84dcd6f3db3bb196acb58e84004a9ffa8c2af8c77554f1f9f19e85c5e"
+      },
+      "00000000-0000-0002-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812137,
+        "sha256": "4cc30b0b64ac550d8e8a83509b2ea3bb7c0809c39d10ebc2be8fbcc8f5ed2f2e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1139588,
+        "sha256": "ce8d8c0fffa385afd1627798d7100762547f366521ea623bf49a2ebc7646808e"
+      },
+      "00000000-0000-0002-0000-504947434445.history/rows.index": {
+        "bytes": 204672,
+        "sha256": "532f16e60924e65fc0e4a24caac3443e662f80ccc124b40ce0d7a2e02e2413e1"
+      },
+      "00000000-0000-0002-0000-504947434445.journal": {
+        "bytes": 1058334,
+        "sha256": "84977d28b74cccff680ad9ae0fffeb826c98eff378204a8e5b8bc174c25bf533"
+      },
+      "00000000-0000-0002-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "61b9c194b53a490913756449d28214dc97a79f6b0e8db7093317f39d5a8bfc13"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "7541141ffd3a8f0668d70ae0e6f9de86078a8fa784d196279f27a98f46616779"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "73bd30fe61f8b616673b7cc60efc23b4311cfcc41d681b6a7e31a07ebe5f3372"
+      },
+      "00000000-0000-0003-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812259,
+        "sha256": "659a127fb16f82c1b76a67e288abc729ec846e6c4f81c52724d5b00ec80fd24e"
+      },
+      "00000000-0000-0003-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "48aa97adf520387a566acbc64e1c93969df6a8e818569d1f5d8f38298300e95d"
+      },
+      "00000000-0000-0003-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "c34e85359cbdf8bfc0a2bba1d28aea8633c1477d1d7ec2c01f051a642c0303fb"
+      },
+      "00000000-0000-0003-0000-504947434445.journal": {
+        "bytes": 1058361,
+        "sha256": "f280931c01d30914a75491c849be1a6227b56cc6093f3bd70d95c9a70abcff1a"
+      },
+      "00000000-0000-0003-0000-504947434445.timeline.jsonl": {
+        "bytes": 19323,
+        "sha256": "4ac1385f70021a60b4e77ac16096e95d8c553f3ecf67a859f917cdca65c0be8f"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000012.checkpoint": {
+        "bytes": 71879,
+        "sha256": "d6bf688bcb2fd418bf9bb15722054db07c340c0ee716935d48126b4106c7204a"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000013.checkpoint": {
+        "bytes": 71879,
+        "sha256": "ef9a95b0557e87384fe0497953abf5a213bdb7147023effbf93ee9efaf273ce7"
+      },
+      "00000000-0000-0004-0000-504947434445.00000000000000000216.checkpoint": {
+        "bytes": 9812249,
+        "sha256": "42161de9b7da9ad0e36f3e6a3c5a86eff66a5459af5fd41ba1781209933f0474"
+      },
+      "00000000-0000-0004-0000-504947434445.history/00000000000000000000.archive": {
+        "bytes": 1140302,
+        "sha256": "592d9e2c88e257f3002a7ce03455b967014fec5cfde61d6d2c41f5873d56358e"
+      },
+      "00000000-0000-0004-0000-504947434445.history/rows.index": {
+        "bytes": 204800,
+        "sha256": "2462f324b512cc57d3eeb3f06132e717b0771c6342f1029cafcf0351029882bf"
+      },
+      "00000000-0000-0004-0000-504947434445.journal": {
+        "bytes": 1058387,
+        "sha256": "48143d6c7d9160090e1d0cbeedcc70ec482b2e2ff49bee97fa08bf22a7a0795b"
+      },
+      "00000000-0000-0004-0000-504947434445.timeline.jsonl": {
+        "bytes": 19427,
+        "sha256": "a53e286e08ecf32a0e1e065bbc1d3f292fbddea8a7dda20961511cafeb310a54"
+      },
+      "manifest.json": {
+        "bytes": 9397,
+        "sha256": "bb236e755837a6860dedd74964400132cd3e8bf72e2cd4f2b98a399341602499"
+      }
+    }
+  },
+  "isolation": {
+    "network": "none",
+    "display": "none",
+    "input_devices": "none",
+    "host_mounts": [
+      "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/stage",
+      "/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/corpus-source"
+    ],
+    "host_mounts_readonly": true,
+    "state": "owned guest root plus private 64 GiB corpus disk"
+  },
+  "scope": "completed corpus copied to guest ext4 and recovered across an actual guest reboot; not provider/layout/real-time soak/in-VM full cold oracle/REC-08 p95/acceptance",
+  "REC08_acceptance": false,
+  "qemu": {
+    "pid": 882026,
+    "identity": [
+      "d639535a-367c-4655-8316-12063ad08144",
+      882026,
+      1627986
+    ],
+    "command": [
+      "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/bin/qemu-system-x86_64",
+      "-name",
+      "pigade-vm-recovery",
+      "-machine",
+      "pc",
+      "-accel",
+      "kvm",
+      "-L",
+      "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/share/qemu",
+      "-cpu",
+      "host",
+      "-smp",
+      "2",
+      "-m",
+      "1024M",
+      "-bios",
+      "/tmp/pigade-vm-sdk-qemu-img-20261017/root/qemu-77e330878a56f786/usr/share/qemu/bios-256k.bin",
+      "-smbios",
+      "type=1,manufacturer=Amazon,serial=ds=nocloud",
+      "-nodefaults",
+      "-no-user-config",
+      "-display",
+      "none",
+      "-monitor",
+      "none",
+      "-serial",
+      "file:/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/serial.log",
+      "-parallel",
+      "none",
+      "-qmp",
+      "unix:/tmp/p-q-wq66zpbm/q,server=on,wait=off",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/guest-disk.qcow2,format=qcow2,if=ide,index=0",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/nocloud-seed.img,format=raw,if=ide,index=1",
+      "-virtfs",
+      "local,path=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/stage,mount_tag=pigade_stage,security_model=none,readonly=on",
+      "-drive",
+      "file=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/corpus-data.qcow2,format=qcow2,if=none,id=pigade-corpus-data",
+      "-device",
+      "virtio-blk-pci,drive=pigade-corpus-data,serial=pgd-data-ba1ced21",
+      "-virtfs",
+      "local,path=/home/afterburner/.local/state/pigade/vm-reboot/run-20261016T231122Z-f87a657c/corpus-source,mount_tag=pigade_corpus,security_model=none,readonly=on",
+      "-nic",
+      "none",
+      "-boot",
+      "order=c"
+    ],
+    "environment_keys": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "LD_LIBRARY_PATH",
+      "PATH",
+      "QEMU_DATA_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+    ]
+  },
+  "guest_result": {
+    "REC08_acceptance": false,
+    "first_boot_id": "3ae73e6b-2041-41e2-bd27-8d735c45dfa4",
+    "first_boot_recovery": {
+      "four_frames_ms": 466.8665799999996,
+      "host_rss_bytes": 58556416,
+      "sessions": [
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "f764f3910a460065fdb9b97cb3a6a63d2e1ffc9b44bb91bc3f963ad393dd3383",
+          "generation": "00000000-0000-0001-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 405,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 216,
+          "session": "00000001-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 0,
+          "frame_sha256": "1ed6d3e405ff893cd8610410d6e09494977a2fb8e390a3c1f1f05a03d5f9705d",
+          "generation": "00000000-0000-0002-0000-504947434445",
+          "history": {
+            "digest": 1386944506,
+            "epoch": 0,
+            "records": 3197,
+            "retired_rows": 3197
+          },
+          "journal_bytes_read": 418,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 217,
+          "session": "00000002-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "120d99c8b0660c459cb425aad3d31f84d3e1a71d2e32ceb57191fed2f420a349",
+          "generation": "00000000-0000-0003-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 422,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 217,
+          "session": "00000003-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "62b76d6e2336ab5381538b172514979281a584b4518bda7bfc86b58321a0a3e4",
+          "generation": "00000000-0000-0004-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 441,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 218,
+          "session": "00000004-0000-0000-0000-000000000001",
+          "state": "history"
+        }
+      ]
+    },
+    "full_cold_oracle_in_vm": false,
+    "inventory_sha256": "4eae7ed9bbb97f535462545ff9cd5b6ff9a1ebd663c21482e74e33f9c14abc93",
+    "mode": "corpus",
+    "nonce": "ba1ced2119614cfa989546455d2509d8",
+    "reference_sha256": "5beadbe5901d6206e74d2b1ae873d85504702a9eb2c55a2852717734555cb012",
+    "scope": "completed prebuilt corpus copied to guest ext4; actual guest reboot; checkpoint-tail frames matched same-binary host reference; no provider, layout, real-time soak, in-VM full cold oracle, or REC-08 p95 claim",
+    "second_boot_id": "f3fca9c7-7c6d-4b32-9648-2425311e389f",
+    "second_boot_recovery": {
+      "four_frames_ms": 1166.8541289999998,
+      "host_rss_bytes": 58314752,
+      "sessions": [
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "f764f3910a460065fdb9b97cb3a6a63d2e1ffc9b44bb91bc3f963ad393dd3383",
+          "generation": "00000000-0000-0001-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 405,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 216,
+          "session": "00000001-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 0,
+          "frame_sha256": "1ed6d3e405ff893cd8610410d6e09494977a2fb8e390a3c1f1f05a03d5f9705d",
+          "generation": "00000000-0000-0002-0000-504947434445",
+          "history": {
+            "digest": 1386944506,
+            "epoch": 0,
+            "records": 3197,
+            "retired_rows": 3197
+          },
+          "journal_bytes_read": 418,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 217,
+          "session": "00000002-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "120d99c8b0660c459cb425aad3d31f84d3e1a71d2e32ceb57191fed2f420a349",
+          "generation": "00000000-0000-0003-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 422,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 217,
+          "session": "00000003-0000-0000-0000-000000000001",
+          "state": "history"
+        },
+        {
+          "canonical_tail_records_verified": 2,
+          "frame_sha256": "62b76d6e2336ab5381538b172514979281a584b4518bda7bfc86b58321a0a3e4",
+          "generation": "00000000-0000-0004-0000-504947434445",
+          "history": {
+            "digest": 3894329908,
+            "epoch": 0,
+            "records": 3199,
+            "retired_rows": 3199
+          },
+          "journal_bytes_read": 441,
+          "pid": null,
+          "recovery_path": "checkpoint-tail",
+          "sequence": 218,
+          "session": "00000004-0000-0000-0000-000000000001",
+          "state": "history"
+        }
+      ]
+    },
+    "status": "recovery_verified"
+  },
+  "guest_boot_ids": [
+    "3ae73e6b-2041-41e2-bd27-8d735c45dfa4",
+    "f3fca9c7-7c6d-4b32-9648-2425311e389f"
+  ],
+  "qmp_last_status": {
+    "status": "running",
+    "running": true
+  },
+  "serial_sha256": "9c9123d30bff49a43904a4f142300d148e2ac0355f1575ab0345e56ce97beace",
+  "qemu_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

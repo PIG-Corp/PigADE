@@ -2,11 +2,11 @@
 set -euo pipefail
 # This builds PigADE itself. No separate comparison application is created.
 app_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-commit=69e2130295c2649963eb639fc70b4f2ee8ea1624
+commit=322cd509dcccaee1f6bc44725d270598ae8171ad
 cache="${PIGADE_GPUI_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/pigade/gpui}"
 mkdir -p "$cache" "$app_dir/.upstream"
 archive="$cache/$commit.tar.gz"
-checksum=3954c515b37623af616253da41a6d25882e2323bcb0af2c4a2d1bdec790355e8
+checksum=27e6a724515cb6e6fa8a456098d075bfa2a50b4f6145491105555e56de2d256d
 if ! test -f "$archive"; then
   download="$(mktemp "$cache/download.XXXXXXXX")"
   trap 'rm -f -- "$download"' EXIT

@@ -1,5 +1,6 @@
 //! The host is the sole ANSI parser. A Frame is a render replica, NOT a checkpoint.
 pub mod history;
+pub use alacritty_terminal::term::resources::{AllocationCensus, CensusLimits};
 pub use alacritty_terminal::{
     grid::{HistoryObserver, HistoryRetirement, Row as HistoryRow},
     term::cell::{Cell as HistoryCell, Flags as CellFlags},
@@ -196,6 +197,13 @@ pub struct Terminal {
     responses: Vec<u8>,
 }
 impl Terminal {
+    /// Diagnostic capacity census of the underlying Term, including retained
+    /// row caches. This excludes this wrapper, parser, sinks and all transients;
+    /// it is neither a heap limit nor an RSS measurement. Never run per frame.
+    pub fn term_allocation_census(&self, limits: CensusLimits) -> AllocationCensus {
+        alacritty_terminal::term::resources::census_terminal_allocations(&self.term, limits)
+    }
+
     pub fn new(geometry: Geometry, live: bool) -> Self {
         let listener = Listener::default();
         let config = Config {

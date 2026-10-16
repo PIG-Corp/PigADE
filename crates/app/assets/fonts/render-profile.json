@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "id": "pigade-terminal-render-profile-aliases-v1",
+  "status": "implemented in app; renderer and platform acceptance pending",
+  "semantic_core_binding": false,
+  "primary": {
+    "family": "PigADE Terminal Mono v1",
+    "release": "derived from JetBrains Mono v2.304; OpenType identity strings changed; no DSIG present in TTF sources",
+    "asset_manifest": "derived-terminal-v1/derived-font-manifest.json",
+    "size_logical_px": 14,
+    "features": {
+      "liga": 0,
+      "calt": 0
+    },
+    "faces": [
+      "Regular",
+      "Bold",
+      "Italic",
+      "Bold Italic"
+    ],
+    "upstream_family": "JetBrains Mono",
+    "family_identity": "unique PigADE-only alias; startup rejects a preexisting alias before embedded registration"
+  },
+  "fallbacks": [
+    {
+      "family": "PigADE Terminal CJK JP v1",
+      "release": "derived from Noto Sans Mono CJK JP v2.004; OpenType identity strings changed and empty unsigned DSIG table removed",
+      "asset_manifest": "derived-terminal-v1/derived-font-manifest.json",
+      "faces": [
+        "Regular"
+      ],
+      "policy": "fixed Japanese regional glyph forms when covered; not asserted locale-correct for all CJK languages",
+      "styled_text": "only the regular bundled fallback face is available; bold/italic fallback styling is unverified",
+      "upstream_family": "Noto Sans Mono CJK JP",
+      "family_identity": "unique PigADE-only alias; startup rejects a preexisting alias before embedded registration"
+    }
+  ],
+  "cell_placement": {
+    "origin": "host cell column and row",
+    "single_cell_span": 1,
+    "wide_char_flag": 32,
+    "wide_char_span": 2,
+    "glyph_clip": "allocated cell span intersected with pane viewport",
+    "alignment": "left",
+    "baseline": "GPUI shaped-line vertical centering; line height uses primary ascent + absolute descent + 4 logical px",
+    "combining": "shape with base cluster from host cell"
+  },
+  "missing_glyphs": {
+    "bundled_fallback": "PigADE Terminal CJK JP v1, derived from Noto Sans Mono CJK JP v2.004, regular only",
+    "cjk_policy": "fixed JP regional forms for glyphs covered by the bundled family; not universal or locale-correct across CJK",
+    "platform_fallback": "GPUI/platform behavior remains possible for codepoints unsupported by the JP face and all other missing glyphs; identity is unpinned"
+  },
+  "not_certified": [
+    "pixel-level glyph containment or baseline on any platform",
+    "platform fallback identity for glyphs unsupported by the pinned JP family",
+    "locale-correct CJK forms outside the pinned JP regional policy; emoji, variation selectors, or ZWJ clusters",
+    "fractional-scale runtime rendering",
+    "product/core profile binding",
+    "byte identity of the platform-selected or rasterized font across operating systems and releases"
+  ],
+  "font_derivation": {
+    "generator": "scripts/prepare-terminal-fonts.py",
+    "fontTools_version": "4.63.0",
+    "derived_assets": "derived-terminal-v1/derived-font-manifest.json",
+    "changes": [
+      "OpenType family, subfamily, full, unique, WWS, PostScript and CFF identity names",
+      "empty unsigned DSIG table removed from the Noto JP OTF"
+    ],
+    "verified_unchanged": [
+      "glyph outlines",
+      "horizontal and vertical metrics",
+      "cmap"
+    ],
+    "upstream_font_files_modified": false,
+    "license": "upstream OFL 1.1 and attribution files are retained with derived assets",
+    "notice": "derived-terminal-v1/PigADE-Terminal-NOTICE.txt",
+    "source_notices": "source-notice hashes recorded in derived-font-manifest.json; upstream originals are unchanged"
+  }
+}

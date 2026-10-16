@@ -112,6 +112,16 @@ impl<T: Default> Row<T> {
 
 #[allow(clippy::len_without_is_empty)]
 impl<T> Row<T> {
+    /// Capacity of the backing allocation, including spare slots.
+    pub(crate) fn allocation_capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    /// Number of initialized values which can be inspected without allocation.
+    pub(crate) fn initialized(&self) -> &[T] {
+        &self.inner
+    }
+
     #[inline]
     pub fn from_vec(vec: Vec<T>, occ: usize) -> Row<T> {
         Row { inner: vec, occ }

@@ -12,7 +12,17 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("serve") => {
-            pigade_session_host::serve(PathBuf::from(args.get(1).context("serve STATE_DIRECTORY")?))
+            let root = PathBuf::from(
+                args.get(1)
+                    .context("serve STATE_DIRECTORY [--runtime DIRECTORY]")?,
+            );
+            match &args[2..] {
+                [] => pigade_session_host::serve(root),
+                [flag, runtime] if flag == "--runtime" => {
+                    pigade_session_host::serve_with_runtime(root, PathBuf::from(runtime))
+                }
+                _ => anyhow::bail!("serve STATE_DIRECTORY [--runtime DIRECTORY]"),
+            }
         }
         Some("__helper") => pigade_session_host::helper(
             std::path::Path::new(args.get(1).context("socket")?),
@@ -65,7 +75,7 @@ fn main() -> Result<()> {
             serde_json::from_str(args.get(2).context("request SOCKET JSON_COMMAND")?)?,
         ),
         _ => anyhow::bail!(
-            "PigADE stage-0 host (not MVP)\nserve STATE_DIRECTORY\nlist SOCKET\nlaunch SOCKET CWD /absolute/executable [ARGS...]\nrequest SOCKET JSON_COMMAND\nreplay JOURNAL"
+            "PigADE stage-0 host (not MVP)\nserve STATE_DIRECTORY [--runtime PRIVATE_DIRECTORY]\nlist SOCKET\nlaunch SOCKET CWD /absolute/executable [ARGS...]\nrequest SOCKET JSON_COMMAND\nreplay JOURNAL\nverify-recovery JOURNAL"
         ),
     }
 }

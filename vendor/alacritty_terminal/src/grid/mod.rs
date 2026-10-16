@@ -403,6 +403,13 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 }
 
 impl<T> Grid<T> {
+    /// Rows and outer storage capacity for the bounded resource census.
+    pub(crate) fn allocation_rows(&self) -> (&[Row<T>], usize) {
+        (self.raw.allocation_rows(), self.raw.allocation_row_capacity())
+    }
+}
+
+impl<T> Grid<T> {
     pub(crate) fn notify_history_palette(&self, index: usize, color: Option<crate::vte::ansi::Rgb>) {
         if let Some(observer) = &self.history_observer {
             observer.palette(index, color);

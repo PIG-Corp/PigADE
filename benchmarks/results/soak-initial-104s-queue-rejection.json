@@ -1,0 +1,79 @@
+{
+  "actual_elapsed_seconds": 104.13288460100011,
+  "binary_path": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+  "binary_sha256": "a894484e4401fab759201e0add44566793e40c90b2406b7a9d26ed9f72d466b1",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "elapsed_24h_completed": false,
+  "environment": {
+    "filesystem": "btrfs",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44"
+  },
+  "errors": [
+    "RuntimeError: host: sending on a full channel"
+  ],
+  "filesystem": "btrfs",
+  "finished_at": "2026-10-16T22:27:56.592127+00:00",
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    740822,
+    1356869
+  ],
+  "host_log_tail": "",
+  "host_pid": 740822,
+  "measurement_started_at": "2026-10-16T22:26:28.007672+00:00",
+  "other_open_gates": [
+    "4 sessions x 1 GiB plus 100000 resizes/session",
+    "VM reboot",
+    "UI/GPU and platform acceptance"
+  ],
+  "rate_bytes_per_second_per_session": 4096,
+  "real_time_elapsed": false,
+  "real_time_soak_24h_integrity_pass": false,
+  "rec08_full_acceptance": false,
+  "requested_seconds": 86400,
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/soak-20261016T222611Z-8a013181",
+  "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
+  "sessions": [
+    {
+      "generation": "e40f63e5-000a-409b-921b-4828483c1619",
+      "journal": "e40f63e5-000a-409b-921b-4828483c1619.journal",
+      "pid": 740850,
+      "session": "213f48c5-80a2-4abc-ae61-d79540e6ff48",
+      "stream": 0
+    },
+    {
+      "generation": "a519e3b3-8c07-49b1-bcb0-9736a7c46f1e",
+      "journal": "a519e3b3-8c07-49b1-bcb0-9736a7c46f1e.journal",
+      "pid": 741165,
+      "session": "808a0882-10bb-44f5-a9b6-a05f33f7b712",
+      "stream": 1
+    },
+    {
+      "generation": "334bcf63-15bd-4832-b56b-86263ba4a618",
+      "journal": "334bcf63-15bd-4832-b56b-86263ba4a618.journal",
+      "pid": 741600,
+      "session": "12c9e96c-b925-4ce5-af87-29a81a60ba7b",
+      "stream": 2
+    },
+    {
+      "generation": "5aa2159a-0c30-4739-b1e5-fb1d0f75bdc8",
+      "journal": "5aa2159a-0c30-4739-b1e5-fb1d0f75bdc8.journal",
+      "pid": 741855,
+      "session": "a9ff186b-2786-41b3-88a8-13fc8a3d7c68",
+      "stream": 3
+    }
+  ],
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "a653a9b30dfbf7ac1e746ca3963ae5f21f3e32ae1591d11243f7516d654631f5",
+    "scripts/soak-pty.py": "51772734c71d3f1d1a6b8b1d116b5c2173aa7184a68641307edc9ef0c33607ce",
+    "scripts/stress-pty.py": "5709ac0b40fea25b70a75ee10a8660ce2eb66ad0aca639bd00ac1b392232c27a"
+  },
+  "started_at": "2026-10-16T22:26:11.973409+00:00",
+  "state_directory": "/home/afterburner/.local/state/pigade/soak/soak-20261016T222611Z-8a013181/state",
+  "state_retained": true,
+  "status": "failed",
+  "verify_recovery_passed_all_sessions": false,
+  "verify_requested": true
+}

@@ -1,0 +1,119 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "render_and_reopen_pass",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532959]",
+      "pid": "pid:[4026533021]",
+      "user": "user:[4026533077]",
+      "ipc": "ipc:[4026533020]",
+      "net": "net:[4026533023]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "compositor": {
+    "pid": 5,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[2171592]",
+      "socket:[2171592]"
+    ]
+  },
+  "views": [
+    {
+      "session": "04116f82-acb2-47ee-982f-2643acaedc3b",
+      "generation": "57acec77-3e12-458d-a0df-d7ee8a2a81c2",
+      "pid": 9,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 15,
+        "cols": 69
+      }
+    },
+    {
+      "session": "181684f0-fb9c-4d34-b656-a8359a148327",
+      "generation": "c5a82491-af71-4775-8fe8-d1d0b6846f12",
+      "pid": 14,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 15,
+        "cols": 69
+      }
+    },
+    {
+      "session": "8dff09e9-c72e-493d-a77a-46010edea7d5",
+      "generation": "3c85f086-97c8-4f83-b98d-712a54a69cc0",
+      "pid": 19,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 15,
+        "cols": 69
+      }
+    },
+    {
+      "session": "570e296b-9a3c-403a-8d9f-e7d41b01396d",
+      "generation": "7cba1b06-bf21-4820-990c-c4050eac0214",
+      "pid": 24,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 15,
+        "cols": 69
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "wayland-screenshot-2026-10-16_22-34-33.png",
+      "sha256": "3a7f1adf96ca3d34b5bd2e75da10d6069373539b1962b68cb1901596958ddf80",
+      "bytes": 29631
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+Noto Sans Mono CJK JP Regular
+
+Copyright 2014-2021 Adobe (http://www.adobe.com/), as recorded in the
+font's name table.
+
+This font is redistributed under SIL Open Font License 1.1. See OFL.txt for
+the full license text. This is an unmodified font file from the official
+notofonts/noto-cjk release package; it is the Japanese regional variant.
+
+Upstream release: Sans2.004
+Package: https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/11_NotoSansMonoCJKjp.zip

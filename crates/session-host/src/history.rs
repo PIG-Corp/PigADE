@@ -17,6 +17,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
+use uuid::Uuid;
 
 const INDEX_MAGIC: &[u8; 8] = b"PIGIDX01";
 const INDEX_HEADER: u64 = 64;
@@ -132,6 +133,29 @@ pub struct RecordMetadata {
     /// Sparse dynamic palette at retirement; indexed cell colors stay typed.
     pub palette: Vec<(u16, [u8; 3])>,
 }
+
+/// One bounded byte range from a source-preserving canonical history record.
+/// `next_offset` is absent when `bytes` reaches the end of the record; callers
+/// may pass that end offset to obtain an empty terminal chunk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordChunk {
+    pub session_id: Uuid,
+    pub generation: Uuid,
+    pub profile: String,
+    pub history_sequence: u64,
+    pub snapshot_records: u64,
+    /// Present for recovered histories: records before this ordinal belong to
+    /// the immutable checkpoint root; later ones were reconstructed from tail.
+    pub recovery_prefix_records: Option<u64>,
+    pub source_event_sequence: u64,
+    pub ordinal: u64,
+    pub record_bytes: u64,
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+    pub next_offset: Option<u64>,
+}
+
+pub const MAX_RECORD_CHUNK_BYTES: usize = 64 * 1024;
 
 fn header(source: &JournalHeader) -> ArchiveHeader {
     ArchiveHeader {
@@ -465,7 +489,7 @@ struct Inner {
     state: State,
     pending_sequence: Option<u64>,
     error: Option<String>,
-    _temporary: Option<tempfile::TempDir>,
+    _temporary: Option<crate::replay_cache::ReplayCache>,
 }
 pub struct History {
     parent: PathBuf,
@@ -512,9 +536,7 @@ impl History {
         } else {
             (None, State::default())
         };
-        let temporary = tempfile::Builder::new()
-            .prefix(".history-replay-")
-            .tempdir_in(parent)?;
+        let temporary = crate::replay_cache::ReplayCache::create(parent, source)?;
         let directory = temporary
             .path()
             .file_name()
@@ -631,6 +653,84 @@ impl History {
                 .context("history ordinal before available range")?
         };
         read_record(&self.parent, reference, &self.header, ordinal)
+    }
+    /// Read a bounded range from one canonical encoded record. The source
+    /// `expected_sequence` is an exact freshness guard for the history snapshot.
+    /// This currently materializes one codec-bounded row (16 MiB plus bounded
+    /// metadata) before slicing; returned bytes are bounded, but this is not a
+    /// streaming decoder. Source events and the history watermark are distinct.
+    pub fn record_chunk(
+        &self,
+        expected_sequence: u64,
+        ordinal: u64,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<RecordChunk> {
+        ensure!(
+            (1..=MAX_RECORD_CHUNK_BYTES).contains(&max_bytes),
+            "history chunk size outside allowed range"
+        );
+        let (reference, snapshot_records, recovery_prefix_records) = {
+            let i = self.inner.lock().expect("history lock");
+            ensure!(
+                i.error.is_none() && i.pending_sequence.is_none() && !i.store.dirty,
+                "history is not committed"
+            );
+            ensure!(
+                i.state.applied_sequence == expected_sequence,
+                "history source sequence changed"
+            );
+            let tail = &i.store.reference;
+            let reference = if ordinal >= tail.first_ordinal {
+                tail.clone()
+            } else {
+                i.base
+                    .as_ref()
+                    .context("history ordinal before available range")?
+                    .clone()
+            };
+            let prefix = if i._temporary.is_some() {
+                Some(i.base.as_ref().map_or(Ok(0), StoreRoot::end)?)
+            } else {
+                None
+            };
+            (reference, i.state.next_entry, prefix)
+        };
+        // The committed prefix is immutable even if the actor appends later
+        // events. Do not hold its history mutex across cold filesystem I/O.
+        // Our borrowed History (and the service's Arc) keeps its cache lease live.
+        let (source_event_sequence, encoded) =
+            read_record_with_sequence(&self.parent, &reference, &self.header, ordinal)?;
+        ensure!(
+            source_event_sequence <= expected_sequence,
+            "history record is ahead of the requested model watermark"
+        );
+        let record_bytes = u64::try_from(encoded.len()).context("history record size overflow")?;
+        ensure!(
+            offset <= record_bytes,
+            "history chunk offset outside record"
+        );
+        let start = usize::try_from(offset).context("history chunk offset overflow")?;
+        let end = start
+            .checked_add(max_bytes)
+            .context("history chunk end overflow")?
+            .min(encoded.len());
+        let bytes = encoded[start..end].to_vec();
+        let next_offset = (end < encoded.len()).then_some(end as u64);
+        Ok(RecordChunk {
+            session_id: self.header.session_id,
+            generation: self.header.generation,
+            profile: self.header.profile.clone(),
+            history_sequence: expected_sequence,
+            snapshot_records,
+            recovery_prefix_records,
+            source_event_sequence,
+            ordinal,
+            record_bytes,
+            offset,
+            bytes,
+            next_offset,
+        })
     }
     fn notification(&self, row: Option<&HistoryRow<HistoryCell>>, reason: HistoryRetirement) {
         let mut i = self.inner.lock().expect("history lock");
@@ -791,6 +891,15 @@ fn read_record(
     h: &ArchiveHeader,
     ordinal: u64,
 ) -> Result<Vec<u8>> {
+    read_record_with_sequence(parent, root, h, ordinal).map(|(_, bytes)| bytes)
+}
+
+fn read_record_with_sequence(
+    parent: &Path,
+    root: &StoreRoot,
+    h: &ArchiveHeader,
+    ordinal: u64,
+) -> Result<(u64, Vec<u8>)> {
     ensure!(
         ordinal >= root.first_ordinal && ordinal < root.end()?,
         "history ordinal outside committed root"
@@ -823,7 +932,7 @@ fn read_record(
         );
         encoded.extend_from_slice(&fragment.payload);
     }
-    Ok(encoded)
+    Ok((entry.location.source_event_sequence, encoded))
 }
 pub fn decode_record(
     bytes: &[u8],

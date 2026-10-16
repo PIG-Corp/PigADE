@@ -157,6 +157,18 @@ Term/parser bytes with an observer, including inactive normal resize, clear and
 reset. This adds five core tests to the previous146, without changing schema2.
 Production sinks/encoding/roots are still absent.
 
+## Parser-derived resource census primitives
+
+`term::resources` advances a clone of the pinned VTE Processor with a counting
+Handler and reports input callbacks, zero-width callbacks, delivered title and
+hyperlink byte counts, and title-stack pushes. REP is counted through the
+Processor's `input_repeated` callback, and synchronized timeout census drains
+only the cloned pending buffer. The original parser and terminal are
+untouched. This is census data, not a heap measurement or admission policy.
+Cloning allocates for existing pending parser buffers (bounded by the VTE
+2 MiB synchronized-update and 64 KiB OSC limits); it does not clone the Term
+grid. No CORE_PROFILE, checkpoint schema, or live terminal behavior changes.
+
 ## Host archive integration (2026-10-17)
 
 The statement above describes the earlier retirement-only slice. The host now
@@ -186,3 +198,19 @@ checked. Root ran 152 library tests, 45 reference cases and the no-serde check.
 The original grid, one row being split, parser state and checkpoint transients
 still consume memory: this is a local scratch bound, not total heap admission.
 Live combining marks and aggregate session memory remain open resource gates.
+
+## Bounded persistent allocation census
+
+`term::resources::census_terminal_allocations` reports capacity-based owned
+storage estimates for both screens, including inactive cached rows, row and
+cell Vec capacities, the four cursor templates, deduplicated `CellExtra` and
+hyperlink Arc payloads, titles/title-stack storage, tab stops, both keyboard
+mode stacks, damage-line storage, and semantic escape chars.
+Callers set cell-visit and unique-Arc limits; reaching either limit or a checked
+arithmetic/allocation failure marks the result incomplete. The census does not
+clone or mutate the model and is not wired into output processing or admission.
+Its scoped payload-capacity estimate includes inline Term size and a two-`usize`
+Arc-header estimate, but excludes allocator metadata, alignment, fragmentation,
+generic listeners, history observers, parser state and transient copies. A
+complete scan is not an upper bound on terminal or process memory and makes no
+claim about physical allocator overhead or heap/RSS usage.

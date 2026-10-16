@@ -31,6 +31,41 @@ fn apply(
     Ok(receipt)
 }
 
+fn reassemble_chunks(history: &History, sequence: u64, ordinal: u64) -> Result<Vec<u8>> {
+    let mut offset = 0;
+    let mut record = Vec::new();
+    let mut expected_size = None;
+    let mut source_sequence = None;
+    loop {
+        let chunk = history.record_chunk(sequence, ordinal, offset, 23)?;
+        assert_eq!(chunk.history_sequence, sequence);
+        assert_eq!(chunk.ordinal, ordinal);
+        assert_eq!(chunk.offset, offset);
+        assert!(chunk.bytes.len() <= 23);
+        assert_eq!(
+            source_sequence.get_or_insert(chunk.source_event_sequence),
+            &chunk.source_event_sequence
+        );
+        assert_eq!(
+            expected_size.get_or_insert(chunk.record_bytes),
+            &chunk.record_bytes
+        );
+        record.extend_from_slice(&chunk.bytes);
+        match chunk.next_offset {
+            Some(next) => {
+                assert_eq!(next, offset + chunk.bytes.len() as u64);
+                assert!(!chunk.bytes.is_empty());
+                offset = next;
+            }
+            None => {
+                assert_eq!(offset + chunk.bytes.len() as u64, chunk.record_bytes);
+                break;
+            }
+        }
+    }
+    Ok(record)
+}
+
 #[test]
 fn provisional_index_slots_are_bounded_and_commit_after_data() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -151,10 +186,37 @@ fn cold_records_and_hot_parser_match_full_replay_checkpoint_and_live() -> Result
     assert_eq!(row.columns, 40);
     assert_eq!(row.hyperlinks[0].id, "stable");
     assert!(row.cells.iter().any(|cell| cell.c == '界'));
+    assert!(
+        row.cells
+            .iter()
+            .any(|cell| cell.zerowidth.contains(&'\u{301}'))
+    );
+    assert_eq!(
+        reassemble_chunks(&history, history.state().applied_sequence, 0)?,
+        history.record(0)?,
+        "chunk reads preserve canonical metadata, Unicode and hyperlink bytes"
+    );
     let (_, replay, replay_history) = crate::restore_model(&path, false)?;
     assert_eq!(replay.checkpoint()?, terminal.checkpoint()?);
     let replay_history = replay_history.unwrap();
     assert_eq!(history.state(), replay_history.state());
+    let base_end = replay_history
+        .inner
+        .lock()
+        .expect("history lock")
+        .base
+        .as_ref()
+        .map(StoreRoot::end)
+        .transpose()?
+        .unwrap_or(0);
+    let replay_sequence = replay_history.state().applied_sequence;
+    for ordinal in [0, base_end, replay_history.summary().records - 1] {
+        assert_eq!(
+            reassemble_chunks(&replay_history, replay_sequence, ordinal)?,
+            replay_history.record(ordinal)?,
+            "checkpoint-prefix and private-tail chunk record {ordinal}"
+        );
+    }
     let mut alternate_palette_observed = false;
     for ordinal in 0..history.summary().records {
         let encoded = history.record(ordinal)?;
@@ -182,6 +244,28 @@ fn cold_records_and_hot_parser_match_full_replay_checkpoint_and_live() -> Result
         header_bytes + fs::metadata(&path)?.len() - cut.end_offset
     );
     assert!(proof.checkpoint_tail_journal_bytes_read < proof.full_journal_bytes_read / 100);
+    let sequence = history.state().applied_sequence;
+    let original = history.record(0)?;
+    let directory = root.path().join(format!("{}.history", source.generation));
+    let index_before = fs::read(directory.join("rows.index"))?;
+    let segment_before = fs::read(segment_path(&directory, 0))?;
+    assert!(history.record_chunk(sequence + 1, 0, 0, 1).is_err());
+    assert!(history.record_chunk(sequence, 0, 0, 0).is_err());
+    assert!(
+        history
+            .record_chunk(sequence, 0, 0, MAX_RECORD_CHUNK_BYTES + 1)
+            .is_err()
+    );
+    assert!(history.record_chunk(sequence, 0, u64::MAX, 1).is_err());
+    assert!(history.record_chunk(sequence, u64::MAX, 0, 1).is_err());
+    let end = history.record_chunk(sequence, 0, original.len() as u64, 1)?;
+    assert!(end.bytes.is_empty());
+    assert_eq!(end.next_offset, None);
+    assert_eq!(end.record_bytes, original.len() as u64);
+    history.begin(sequence + 1)?;
+    assert!(history.record_chunk(sequence, 0, 0, 1).is_err());
+    assert_eq!(fs::read(directory.join("rows.index"))?, index_before);
+    assert_eq!(fs::read(segment_path(&directory, 0))?, segment_before);
     assert!(history.summary().epoch >= 2);
     Ok(())
 }
@@ -205,6 +289,22 @@ fn segment_rotation_and_index_addressing_do_not_scan_unrelated_rows() -> Result<
     assert_eq!(saved.state.retired_rows, 24);
     let directory = saved.root.path(root.path())?;
     assert!(segment_path(&directory, 1).is_file());
+    let expected = history.record(23)?;
+    let mut offset = 0;
+    let mut assembled = Vec::new();
+    loop {
+        let chunk = history.record_chunk(1, 23, offset, MAX_RECORD_CHUNK_BYTES)?;
+        assert!(chunk.bytes.len() <= MAX_RECORD_CHUNK_BYTES);
+        assembled.extend_from_slice(&chunk.bytes);
+        match chunk.next_offset {
+            Some(next) => {
+                assert_eq!(next, offset + chunk.bytes.len() as u64);
+                offset = next;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(assembled, expected);
     // A bad earlier slot cannot affect a direct lookup of a later row. Reading
     // that bad slot itself must fail rather than hiding unavailable history.
     let mut index = OpenOptions::new()

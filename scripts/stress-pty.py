@@ -104,9 +104,17 @@ def identity(pid):
     return (Path('/proc/sys/kernel/random/boot_id').read_text().strip(), pid, int(fields[19]))
 
 
-def request(endpoint, command):
+class HostRejection(RuntimeError):
+    """A command explicitly rejected before host admission."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def request(endpoint, command, timeout=3):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(3)
+        connection.settimeout(timeout)
         connection.connect(str(endpoint))
         data = json.dumps({'protocol': PROTOCOL, 'command': command}, separators=(',', ':')).encode()
         check(len(data) <= MAX_IPC, 'request exceeds limit')
@@ -123,7 +131,12 @@ def request(endpoint, command):
         check(0 < length <= MAX_IPC, 'invalid response size')
         response = json.loads(read(length))
         check(response['protocol'] == PROTOCOL, 'protocol mismatch')
-        check(response['error'] is None, f"host: {response['error']}")
+        error = response.get('error')
+        if error is not None:
+            rejection = response.get('rejected_before_admission')
+            if rejection in ('queue_full',):
+                raise HostRejection(rejection, f"host rejected before admission ({rejection}): {error}")
+            raise RuntimeError(f"host: {error}")
         return response['views']
 
 

@@ -239,8 +239,28 @@ fn parse_number(input: &[u8]) -> Option<u8> {
     Some(num)
 }
 
+/// Clone parser state for processor census without exposing parser internals.
+impl<const OSC_RAW_BUF_SIZE: usize> Clone for crate::Parser<OSC_RAW_BUF_SIZE> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state,
+            intermediates: self.intermediates,
+            intermediate_idx: self.intermediate_idx,
+            params: self.params.clone(),
+            param: self.param,
+            osc_raw: self.osc_raw.clone(),
+            osc_params: self.osc_params,
+            osc_num_params: self.osc_num_params,
+            osc_overflow: self.osc_overflow,
+            ignoring: self.ignoring,
+            partial_utf8: self.partial_utf8,
+            partial_utf8_len: self.partial_utf8_len,
+        }
+    }
+}
+
 /// Internal state for VTE processor.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ProcessorState<T: Timeout> {
     /// Last processed character for repetition.
     preceding_char: Option<char>,
@@ -249,7 +269,7 @@ struct ProcessorState<T: Timeout> {
     sync_state: SyncState<T>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SyncState<T: Timeout> {
     /// Handler for synchronized updates.
     timeout: T,
@@ -267,7 +287,7 @@ impl<T: Timeout> Default for SyncState<T> {
 /// The processor wraps a `crate::Parser` to ultimately call methods on a
 /// Handler.
 #[cfg(feature = "std")]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Processor<T: Timeout = StdSyncHandler> {
     state: ProcessorState<T>,
     parser: crate::Parser,
@@ -276,7 +296,7 @@ pub struct Processor<T: Timeout = StdSyncHandler> {
 /// The processor wraps a `crate::Parser` to ultimately call methods on a
 /// Handler.
 #[cfg(not(feature = "std"))]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Processor<T: Timeout> {
     state: ProcessorState<T>,
     parser: crate::Parser,
@@ -480,7 +500,7 @@ impl<'a, H: Handler + 'a, T: Timeout> Performer<'a, H, T> {
 }
 
 #[cfg(feature = "std")]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct StdSyncHandler {
     timeout: Option<Instant>,
 }
@@ -545,6 +565,17 @@ pub trait Handler {
 
     /// A character to be displayed.
     fn input(&mut self, _c: char) {}
+
+    /// A character repeated by a terminal REP sequence.
+    ///
+    /// The default preserves existing handlers by forwarding each repetition
+    /// to [`Self::input`]. Handlers which can aggregate repeated work may
+    /// override this method.
+    fn input_repeated(&mut self, c: char, count: u16) {
+        for _ in 0..count {
+            self.input(c);
+        }
+    }
 
     /// Set cursor to position.
     fn goto(&mut self, _line: i32, _col: usize) {}
@@ -1602,9 +1633,7 @@ where
             ('B', []) | ('e', []) => handler.move_down(next_param_or(1) as usize),
             ('b', []) => {
                 if let Some(c) = self.state.preceding_char {
-                    for _ in 0..next_param_or(1) {
-                        handler.input(c);
-                    }
+                    handler.input_repeated(c, next_param_or(1));
                 } else {
                     debug!("tried to repeat with no preceding char");
                 }
@@ -2078,6 +2107,23 @@ mod tests {
         fn pending_timeout(&self) -> bool {
             self.is_sync != 0
         }
+    }
+
+    #[test]
+    fn default_repeated_input_matches_individual_inputs() {
+        #[derive(Default)]
+        struct Inputs(Vec<char>);
+
+        impl Handler for Inputs {
+            fn input(&mut self, c: char) {
+                self.0.push(c);
+            }
+        }
+
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut inputs = Inputs::default();
+        parser.advance(&mut inputs, b"A\x1b[5b");
+        assert_eq!(inputs.0, vec!['A'; 6]);
     }
 
     struct MockHandler {

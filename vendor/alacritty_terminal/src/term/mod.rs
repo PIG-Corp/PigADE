@@ -29,6 +29,7 @@ use crate::vte::ansi::{
 pub mod cell;
 pub mod color;
 pub mod search;
+pub mod resources;
 #[cfg(feature = "serde")]
 pub mod checkpoint;
 

@@ -1,7 +1,7 @@
 //! A non-reading PTY must not block the terminal actor's resize or Stop path.
 use anyhow::{Context, Result, bail, ensure};
 use pigade_session_host::{
-    Command, Launch, PROTOCOL, Request, Response, View, identity, receive, send,
+    Command, CommandRejection, Launch, PROTOCOL, Request, Response, View, identity, receive, send,
 };
 use pigade_storage::ProcessIdentity;
 use pigade_terminal::Geometry;
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 const WAIT: Duration = Duration::from_secs(5);
 
-fn exchange(socket: &Path, command: Command) -> Result<Vec<View>> {
+fn exchange_response(socket: &Path, command: Command) -> Result<Response> {
     let mut stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -30,6 +30,10 @@ fn exchange(socket: &Path, command: Command) -> Result<Vec<View>> {
     )?;
     let response: Response = receive(&mut stream)?;
     ensure!(response.protocol == PROTOCOL, "protocol mismatch");
+    Ok(response)
+}
+fn exchange(socket: &Path, command: Command) -> Result<Vec<View>> {
+    let response = exchange_response(socket, command)?;
     if let Some(error) = response.error {
         bail!("host: {error}");
     }
@@ -173,20 +177,25 @@ fn unread_slave_input_does_not_block_resize_or_stop() -> Result<()> {
     // making the control channel depend on the input worker's progress.
     let mut full = false;
     for _ in 0..64 {
-        match exchange(
+        let response = exchange_response(
             &host.socket(),
             Command::Input {
                 session: spec.session,
                 generation: spec.generation,
                 bytes: vec![b'x'; 16 * 1024],
             },
-        ) {
-            Ok(_) => (),
-            Err(error) if error.to_string().contains("queue full") => {
+        )?;
+        match response.error {
+            None => assert_eq!(response.rejected_before_admission, None),
+            Some(error) if error.contains("queue full") => {
+                assert_eq!(
+                    response.rejected_before_admission,
+                    Some(CommandRejection::QueueFull)
+                );
                 full = true;
                 break;
             }
-            Err(error) => return Err(error),
+            Some(error) => bail!("host: {error}"),
         }
     }
     ensure!(

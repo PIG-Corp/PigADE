@@ -63,6 +63,15 @@ impl<T: PartialEq> PartialEq for Storage<T> {
 }
 
 impl<T> Storage<T> {
+    /// Raw rows include the inactive resize cache as well as active rows.
+    pub(super) fn allocation_rows(&self) -> &[Row<T>] {
+        &self.inner
+    }
+
+    pub(super) fn allocation_row_capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
     /// Canonical active rows for a versioned checkpoint, excluding resize cache.
     #[cfg(feature = "serde")]
     pub(super) fn checkpoint_rows(&self) -> impl Iterator<Item = &Row<T>> {

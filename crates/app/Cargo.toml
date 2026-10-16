@@ -5,9 +5,10 @@ edition = "2024"
 publish = false
 
 [workspace]
-exclude = [".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624", ".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624/crates/gpui"]
+exclude = [".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_platform"]
 
 [dependencies]
-gpui = { path = ".upstream/zed-69e2130295c2649963eb639fc70b4f2ee8ea1624/crates/gpui" }
+gpui = { path = ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui" }
+gpui_platform = { path = ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_platform", features = ["wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

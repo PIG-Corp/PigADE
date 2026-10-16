@@ -131,6 +131,31 @@ def save_json(path, value):
         raise
 
 
+def resize_with_admission_retry(endpoint, command, stats, deadline_seconds=10):
+    """Retry only an explicit queue-full resize rejection, within one deadline."""
+    check(command.get("command") == "resize", "admission retry is restricted to resize")
+    deadline = time.monotonic() + deadline_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("resize admission retry deadline exceeded")
+        stats["attempts"] += 1
+        try:
+            STRESS.request(endpoint, command, timeout=min(3, remaining))
+            return
+        except STRESS.HostRejection as error:
+            if error.code != "queue_full":
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("resize admission retry deadline exceeded") from error
+            delay = min(.025, remaining)
+            time.sleep(delay)
+            stats["retries"] += 1
+            stats["total_wait_seconds"] += delay
+            stats["max_wait_seconds"] = max(stats["max_wait_seconds"], delay)
+
+
 def freeze_executable(source, destination):
     source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     destination_fd = None
@@ -255,12 +280,18 @@ def run(args):
                 while f"READY:{index}" not in STRESS.text(STRESS.snapshot(endpoint, spec)):
                     check(time.monotonic() < ready_by, f"producer {index} READY timeout")
                     time.sleep(.05)
+            # Persist owned identities/session IDs before the long measurement.
+            # A running manifest must remain useful after harness interruption.
+            save_json(manifest_path, result)
             actual_start = time.monotonic()
             result["measurement_started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             sample_every = args.sample_seconds
             next_sample, next_ack, next_resize = actual_start, actual_start + 5, actual_start + 3
             ack_counts = [0] * len(specs)
             resize_counts = [0] * len(specs)
+            resize_admission_stats = [{"attempts": 0, "retries": 0,
+                                       "total_wait_seconds": 0.0, "max_wait_seconds": 0.0}
+                                      for _ in specs]
             checkpoint_summaries = [{"sample_count": 0, "max_checkpoint_age_seconds": None,
                                      "last_checkpoint_sequence": None, "max_sequence_lag": None}
                                     for _ in specs]
@@ -299,9 +330,10 @@ def run(args):
                         # Three bounded viewport sizes exercise live resize during output.
                         width = (112, 120, 128)[resize_counts[index] % 3]
                         height = (32, 36, 40)[resize_counts[index] % 3]
-                        STRESS.request(endpoint, {"command": "resize", "session": spec["session"],
-                                                  "generation": spec["generation"],
-                                                  "geometry": {"rows": height, "cols": width}})
+                        resize_with_admission_retry(endpoint, {"command": "resize", "session": spec["session"],
+                                                              "generation": spec["generation"],
+                                                              "geometry": {"rows": height, "cols": width}},
+                                                    resize_admission_stats[index])
                         resize_counts[index] += 1
                     next_resize = now + args.resize_seconds
                 if now >= next_sample:
@@ -332,6 +364,8 @@ def run(args):
                                               **host_sample, "sessions": session_rows})
                     write_json_line(progress, {"elapsed_seconds": elapsed, "target_seconds": args.seconds,
                                                "ack_counts": ack_counts, "resize_counts": resize_counts,
+                                               "resize_admission_retry_counts": [item["retries"] for item in resize_admission_stats],
+                                               "resize_admission_retry_wait_seconds": [item["total_wait_seconds"] for item in resize_admission_stats],
                                                "host_rss_bytes": host_sample["host_rss_bytes"]})
                     next_sample = now + sample_every
                 time.sleep(.05)
@@ -379,6 +413,7 @@ def run(args):
                                                    "note": "Each producer pauses output until token ACK is observed then harness dispatches RELEASE; this is not a latency/rate sample."}
                                                   for total, maximum in zip(ack_pause_totals, ack_pause_max)]
             result["resizes_per_session"] = resize_counts
+            result["resize_admission_retry_summary"] = resize_admission_stats
             result["checkpoint_age_and_watermark_summary"] = checkpoint_summaries
             result["status"] = "completed" if result["real_time_elapsed"] and not interrupted.is_set() else "incomplete"
             result["real_time_soak_24h_integrity_pass"] = (
@@ -421,6 +456,8 @@ def run(args):
                 signal.signal(sig, handler)
             result.setdefault("verify_requested", args.verify)
             result.setdefault("verify_recovery_passed_all_sessions", False)
+            if "resize_admission_stats" in locals():
+                result["resize_admission_retry_summary"] = resize_admission_stats
             save_json(manifest_path, result)
     print(json.dumps({key: result.get(key) for key in
                       ("status", "actual_elapsed_seconds", "real_time_elapsed", "elapsed_24h_completed",

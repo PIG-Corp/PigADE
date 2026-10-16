@@ -2,3 +2,9 @@
 # Preserve byte-for-byte fixtures; never normalize or whitespace-fix them.
 *.recording binary
 *.vte binary
+# Preserve upstream legal-file hashes, including their original trailing spaces.
+# The exception is limited to these exact source files and reproduced copies.
+crates/app/assets/fonts/jetbrains-mono-v2.304/AUTHORS.txt -text whitespace=-blank-at-eol
+crates/app/assets/fonts/jetbrains-mono-v2.304/OFL.txt -text whitespace=-blank-at-eol
+crates/app/assets/fonts/derived-terminal-v1/JetBrainsMono-AUTHORS.txt -text whitespace=-blank-at-eol
+crates/app/assets/fonts/derived-terminal-v1/LICENSE-JetBrainsMono-OFL.txt -text whitespace=-blank-at-eol

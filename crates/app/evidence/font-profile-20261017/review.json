@@ -1,0 +1,15 @@
+{
+  "status": "visually-reviewed-scoped-fixture",
+  "render_profile": "pigade-terminal-render-profile-aliases-v1",
+  "render_profile_sha256": "c7e245f0bce354877149c48500d544d71da833668de5df5727bcbcf7aca59cb3",
+  "app_sha256": "275e47a1b3c1dc68c907c1be794657f2fac36b52ce840bbcd6c9e46c2e66e550",
+  "embedded_faces_verified": 5,
+  "visual_review": "Root inspected scale1 and scale2 screenshots; tested Cyrillic, combining accent, Han/Hiragana/Hangul with ASCII neighbors and primary styles are readable without obvious adjacent-cell collision. This is not a pixel-level ink, complete coverage or native-platform certification.",
+  "source_sha256": {
+    "crates/app/src/font.rs": "50ee7e3acae91eb7ea928f1d9bbd8013cfb18e5fbf18c812eb3f85e5ddfae3a8",
+    "crates/app/src/main.rs": "5c2f4bb677120828655f5d64d4838a17bbf4b1152e91e442d61d530fa45d0289",
+    "scripts/isolated-render.py": "1f4a953a150fbffece81432bd1fc729d89f86b1a002cb0c8930614e4a0ab292c",
+    "scripts/prepare-terminal-fonts.py": "829d6ee17bffaa236c414f0608bb735a45ca4b86990780a7b7324f8e5574d089"
+  },
+  "prior_invalidated_evidence": "../font-profile-stale-build-20261017/CORRECTION.json"
+}

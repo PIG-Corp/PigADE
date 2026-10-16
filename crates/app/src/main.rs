@@ -1,8 +1,10 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod font;
 mod input;
 mod protocol;
 use gpui::{prelude::*, *};
-use protocol::{Cell, View, command, request};
+use gpui_platform::application;
+use protocol::{Cell, CommandFailure, View, command, request};
 use serde_json::{Value, json};
 use std::{
     ops::Range,
@@ -12,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-const FONT_SIZE: f32 = 14.;
 const HEADER: f32 = 32.;
 const GAP: f32 = 6.;
 #[derive(Clone, Default)]
@@ -39,10 +40,15 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
             // At most 32 queued commands, no retries of ambiguous input/resize.
             while let Ok(command) = rx.try_recv() {
                 if let Err(e) = request(&socket, command) {
-                    output
-                        .lock()
-                        .unwrap()
-                        .fail(format!("Команда: исход неизвестен: {e}"));
+                    let message = match &e {
+                        CommandFailure::NotAdmitted { .. } => {
+                            format!("Команда не принята: {e}")
+                        }
+                        CommandFailure::OutcomeUnknown(_) => {
+                            format!("Исход команды неизвестен: {e}")
+                        }
+                    };
+                    output.lock().unwrap().fail(message);
                 }
             }
             let known = output
@@ -430,6 +436,10 @@ impl Render for CanvasApp {
         let views = self.state.views.clone();
         let selected = self.selected;
         let attached = self.state.error.is_none();
+        let terminal_label = self.state.views.get(selected).map_or_else(
+            || "Терминал: нет выбранной сессии".to_owned(),
+            |view| format!("Терминал {} · {}", view.frame.title, view.state),
+        );
         let status = self.error().map(str::to_owned).unwrap_or_else(|| {
             if self.prefix {
                 "Режим PigADE: 1–4 — фокус · Escape — выход".into()
@@ -441,6 +451,10 @@ impl Render for CanvasApp {
             }
         });
         div()
+            .id("pigade-root")
+            .accessibility_id("pigade-root")
+            .role(Role::Application)
+            .aria_label("PigADE")
             .size_full()
             .flex()
             .flex_col()
@@ -452,6 +466,10 @@ impl Render for CanvasApp {
             .on_key_down(cx.listener(Self::key))
             .child(
                 div()
+                    .id("app-heading")
+                    .role(Role::Heading)
+                    .aria_level(1)
+                    .aria_label("PigADE")
                     .h(px(40.))
                     .px(px(12.))
                     .flex()
@@ -459,52 +477,62 @@ impl Render for CanvasApp {
                     .child("PigADE"),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    canvas(
-                        move |bounds, window, cx| {
-                            let font = font("Liberation Mono");
-                            let fontid = window.text_system().resolve_font(&font);
-                            let width = window
-                                .text_system()
-                                .advance(fontid, px(FONT_SIZE), 'M')
-                                .map(|s| s.width)
-                                .unwrap_or(px(9.));
-                            let height = terminal_line_height(
-                                window.text_system().ascent(fontid, px(FONT_SIZE)),
-                                window.text_system().descent(fontid, px(FONT_SIZE)),
-                            );
-                            let cell = size(width, height);
-                            let scale = window.scale_factor();
-                            let panes =
-                                entity.update(cx, |this, _| this.geometry(bounds, cell, scale));
-                            (font, panes)
-                        },
-                        move |bounds, (font, panes), window, cx| {
-                            let focus = painter.read(cx).focus.clone();
-                            window.handle_input(
-                                &focus,
-                                ElementInputHandler::new(bounds, painter.clone()),
-                                cx,
-                            );
-                            window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                                for (index, pane) in panes.into_iter().enumerate() {
-                                    paint_panel(
-                                        pane,
-                                        views.get(index),
-                                        (index == selected, attached),
-                                        &font,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            });
-                        },
-                    )
-                    .size_full(),
-                ),
+                div()
+                    .id("terminal-canvas")
+                    .accessibility_id("terminal-canvas")
+                    .role(Role::Terminal)
+                    .aria_label(terminal_label)
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        canvas(
+                            move |bounds, window, cx| {
+                                let font = crate::font::terminal_font();
+                                let fontid = window.text_system().resolve_font(&font);
+                                let width = window
+                                    .text_system()
+                                    .advance(fontid, px(crate::font::SIZE), 'M')
+                                    .map(|s| s.width)
+                                    .unwrap_or(px(9.));
+                                let height = terminal_line_height(
+                                    window.text_system().ascent(fontid, px(crate::font::SIZE)),
+                                    window.text_system().descent(fontid, px(crate::font::SIZE)),
+                                );
+                                let cell = size(width, height);
+                                let scale = window.scale_factor();
+                                let panes =
+                                    entity.update(cx, |this, _| this.geometry(bounds, cell, scale));
+                                (font, panes)
+                            },
+                            move |bounds, (font, panes), window, cx| {
+                                let focus = painter.read(cx).focus.clone();
+                                window.handle_input(
+                                    &focus,
+                                    ElementInputHandler::new(bounds, painter.clone()),
+                                    cx,
+                                );
+                                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                                    for (index, pane) in panes.into_iter().enumerate() {
+                                        paint_panel(
+                                            pane,
+                                            views.get(index),
+                                            (index == selected, attached),
+                                            &font,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                });
+                            },
+                        )
+                        .size_full(),
+                    ),
             )
             .child(
                 div()
+                    .id("session-status")
+                    .role(Role::Status)
+                    .aria_label(status.clone())
                     .h(px(24.))
                     .px(px(12.))
                     .text_color(rgb(0xb0b8c5))
@@ -520,7 +548,7 @@ impl Render for CanvasApp {
                     {
                         this.selected = index;
                     }
-                    this.focus.focus(window);
+                    this.focus.focus(window, cx);
                     cx.notify();
                 }),
             )
@@ -552,6 +580,19 @@ fn cell_paint_order(cells: &[Cell]) -> impl Iterator<Item = CellPaint<'_>> {
         )
 }
 
+/// Alacritty marks the leading cell of a width-two glyph with WIDE_CHAR.
+/// Continuation cells are not separate grapheme origins.
+fn glyph_span_cells(flags: u16) -> usize {
+    if flags & (1 << 5) != 0 { 2 } else { 1 }
+}
+
+fn glyph_span_bounds(origin: Point<Pixels>, cell: Size<Pixels>, flags: u16) -> Bounds<Pixels> {
+    Bounds::new(
+        origin,
+        size(cell.width * glyph_span_cells(flags) as f32, cell.height),
+    )
+}
+
 fn text(
     text: String,
     origin: Point<Pixels>,
@@ -567,7 +608,7 @@ fn text(
     }
     let line = window.text_system().shape_line(
         text.into(),
-        px(FONT_SIZE),
+        px(crate::font::SIZE),
         &[TextRun {
             len,
             font: font.clone(),
@@ -578,7 +619,7 @@ fn text(
         }],
         None,
     );
-    let _ = line.paint(origin, line_height, window, cx);
+    let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
 }
 fn paint_panel(
     pane: PaneGeometry,
@@ -665,17 +706,24 @@ fn paint_panel(
                         if c.flags & 4 != 0 {
                             glyphfont.style = FontStyle::Italic;
                         }
-                        // Shape the entire host cell cluster, including combining
-                        // marks. Wide cells may occupy their continuation span;
-                        // only the pane viewport clips it, never an individual cell.
-                        text(
-                            c.text.clone(),
-                            origin,
-                            &glyphfont,
-                            rgb(fg).into(),
-                            cell.height,
-                            window,
-                            cx,
+                        // Shape the host-owned cluster, including combining
+                        // marks. Clip ink to its host-assigned one/two-cell span
+                        // so fallback overhang cannot paint into the next cell.
+                        window.with_content_mask(
+                            Some(ContentMask {
+                                bounds: glyph_span_bounds(origin, cell, c.flags),
+                            }),
+                            |window| {
+                                text(
+                                    c.text.clone(),
+                                    origin,
+                                    &glyphfont,
+                                    rgb(fg).into(),
+                                    cell.height,
+                                    window,
+                                    cx,
+                                );
+                            },
                         );
                     }
                 }
@@ -762,8 +810,9 @@ fn main() {
         .nth(1)
         .expect("usage: pigade-app /path/to/host.sock");
     let (tx, shared) = ipc(socket.into());
-    Application::new().run(move |cx: &mut App| {
-        cx.on_window_closed(|cx| {
+    application().run(move |cx: &mut App| {
+        crate::font::install(cx).expect("bundled terminal font profile must load");
+        cx.on_window_closed(|cx, _window_id| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
@@ -778,7 +827,8 @@ fn main() {
             },
             move |window, cx| {
                 let view = cx.new(|cx| CanvasApp::new(cx, tx, shared));
-                view.read(cx).focus.focus(window);
+                let focus = view.read(cx).focus.clone();
+                focus.focus(window, cx);
                 view
             },
         )
@@ -790,7 +840,8 @@ fn main() {
 mod tests {
     use super::protocol::Cell;
     use super::{
-        CellPaint, PaneGeometry, cell_paint_order, color, project_panels, terminal_line_height,
+        CellPaint, PaneGeometry, cell_paint_order, color, glyph_span_bounds, glyph_span_cells,
+        project_panels, terminal_line_height,
     };
     use gpui::{Bounds, point, px, size};
     #[test]
@@ -807,6 +858,19 @@ mod tests {
             assert!(baseline - 12. >= 0.);
             assert!(baseline + 4. <= f32::from(pane.cell.height));
         }
+    }
+    #[test]
+    fn glyph_clip_matches_host_allocated_cell_span() {
+        let origin = point(px(4.), px(9.));
+        let cell = size(px(8.5), px(19.));
+        let single = glyph_span_bounds(origin, cell, 0);
+        let wide = glyph_span_bounds(origin, cell, 1 << 5);
+        assert_eq!(glyph_span_cells(0), 1);
+        assert_eq!(glyph_span_cells(1 << 5), 2);
+        assert_eq!(single.origin, origin);
+        assert_eq!(single.size, cell);
+        assert_eq!(wide.origin, origin);
+        assert_eq!(wide.size, size(px(17.), px(19.)));
     }
     #[test]
     fn backgrounds_cannot_erase_wide_spans_or_next_row_descenders() {

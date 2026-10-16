@@ -1,0 +1,6 @@
+{
+  "status": "not-font-profile-proof",
+  "reason": "Harness selected old /tmp GPUI target binary 8b24806d rather than current app target275e47a1; current Noto derived payload absent from tested executable. Source hashes in initial review are not a build attestation. Rendering/reopen/AT-SPI evidence remains scoped to the older executable only.",
+  "replacement": "../font-profile-20261017",
+  "prevention": "Exact expected font payload/manifest verification now runs before namespace/window creation."
+}

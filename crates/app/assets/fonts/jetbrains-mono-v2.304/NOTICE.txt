@@ -1,0 +1,12 @@
+JetBrains Mono font files
+
+Copyright 2020 The JetBrains Mono Project Authors
+https://github.com/JetBrains/JetBrainsMono
+
+The font files in this directory are redistributed under SIL Open Font
+License 1.1. See OFL.txt for the full license text. AUTHORS.txt is copied
+from the upstream release.
+
+Upstream release: JetBrainsMono v2.304
+Upstream archive: https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+Upstream release commit: cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9

@@ -1,0 +1,16 @@
+PigADE terminal font assets — derived redistribution notice
+
+These files are derived from the upstream font files listed in
+derived-font-manifest.json. The upstream source files, licenses, and notices
+remain unchanged in their versioned source directories.
+
+The derived font files change OpenType family, subfamily, full, unique, WWS,
+PostScript, and (for CFF) name strings to PigADE-only aliases. The Noto Sans
+Mono CJK JP OTF also had its empty, unsigned DSIG table removed. Glyph outlines,
+metrics, and cmap are fingerprinted as unchanged in the manifest.
+
+JetBrains Mono assets are redistributed under LICENSE-JetBrainsMono-OFL.txt;
+their upstream authors are listed in JetBrainsMono-AUTHORS.txt. The Noto Sans
+Mono CJK JP asset is redistributed under LICENSE-NotoSansCJK-OFL.txt. Its
+upstream copyright and package attribution are recorded in the Noto source
+NOTICE.txt identified by source_notices in the manifest.

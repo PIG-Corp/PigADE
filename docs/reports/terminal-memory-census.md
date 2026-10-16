@@ -1,0 +1,56 @@
+# Terminal resource census — 0.0.1-dev
+
+The terminal now has two bounded diagnostic primitives for a future admission
+policy. Neither limits the running model or establishes the total memory gate.
+
+The parser callback census advances a clone of the existing VTE processor. It
+counts input, zero-width characters, title and hyperlink payload bytes and
+title pushes, including buffered synchronized output and REP. REP counts are
+aggregated without calling the census handler 65,535 times. The original
+processor and terminal stay unchanged; bounded parser buffers can still be
+allocated while cloning. It introduces no second ANSI implementation.
+
+The allocation census inspects both Term grids and every retained cache row,
+Vec capacities, four cursor templates, separately deduplicated CellExtra and
+hyperlink Arc allocations, combining Vec capacities, title strings/stacks,
+tab stops, keyboard stacks and damage lines. Identical contents in distinct
+Arcs count as separate allocations. Caller-supplied cell-visit and unique-Arc
+limits stop work and mark the result incomplete. The estimate includes payload
+capacities and an estimated Arc header; allocator overhead, fragmentation,
+parser/wrapper/listener/observer storage and transients are excluded. Even a
+complete result is not an upper bound on process memory.
+
+The release example uses the actual terminal model and verifies the complete
+checkpoint stays byte-identical before/after each census. Its 30-sample nearest
+rank timings and exact source/binary hashes are in
+[`terminal-allocation-census.json`](../../benchmarks/results/terminal-allocation-census.json).
+Concurrent corpus, soak and build work were present, so these are diagnostic
+cost samples, not isolated PERF-01 results.
+
+| Model fixture | Estimated Term payload bytes | Visited cells | Census p95 |
+| --- | ---: | ---: | ---: |
+| Empty, 120×36 | 212,443 | 8,644 | 0.018 ms |
+| 10,000 hot rows, 120×36 | 29,541,723 | 1,208,644 | 3.486 ms |
+| Same history after 50 resizes | 27,377,843 | 1,127,172 | 6.537 ms |
+| 262,144 combining marks on one cell | 1,261,075 | 8,644 | 0.023 ms |
+| 4,096 distinct 1 KiB hyperlinks | 19,663,621 | 608,644 | 2.009 ms |
+
+The full census is O(retained cells); it is deliberately absent from the
+output/frame loop. These measurements support admission-triggered accounting,
+not a full walk on every output chunk. Required next work is a conservative
+whole-event reservation covering grid growth, CellExtra copy-on-write,
+metadata, resize/reflow and checkpoint/frame/import/export transients, plus a
+shared host budget. Rejection must retain the durable raw tail and last valid
+frame, leave parser/model unchanged and recover that same valid prefix with an
+explicit resource error. Cumulative lifetime counters that never decrease
+under overwrite are unsuitable. The existing 128 MiB encoded checkpoint limit
+does not solve this problem.
+
+```sh
+cargo run --release -p pigade-terminal --example allocation_census
+```
+
+The census is tested for shared/distinct Arc ownership, copy-on-write extras,
+inactive row caches, all cursor roots, metadata-capacity deltas, work-limit
+exhaustion and unchanged checkpoints. Global heap admission, storage quotas and
+the SPEC 700 MiB product budget remain open release blockers.

@@ -47,6 +47,12 @@ PACKAGES = (
         'signer': SIGNER_DAVID_RUNGE,
     },
     {
+        'name': 'qemu-img', 'version': '11.1.2-1', 'repo': 'extra',
+        'arch': 'x86_64',
+        'sha256': '666dfe6cda552f09091c1cc03fd1143293bd25f47eee4745053efa170fc32e5c',
+        'signer': SIGNER_DAVID_RUNGE,
+    },
+    {
         'name': 'qemu-common', 'version': '11.1.2-1', 'repo': 'extra',
         'arch': 'x86_64',
         'sha256': 'bd78128c06b0686b360fee1d46af3bd4f7e19a346323191aed1fd6c78a296183',
@@ -425,17 +431,18 @@ def prepare(args: argparse.Namespace) -> int:
         marker.chmod(0o600)
 
     qemu = extraction_root / 'usr/bin/qemu-system-x86_64'
+    qemu_img = extraction_root / 'usr/bin/qemu-img'
     mcopy = extraction_root / 'usr/bin/mcopy'
     bios = extraction_root / 'usr/share/qemu/bios-256k.bin'
     qemu_data = extraction_root / 'usr/share/qemu'
-    for required_path in (qemu, mcopy, bios):
+    for required_path in (qemu, qemu_img, mcopy, bios):
         require(required_path.is_file(), f'Missing expected SDK payload: {required_path}')
 
     runtime_env = {
         'PATH': '/usr/bin', 'LC_ALL': 'C',
         'LD_LIBRARY_PATH': f'{extraction_root}/usr/lib:{extraction_root}/usr/lib/qemu',
     }
-    elf_targets = [qemu, mcopy]
+    elf_targets = [qemu, qemu_img, mcopy]
     module_dir = extraction_root / 'usr/lib/qemu'
     if module_dir.is_dir():
         for candidate in sorted(module_dir.rglob('*.so*')):
@@ -463,6 +470,7 @@ def prepare(args: argparse.Namespace) -> int:
     commands = {}
     if not unresolved:
         commands['qemu_version'] = run([str(qemu), '--version'], env=runtime_env).splitlines()[0]
+        commands['qemu_img_version'] = run([str(qemu_img), '--version'], env=runtime_env).splitlines()[0]
         commands['mcopy_version'] = run([str(mcopy), '-V'], env=runtime_env).splitlines()[0]
 
     manifest = {
@@ -475,10 +483,10 @@ def prepare(args: argparse.Namespace) -> int:
         'keyring_sha256': sha256(keyring),
         'packages': downloaded,
         'qemu_system_x86_64': str(qemu),
+        'qemu_img': str(qemu_img),
         'qemu_data_dir': str(qemu_data),
         'seabios_bios_256k': str(bios),
         'mcopy': str(mcopy),
-        'qemu_img': None,
         'uefi': 'not provisioned; this SDK is for explicit SeaBIOS boot only',
         'total_downloaded_bytes': total_bytes,
         'ldd_checks': ldd_checks,
@@ -498,7 +506,7 @@ def prepare(args: argparse.Namespace) -> int:
     manifest_path.chmod(0o600)
     print(json.dumps({
         'status': manifest['status'], 'manifest': str(manifest_path),
-        'qemu': str(qemu), 'mcopy': str(mcopy),
+        'qemu': str(qemu), 'qemu_img': str(qemu_img), 'mcopy': str(mcopy),
         'package_count': len(downloaded), 'total_downloaded_bytes': total_bytes,
         'unresolved': unresolved,
     }, indent=2))

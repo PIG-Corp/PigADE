@@ -3,12 +3,14 @@ mod catalog;
 #[doc(hidden)]
 pub mod checkpoint;
 pub mod history;
+pub mod history_read;
 pub mod input;
 pub use catalog::LayoutAction;
 mod ipc_server;
 mod launch_gate;
 pub mod metrics;
 pub mod poll;
+mod replay_cache;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -51,6 +53,9 @@ pub struct Launch {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     List,
+    HistoryRead {
+        query: history_read::Query,
+    },
     Poll {
         known: Vec<poll::Known>,
     },
@@ -111,12 +116,37 @@ pub struct Response {
     pub protocol: u32,
     pub views: Vec<View>,
     pub error: Option<String>,
+    /// Present only when the complete command was rejected before admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_before_admission: Option<CommandRejection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<pigade_storage::Catalog>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_notice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<Vec<poll::SessionInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_chunk: Option<history::RecordChunk>,
+}
+
+/// Stable machine-readable proof that no part of a command was admitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandRejection {
+    QueueFull,
+}
+
+impl std::fmt::Display for CommandRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QueueFull => f.write_str("command queue full; command was not admitted"),
+        }
+    }
+}
+impl std::error::Error for CommandRejection {}
+
+fn rejected_before_admission(error: &anyhow::Error) -> Option<CommandRejection> {
+    error.downcast_ref::<CommandRejection>().copied()
 }
 
 struct MessageBuffer(Vec<u8>);
@@ -258,6 +288,7 @@ struct ActorConfig {
 }
 struct Host {
     root: PathBuf,
+    endpoint_root: PathBuf,
     sessions: Vec<Session>,
     metadata: MetadataStore,
     catalog_notice: Option<String>,
@@ -388,6 +419,23 @@ fn restore_model(
     Ok((view, terminal, history))
 }
 impl Host {
+    fn history_source(&self, query: &history_read::Query) -> Result<Arc<history::History>> {
+        query.validate()?;
+        for session in &self.sessions {
+            let view = session.view.lock().expect("view lock");
+            if view.session == query.session && view.generation == query.generation {
+                ensure!(
+                    view.sequence == query.expected_sequence,
+                    "history view sequence changed"
+                );
+                return session
+                    ._history
+                    .clone()
+                    .context("cold history unavailable for this generation");
+            }
+        }
+        bail!("unknown session generation")
+    }
     fn dispatch(&mut self, command: Command) -> Result<Response> {
         if let Command::Poll { known } = command {
             self.reconcile_exits()?;
@@ -396,9 +444,11 @@ impl Host {
                 protocol: PROTOCOL,
                 views: result.views,
                 error: None,
+                rejected_before_admission: None,
                 catalog: None,
                 catalog_notice: self.catalog_notice.clone(),
                 selected: Some(result.selected),
+                history_chunk: None,
             });
         }
         let catalog = match command {
@@ -413,9 +463,11 @@ impl Host {
                     protocol: PROTOCOL,
                     views: self.handle(terminal)?,
                     error: None,
+                    rejected_before_admission: None,
                     catalog: None,
                     catalog_notice: None,
                     selected: None,
+                    history_chunk: None,
                 });
             }
         };
@@ -423,9 +475,11 @@ impl Host {
             protocol: PROTOCOL,
             views: Vec::new(),
             error: None,
+            rejected_before_admission: None,
             catalog: Some(catalog),
             catalog_notice: self.catalog_notice.clone(),
             selected: None,
+            history_chunk: None,
         })
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -488,6 +542,7 @@ impl Host {
             }
         }
         Ok(Self {
+            endpoint_root: root.clone(),
             root,
             sessions,
             metadata,
@@ -566,15 +621,30 @@ impl Host {
         match command {
             Command::Input { bytes, .. } => {
                 ensure!(bytes.len() <= OUTPUT_CHUNK, "input exceeds limit");
-                session
+                let result = session
                     .input
                     .as_ref()
                     .context("historical terminal is read-only")?
-                    .try_write(bytes)?;
+                    .try_write(bytes);
+                match result {
+                    Ok(()) => (),
+                    Err(input::InputWriteError::Full) => {
+                        return Err(CommandRejection::QueueFull.into());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
             Command::Resize { geometry, .. } => {
                 Geometry::new(geometry.rows, geometry.cols)?;
-                session.commands.try_send(Action::Resize(geometry))?;
+                match session.commands.try_send(Action::Resize(geometry)) {
+                    Ok(()) => (),
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        return Err(CommandRejection::QueueFull.into());
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        return Err(anyhow::anyhow!("session command actor unavailable"));
+                    }
+                }
             }
             Command::Stop { .. } => {
                 session.control.try_send(Control::Stop)?;
@@ -634,7 +704,7 @@ impl Host {
             },
         )?;
         let history = history::History::live(&self.root, journal.header())?;
-        let handshake = launch_gate::LaunchGate::bind(&self.root)?;
+        let handshake = launch_gate::LaunchGate::bind(&self.endpoint_root)?;
         let pair = native_pty_system().openpty(pty_size(spec.geometry))?;
         let mut builder = CommandBuilder::new(std::env::current_exe()?);
         builder.arg("__helper");
@@ -1146,18 +1216,85 @@ fn wait_degraded(control: &mpsc::Receiver<Control>, child: &mut dyn portable_pty
 }
 
 pub fn serve(root: PathBuf) -> Result<()> {
+    private_directory(&root)?;
+    serve_with_runtime(root.clone(), root)
+}
+
+/// Separate short socket paths from durable state paths. Both namespaces are
+/// exclusively locked; selecting a runtime directory cannot unlink a different
+/// live host's endpoint. Existing callers keep state-local sockets by default.
+pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(metadata) = fs::symlink_metadata(&runtime) {
+        ensure!(
+            metadata.is_dir()
+                && metadata.uid() == unsafe { libc::getuid() }
+                && metadata.mode() & 0o777 == 0o700,
+            "runtime must be a dedicated private 0700 directory; original permissions preserved"
+        );
+    }
+    private_directory(&runtime)?;
+    let runtime_lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(runtime.join("endpoint.lock"))?;
+    let metadata = runtime_lock.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::getuid() }
+            && metadata.nlink() == 1
+            && metadata.mode() & 0o777 == 0o600,
+        "unsafe endpoint ownership lock; original preserved"
+    );
+    // SAFETY: flock borrows a valid descriptor; keep it alive through dispatch.
+    ensure!(
+        unsafe { libc::flock(runtime_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+        "another host owns this runtime directory"
+    );
     let mut host = Host::open(root.clone())?;
-    let jobs = ipc_server::bind(&root.join("host.sock"))?;
+    host.endpoint_root = runtime.clone();
+    let jobs = ipc_server::bind(&runtime.join("host.sock"))?;
+    let history_reader = history_read::Reader::new()?;
+    // Reclamation is optional derived-data maintenance. Never make the first
+    // recovered frame wait for old cache removal. Per-cache leases also protect
+    // independent verifiers that do not participate in this host's state lock.
+    let cleanup_root = root.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("pigade-replay-cleanup".into())
+        .spawn(move || {
+            let report = replay_cache::cleanup(&cleanup_root);
+            for warning in &report.warnings {
+                eprintln!("Private replay-cache cleanup: {warning}");
+            }
+        })
+    {
+        eprintln!("Private replay-cache cleanup unavailable: {error}");
+    }
     for job in jobs {
+        if let Command::HistoryRead { query } = job.request.command {
+            match host.history_source(&query) {
+                Ok(source) => history_reader.submit(source, query, job.reply),
+                Err(error) => {
+                    let _ = job.reply.try_send(history_read::response(Err(error), None));
+                }
+            }
+            continue;
+        }
         let response = match host.dispatch(job.request.command) {
             Ok(response) => response,
             Err(error) => Response {
                 protocol: PROTOCOL,
                 views: Vec::new(),
                 error: Some(format!("{error:#}")),
+                rejected_before_admission: rejected_before_admission(&error),
                 catalog: None,
                 catalog_notice: host.catalog_notice.clone(),
                 selected: None,
+                history_chunk: None,
             },
         };
         let _ = job.reply.try_send(response);

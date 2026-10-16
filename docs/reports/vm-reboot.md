@@ -77,3 +77,54 @@ separate artifacts: [read-only seed failure](../../benchmarks/results/vm-reboot-
 Keep all attempts; do not overwrite failed evidence. A rerun should record the
 new manifest path, binary hash, boot IDs, session/generation identities, retry
 evidence, cold-row counts, full recovery output, and any failure.
+
+## Completed-corpus VM path
+
+`--corpus INNER_DIRECTORY --reference RECOVER_RESULT_JSON` stages only a
+completed, four-session corpus with all full/fast/live equality proofs and
+the exact same frozen host binary used by `scripts/recover-corpus.py`.
+Source files are whitelisted and hashed; runtime SQLite, locks, sockets and
+private replay caches are excluded. The private staging copy is read-only.
+The guest copies it to a newly created 64 GiB qcow2/ext4 data disk, identified
+by its unique device serial before formatting. The second boot requires the
+existing filesystem and copy marker; it does not format or recopy data.
+QEMU has no network, display or input devices and sees only these staged files.
+
+The diagnostic run in
+[`vm-reboot-corpus-small.json`](../../benchmarks/results/vm-reboot-corpus-small.json)
+uses the explicit `--allow-small-corpus` override: four 1 MiB journals and
+100 resizes each, not the required four 1 GiB corpus. Distinct boot IDs were
+`3ae73e6b-2041-41e2-bd27-8d735c45dfa4` and
+`f3fca9c7-7c6d-4b32-9648-2425311e389f`. Both boots matched the same-binary host
+reference, retained 3,197–3,199 cold records per generation, and reconstructed
+all six private checkpoint-tail records as exact canonical bytes through the
+bounded history API. Journal-tail reads were 405–441 bytes. Four host frames
+were available in 466.87 ms and 1,166.85 ms respectively. These two concurrent
+diagnostic samples do not establish a percentile, UI-present time or REC-08.
+Every source fixture hash remained unchanged. The completed corpus's earlier
+full cold oracle runs outside the VM; this VM path verifies the persisted
+source inventory, recovered frames and canonical tail, not a fresh full
+1 GiB replay inside the guest.
+
+The failed owned-process-identity attempt is retained in
+[`vm-reboot-corpus-identity-failure.json`](../../benchmarks/results/vm-reboot-corpus-identity-failure.json).
+QEMU exited when its removed QMP directory could not be bound. Cleanup now
+uses a Linux pidfd opened for the exact unreaped Popen child, including when
+later identity capture fails; a regression exercises that boundary with a
+harmless owned child. The SDK also now includes signed `qemu-img` and its
+private library path; see [the SDK record](../research/vm-sdk-qemu-img.md).
+Other preflight failures (missing image tool and its loader library path)
+occurred before a guest boot and were corrected before the passing run.
+
+```sh
+python3 scripts/recover-corpus.py --corpus /absolute/completed/inner-directory \
+  --output /absolute/new/recovery-reference --iterations 30
+python3 scripts/vm-reboot.py --run --directory /absolute/durable/vm-runs \
+  --sdk-manifest /absolute/prepared/sdk/evidence/manifest.json \
+  --corpus /absolute/completed/inner-directory \
+  --reference /absolute/new/recovery-reference/result.json
+```
+
+The default corpus mode refuses small or incomplete fixtures. The full corpus,
+real-time soak, product layout/provider recovery, storage quota, measured total
+memory and REC-08 acceptance remain open.

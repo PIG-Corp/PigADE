@@ -1,0 +1,11 @@
+{
+  "runtime": "/home/afterburner/.local/state/pigade/isolated-font-alias-20261017",
+  "render_profile": "pigade-terminal-render-profile-aliases-v1",
+  "render_profile_sha256": "1a88d4181015528cd47f72ef5aa48e8e19bcfae536fd8398fe7d42acee8f3af1",
+  "source_sha256": {
+    "crates/app/src/font.rs": "50ee7e3acae91eb7ea928f1d9bbd8013cfb18e5fbf18c812eb3f85e5ddfae3a8",
+    "crates/app/src/main.rs": "5c2f4bb677120828655f5d64d4838a17bbf4b1152e91e442d61d530fa45d0289",
+    "scripts/isolated-render.py": "795c378255ace544120afc78a489ba99270b83827f89370c6634d8dc2978a39e"
+  },
+  "visual_review": "Root inspected full screenshot: Cyrillic, combining accent, Han/Hiragana/Hangul with ASCII neighbors, primary bold/italic, pane clipping and focus readable at 1280x800 scale1; not pixel/coverage/platform certification."
+}

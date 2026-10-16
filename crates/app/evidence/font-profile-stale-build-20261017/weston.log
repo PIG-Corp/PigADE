@@ -1,0 +1,37 @@
+Date: 2026-10-16 UTC
+[23:18:48.009] weston 15.0.1
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 15.0.1
+[23:18:48.009] Command line: /tmp/pigade-platform-sdk/root/usr/bin/weston --backend=headless --renderer=pixman --shell=kiosk --no-config --socket=pigade-private --width=1280 --height=800 --scale=1 --refresh-rate=60000 --idle-time=0 --fake-seat --debug --log=/artifacts/weston.log
+[23:18:48.009] OS: Linux, 7.2.2-1-cachyos, #1 SMP PREEMPT_DYNAMIC Fri, 28 Aug 2026 11:45:06 +0000, x86_64
+[23:18:48.009] Flight recorder: enabled, scopes subscribed: log
+[23:18:48.009] Starting with no config file.
+[23:18:48.010] Output repaint window is 7 ms maximum.
+[23:18:48.010] Loading module '/tmp/pigade-platform-sdk/root/usr/lib/libweston-15/headless-backend.so'
+[23:18:48.071] Using Pixman renderer
+[23:18:48.071] Registered plugin API 'weston_windowed_output_api_headless_v2' of size 16
+[23:18:48.071] Color manager: no-op
+                 protocol support: no
+[23:18:48.071] Color representation not supported by renderer
+[23:18:48.071] Output 'headless' attempts EOTF mode SDR and colorimetry mode default.
+[23:18:48.071] Output 'headless' using color profile: stock sRGB color profile
+[23:18:48.072] Output 'headless' enabled with head(s) headless
+[23:18:48.072] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: no
+               cursor planes: no
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: no
+               color operations: no
+               color representation: no
+               presentation clock: CLOCK_MONOTONIC_RAW, id 4
+               presentation clock resolution: 0.000000001 s
+[23:18:48.072] Loading module '/tmp/pigade-platform-sdk/root/usr/lib/weston/kiosk-shell.so'
+[23:18:48.072] Currently advertised debug scopes:
+               'log' - Weston and Wayland log
+               'scene-graph' - Scene graph details
+               'timeline' - Timeline event points
+               'libseat-debug' - libseat debug messages
+               'proto' - Wayland protocol dump for all clients.

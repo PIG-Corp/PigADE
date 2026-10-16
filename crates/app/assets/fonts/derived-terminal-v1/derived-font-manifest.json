@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "profile_id": "pigade-terminal-render-profile-aliases-v1",
+  "status": "derived family aliases; stale DSIG removed where present; glyph outlines, metrics, and cmap verified unchanged",
+  "generator": {
+    "path": "scripts/prepare-terminal-fonts.py",
+    "fontTools_version": "4.63.0",
+    "command": "python3 scripts/prepare-terminal-fonts.py --output DIR",
+    "reproducibility": "generate into two empty directories and compare file SHA-256 values; --verify checks a fresh generation against this directory"
+  },
+  "policy": {
+    "upstream_assets_untouched": true,
+    "glyphs_metrics_and_cmap_modified": false,
+    "stale_dsig_tables_removed": true,
+    "derived_changes": [
+      "OpenType identity names changed to PigADE-only aliases",
+      "empty or stale DSIG tables removed when present"
+    ],
+    "family_aliases": [
+      "PigADE Terminal CJK JP v1",
+      "PigADE Terminal Mono v1"
+    ],
+    "reserved_upstream_family_names_used_by_derived_fonts": false,
+    "primary_alias": "PigADE Terminal Mono v1",
+    "jp_cjk_alias": "PigADE Terminal CJK JP v1"
+  },
+  "files": [
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/JetBrainsMono-Regular.ttf",
+      "source_manifest": "crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json",
+      "source_manifest_sha256": "5b3f742bf77f8fd7ca2031783cbe5b8080465bd135c5afa25cbcd407084aec3a",
+      "source_sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f",
+      "upstream_family": "JetBrains Mono",
+      "upstream_release": "JetBrains Mono v2.304",
+      "derived_family": "PigADE Terminal Mono v1",
+      "subfamily": "Regular",
+      "postscript_name": "PigADETerminalMonoV1-Regular",
+      "path": "PigADETerminalMonoV1-Regular.ttf",
+      "removed_tables": [],
+      "bytes": 272016,
+      "sha256": "9eab97106f8af1e0f9c8617a36a8c5fec2b572764be997ae4224f6329ec7a9f8",
+      "preservation_fingerprints": {
+        "outlines": "5752558c9e2b9ce44b9cdbaf0e68794d90a3a63e27f9f938a68b565ecbc4d8be",
+        "metrics": "2d12ed18072e5029f7903c39a6f67c3de267b90a96df4a853cbfdbb11d5d2e2c",
+        "cmap": "ff7ad25bd151ca9bad76eb37fbab1cd1b577d3d55eac5b933e3ee86dd91076bc"
+      }
+    },
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/JetBrainsMono-Bold.ttf",
+      "source_manifest": "crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json",
+      "source_manifest_sha256": "5b3f742bf77f8fd7ca2031783cbe5b8080465bd135c5afa25cbcd407084aec3a",
+      "source_sha256": "5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb",
+      "upstream_family": "JetBrains Mono",
+      "upstream_release": "JetBrains Mono v2.304",
+      "derived_family": "PigADE Terminal Mono v1",
+      "subfamily": "Bold",
+      "postscript_name": "PigADETerminalMonoV1-Bold",
+      "path": "PigADETerminalMonoV1-Bold.ttf",
+      "removed_tables": [],
+      "bytes": 275904,
+      "sha256": "8eb93d5349b81f004c31118adacc8954f406e8f7ae8816fdd8e91548c8184104",
+      "preservation_fingerprints": {
+        "outlines": "70d52d67d67ea2e1a6cfcc150ebef0f2894bc1131426f4e57457899c47a9bf4e",
+        "metrics": "f53c2504a784cfae370de766fb87700b7cce99f473e555598dcd08d53413bd4d",
+        "cmap": "ff7ad25bd151ca9bad76eb37fbab1cd1b577d3d55eac5b933e3ee86dd91076bc"
+      }
+    },
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/JetBrainsMono-Italic.ttf",
+      "source_manifest": "crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json",
+      "source_manifest_sha256": "5b3f742bf77f8fd7ca2031783cbe5b8080465bd135c5afa25cbcd407084aec3a",
+      "source_sha256": "9d0a1f7a708e6af183f1193b7e81d40da294f5c67682c085d8401c60aac8ded4",
+      "upstream_family": "JetBrains Mono",
+      "upstream_release": "JetBrains Mono v2.304",
+      "derived_family": "PigADE Terminal Mono v1",
+      "subfamily": "Italic",
+      "postscript_name": "PigADETerminalMonoV1-Italic",
+      "path": "PigADETerminalMonoV1-Italic.ttf",
+      "removed_tables": [],
+      "bytes": 274972,
+      "sha256": "ee764684b2ac7e4c122ee2a7840823463bde9814857b5138b091f5a4fdca4b41",
+      "preservation_fingerprints": {
+        "outlines": "6747818ffed0d65702766632766791b2501137c0f384fdee5c6ac2c94ba2b7c9",
+        "metrics": "094201d7d941401e607a26cc29a92d3d79dfe94557fe7d89ae9ba857191f9193",
+        "cmap": "ff7ad25bd151ca9bad76eb37fbab1cd1b577d3d55eac5b933e3ee86dd91076bc"
+      }
+    },
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/JetBrainsMono-BoldItalic.ttf",
+      "source_manifest": "crates/app/assets/fonts/jetbrains-mono-v2.304/asset-manifest.json",
+      "source_manifest_sha256": "5b3f742bf77f8fd7ca2031783cbe5b8080465bd135c5afa25cbcd407084aec3a",
+      "source_sha256": "4039d5ce0ed225bf9c8b2c8c6436290ae2f356b7e90d70fa666227238324aa3b",
+      "upstream_family": "JetBrains Mono",
+      "upstream_release": "JetBrains Mono v2.304",
+      "derived_family": "PigADE Terminal Mono v1",
+      "subfamily": "Bold Italic",
+      "postscript_name": "PigADETerminalMonoV1-BoldItalic",
+      "path": "PigADETerminalMonoV1-BoldItalic.ttf",
+      "removed_tables": [],
+      "bytes": 277940,
+      "sha256": "740f80d509a5d5440304680adeddccf4efa21f12ece97fd8e5ed13d3e9cb65f2",
+      "preservation_fingerprints": {
+        "outlines": "5e8b129cefaaba2f2759981072f60ae916e889dc2e8ee0dd8816acf350f2dbec",
+        "metrics": "442f114057cf47d6f52fab6a639b4050cf81dfbeaeb4ac0630168729be3a6b7e",
+        "cmap": "ff7ad25bd151ca9bad76eb37fbab1cd1b577d3d55eac5b933e3ee86dd91076bc"
+      }
+    },
+    {
+      "source": "crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004/NotoSansMonoCJKjp-Regular.otf",
+      "source_manifest": "crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004/asset-manifest.json",
+      "source_manifest_sha256": "880912c84b8a3b1e51cbe6eebc8ec1d78deba105c072b8319fdc6db2c082d43a",
+      "source_sha256": "4d01725be822d144cf9a56ade981e6fb920cd7a610b8fc24cc601a920beea5b9",
+      "upstream_family": "Noto Sans Mono CJK JP",
+      "upstream_release": "Noto Sans Mono CJK JP v2.004",
+      "derived_family": "PigADE Terminal CJK JP v1",
+      "subfamily": "Regular",
+      "postscript_name": "PigADETerminalCJKJPV1-Regular",
+      "path": "PigADETerminalCJKJPV1-Regular.otf",
+      "removed_tables": [
+        "DSIG"
+      ],
+      "bytes": 16424284,
+      "sha256": "62eae011b3edc1d1ec57616330b51931a912768fe74dcda3b012ce290fb029f4",
+      "preservation_fingerprints": {
+        "outlines": "9180bc5f5cd2b7dcc6d583c4c5fb265c29077076db11346389f3041e3e1f1753",
+        "metrics": "08bd58cd70364041958d618c40a1d982bd85d15029d8d12576fb70a3d19008aa",
+        "cmap": "1e5f826bebd1830c79324005ff66aefeb1fa63c27e8a850af33809a149546e5b"
+      }
+    }
+  ],
+  "legal_files": [
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/OFL.txt",
+      "path": "LICENSE-JetBrainsMono-OFL.txt",
+      "bytes": 4399,
+      "sha256": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad"
+    },
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/AUTHORS.txt",
+      "path": "JetBrainsMono-AUTHORS.txt",
+      "bytes": 350,
+      "sha256": "33f99c94ef0a0909d7584a5d4bde1fb9b1630daa620f5a788c28c43327e79412"
+    },
+    {
+      "source": "crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004/OFL.txt",
+      "path": "LICENSE-NotoSansCJK-OFL.txt",
+      "bytes": 4301,
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    {
+      "source": "generated by scripts/prepare-terminal-fonts.py",
+      "path": "PigADE-Terminal-NOTICE.txt",
+      "bytes": 923,
+      "sha256": "8c795584c63c2fac64804fb170c9df1ee39554d00da9568fb8f53328bcc31c9d"
+    }
+  ],
+  "source_notices": [
+    {
+      "source": "crates/app/assets/fonts/jetbrains-mono-v2.304/NOTICE.txt",
+      "bytes": 509,
+      "sha256": "3fd923336f9575ec4864b0879a2aa0f951fde5285359acde4a03111b19d86adf"
+    },
+    {
+      "source": "crates/app/assets/fonts/noto-sans-mono-cjk-jp-v2.004/NOTICE.txt",
+      "bytes": 472,
+      "sha256": "943ff57653e926d59a87532eb559cee40a85405d13eaf06f9e32b00c293fb81b"
+    }
+  ]
+}

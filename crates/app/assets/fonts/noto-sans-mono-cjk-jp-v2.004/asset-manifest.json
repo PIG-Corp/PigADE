@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "family": "Noto Sans Mono CJK JP",
+  "style": "Regular",
+  "status": "bundled as the app render profile's fixed Japanese-regional fallback; glyph placement and styled fallback acceptance pending",
+  "upstream": {
+    "repository": "https://github.com/notofonts/noto-cjk",
+    "release": "Sans2.004",
+    "archive": "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/11_NotoSansMonoCJKjp.zip",
+    "archive_bytes": 27839173,
+    "archive_sha256": "6c8faf475ce78fa37486dd5d8920e4bb4450b1b0f3c497edf3ba2d25cf52ab78",
+    "source_path_in_archive": "NotoSansMonoCJKjp-Regular.otf",
+    "license": "SIL Open Font License 1.1",
+    "source_license_path_in_archive": "LICENSE"
+  },
+  "advance_samples_1000_upm": {
+    "M": 500,
+    "漢": 1000,
+    "あ": 1000,
+    "中": 1000,
+    "한": 920
+  },
+  "not_certified": [
+    "universal CJK locale forms",
+    "safe glyph ink and baseline within host-assigned cell spans",
+    "adjacent-cell clipping/centering behavior",
+    "bold/italic rendering",
+    "Linux/macOS/Windows runtime or pixel acceptance"
+  ],
+  "files": [
+    {
+      "path": "NotoSansMonoCJKjp-Regular.otf",
+      "style": "regional_jp_regular_candidate",
+      "bytes": 16424156,
+      "sha256": "4d01725be822d144cf9a56ade981e6fb920cd7a610b8fc24cc601a920beea5b9"
+    },
+    {
+      "path": "OFL.txt",
+      "style": "license",
+      "bytes": 4301,
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    {
+      "path": "NOTICE.txt",
+      "style": "redistribution_notice",
+      "bytes": 472,
+      "sha256": "943ff57653e926d59a87532eb559cee40a85405d13eaf06f9e32b00c293fb81b"
+    }
+  ]
+}
