@@ -62,7 +62,7 @@ tiling UI, Git/worktree preparation and context/adapters are pending.
 
 ## Fresh evidence and limits
 
-- The fresh root run passed 128 workspace tests, including real-PTY
+- The fresh root run passed 130 workspace tests, including real-PTY
   integration tests and conditional-poll coverage. Fresh vendor verification passed 162 Alacritty library tests and 45
   reference cases. Workspace fmt, strict Clippy and release build passed. The
   app's 21 tests, all-target strict Clippy
@@ -252,3 +252,11 @@ accepted terminal semantics. The release actual-model diagnostic measures
 work. It is absent from the output/frame loop; see `reports/terminal-memory-census.md`.
 This is not an allocator/RSS bound. Whole-event admission and a shared global
 budget, including checkpoint/frame/reflow/import/export transients, remain open.
+
+Root fixed typed-invalid CRC-valid journal tails: validate before history.begin
+and mutation, retain the last good sequence/frame/history, name the rejected
+sequence and preserve raw bytes. Tests cover full replay, actual checkpoint-tail,
+host list/read, nonempty cold history and exact hidden-state continuation.
+Clean recovery verification still refuses any storage warning. See the runtime
+report. Completely unreadable headers/profiles can still be omitted by Host::open
+with only a log; visible recovery diagnostics are the next bounded fix.

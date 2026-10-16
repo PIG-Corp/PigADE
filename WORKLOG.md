@@ -753,3 +753,19 @@ Preserved upstream font license and authors bytes during staged whitespace verif
 - Files: .gitattributes, WORKLOG.md
 - Verification: Staged diff check identified original trailing spaces in four upstream/reproduced legal files; exact-path attributes retain their bytes and disable only end-of-line whitespace warnings for those files. Other whitespace checks and the pre-commit hook remain enabled.
 - Risks / next: Recheck staged diff and commit the verified integration; do not normalize source license hashes.
+
+## 2026-10-16T23:31:04+00:00 — /root/recovery_slice_review
+
+Cover CRC-valid semantic journal-tail rejection across full replay, checkpoint-tail recovery, and live host listing while preserving valid prefix and source bytes
+
+- Files: crates/session-host/tests/recovery.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/session-host/tests/recovery.rs; cargo test -p pigade-session-host --test recovery semantically_invalid_crc_valid_tail_preserves_and_serves_last_good_prefix -- --nocapture (passed, four invalid-tail payload cases)
+- Risks / next: Host implementation now validates semantic payloads before mutation; broader host/recovery suite and final integration verification remain with root.
+
+## 2026-10-16T23:36:14+00:00 — /root
+
+Kept valid terminal generations visible when a CRC-valid journal tail contains an invalid typed event
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/recovery_tests.rs, crates/session-host/tests/recovery.rs, docs/reports/runtime-and-replay-cache.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Red invalid-resize reproduction failed before fix; payload validation now precedes history.begin/model changes. Fresh workspace checks passed 130 tests, strict all-target Clippy, formatting and release bins/examples. Integration covers four bad tails, full/fast frames, source preservation and host reads. Root strengthened fixture to exceed10000hotrows and assert nonempty cold archive; targeted rerun passed. Separate exact checkpoint and partial UTF-8 continuation test passed for both recovery paths. Clean recovery oracle rejects degraded results.
+- Risks / next: Continue with visible diagnostics for journals whose header/profile cannot be recovered at all; global memory admission and complete MVP gates remain open.

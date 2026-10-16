@@ -10,6 +10,8 @@ mod ipc_server;
 mod launch_gate;
 pub mod metrics;
 pub mod poll;
+#[cfg(test)]
+mod recovery_tests;
 mod replay_cache;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -299,6 +301,28 @@ fn restore(path: &Path, fast: bool) -> Result<View> {
     Ok(restore_model(path, fast)?.0)
 }
 
+fn validate_replay_payload(
+    kind: EventKind,
+    payload: &[u8],
+) -> std::result::Result<Option<Geometry>, &'static str> {
+    match kind {
+        EventKind::Resize => serde_json::from_slice(payload)
+            .map(Some)
+            .map_err(|_| "invalid resize geometry"),
+        EventKind::SyncTimeout | EventKind::Exit if !payload.is_empty() => {
+            Err("unexpected timer/exit payload")
+        }
+        _ => Ok(None),
+    }
+}
+
+fn append_recovery_error(storage_error: &mut Option<String>, message: String) {
+    *storage_error = Some(match storage_error.take() {
+        Some(previous) => format!("{previous}; {message}"),
+        None => message,
+    });
+}
+
 fn restore_model(
     path: &Path,
     fast: bool,
@@ -380,7 +404,26 @@ fn restore_model(
             Ok(Some(event)) => event,
             Ok(None) => break,
             Err(error) => {
-                storage_error = Some(format!("recovered valid prefix only: {error:#}"));
+                append_recovery_error(
+                    &mut storage_error,
+                    format!("recovered valid prefix only: {error:#}"),
+                );
+                break;
+            }
+        };
+        // A valid frame CRC does not prove its typed payload is applicable to
+        // this terminal profile. Validate before history.begin or any mutation
+        // so malformed tails cannot hide an otherwise recoverable generation.
+        let resize = match validate_replay_payload(event.kind, &event.payload) {
+            Ok(geometry) => geometry,
+            Err(reason) => {
+                append_recovery_error(
+                    &mut storage_error,
+                    format!(
+                        "recovered valid prefix only: rejected event sequence {}: {reason}; raw tail retained",
+                        event.sequence
+                    ),
+                );
                 break;
             }
         };
@@ -391,7 +434,7 @@ fn restore_model(
             EventKind::Output => {
                 terminal.output(&event.payload);
             }
-            EventKind::Resize => terminal.resize(serde_json::from_slice(&event.payload)?),
+            EventKind::Resize => terminal.resize(resize.expect("validated resize geometry")),
             EventKind::SyncTimeout => terminal.sync_timeout(),
             EventKind::Exit => (),
         }

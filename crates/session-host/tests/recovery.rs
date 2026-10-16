@@ -3,8 +3,8 @@ use anyhow::{Context, Result, bail, ensure};
 use pigade_session_host::{
     Command, Launch, PROTOCOL, Request, Response, View, identity, receive, send,
 };
-use pigade_storage::{EventKind, JournalReader, ProcessIdentity};
-use pigade_terminal::Geometry;
+use pigade_storage::{EventKind, Journal, JournalHeader, JournalReader, ProcessIdentity};
+use pigade_terminal::{CORE_PROFILE, Geometry, Terminal};
 use std::{
     fs::{self, File},
     os::unix::{
@@ -270,6 +270,242 @@ fn conditional_poll_keeps_idle_cells_private_and_reports_exit_and_reopen() -> Re
         recovered.views[0].generation == spec.generation && recovered.views[0].pid.is_none(),
         "reopen spawned a process"
     );
+    Ok(())
+}
+
+#[test]
+fn semantically_invalid_crc_valid_tail_preserves_and_serves_last_good_prefix() -> Result<()> {
+    let cases: &[(&str, EventKind, &[u8])] = &[
+        (
+            "invalid resize geometry",
+            EventKind::Resize,
+            br#"{"rows":0,"cols":80}"#,
+        ),
+        ("invalid resize JSON", EventKind::Resize, b"{"),
+        (
+            "nonempty SyncTimeout",
+            EventKind::SyncTimeout,
+            b"unexpected",
+        ),
+        ("nonempty Exit", EventKind::Exit, b"unexpected"),
+    ];
+
+    for (name, invalid_kind, invalid_payload) in cases {
+        let directory = tempfile::tempdir()?;
+        let session = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let header = JournalHeader {
+            session_id: session,
+            generation,
+            profile: CORE_PROFILE.into(),
+            initial_rows: 8,
+            initial_cols: 40,
+        };
+        let journal_path = directory.path().join(format!("{generation}.journal"));
+        let mut journal = Journal::create(&journal_path, header)?;
+        // Exceed the 10,000-row hot-history limit so the archive comparison
+        // cannot pass vacuously with zero cold records.
+        let mut output = b"row\r\n".repeat(10_020);
+        output.extend_from_slice(b"VALID_PREFIX_MARKER\r\n");
+        let history =
+            pigade_session_host::history::History::live(directory.path(), journal.header())?;
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        terminal.set_history_observer(Some(history.clone()));
+        let receipt = journal.append(EventKind::Output, &output)?;
+        history.begin(receipt.sequence)?;
+        terminal.output(&output);
+        history.commit()?;
+        let expected_records = (0..history.summary().records)
+            .map(|ordinal| history.record(ordinal))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(
+            !expected_records.is_empty(),
+            "fixture must retire cold rows"
+        );
+        pigade_session_host::checkpoint::publish_with_history(
+            directory.path(),
+            journal.header(),
+            receipt,
+            &terminal,
+            Some(history.checkpoint()?),
+        )?;
+        journal.append(*invalid_kind, invalid_payload)?;
+        drop(journal);
+        drop(history);
+
+        let original = fs::read(&journal_path)?;
+        let scan = pigade_storage::scan_valid_prefix(&journal_path)?;
+        assert_eq!(
+            scan.valid_events, 2,
+            "{name}: event framing and CRC must be valid"
+        );
+        assert!(
+            scan.corruption.is_none(),
+            "{name}: unexpected raw corruption"
+        );
+        assert!(
+            pigade_session_host::verify_recovery(&journal_path).is_err(),
+            "{name}: degraded recovery must not pass the clean recovery gate"
+        );
+
+        let replayed = pigade_session_host::replay_journal(&journal_path)
+            .with_context(|| format!("{name}: direct replay should retain its valid prefix"))?;
+        assert_eq!(
+            (replayed.session, replayed.generation),
+            (session, generation),
+            "{name}"
+        );
+        assert_eq!(
+            replayed.sequence, 1,
+            "{name}: invalid event must not advance the model"
+        );
+        assert!(
+            replayed.frame.text().contains("VALID_PREFIX_MARKER"),
+            "{name}"
+        );
+        assert_eq!(
+            replayed.history.as_ref().map(|summary| summary.records),
+            Some(expected_records.len() as u64),
+            "{name}: full replay cold history prefix mismatch"
+        );
+        let error = replayed
+            .storage_error
+            .as_deref()
+            .context("missing invalid-tail diagnostic")?;
+        assert!(
+            error.contains("sequence 2"),
+            "{name}: diagnostic lacks failed event sequence: {error}"
+        );
+        assert!(
+            error.contains("raw tail retained"),
+            "{name}: diagnostic does not state that the raw tail was retained: {error}"
+        );
+        assert!(
+            replayed.pid.is_none(),
+            "{name}: historical recovery must not spawn a process"
+        );
+        assert_eq!(
+            fs::read(&journal_path)?,
+            original,
+            "{name}: direct replay changed source bytes"
+        );
+
+        let fast = pigade_session_host::recover_journal(&journal_path).with_context(|| {
+            format!("{name}: checkpoint-tail recovery should retain its valid prefix")
+        })?;
+        assert_eq!(
+            fast.recovery_path, "checkpoint-tail",
+            "{name}: fast path was not exercised"
+        );
+        assert_eq!(
+            fast.sequence, replayed.sequence,
+            "{name}: full/fast watermark differs"
+        );
+        assert_eq!(
+            fast.frame, replayed.frame,
+            "{name}: full/fast frame differs"
+        );
+        assert_eq!(
+            fast.history, replayed.history,
+            "{name}: full/fast cold-history summary differs"
+        );
+        let error = fast
+            .storage_error
+            .as_deref()
+            .context("fast recovery omitted invalid-tail diagnostic")?;
+        assert!(
+            error.contains("sequence 2"),
+            "{name}: fast diagnostic lacks failed event sequence: {error}"
+        );
+        assert!(
+            error.contains("raw tail retained"),
+            "{name}: fast diagnostic does not state that the raw tail was retained: {error}"
+        );
+        assert_eq!(
+            fs::read(&journal_path)?,
+            original,
+            "{name}: fast recovery changed source bytes"
+        );
+
+        let host = TestHost::in_directory(directory)?;
+        let views = checked(&host.socket(), Command::List)?;
+        assert_eq!(
+            views.len(),
+            1,
+            "{name}: service should retain one generation"
+        );
+        let served = &views[0];
+        assert_eq!(
+            (served.session, served.generation),
+            (session, generation),
+            "{name}"
+        );
+        assert_eq!(
+            served.sequence, 1,
+            "{name}: service advanced beyond valid prefix"
+        );
+        assert!(
+            served.frame.text().contains("VALID_PREFIX_MARKER"),
+            "{name}"
+        );
+        let error = served
+            .storage_error
+            .as_deref()
+            .context("service omitted invalid-tail diagnostic")?;
+        assert!(
+            error.contains("sequence 2"),
+            "{name}: diagnostic lacks failed event sequence: {error}"
+        );
+        assert!(
+            error.contains("raw tail retained"),
+            "{name}: service diagnostic does not state that the raw tail was retained: {error}"
+        );
+        assert!(
+            served.pid.is_none(),
+            "{name}: recovery must not spawn a process"
+        );
+        assert_eq!(
+            fs::read(&journal_path)?,
+            original,
+            "{name}: host recovery changed source bytes"
+        );
+        for (ordinal, expected) in expected_records.iter().enumerate() {
+            let reply = exchange(
+                &host.socket(),
+                Command::HistoryRead {
+                    query: pigade_session_host::history_read::Query {
+                        session,
+                        generation,
+                        expected_sequence: 1,
+                        ordinal: ordinal as u64,
+                        offset: 0,
+                        max_bytes: pigade_session_host::history::MAX_RECORD_CHUNK_BYTES,
+                    },
+                },
+            )?;
+            ensure!(
+                reply.error.is_none(),
+                "{name}: cold-history read failed: {:?}",
+                reply.error
+            );
+            let chunk = reply
+                .history_chunk
+                .context("missing recovered cold-history record")?;
+            assert_eq!(
+                chunk.bytes, *expected,
+                "{name}: checkpoint-tail cold record differs"
+            );
+            assert_eq!(
+                chunk.next_offset, None,
+                "{name}: cold record unexpectedly needs another chunk"
+            );
+        }
+        assert_eq!(
+            fs::read(&journal_path)?,
+            original,
+            "{name}: service cold reads changed source bytes"
+        );
+    }
     Ok(())
 }
 

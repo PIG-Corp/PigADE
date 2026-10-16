@@ -79,3 +79,25 @@ private cold-tail record through this API and compares identities, offsets and
 lengths. It completed in 319.16 ms for four host frames, with unchanged source
 hashes. This single concurrent-workload sample is not a percentile or release
 performance claim; the 30-cycle 1 GiB experiment remains required.
+
+## Invalid typed journal tails
+
+A CRC-valid frame can still carry a resize payload outside the terminal
+profile, malformed JSON or a nonempty timer/exit payload. Previously the
+history transaction began before resize decoding; its error escaped recovery
+and Host::open omitted the entire otherwise recoverable generation.
+
+Recovery now validates these payloads before history.begin or model mutation.
+It retains the last good frame/sequence and committed history prefix, reports
+the rejected event sequence and leaves the raw tail untouched. Earlier
+checkpoint warnings are retained too. Degraded recovery cannot pass the clean
+recovery oracle.
+
+The regression covers four CRC-valid malformed tails through full replay,
+checkpoint-tail and actual host listing. Its prefix exceeds 10,000 hot rows,
+asserts nonempty cold history and reads every retained canonical record through
+the service. Root added a separate complete-checkpoint/continuation test with
+hidden normal screen, alternate screen, modes and partial UTF-8: both recovery
+paths preserve the exact pre-tail model and continue it identically. This does
+not yet cover resource rejection or every archive/I/O failure; whole-event
+memory admission remains open.
