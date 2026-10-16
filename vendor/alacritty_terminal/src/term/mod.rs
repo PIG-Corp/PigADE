@@ -663,6 +663,11 @@ impl<T> Term<T> {
         &mut self,
         observer: Option<Arc<dyn crate::grid::HistoryObserver<Cell>>>,
     ) {
+        if let Some(observer) = &observer {
+            for index in 0..color::COUNT {
+                observer.palette(index, self.colors[index]);
+            }
+        }
         if self.mode.contains(TermMode::ALT_SCREEN) {
             self.inactive_grid.set_history_observer(observer);
         } else {
@@ -1687,6 +1692,11 @@ impl<T: EventListener> Handler for Term<T> {
         }
 
         self.colors[index] = Some(color);
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.notify_history_palette(index, Some(color));
+        } else {
+            self.grid.notify_history_palette(index, Some(color));
+        }
     }
 
     /// Respond to a color query escape sequence.
@@ -1717,6 +1727,11 @@ impl<T: EventListener> Handler for Term<T> {
         }
 
         self.colors[index] = None;
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.notify_history_palette(index, None);
+        } else {
+            self.grid.notify_history_palette(index, None);
+        }
     }
 
     /// Store data into clipboard.

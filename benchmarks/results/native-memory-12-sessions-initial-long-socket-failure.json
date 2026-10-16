@@ -1,0 +1,59 @@
+{
+  "captured_at": "2026-10-16T21:21:18.930878+00:00",
+  "product_version": "0.0.1-dev",
+  "status": "failed",
+  "errors": [
+    "RuntimeError: host: path must be shorter than SUN_LEN"
+  ],
+  "sessions": [],
+  "resource_samples": [
+    {
+      "wall_seconds": 0.0003968029996030964,
+      "phase": "startup",
+      "host_RSS_bytes": 7147520,
+      "host_CPU_seconds": 0.0
+    }
+  ],
+  "target": {
+    "sessions": 12,
+    "visible_sessions": 4,
+    "geometry": {
+      "rows": 36,
+      "cols": 120
+    },
+    "output_lines_per_session": 10036,
+    "hot_history_rows_per_session": 10000,
+    "hold_seconds": 10,
+    "host_RSS_limit_bytes": 734003200
+  },
+  "measurement_scope": "Release session-host process RSS and CPU only. Python harness, Python PTY producers, UI, GPU allocation, provider processes, models and network are excluded.",
+  "interpretation": "The 700 MiB host-only threshold is necessary for the product budget, not full product acceptance; it excludes UI, GPU and helper-process memory.",
+  "context": "Deterministic Python PTY producers only; no agent CLI, provider task, credentials, or network use.",
+  "environment": {
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "filesystem_type": "btrfs",
+    "benchmark_directory": "/home/afterburner/.local/state/pigade/benchmarks"
+  },
+  "protocol": 2,
+  "steady_IPC_polling": true,
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "19059e3fd798ab273448ef7dab0ed5380d78e8762a0b7f0057d11056129a1b82",
+    "crates/session-host/src/history.rs": "e8aa364c8fb037be50a023889b65928e4819678f7395773d19a1c3a4a772b4a8",
+    "crates/session-host/src/checkpoint.rs": "00f08bece132e5ffd5d21daebd8bc3cbb93a8aa334dd78083ef852dec08cc7c8",
+    "crates/storage/src/archive.rs": "c655ef7728a3e8ab0c07d3390b26ae03a3a75dc9c983e3a515efb5e5bd8988fd",
+    "crates/terminal/src/history.rs": "c652478699787e882da3ab3d20ac62e98b39588e56732221ee07464f181bb746",
+    "scripts/measure-memory.py": "a14b696141c1d2718d0d509e4ae9440ed914a9dbac3c286633f46d6f27a364db"
+  },
+  "binary_sha256": "387d61e5f469ccf116ebe4f425b761ab179ae49d2f7b056f8f21562f77f67d7b",
+  "binary_path": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "host_pid": 584085,
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    584085,
+    967563
+  ],
+  "host_log_tail": ""
+}

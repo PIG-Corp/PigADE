@@ -156,3 +156,15 @@ the composed wrapper crosses the10k hot-row boundary and compares complete hot
 Term/parser bytes with an observer, including inactive normal resize, clear and
 reset. This adds five core tests to the previous146, without changing schema2.
 Production sinks/encoding/roots are still absent.
+
+## Host archive integration (2026-10-17)
+
+The statement above describes the earlier retirement-only slice. The host now
+attaches a PIGROW02/PIGARC01 sink with a generation-bound fixed-slot index and
+PIGCP002 checkpoint roots (ADR0006). The vendor API additionally exposes borrowed
+row occupancy without changing Row's memory layout, and forwards dynamic palette
+updates to the normal-grid observer, including while alternate screen is active.
+Observer attachment provides the current palette before any retired row. These
+runtime notifications remain outside the schema2 hot checkpoint wire format.
+Archive durability and complete hot/parser/cold-record comparisons live in the
+host tests; full resource, platform and release gates remain open.

@@ -33,6 +33,7 @@ MAX_IPC = 8 * 1024 * 1024
 PRODUCER = r'''
 import fcntl,os,select,sys,termios,time,tty,zlib
 stream,seconds,rate=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
+normal=len(sys.argv)>4 and sys.argv[4]=='normal'
 tty.setraw(0,termios.TCSANOW)
 crc=count=0
 pending=b''
@@ -55,8 +56,14 @@ emit(('READY:'+stream+'\r\n').encode())
 while True:
  if b'GO' in commands():break
  time.sleep(.001)
+if normal:
+ emit(('STARTED:'+stream+'\r\n').encode())
+ while True:
+  if b'STREAM' in commands():break
+  time.sleep(.001)
 start=time.monotonic_ns()
-emit(b'\x1b[?1049h\x1b[2J\x1b[2;36r\x1b[1;1H'+('STARTED:'+stream).encode()+b'\x1b[2;1H')
+if normal:emit(b'\x1b[2J\x1b[1;1H')
+else:emit(b'\x1b[?1049h\x1b[2J\x1b[2;36r\x1b[1;1H'+('STARTED:'+stream).encode()+b'\x1b[2;1H')
 line=('S'+stream+':'+('0123456789'*11)+'\r\n').encode()
 body=(line*((16384//len(line))+1))[:16384]
 chunks=(rate*seconds)//16384
@@ -71,7 +78,7 @@ for index in range(chunks):
    emit(b'\x1b7\x1b[1;1H\x1b[2KACK:'+command[5:]+b'\x1b8')
  emit(body)
 finished=time.monotonic_ns()
-emit(b'\x1b[?1049l')
+if not normal:emit(b'\x1b[?1049l')
 trailer=('\r\nPIGADE_ENDCRC:%s:%08x:%d:%d:%d:%d:%d\r\n'%(stream,crc,count,start,finished-start,max_late_ns,chunks*16384)).encode()
 view=memoryview(trailer)
 while view:
@@ -216,6 +223,11 @@ def run(args):
                   'IPC_workers': 16, 'IPC_jobs': 16, 'IPC_message_limit_bytes': MAX_IPC,
                   'note': 'Source limits, not measured occupancy; one in-flight chunk per worker/reader plus retained bounded query/deferred buffers.'},
               'source_sha256': {name: digest(ROOT / name) for name in ['crates/session-host/src/lib.rs', 'crates/session-host/src/input.rs', 'crates/session-host/src/ipc_server.rs']}}
+    result['screen_mode'] = 'normal_with_cold_history' if args.normal_history else 'alternate_TUI'
+    result['source_sha256'].update({name: digest(ROOT / name) for name in ['crates/session-host/src/history.rs', 'crates/terminal/src/history.rs', 'crates/storage/src/archive.rs']})
+    if args.normal_history:
+        result['not_measured'].append('input ACK latency (normal-history workload)')
+        result['scope'] = 'Actual normal-screen PTY/host/fsync/cold-history workload; no UI/GPU/provider processes; no input latency claim.'
     host = None
     owned = []
     stop = threading.Event()
@@ -250,7 +262,7 @@ def run(args):
             specs = []
             for index in range(4):
                 spec = {'session': str(uuid.uuid4()), 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
-                        'executable': '/usr/bin/python3', 'args': ['-u', '-c', PRODUCER, str(index), str(args.seconds), str(RATE)],
+                        'executable': '/usr/bin/python3', 'args': ['-u', '-c', PRODUCER, str(index), str(args.seconds), str(RATE), 'normal' if args.normal_history else 'alternate'],
                         'cwd': str(state), 'geometry': {'rows': 36, 'cols': 120}}
                 view = request(endpoint, {'command': 'launch', 'spec': spec})[0]
                 owned.append(identity(view['pid']))
@@ -269,6 +281,9 @@ def run(args):
                 while f'STARTED:{index}' not in text(snapshot(endpoint, spec)):
                     check(time.monotonic() < deadline, 'producer STARTED handshake deadline')
                     time.sleep(.005)
+            if args.normal_history:
+                for spec in specs:
+                    request(endpoint, {'command': 'input', 'session': spec['session'], 'generation': spec['generation'], 'bytes': list(b'STREAM\n')})
             measurement_start = time.monotonic()
             first_cpu = None
 
@@ -287,7 +302,7 @@ def run(args):
                             record['final_view'] = view
                             return
                         check(view['state'] == 'running', f"producer state: {view['state']}")
-                        if now >= next_ping and now - measurement_start < args.seconds - 1:
+                        if not args.normal_history and now >= next_ping and now - measurement_start < args.seconds - 1:
                             token = f'{index}_{counter:04d}'
                             command = f'PING:{token}\n'.encode()
                             sent = time.monotonic_ns()
@@ -334,6 +349,11 @@ def run(args):
             for index, (spec, record) in enumerate(zip(specs, result['sessions'])):
                 check(not record['ACK_errors'], str(record['ACK_errors']))
                 live = record.pop('final_view')
+                record['pipeline_metrics'] = live.get('metrics')
+                record['cold_history_summary'] = live.get('history')
+                archive_directory = state / (spec['generation'] + '.history')
+                record['archive_bytes'] = sum(path.stat().st_size for path in archive_directory.glob('*.archive'))
+                record['archive_index_bytes'] = (archive_directory / 'rows.index').stat().st_size
                 verified = verify_journal(state / f"{spec['generation']}.journal", spec)
                 record.update(verified)
                 check(record['producer_body_bytes'] == RATE * args.seconds, 'producer emitted wrong body size')
@@ -343,6 +363,7 @@ def run(args):
                 check(replay.returncode == 0, f'full replay failed: {replay.stderr[:2000]}')
                 restored = json.loads(replay.stdout)
                 check(restored['frame'] == live['frame'], 'full replay/live frame mismatch')
+                check(restored.get('history') == live.get('history'), 'full replay/live cold continuation mismatch')
                 check(restored['sequence'] == live['sequence'], 'replay sequence mismatch')
                 record['full_replay_frame_equivalent'] = True
                 verification = subprocess.run([str(frozen), 'verify-recovery', str(state / f"{spec['generation']}.journal")], text=True, capture_output=True, timeout=120, check=False)
@@ -363,6 +384,7 @@ def run(args):
             result['all_journals_and_producer_output_valid'] = True
             result['all_full_replay_frames_equal'] = True
             result['all_checkpoint_tail_full_models_equal'] = all(s['complete_recovery_verification']['complete_state_equal'] for s in result['sessions'])
+            result['all_cold_history_records_equal'] = all(s['complete_recovery_verification']['cold_history_equal'] for s in result['sessions'])
             result['target_producer_rate_achieved_all_streams'] = all(s['producer_completed_body_within_target_seconds'] for s in result['sessions'])
             result['target_host_exit_observed_within_deadline_all_streams'] = all(s['host_exit_observed_within_target_seconds'] for s in result['sessions'])
             result['status'] = 'integrity_pass' if result['target_producer_rate_achieved_all_streams'] else 'integrity_pass_rate_target_missed'
@@ -404,6 +426,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, default=ROOT / 'benchmarks/results/native-pty-stress.json')
     parser.add_argument('--binary', type=Path, default=ROOT / 'target/release/pigade-session-host')
     parser.add_argument('--seconds', type=int, default=60)
+    parser.add_argument('--normal-history', action='store_true', help='Exercise normal scrollback/cold archive; input latency is not measured in this mode')
     arguments = parser.parse_args()
     check(1 <= arguments.seconds <= 60, 'test duration must be 1..60 seconds')
     sys.exit(run(arguments))

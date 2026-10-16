@@ -57,6 +57,18 @@ pub struct ArchiveReceipt {
     pub last_fragment_checksum: u32,
 }
 
+/// A direct byte range for one complete archive row. This is an address, not
+/// evidence that the row was fsynced; the host must bind it into a durable
+/// committed index/root before treating it as committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveRowLocation {
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub row_ordinal: u64,
+    pub source_event_sequence: u64,
+    pub last_fragment_checksum: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveCorruptionKind {
     TruncatedHeader,
@@ -286,7 +298,8 @@ pub struct ArchiveWriter {
     order: OrderState,
     poisoned: bool,
     complete_since_commit: bool,
-    latest_complete: Option<(u64, u64, u32)>,
+    current_row_start: Option<u64>,
+    latest_complete: Option<ArchiveRowLocation>,
 }
 
 impl ArchiveWriter {
@@ -323,6 +336,7 @@ impl ArchiveWriter {
             order: OrderState::default(),
             poisoned: false,
             complete_since_commit: false,
+            current_row_start: None,
             latest_complete: None,
         })
     }
@@ -371,7 +385,8 @@ impl ArchiveWriter {
             payload: payload.to_vec(),
         };
         let mut next_order = self.order;
-        next_order.accept(&fragment, self.file.stream_position()?)?;
+        let record_start = self.file.stream_position()?;
+        next_order.accept(&fragment, record_start)?;
         let mut frame = Vec::with_capacity(RECORD_HEADER_BYTES + payload.len());
         frame.extend_from_slice(&source_event_sequence.to_le_bytes());
         frame.extend_from_slice(&row_ordinal.to_le_bytes());
@@ -395,12 +410,32 @@ impl ArchiveWriter {
             _ => self.file.write_all(&frame)?,
         }
         self.order = next_order;
+        if fragment_offset == 0 {
+            self.current_row_start = Some(record_start);
+        }
         if final_fragment {
             self.complete_since_commit = true;
-            self.latest_complete = Some((row_ordinal, source_event_sequence, checksum));
+            self.latest_complete = Some(ArchiveRowLocation {
+                start_offset: self.current_row_start.take().unwrap_or(record_start),
+                end_offset: self.file.stream_position()?,
+                row_ordinal,
+                source_event_sequence,
+                last_fragment_checksum: checksum,
+            });
         }
         self.poisoned = false;
         Ok(())
+    }
+
+    /// Current append position, useful for constructing durable index entries.
+    pub fn position(&mut self) -> Result<u64> {
+        Ok(self.file.stream_position()?)
+    }
+
+    /// Most recently completed row. This remains provisional until the caller
+    /// commits it and durably binds the location into its index/root.
+    pub fn last_complete_row(&self) -> Option<ArchiveRowLocation> {
+        self.latest_complete
     }
 
     pub fn commit(&mut self) -> Result<ArchiveReceipt> {
@@ -426,16 +461,16 @@ impl ArchiveWriter {
         let _ = fail_sync;
         self.file.sync_all()?;
         let end_offset = self.file.stream_position()?;
-        let (row_ordinal, source_event_sequence, checksum) = self.latest_complete.unwrap();
+        let location = self.latest_complete.unwrap();
         self.complete_since_commit = false;
         self.poisoned = false;
         Ok(ArchiveReceipt {
             session_id: self.header.session_id,
             generation: self.header.generation,
-            row_ordinal,
-            source_event_sequence,
+            row_ordinal: location.row_ordinal,
+            source_event_sequence: location.source_event_sequence,
             end_offset,
-            last_fragment_checksum: checksum,
+            last_fragment_checksum: location.last_fragment_checksum,
         })
     }
 }
@@ -456,6 +491,7 @@ pub struct ArchiveReader {
     replay_end: Option<u64>,
     limit: u64,
     receipt: Option<ArchiveReceipt>,
+    row_location: Option<ArchiveRowLocation>,
     receipt_verified: bool,
     poisoned: bool,
     report: ArchiveScan,
@@ -479,6 +515,7 @@ impl ArchiveReader {
             poisoned: false,
             limit,
             receipt: None,
+            row_location: None,
             receipt_verified: false,
             report: ArchiveScan {
                 complete_rows: 0,
@@ -505,6 +542,30 @@ impl ArchiveReader {
         );
         reader.limit = receipt.end_offset;
         reader.receipt = Some(receipt);
+        Ok(reader)
+    }
+
+    /// Open exactly one indexed row without scanning its prefix. The location
+    /// still requires an externally durable index/root binding for commit proof.
+    pub fn open_row(
+        path: impl AsRef<Path>,
+        expected_header: &ArchiveHeader,
+        location: ArchiveRowLocation,
+    ) -> Result<Self> {
+        expected_header.validate()?;
+        let mut reader = Self::open(path)?;
+        ensure!(reader.header == *expected_header, "archive header mismatch");
+        let header_end = reader.offset;
+        ensure!(
+            location.start_offset >= header_end
+                && location.end_offset > location.start_offset
+                && location.end_offset <= reader.limit,
+            "archive row location outside file"
+        );
+        reader.file.seek(SeekFrom::Start(location.start_offset))?;
+        reader.offset = location.start_offset;
+        reader.limit = location.end_offset;
+        reader.row_location = Some(location);
         Ok(reader)
     }
 
@@ -565,6 +626,10 @@ impl ArchiveReader {
                         self.poisoned = true;
                         return Err(corruption(at, ArchiveCorruptionKind::Receipt));
                     }
+                    if self.row_location.is_some() && !self.receipt_verified {
+                        self.poisoned = true;
+                        return Err(corruption(at, ArchiveCorruptionKind::Receipt));
+                    }
                     return Ok(());
                 }
                 Ok(None) => {
@@ -584,6 +649,18 @@ impl ArchiveReader {
             count += 1;
             if fragment.final_fragment {
                 let end = self.file.stream_position()?;
+                if let Some(location) = self.row_location {
+                    if row_start != location.start_offset
+                        || end != location.end_offset
+                        || fragment.row_ordinal != location.row_ordinal
+                        || fragment.source_event_sequence != location.source_event_sequence
+                        || checksum != location.last_fragment_checksum
+                    {
+                        self.poisoned = true;
+                        return Err(corruption(at, ArchiveCorruptionKind::Receipt));
+                    }
+                    self.receipt_verified = true;
+                }
                 if let Some(receipt) = self.receipt {
                     if end > receipt.end_offset {
                         self.poisoned = true;
@@ -720,6 +797,88 @@ mod tests {
         bad_identity.session_id = Uuid::new_v4();
         assert!(ArchiveReader::open_committed(&path, bad_identity).is_err());
         assert_eq!(std::fs::read(&path)?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_row_reads_are_direct_bounded_and_validate_the_whole_row() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("archive");
+        let h = header();
+        let mut writer = ArchiveWriter::create(&path, h.clone())?;
+        writer.append_fragment(1, 1, 0, true, b"prefix")?;
+        let first = writer.last_complete_row().unwrap();
+        writer.append_fragment(2, 2, 0, false, b"middle-")?;
+        writer.append_fragment(2, 2, 7, true, b"row")?;
+        let middle = writer.last_complete_row().unwrap();
+        assert_eq!(middle.start_offset, first.end_offset);
+        assert_eq!(middle.end_offset, writer.position()?);
+        writer.commit()?;
+        writer.append_fragment(3, 3, 0, true, b"later")?;
+        drop(writer);
+
+        // Damage an earlier row and a later tail. A direct range read must not
+        // inspect either one, while validating all fragments of its target.
+        let original = std::fs::read(&path)?;
+        let mut damaged = original.clone();
+        damaged[first.start_offset as usize + RECORD_HEADER_BYTES] ^= 0x40;
+        damaged[middle.end_offset as usize + 25..middle.end_offset as usize + 29]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&path, &damaged)?;
+        let mut reader = ArchiveReader::open_row(&path, &h, middle)?;
+        assert_eq!(reader.next_fragment()?.unwrap().payload, b"middle-");
+        let last = reader.next_fragment()?.unwrap();
+        assert_eq!(last.payload, b"row");
+        assert!(last.final_fragment);
+        assert!(reader.next_fragment()?.is_none());
+
+        let mut bad_header = h.clone();
+        bad_header.profile.push_str("-other");
+        assert!(ArchiveReader::open_row(&path, &bad_header, middle).is_err());
+        let mut bad = middle;
+        bad.row_ordinal += 1;
+        assert!(
+            ArchiveReader::open_row(&path, &h, bad)?
+                .next_fragment()
+                .is_err()
+        );
+        let mut bad = middle;
+        bad.source_event_sequence += 1;
+        assert!(
+            ArchiveReader::open_row(&path, &h, bad)?
+                .next_fragment()
+                .is_err()
+        );
+        let mut bad = middle;
+        bad.last_fragment_checksum ^= 1;
+        assert!(
+            ArchiveReader::open_row(&path, &h, bad)?
+                .next_fragment()
+                .is_err()
+        );
+        for bad in [
+            ArchiveRowLocation {
+                start_offset: 0,
+                ..middle
+            },
+            ArchiveRowLocation {
+                start_offset: middle.start_offset + 1,
+                ..middle
+            },
+            ArchiveRowLocation {
+                end_offset: middle.start_offset,
+                ..middle
+            },
+            ArchiveRowLocation {
+                end_offset: middle.end_offset + 1,
+                ..middle
+            },
+        ] {
+            if let Ok(mut reader) = ArchiveReader::open_row(&path, &h, bad) {
+                assert!(reader.next_fragment().is_err());
+            }
+        }
+        std::fs::write(&path, original)?;
         Ok(())
     }
 

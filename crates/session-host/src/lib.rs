@@ -2,14 +2,17 @@
 mod catalog;
 #[doc(hidden)]
 pub mod checkpoint;
+pub mod history;
 pub mod input;
 pub use catalog::LayoutAction;
 mod ipc_server;
+mod launch_gate;
+pub mod metrics;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -87,6 +90,12 @@ pub struct View {
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
     pub frame: Frame,
+    #[serde(default)]
+    pub history: Option<history::Summary>,
+    #[serde(default)]
+    pub recovery_journal_bytes_read: u64,
+    #[serde(default)]
+    pub metrics: metrics::SessionMetrics,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
@@ -216,9 +225,11 @@ struct Session {
     commands: mpsc::SyncSender<Action>,
     input: Option<input::InputWriter>,
     control: mpsc::SyncSender<Control>,
+    _history: Option<Arc<history::History>>,
 }
 #[derive(Clone)]
 enum Action {
+    Wake,
     Output(Vec<u8>),
     SyncTimeout,
     Resize(Geometry),
@@ -232,6 +243,7 @@ struct ActorConfig {
     geometry: Geometry,
     root: PathBuf,
     control: mpsc::Receiver<Control>,
+    history: Arc<history::History>,
 }
 struct Host {
     root: PathBuf,
@@ -245,7 +257,10 @@ fn restore(path: &Path, fast: bool) -> Result<View> {
     Ok(restore_model(path, fast)?.0)
 }
 
-fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
+fn restore_model(
+    path: &Path,
+    fast: bool,
+) -> Result<(View, Terminal, Option<Arc<history::History>>)> {
     let mut reader = JournalReader::open(path)?;
     let header = reader.header().clone();
     ensure!(
@@ -259,6 +274,8 @@ fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
     let mut sequence = 0;
     let mut recovery_path = "full-journal".to_owned();
     let mut recovery_warnings = Vec::new();
+    let parent = path.parent().context("journal parent")?;
+    let mut history = Some(history::History::replay(parent, &header, None)?);
     let selection = if fast {
         checkpoint::latest(
             path.parent().context("journal parent")?,
@@ -272,19 +289,48 @@ fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
         }
     };
     recovery_warnings.extend(selection.warnings);
-    if let Some(saved) = selection.loaded {
+    let saved = if selection
+        .loaded
+        .as_ref()
+        .is_some_and(|saved| saved.history.is_none())
+        && pigade_storage::scan_valid_prefix(path)?
+            .corruption
+            .is_none()
+    {
+        // Legacy hot-only checkpoints cannot stand in for a cold-history root.
+        // Rebuild from valid raw events; retain the old hot checkpoint only when
+        // raw corruption prevents complete reconstruction (explicit warning).
+        recovery_path = "full-journal-legacy-checkpoint".into();
+        None
+    } else {
+        selection.loaded
+    };
+    if let Some(saved) = saved {
         match reader.resume_after_checkpoint(saved.sequence, saved.offset) {
             Ok(tail) => {
                 reader = tail;
                 terminal = saved.terminal;
                 sequence = saved.sequence;
                 recovery_path = "checkpoint-tail".into();
+                history = if let Some(saved_history) = saved.history {
+                    Some(history::History::replay(
+                        parent,
+                        &header,
+                        Some(saved_history),
+                    )?)
+                } else {
+                    recovery_warnings.push("legacy checkpoint has no cold-history root; hot state retained, full raw replay required for complete history".into());
+                    None
+                };
             }
             Err(error) => {
                 eprintln!("checkpoint watermark rejected; full replay: {error:#}");
                 reader = JournalReader::open(path)?;
             }
         }
+    }
+    if let Some(history) = &history {
+        terminal.set_history_observer(Some(history.clone()));
     }
     let mut storage_error = (!recovery_warnings.is_empty()).then(|| recovery_warnings.join("; "));
     loop {
@@ -296,6 +342,9 @@ fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
                 break;
             }
         };
+        if let Some(history) = &history {
+            history.begin(event.sequence)?;
+        }
         match event.kind {
             EventKind::Output => {
                 terminal.output(&event.payload);
@@ -304,7 +353,13 @@ fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
             EventKind::SyncTimeout => terminal.sync_timeout(),
             EventKind::Exit => (),
         }
+        if let Some(history) = &history {
+            history.replay_event()?;
+        }
         sequence = event.sequence;
+    }
+    if let Some(history) = &history {
+        history.finish_replay()?;
     }
     let view = View {
         session: header.session_id,
@@ -315,8 +370,11 @@ fn restore_model(path: &Path, fast: bool) -> Result<(View, Terminal)> {
         pid: None,
         storage_error,
         frame: terminal.frame(),
+        history: history.as_ref().map(|h| h.summary()),
+        recovery_journal_bytes_read: reader.bytes_read(),
+        metrics: metrics::SessionMetrics::default(),
     };
-    Ok((view, terminal))
+    Ok((view, terminal, history))
 }
 impl Host {
     fn dispatch(&mut self, command: Command) -> Result<Response> {
@@ -373,8 +431,8 @@ impl Host {
         for entry in fs::read_dir(&root)? {
             let path = entry?.path();
             if path.extension().is_some_and(|ext| ext == "journal") {
-                match restore(&path, true) {
-                    Ok(view) => {
+                match restore_model(&path, true) {
+                    Ok((view, _terminal, history)) => {
                         let (tx, _rx) = mpsc::sync_channel(1);
                         let (control, _) = mpsc::sync_channel(1);
                         sessions.push(Session {
@@ -382,6 +440,7 @@ impl Host {
                             commands: tx,
                             input: None,
                             control,
+                            _history: history,
                         });
                     }
                     Err(error) => eprintln!("history unavailable {}: {error:#}", path.display()),
@@ -479,7 +538,12 @@ impl Host {
                 Geometry::new(geometry.rows, geometry.cols)?;
                 session.commands.try_send(Action::Resize(geometry))?;
             }
-            Command::Stop { .. } => session.control.try_send(Control::Stop)?,
+            Command::Stop { .. } => {
+                session.control.try_send(Control::Stop)?;
+                // Wake a clean actor sleeping without a timer. A full output
+                // queue already guarantees it will wake and inspect Stop.
+                let _ = session.commands.try_send(Action::Wake);
+            }
             _ => (),
         }
         Ok(vec![session.view.lock().expect("view lock").clone()])
@@ -531,13 +595,12 @@ impl Host {
                 initial_cols: spec.geometry.cols,
             },
         )?;
-        let handshake_path = self.root.join(format!("{}.gate", spec.operation));
-        let listener = UnixListener::bind(&handshake_path)?;
-        listener.set_nonblocking(true)?;
+        let history = history::History::live(&self.root, journal.header())?;
+        let handshake = launch_gate::LaunchGate::bind(&self.root)?;
         let pair = native_pty_system().openpty(pty_size(spec.geometry))?;
         let mut builder = CommandBuilder::new(std::env::current_exe()?);
         builder.arg("__helper");
-        builder.arg(&handshake_path);
+        builder.arg(&handshake.path);
         builder.arg(nonce.to_string());
         builder.arg(&spec.executable);
         builder.args(&spec.args);
@@ -549,7 +612,7 @@ impl Host {
         let child_pid = child.process_id().context("helper pid unavailable")?;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut gate = loop {
-            match listener.accept() {
+            match handshake.listener.accept() {
                 Ok((stream, _)) => {
                     ensure!(peer_pid(&stream)? == child_pid, "unexpected helper peer");
                     break stream;
@@ -574,7 +637,7 @@ impl Host {
         self.metadata.permit_exec(spec.operation)?;
         send(&mut gate, &nonce.to_string())?;
         drop(gate);
-        fs::remove_file(&handshake_path)?;
+        drop(handshake);
         self.metadata.mark_running(spec.operation)?;
         let view = Arc::new(Mutex::new(View {
             session: spec.session,
@@ -585,6 +648,9 @@ impl Host {
             pid: Some(child_pid),
             storage_error: None,
             frame: Terminal::new(spec.geometry, false).frame(),
+            history: Some(history.summary()),
+            recovery_journal_bytes_read: 0,
+            metrics: metrics::SessionMetrics::default(),
         }));
         let (tx, rx) = mpsc::sync_channel(8);
         let mut reader = pair.master.try_clone_reader()?;
@@ -620,6 +686,7 @@ impl Host {
         let actor_view = view.clone();
         let actor_root = self.root.clone();
         let actor_writer = writer.clone();
+        let actor_history = history.clone();
         thread::spawn(move || {
             actor(
                 rx,
@@ -632,6 +699,7 @@ impl Host {
                     geometry: spec.geometry,
                     root: actor_root,
                     control: control_rx,
+                    history: actor_history,
                 },
             )
         });
@@ -640,6 +708,7 @@ impl Host {
             commands: tx,
             input: Some(writer),
             control: control_tx,
+            _history: Some(history),
         });
         Ok(vec![view.lock().expect("view lock").clone()])
     }
@@ -757,7 +826,8 @@ impl CheckpointProgress {
         root: &Path,
         header: &JournalHeader,
         terminal: &Terminal,
-    ) -> Result<()> {
+        history: &history::History,
+    ) -> Result<bool> {
         let due = self.events > 0
             && (force
                 || self.bytes >= 16 * 1024 * 1024
@@ -765,18 +835,19 @@ impl CheckpointProgress {
                 || self.model_work >= Duration::from_millis(125)
                 || self.clock.elapsed() >= Duration::from_secs(5));
         if due {
-            checkpoint::publish(
+            checkpoint::publish_with_history(
                 root,
                 header,
                 self.receipt.context("checkpoint lacks durable receipt")?,
                 terminal,
+                Some(history.checkpoint()?),
             )?;
             self.bytes = 0;
             self.events = 0;
             self.model_work = Duration::ZERO;
             self.clock = Instant::now();
         }
-        Ok(())
+        Ok(due)
     }
 }
 
@@ -790,8 +861,11 @@ fn actor(
     config: ActorConfig,
 ) {
     let mut terminal = Terminal::new(config.geometry, true);
+    let history = &config.history;
+    terminal.set_history_observer(Some(history.clone()));
     let mut deferred = None;
     let mut checkpoints = CheckpointProgress::default();
+    let mut metrics = metrics::SessionMetrics::default();
     let mut query_responses: Vec<u8> = Vec::new();
     let mut query_response_offset = 0;
     loop {
@@ -829,7 +903,14 @@ fn actor(
         let mut action = if let Some(action) = deferred.take() {
             action
         } else {
-            match rx.recv_timeout(Duration::from_millis(10)) {
+            let received = if terminal.sync_timeout_pending() {
+                rx.recv_timeout(Duration::from_millis(10))
+            } else if checkpoints.events > 0 {
+                rx.recv_timeout(Duration::from_secs(5).saturating_sub(checkpoints.clock.elapsed()))
+            } else {
+                rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            };
+            match received {
                 Ok(a) => a,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if terminal.sync_timeout_due() {
@@ -837,9 +918,19 @@ fn actor(
                     } else {
                         // A quiet terminal still checkpoints its last dirty state
                         // after five seconds; no synthetic model event is needed.
-                        if let Err(error) =
-                            checkpoints.publish(false, &config.root, journal.header(), &terminal)
-                        {
+                        let checkpoint_start = Instant::now();
+                        let checkpoint_result = checkpoints.publish(
+                            false,
+                            &config.root,
+                            journal.header(),
+                            &terminal,
+                            history,
+                        );
+                        if matches!(checkpoint_result, Ok(true)) {
+                            metrics.idle_checkpoint(checkpoint_start.elapsed());
+                            view.lock().expect("view lock").metrics = metrics.clone();
+                        }
+                        if let Err(error) = checkpoint_result {
                             let mut current = view.lock().expect("view lock");
                             current.storage_error =
                                 Some(format!("idle checkpoint failed: {error:#}"));
@@ -855,6 +946,9 @@ fn actor(
                 Err(_) => break,
             }
         };
+        if matches!(action, Action::Wake) {
+            continue;
+        }
         if (terminal.sync_timeout_due()
             || matches!(&action, Action::Eof) && terminal.sync_timeout_pending())
             && !matches!(&action, Action::SyncTimeout)
@@ -876,6 +970,7 @@ fn actor(
                 return Ok(true);
             }
             let (kind, payload, resize) = match action {
+                Action::Wake => unreachable!("wake is not a terminal event"),
                 Action::ReadError(error) => bail!("PTY output read failure: {error}"),
                 Action::SyncTimeout => (EventKind::SyncTimeout, Vec::new(), None),
                 Action::Output(bytes) => (EventKind::Output, bytes, None),
@@ -886,7 +981,10 @@ fn actor(
             if let Some(g) = resize {
                 master.resize(pty_size(g))?;
             }
+            let journal_start = Instant::now();
             let receipt = journal.append(kind, &payload)?;
+            let journal_work = journal_start.elapsed();
+            history.begin(receipt.sequence)?;
             let model_start = Instant::now();
             match kind {
                 EventKind::Output => terminal.output(&payload),
@@ -897,13 +995,22 @@ fn actor(
                 }
                 EventKind::Exit => (),
             }
-            checkpoints.observe(receipt, payload.len(), model_start.elapsed());
-            checkpoints.publish(
+            let model_work = model_start.elapsed();
+            // Derived cells and index reach durability before either the frame
+            // or a checkpoint is allowed to reference their committed root.
+            let archive_start = Instant::now();
+            history.commit()?;
+            let archive_work = archive_start.elapsed();
+            checkpoints.observe(receipt, payload.len(), model_work);
+            let checkpoint_start = Instant::now();
+            let checkpointed = checkpoints.publish(
                 kind == EventKind::Exit,
                 &config.root,
                 journal.header(),
                 &terminal,
+                history,
             )?;
+            let checkpoint_work = checkpoint_start.elapsed();
             let responses = terminal.take_responses();
             if !responses.is_empty() {
                 ensure!(
@@ -912,9 +1019,27 @@ fn actor(
                 );
                 query_responses = responses;
             }
+            let frame_start = Instant::now();
+            let frame = terminal.frame();
+            let history_summary = history.summary();
             let mut current = view.lock().expect("view lock");
             current.sequence = receipt.sequence;
-            current.frame = terminal.frame();
+            current.frame = frame;
+            current.history = Some(history_summary);
+            metrics.event(metrics::EventCost {
+                output_bytes: if kind == EventKind::Output {
+                    payload.len()
+                } else {
+                    0
+                },
+                journal: journal_work,
+                model: model_work,
+                archive: archive_work,
+                checkpoint: checkpoint_work,
+                frame: frame_start.elapsed(),
+                checkpointed,
+            });
+            current.metrics = metrics.clone();
             if kind == EventKind::Exit {
                 current.state = "exited".into();
                 return Ok(false);
@@ -997,16 +1122,23 @@ pub struct RecoveryVerification {
     pub semantic_checkpoint_bytes: usize,
     pub complete_state_equal: bool,
     pub frame_equal: bool,
+    pub cold_history_records: u64,
+    pub cold_history_equal: bool,
+    pub archive_comparison_ms: f64,
+    pub full_journal_bytes_read: u64,
+    pub checkpoint_tail_journal_bytes_read: u64,
+    pub cold_archive_format: &'static str,
 }
 
-/// Read-only correctness oracle for an immutable, finished journal. Compare the
-/// complete model/parser bytes, not a screenshot or a digest of visible cells.
+/// Source-preserving oracle for an immutable, finished journal. Recovery creates
+/// temporary derived archives; it never rewrites source journals/checkpoints.
+/// Compare complete model/parser bytes and every cold record, not screen digests.
 pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
     let start = Instant::now();
-    let (full_view, full) = restore_model(path, false)?;
+    let (full_view, full, full_history) = restore_model(path, false)?;
     let full_replay_ms = start.elapsed().as_secs_f64() * 1000.;
     let start = Instant::now();
-    let (fast_view, fast) = restore_model(path, true)?;
+    let (fast_view, fast, fast_history) = restore_model(path, true)?;
     let checkpoint_tail_ms = start.elapsed().as_secs_f64() * 1000.;
     ensure!(
         full_view.storage_error.is_none() && fast_view.storage_error.is_none(),
@@ -1027,6 +1159,20 @@ pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
         "complete terminal/parser state differs"
     );
     ensure!(full_view.frame == fast_view.frame, "cell frame differs");
+    let full_history = full_history.context("full replay has no cold history")?;
+    let fast_history = fast_history.context("checkpoint has no cold history root")?;
+    ensure!(
+        full_history.state() == fast_history.state(),
+        "cold-history continuation state differs"
+    );
+    // CRCs are not an equality proof: compare every canonical encoded record.
+    let comparison_start = Instant::now();
+    for ordinal in 0..full_history.state().next_entry {
+        ensure!(
+            full_history.record(ordinal)? == fast_history.record(ordinal)?,
+            "cold-history record {ordinal} differs"
+        );
+    }
     Ok(RecoveryVerification {
         profile: CORE_PROFILE,
         sequence: full_view.sequence,
@@ -1036,5 +1182,11 @@ pub fn verify_recovery(path: &Path) -> Result<RecoveryVerification> {
         semantic_checkpoint_bytes: expected.len(),
         complete_state_equal: true,
         frame_equal: true,
+        cold_history_records: full_history.state().next_entry,
+        cold_history_equal: true,
+        archive_comparison_ms: comparison_start.elapsed().as_secs_f64() * 1000.,
+        full_journal_bytes_read: full_view.recovery_journal_bytes_read,
+        checkpoint_tail_journal_bytes_read: fast_view.recovery_journal_bytes_read,
+        cold_archive_format: history::ARCHIVE_FORMAT,
     })
 }

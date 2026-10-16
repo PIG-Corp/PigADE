@@ -114,7 +114,7 @@ fn corrupt(offset: u64, kind: CorruptionKind) -> anyhow::Error {
     Corruption { offset, kind }.into()
 }
 
-fn read_header(file: &mut File) -> Result<JournalHeader> {
+fn read_header(file: &mut impl Read) -> Result<JournalHeader> {
     let mut prefix = [0u8; 12];
     file.read_exact(&mut prefix).map_err(|e| {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -158,18 +158,49 @@ fn read_header(file: &mut File) -> Result<JournalHeader> {
 /// Streaming reader. On corruption it becomes poisoned; reopening is required.
 /// One decoded event is allocated at a time, bounded by MAX_EVENT_BYTES.
 pub struct JournalReader {
-    file: File,
+    file: ReadCounter<File>,
     header: JournalHeader,
     sequence: u64,
     valid_bytes: u64,
     poisoned: bool,
 }
+
+/// Counts bytes returned by `Read`; seeks and metadata lookups do not count.
+struct ReadCounter<R> {
+    inner: R,
+    bytes_read: u64,
+}
+
+impl<R> ReadCounter<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            bytes_read: 0,
+        }
+    }
+}
+
+impl<R: Read> Read for ReadCounter<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        self.bytes_read += count as u64;
+        Ok(count)
+    }
+}
+
+impl<R: Seek> Seek for ReadCounter<R> {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(position)
+    }
+}
+
 impl JournalReader {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_file(File::open(path)?)
     }
     fn from_file(mut file: File) -> Result<Self> {
         file.seek(SeekFrom::Start(0))?;
+        let mut file = ReadCounter::new(file);
         let header = read_header(&mut file)?;
         let valid_bytes = file.stream_position()?;
         Ok(Self {
@@ -182,6 +213,11 @@ impl JournalReader {
     }
     pub fn header(&self) -> &JournalHeader {
         &self.header
+    }
+    /// Total bytes returned by underlying file reads, including the header.
+    /// Seeking over data does not increase this count.
+    pub fn bytes_read(&self) -> u64 {
+        self.file.bytes_read
     }
     pub fn next_event(&mut self) -> Result<Option<JournalEvent>> {
         ensure!(!self.poisoned, "reader poisoned by prior corruption");
@@ -249,7 +285,7 @@ impl JournalReader {
     /// does not scan the prefix; the snapshot checksum/profile binds that prefix.
     pub fn resume_after_checkpoint(mut self, sequence: u64, offset: u64) -> Result<Self> {
         ensure!(
-            offset >= self.valid_bytes && offset <= self.file.metadata()?.len(),
+            offset >= self.valid_bytes && offset <= self.file.inner.metadata()?.len(),
             "checkpoint journal offset outside file"
         );
         ensure!(
@@ -352,7 +388,7 @@ impl Journal {
             return Err(corruption.into());
         }
         Ok(Self {
-            file: reader.file,
+            file: reader.file.inner,
             header: reader.header,
             sequence: report.valid_events,
             poisoned: false,
@@ -462,6 +498,54 @@ mod tests {
         assert_eq!(reader.next_event()?.unwrap().kind, EventKind::Resize);
         assert_eq!(reader.next_event()?.unwrap().kind, EventKind::SyncTimeout);
         assert!(reader.next_event()?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn counts_header_and_only_bytes_read_after_checkpoint_seek() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let h = header();
+        let mut journal = Journal::create(&path, h)?;
+        let skipped = journal.append(EventKind::Output, b"large prefix")?;
+        let tail = journal.append(EventKind::Output, b"tail")?;
+        drop(journal);
+
+        // A checkpoint authenticates the skipped prefix. Damage it to prove the
+        // resumed reader never reads or parses those bytes.
+        let mut file = OpenOptions::new().write(true).open(&path)?;
+        file.seek(SeekFrom::Start(skipped.end_offset - 1))?;
+        file.write_all(&[0xff])?;
+        drop(file);
+
+        let reader = JournalReader::open(&path)?;
+        let header_bytes = reader.bytes_read();
+        assert_eq!(header_bytes, reader.valid_offset());
+        let resumed = reader.resume_after_checkpoint(1, skipped.end_offset)?;
+        let mut reader = resumed;
+        assert_eq!(reader.bytes_read(), header_bytes);
+        assert_eq!(reader.next_event()?.unwrap().payload, b"tail");
+        assert_eq!(
+            reader.bytes_read(),
+            header_bytes + (tail.end_offset - skipped.end_offset)
+        );
+        Ok(())
+    }
+    #[test]
+    fn counts_bytes_returned_for_a_partial_frame() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let h = header();
+        let mut journal = Journal::create(&path, h)?;
+        let header_bytes = journal.file.stream_position()?;
+        journal.append(EventKind::Output, b"payload")?;
+        drop(journal);
+        let full = std::fs::read(&path)?;
+        std::fs::write(&path, &full[..header_bytes as usize + 13])?;
+
+        let mut reader = JournalReader::open(&path)?;
+        assert_eq!(reader.bytes_read(), header_bytes);
+        assert!(reader.next_event().is_err());
+        assert_eq!(reader.bytes_read(), header_bytes + 13);
         Ok(())
     }
     #[test]

@@ -1,21 +1,102 @@
 //! Atomic generation-bound checkpoint files. Raw journal is never compacted here.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pigade_storage::{JournalHeader, Receipt};
 use pigade_terminal::Terminal;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 use uuid::Uuid;
 const MAGIC: &[u8; 8] = b"PIGCP001";
+const MAGIC_WITH_HISTORY: &[u8; 8] = b"PIGCP002";
 const LIMIT: usize = 128 * 1024 * 1024;
+// Export/import/pruning can temporarily hold a second hot grid. Serialize
+// checkpoint work across actors; bounded PTY queues provide backpressure while
+// a generation waits. This is one part of, not proof of, the total heap budget.
+static CHECKPOINT_WORK: Mutex<Vec<Validated>> = Mutex::new(Vec::new());
+
+#[derive(PartialEq, Eq)]
+struct Stamp {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+fn stamp(path: &Path) -> Result<Stamp> {
+    let m = fs::metadata(path)?;
+    Ok(Stamp {
+        device: m.dev(),
+        inode: m.ino(),
+        length: m.len(),
+        modified: (m.mtime(), m.mtime_nsec()),
+        changed: (m.ctime(), m.ctime_nsec()),
+    })
+}
+struct Validated {
+    path: PathBuf,
+    stamp: Stamp,
+    session: Uuid,
+    generation: Uuid,
+    profile: String,
+    history: Option<crate::history::Checkpoint>,
+}
+fn remember(
+    cache: &mut Vec<Validated>,
+    path: &Path,
+    header: &JournalHeader,
+    history: Option<crate::history::Checkpoint>,
+) -> Result<()> {
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.retain(|entry| entry.path != path);
+    cache.push(Validated {
+        path: path.into(),
+        stamp: stamp(path)?,
+        session: header.session_id,
+        generation: header.generation,
+        profile: header.profile.clone(),
+        history,
+    });
+    Ok(())
+}
+fn valid_for_retention(
+    cache: &mut Vec<Validated>,
+    path: &Path,
+    header: &JournalHeader,
+) -> Result<()> {
+    let current = stamp(path)?;
+    if let Some(known) = cache.iter().find(|entry| {
+        entry.path == path
+            && entry.stamp == current
+            && entry.session == header.session_id
+            && entry.generation == header.generation
+            && entry.profile == header.profile
+    }) {
+        // File bytes were already exported+validated, or fully imported, in this
+        // process. Still validate the bounded external cold-root dependency.
+        if let Some(history) = &known.history {
+            crate::history::validate_checkpoint(
+                path.parent().context("checkpoint directory")?,
+                header,
+                history,
+            )?;
+        }
+        return Ok(());
+    }
+    let loaded = load(path, header)?;
+    remember(cache, path, header, loaded.history)
+}
 
 pub struct Loaded {
     pub terminal: Terminal,
     pub sequence: u64,
     pub offset: u64,
+    pub history: Option<crate::history::Checkpoint>,
 }
 pub fn publish(
     root: &Path,
@@ -23,20 +104,49 @@ pub fn publish(
     receipt: Receipt,
     terminal: &Terminal,
 ) -> Result<()> {
+    publish_with_history(root, header, receipt, terminal, None)
+}
+pub fn publish_with_history(
+    root: &Path,
+    header: &JournalHeader,
+    receipt: Receipt,
+    terminal: &Terminal,
+    history: Option<crate::history::Checkpoint>,
+) -> Result<()> {
+    let mut work = CHECKPOINT_WORK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
     let bytes = terminal.checkpoint()?;
-    ensure!(
-        bytes.len() <= LIMIT,
-        "checkpoint exceeds encoded byte budget"
-    );
+    let mut history_bytes = Vec::new();
+    if let Some(history) = &history {
+        ensure!(
+            history.state.applied_sequence == receipt.sequence,
+            "history/checkpoint sequence mismatch"
+        );
+        let metadata = serde_json::to_vec(history)?;
+        ensure!(
+            metadata.len() <= 32768,
+            "history checkpoint metadata exceeds budget"
+        );
+        history_bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        history_bytes.extend_from_slice(&metadata);
+    }
+    let length = bytes.len() + history_bytes.len();
+    ensure!(length <= LIMIT, "checkpoint exceeds encoded byte budget");
     let mut prefix = Vec::with_capacity(64);
-    prefix.extend_from_slice(MAGIC);
+    prefix.extend_from_slice(if history.is_some() {
+        MAGIC_WITH_HISTORY
+    } else {
+        MAGIC
+    });
     prefix.extend_from_slice(header.session_id.as_bytes());
     prefix.extend_from_slice(header.generation.as_bytes());
     prefix.extend_from_slice(&receipt.sequence.to_le_bytes());
     prefix.extend_from_slice(&receipt.end_offset.to_le_bytes());
-    prefix.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    prefix.extend_from_slice(&(length as u32).to_le_bytes());
     let mut crc = crc32fast::Hasher::new();
     crc.update(&prefix);
+    crc.update(&history_bytes);
     crc.update(&bytes);
     prefix.extend_from_slice(&crc.finalize().to_le_bytes());
     let temporary = root.join(format!("{}.{}.tmp", header.generation, Uuid::new_v4()));
@@ -50,20 +160,25 @@ pub fn publish(
         .mode(0o600)
         .open(&temporary)?;
     file.write_all(&prefix)?;
+    file.write_all(&history_bytes)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);
     fs::rename(&temporary, &destination)?;
     File::open(root)?.sync_all()?;
+    // Export validated the complete semantic DTO before this atomic write.
+    // Avoid reconstructing all three unchanged hot grids on every publication.
+    remember(&mut work, &destination, header, history)?;
     // Keep the last three files. Old raw journal remains the full replay oracle.
     let mut checkpoints = candidates(root, header.generation)?;
     checkpoints.sort();
     let mut valid = 0;
     for path in checkpoints.into_iter().rev() {
-        if load(&path, header).is_ok() {
+        if valid_for_retention(&mut work, &path, header).is_ok() {
             valid += 1;
             if valid > 3 {
-                fs::remove_file(path)?;
+                fs::remove_file(&path)?;
+                work.retain(|entry| entry.path != path);
             }
         }
     }
@@ -129,7 +244,7 @@ fn load(path: &Path, header: &JournalHeader) -> Result<Loaded> {
     let mut prefix = [0; 64];
     file.read_exact(&mut prefix)?;
     ensure!(
-        &prefix[..8] == MAGIC
+        (&prefix[..8] == MAGIC || &prefix[..8] == MAGIC_WITH_HISTORY)
             && &prefix[8..24] == header.session_id.as_bytes()
             && &prefix[24..40] == header.generation.as_bytes(),
         "checkpoint identity/schema mismatch"
@@ -150,10 +265,32 @@ fn load(path: &Path, header: &JournalHeader) -> Result<Loaded> {
         crc.finalize() == u32::from_le_bytes(prefix[60..64].try_into()?),
         "checkpoint checksum mismatch"
     );
+    let (history, model_bytes) = if &prefix[..8] == MAGIC_WITH_HISTORY {
+        ensure!(bytes.len() >= 4, "missing history checkpoint metadata");
+        let length = u32::from_le_bytes(bytes[..4].try_into()?) as usize;
+        ensure!(
+            length <= 32768 && length <= bytes.len() - 4,
+            "invalid history checkpoint metadata length"
+        );
+        let history: crate::history::Checkpoint = serde_json::from_slice(&bytes[4..4 + length])?;
+        ensure!(
+            history.state.applied_sequence == sequence,
+            "history/checkpoint source sequence mismatch"
+        );
+        crate::history::validate_checkpoint(
+            path.parent().context("checkpoint directory")?,
+            header,
+            &history,
+        )?;
+        (Some(history), &bytes[4 + length..])
+    } else {
+        (None, bytes.as_slice())
+    };
     Ok(Loaded {
-        terminal: Terminal::from_checkpoint(&bytes, false)?,
+        terminal: Terminal::from_checkpoint(model_bytes, false)?,
         sequence,
         offset,
+        history,
     })
 }
 #[cfg(test)]

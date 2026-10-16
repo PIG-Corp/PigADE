@@ -60,8 +60,11 @@ struct TestHost {
 }
 impl TestHost {
     fn new() -> Result<Self> {
+        Self::in_directory(tempfile::tempdir()?)
+    }
+    fn in_directory(directory: TempDir) -> Result<Self> {
         let mut host = Self {
-            directory: tempfile::tempdir()?,
+            directory,
             child: None,
             owned_cli: Vec::new(),
         };
@@ -325,6 +328,97 @@ fn host_sigkill_restart_restores_history_without_another_spawn() -> Result<()> {
         assert!(retry.views.iter().all(|v| v.state != "running"));
     }
     assert_eq!(fs::read(&marker)?, b"x");
+    Ok(())
+}
+
+#[test]
+fn real_pty_cold_history_survives_host_kill_and_matches_every_replayed_record() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let marker = host.root().join("cold-launch-count");
+    let script = "import sys\nwith open(sys.argv[1], 'a') as f: f.write('x')\nfor i in range(12500): sys.stdout.write(f'{i:05d} Русский e\\u0301 界\\n')\nsys.stdout.write('__COLD_DONE__\\n'); sys.stdout.flush()";
+    let spec = host.launch(
+        "/usr/bin/python3",
+        vec![
+            "-c".into(),
+            script.into(),
+            marker.to_string_lossy().into_owned(),
+        ],
+    )?;
+    let before = wait_for(|| {
+        let view = host.snapshot(&spec)?;
+        ensure!(
+            view.storage_error.is_none(),
+            "cold history degraded: {:?}",
+            view.storage_error
+        );
+        Ok((view.state == "exited").then_some(view))
+    })?;
+    assert!(before.frame.text().contains("__COLD_DONE__"));
+    assert!(before.history.as_ref().unwrap().retired_rows > 2000);
+    let journal = host.root().join(format!("{}.journal", spec.generation));
+    let verified = pigade_session_host::verify_recovery(&journal)?;
+    assert!(verified.complete_state_equal && verified.frame_equal);
+    host.kill_host()?;
+    host.start()?;
+    let after = host.snapshot(&spec)?;
+    assert_eq!(after.sequence, before.sequence);
+    assert_eq!(after.frame, before.frame);
+    assert_eq!(after.history, before.history);
+    assert_eq!(after.recovery_path, "checkpoint-tail");
+    assert_eq!(fs::read(&marker)?, b"x");
+    Ok(())
+}
+
+#[test]
+fn long_valid_host_socket_directory_still_allows_authenticated_launch() -> Result<()> {
+    let directory = tempfile::Builder::new()
+        .prefix(&format!("pigade-state-{}", "x".repeat(48)))
+        .tempdir()?;
+    assert!(directory.path().as_os_str().len() + 42 >= 108);
+    assert!(directory.path().join("host.sock").as_os_str().len() < 108);
+    let mut host = TestHost::in_directory(directory)?;
+    let spec = host.launch(
+        "/bin/sh",
+        vec![
+            "-c".into(),
+            "printf '__LONG_PATH_OK__\\n'; read hold".into(),
+        ],
+    )?;
+    host.wait_text(&spec, "__LONG_PATH_OK__")?;
+    assert!(!host.root().join("g.sock").exists());
+    Ok(())
+}
+
+#[test]
+fn stop_wakes_clean_actor_after_idle_checkpoint_without_polling_delay() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let spec = host.launch(
+        "/bin/sh",
+        vec!["-c".into(), "printf '__IDLE_READY__\\n'; read hold".into()],
+    )?;
+    let ready = host.wait_text(&spec, "__IDLE_READY__")?;
+    let checkpoint = host.root().join(format!(
+        "{}.{:020}.checkpoint",
+        spec.generation, ready.sequence
+    ));
+    wait_for(|| Ok(checkpoint.is_file().then_some(())))?;
+    // A completed quiet checkpoint leaves no timer; Stop must explicitly wake
+    // the actor rather than rely on a continuous ten-millisecond polling loop.
+    thread::sleep(Duration::from_millis(25));
+    let start = Instant::now();
+    checked(
+        &host.socket(),
+        Command::Stop {
+            session: spec.session,
+            generation: spec.generation,
+        },
+    )?;
+    wait_for(|| Ok((host.snapshot(&spec)?.state == "exited").then_some(())))?;
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "idle Stop took {:?}",
+        start.elapsed()
+    );
     Ok(())
 }
 

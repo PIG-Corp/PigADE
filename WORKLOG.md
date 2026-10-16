@@ -273,3 +273,147 @@ Integrated Luna archive primitive and borrowed normal-history hooks; repaired tr
 - Files: crates/storage/src/archive.rs, crates/storage/src/lib.rs, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/grid, vendor/alacritty_terminal/src/term/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, docs/adr/0005-bounded-hot-state-and-cold-archive.md, docs/reports/cold-history-foundation.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Fresh workspace81/81 tests, strict workspace Clippy, fmt and release build passed. Core151/151 lib and45/45 reference tests passed; no-default-features check passed. Crate-local Clippy passes with only three explicitly documented unchanged upstream question_mark warnings. Five Grid retirement regressions and complete composed hot/parser byte equality pass. Git diff --check and version alignment pass.
 - Risks / next: Archive remains derived/unindexed and unattached to host: typed cells/extras/links and palette provenance, continuation state, segments/lazy index, durable roots and archive+hot replay/fault integration next. Aggregate memory,4x1GiB/100kresizes,VM,24h,platform and fullMVP gates remain open. All new children used user-required gpt-6-luna; no active desktop automation.
+
+## 2026-10-16T20:50:17+00:00 — archive_row_codec
+
+Added bounded typed retired-row encoding and decoding with row-local hyperlink pooling
+
+- Files: crates/terminal/src/history.rs
+- Verification: cargo fmt --all --check; cargo test -p pigade-terminal history (4 passed); git diff --check
+- Risks / next: Lead to review API and integrate host/archive caller; row codec does not provide persistence or transactional rollback itself.
+
+## 2026-10-16T20:51:06+00:00 — /root/archive_range
+
+Added bounded indexed archive row reads and writer row locations
+
+- Files: crates/storage/src/archive.rs
+- Verification: cargo fmt --all --check; cargo test -p pigade-storage archive --lib (9 passed); cargo clippy -p pigade-storage --all-targets -- -D warnings (passed)
+- Risks / next: Lead to integrate archive::ArchiveRowLocation with durable append-only index/root; location itself does not prove fsync
+
+## 2026-10-16T20:56:44+00:00 — archive_row_codec
+
+Completed named-color coverage and widened per-cell zero-width wire count to u32
+
+- Files: crates/terminal/src/history.rs
+- Verification: cargo fmt --all; cargo test -p pigade-terminal history (7 passed); cargo clippy -p pigade-terminal --all-targets -- -D warnings; git diff --check
+- Risks / next: Lead can review final row codec and complete archive integration.
+
+## 2026-10-16T21:05:27+00:00 — root
+
+Integrated typed cold rows with per-generation segments, fixed-slot committed index, PIGCP002 roots and normal-grid palette provenance. Recovery keeps immutable base plus private derived tail; full oracle compares all archive records, not only CRCs. Added real PTY cold-history kill/reopen and archive/index fault regressions. Implemented bounded shared checkpoint scheduler and unchanged-file semantic validation cache after normal-history throughput miss.
+
+- Files: crates/session-host/src/history.rs, crates/session-host/src/history/tests.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/lib.rs, crates/session-host/tests/recovery.rs, crates/session-host/Cargo.toml, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/grid/row.rs, vendor/alacritty_terminal/src/term/mod.rs, scripts/stress-pty.py, benchmarks/results/native-cold-history-5s.json
+- Verification: Workspace94 tests passed before scheduler cache; core151 passed. Real12500-line Python PTY + hostkill/reopen and every-record replay equality passed. Four history integration tests pass incllegacy raw reconstruction and raw/data-without-index recovery. StrictworkspaceClippy passed before scheduler/cache; cache checkpoint2tests and releasebuild pass, freshfullbaseline pending. First5s normal4stream diagnostic allbytes/allcoldrecords correct but producer14.63-15.24s, peak340471808bytes; concurrentrepositoryverification explicitly marked.
+- Risks / next: Repeat normal-history measurement without verification overlap, verify cache invalidation/retention and fullbaseline, then finish lazy history API, fault boundaries and resource budgets. Stage0/MVP gates open; no active-desktop automation. All delegated performers/reviewers explicitlygpt-6-luna.
+
+## 2026-10-16T21:05:38+00:00 — /root/retention_regression
+
+Added checkpoint retention regression coverage for valid-file pruning, cache invalidation, identity mismatch and interrupted temporary files.
+
+- Files: crates/session-host/tests/checkpoint_retention.rs, WORKLOG.md
+- Verification: cargo fmt --all; cargo test -p pigade-session-host --test checkpoint_retention (4 passed); cargo clippy -p pigade-session-host --test checkpoint_retention -- -D warnings (passed)
+- Risks / next: Lead integrates these tests with the checkpoint cache/pruning implementation and performs final verification.
+
+## 2026-10-16T21:07:45+00:00 — /root/journal_read_metrics
+
+Added actual journal read-byte accounting to JournalReader, including header, partial reads, and checkpoint tail reads
+
+- Files: crates/storage/src/journal.rs
+- Verification: cargo test -p pigade-storage journal (8 passed); cargo clippy -p pigade-storage --all-targets -- -D warnings (passed); cargo fmt --all --check (passed)
+- Risks / next: Lead integrates API with host metrics; no wire format or writer behavior changes
+
+## 2026-10-16T21:09:09+00:00 — archive_row_codec
+
+Replaced PIGROW01 with PIGROW02 per-cell attribute and UTF-8 scalar deltas
+
+- Files: crates/terminal/src/history.rs
+- Verification: cargo fmt --all --check; cargo test -p pigade-terminal history (9 passed); cargo clippy -p pigade-terminal --all-targets -- -D warnings; git diff --check; 120 repeated ASCII cells encode to 135 bytes (PIGROW01 layout 2294 bytes)
+- Risks / next: Host integration moves the archive profile to PIGROW02; incompatible old derived rows must be rejected and rebuilt from raw journal.
+
+## 2026-10-16T21:11:03+00:00 — /root/archive_crash_tests
+
+Added bounded real-child SIGKILL tests for four archive recovery cut points; recovery compares terminal/parser state and every cold record while checking source artifacts remain unchanged
+
+- Files: crates/session-host/src/history/crash_tests.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host --lib history::crash_tests -- --nocapture (5 passed); cargo clippy -p pigade-session-host --lib -- -D warnings (passed); cargo fmt --all --check (passed); git diff --check (passed)
+- Risks / next: These are current-OS process-kill tests and do not establish power-loss, VM reboot, or storage-cache-loss behavior; root owns module registration and final integration verification.
+
+## 2026-10-16T21:12:54+00:00 — /root/memory_harness
+
+Added a headless release-host memory diagnostic for up to 32 PTY sessions, defaulting to 12 sessions with 10,000 hot history rows each; captures host-only RSS/CPU by phase and verifies recovery after the measured hold.
+
+- Files: scripts/measure-memory.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/measure-memory.py; python3 scripts/measure-memory.py --help; git diff --check -- scripts/measure-memory.py (all passed; workload intentionally not run while root measures normal throughput)
+- Risks / next: Root to review and run on a durable filesystem after throughput measurement; host-only 700 MiB result is necessary but does not prove total PigADE/GPU acceptance.
+
+## 2026-10-16T21:22:24+00:00 — vm_reboot_prepare
+
+Add pinned, signed local Arch QEMU SDK preparer
+
+- Files: scripts/prepare-vm-sdk.py
+- Verification: PYTHONPYCACHEPREFIX=/tmp/pigade-vm-sdk-pycache python3 -m py_compile scripts/prepare-vm-sdk.py (passed); python3 scripts/prepare-vm-sdk.py --help (passed); python3 scripts/prepare-vm-sdk.py --prepare (passed: 13 packages, 14057837 bytes, QEMU 11.1.2, mcopy 4.0.49, unresolved dependencies empty)
+- Risks / next: Root owns VM launch/isolation and actual guest reboot test; SDK preparation is not reboot or AI conversation-resume proof.
+
+## 2026-10-16T21:40:56+00:00 — /root/vm_reboot_harness
+
+Added an explicit prepare/run Alpine QEMU reboot harness with signed image verification, private staged runtime, synthetic four-session scenario, and recovery evidence capture.
+
+- Files: scripts/vm-reboot.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/vm-reboot.py; python3 scripts/vm-reboot.py --help; python3 scripts/vm-reboot.py --prepare --directory /home/afterburner/.local/state/pigade/vm-reboot --sdk-manifest /tmp/pigade-vm-sdk/evidence/manifest.json; embedded guest Python compile, cloud-config parse, mtools seed listing, and git diff --check passed. No QEMU VM was started.
+- Risks / next: Lead reviews and runs --run on the verified durable filesystem; confirm the Limine cloud image boots with explicit SeaBIOS and assess real two-boot recovery output.
+
+## 2026-10-16T21:43:43+00:00 — /root/cold_history_docs
+
+Documented host-integrated cold history and current verification limits
+
+- Files: README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/cold-history-integration.md
+- Verification: git diff --check and report-link validation pending
+- Risks / next: Root integrates shared implementation, performs final verification and commits; long-history throughput, VM reboot, platform and MVP gates remain open
+
+## 2026-10-16T21:43:54+00:00 — /root/cold_history_docs
+
+Completed validation of the cold-history documentation update
+
+- Files: README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/cold-history-integration.md
+- Verification: git diff --check -- README.md CHANGELOG.md docs/AGENT_HANDOFF.md docs/PROJECT_MAP.md docs/reports/cold-history-integration.md WORKLOG.md passed; relative Markdown links in all five edited documentation files exist; no tests run for this documentation-only change
+- Risks / next: Root owns integrated verification and commit; 60-second rate target, 1-GiB history, VM reboot, 24-hour soak, platform and MVP gates remain open
+
+## 2026-10-16T21:44:00+00:00 — /root/vm_reboot_harness
+
+Corrected guest boot sequencing and shell command construction, added guest-owned CLI invocation evidence across recovery retries, and moved QMP to a short-lived private socket directory.
+
+- Files: scripts/vm-reboot.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/vm-reboot.py; --help; constructed all four embedded first-boot shell commands and passed /bin/sh -n; confirmed first_boot calls start_host and markers are written by launched CLI processes; verified QMP path under AF_UNIX limit; --prepare succeeded in /home/afterburner/.local/state/pigade/vm-reboot/run-20261016T214356Z-8e57d55c. No QEMU VM started.
+- Risks / next: Lead may review and run --run; real guest boot and reboot remain unverified.
+
+## 2026-10-16T21:44:33+00:00 — /root/cold_history_docs
+
+Added actual raw journal-read counts to cold-history evidence and handoff
+
+- Files: docs/reports/cold-history-integration.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: git diff --check on owned docs and WORKLOG passed; relative link validation passed; 60s artifact confirms full replay 63,105,903–63,116,991 bytes/session and checkpoint tail 356 bytes/session
+- Risks / next: Root integrates shared implementation and owns final verification/commit; 1-GiB workload, throughput target, VM reboot, soak, platform and product gates remain open
+
+## 2026-10-16T21:47:05+00:00 — /root/long_history_corpus
+
+Added a streaming production-model long-history corpus generator and durable-filesystem runner with frozen-binary hash, checkpoint cadence, boundary-state scenarios, and optional full recovery oracle.
+
+- Files: crates/session-host/examples/history_corpus.rs, scripts/long-history.py
+- Verification: rustfmt --edition 2024 crates/session-host/examples/history_corpus.rs; PYTHONPYCACHEPREFIX=/tmp/pigade-long-history-pycache python3 -m py_compile scripts/long-history.py; python3 scripts/long-history.py --help; cargo clippy --locked -p pigade-session-host --example history_corpus -- -D warnings; cargo build --release --locked -p pigade-session-host --example history_corpus; one-session 1 MiB/100-resize --verify smoke on btrfs passed: 3199 cold records, exact output/resize counts, full state/frame/cold-record equality, checkpoint-tail read 404/1058242 journal bytes; git diff --check passed.
+- Risks / next: Root integrates and owns the 4-session 1 GiB/100000-resize corpus run and full SPEC budget assessment. Smoke is functionality evidence only; runner checks available space but configures no filesystem quota, logical 24 h is not elapsed soak, and full verification remains optional.
+
+## 2026-10-16T21:47:41+00:00 — /root
+
+Integrate typed cold history, indexed checkpoint roots, durable private replay tails, launch socket repair and measured host resource diagnostics
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/history.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/launch_gate.rs, crates/session-host/src/metrics.rs, crates/terminal/src/history.rs, crates/storage/src/archive.rs, crates/storage/src/journal.rs, scripts/stress-pty.py, scripts/measure-memory.py, scripts/vm-reboot.py, vendor/alacritty_terminal/PIGADE_PATCH.md, docs/adr/0006-generation-archive-index-and-checkpoint-root.md
+- Verification: Workspace111 tests pass; fmt/strictworkspaceClippy/versioncheck pass; vendor151lib+45reference cases and no-default-features check pass. 12realPTY host-only peak447610880B with10000hotrows/session allrecoveryequal. Instrumented60s normal workload allbytes+hot+coldstateequal but rateFAILED86.05..86.36s: stagecounters identify journal+archivefsync dominant (about60s/session), preserved artifact. IsolatedVM first launch failed readonlyIDEseed; media=cdrom repair bootsLinuxroot, rebootnotyetverified.
+- Risks / next: Commit coherent archive integration, then improve bounded output batching without durability loss; finish isolatedVM reboot,4x1GiB100kresizes,24hsoak and remaining stage0/platform/MVP gates.
+
+## 2026-10-16T21:48:41+00:00 — /root/long_history_corpus
+
+Follow-up review: freeze the corpus executable inside each run before hashing and execution, strengthen the free-space preflight, and narrow the logical-hours statement to manifest metadata without event timestamps.
+
+- Files: crates/session-host/examples/history_corpus.rs, scripts/long-history.py
+- Verification: rustfmt --edition 2024 --check crates/session-host/examples/history_corpus.rs; PYTHONPYCACHEPREFIX=/tmp/pigade-long-history-pycache python3 -m py_compile scripts/long-history.py; python3 scripts/long-history.py --help; freeze helper copied the current example into a private mode-0700 file and its recorded SHA-256 matched the copy; no corpus workload rerun.
+- Risks / next: Root owns integration and the full corpus run. The earlier small-run recovery evidence applies to unchanged corpus event-generation/recovery logic; this follow-up changed the manifest label and runner binary/space safeguards only. The preflight estimate is not an enforced filesystem quota.

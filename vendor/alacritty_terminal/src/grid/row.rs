@@ -122,6 +122,13 @@ impl<T> Row<T> {
         self.inner.len()
     }
 
+    /// Upper bound of cells modified since the last reset. It is semantic
+    /// metadata, not the trimmed text length; borrowed archive encoders need it.
+    #[inline]
+    pub fn occupied(&self) -> usize {
+        self.occ
+    }
+
     #[inline]
     pub fn last(&self) -> Option<&T> {
         self.inner.last()

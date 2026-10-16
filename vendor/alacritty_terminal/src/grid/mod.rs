@@ -43,6 +43,7 @@ pub enum HistoryRetirement {
 pub trait HistoryObserver<T>: std::fmt::Debug + Send + Sync {
     fn row(&self, row: &Row<T>, columns: usize, reason: HistoryRetirement);
     fn boundary(&self, _reason: HistoryRetirement) {}
+    fn palette(&self, _index: usize, _color: Option<crate::vte::ansi::Rgb>) {}
 }
 
 pub trait GridCell: Sized {
@@ -402,6 +403,12 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 }
 
 impl<T> Grid<T> {
+    pub(crate) fn notify_history_palette(&self, index: usize, color: Option<crate::vte::ansi::Rgb>) {
+        if let Some(observer) = &self.history_observer {
+            observer.palette(index, color);
+        }
+    }
+
     pub fn set_history_observer(&mut self, observer: Option<Arc<dyn HistoryObserver<T>>>) {
         self.history_observer = observer;
     }
