@@ -157,6 +157,8 @@ pub struct WindowState {
     pub monitor: Option<String>,
     #[serde(default)]
     pub canvas_offsets: BTreeMap<Uuid, CanvasOffset>,
+    #[serde(default)]
+    pub panel_generations: BTreeMap<Uuid, Uuid>,
 }
 impl Default for WindowState {
     fn default() -> Self {
@@ -170,6 +172,7 @@ impl Default for WindowState {
             sidebar_collapsed: false,
             monitor: None,
             canvas_offsets: BTreeMap::new(),
+            panel_generations: BTreeMap::new(),
         }
     }
 }
@@ -523,6 +526,7 @@ fn write_selection(tx: &Transaction<'_>, write: CatalogWrite<Selection>) -> Resu
         text(monitor, 256, false)?;
     }
     validate_canvas_offsets(tx, &window.canvas_offsets)?;
+    validate_panel_generations(&window.panel_generations)?;
     if let Some(project) = s.project_id {
         ensure!(
             tx.query_row(
@@ -577,6 +581,20 @@ fn validate_canvas_offsets(
             "canvas offset references a missing tab"
         );
     }
+    Ok(())
+}
+
+fn validate_panel_generations(generations: &BTreeMap<Uuid, Uuid>) -> Result<()> {
+    ensure!(
+        generations.len() <= 100_000,
+        "too many persisted panel generations"
+    );
+    ensure!(
+        generations
+            .iter()
+            .all(|(session, generation)| !session.is_nil() && !generation.is_nil()),
+        "panel generation map contains a nil identity"
+    );
     Ok(())
 }
 
@@ -725,6 +743,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         revision: selection.4,
     };
     validate_canvas_offsets(connection, &selection.window.canvas_offsets)?;
+    validate_panel_generations(&selection.window.panel_generations)?;
     let layout = connection.query_row(
         "SELECT json,revision FROM layout_revisions WHERE singleton=1",
         [],
@@ -916,6 +935,87 @@ mod tests {
                 })
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn panel_generation_map_is_additive_bounded_and_survives_catalog_cas() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let old_window: WindowState = serde_json::from_value(serde_json::json!({
+            "x": 10,
+            "y": 20,
+            "width": 1280,
+            "height": 800,
+            "scale": 1.0,
+            "sidebar_width": 240,
+            "sidebar_collapsed": false,
+            "monitor": null,
+            "canvas_offsets": {}
+        }))?;
+        assert!(old_window.panel_generations.is_empty());
+        let mut roundtrip = old_window.clone();
+        let session = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        roundtrip.panel_generations.insert(session, generation);
+        assert_eq!(
+            serde_json::from_str::<WindowState>(&serde_json::to_string(&roundtrip)?)?,
+            roundtrip
+        );
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let seeded = seed(&mut store)?;
+        let mut selection = seeded.selection.clone();
+        selection.window.panel_generations = roundtrip.panel_generations.clone();
+        let committed = store.apply_catalog(CatalogBatch {
+            selection: Some(update(selection, seeded.selection.revision)),
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(
+            committed.selection.window.panel_generations,
+            roundtrip.panel_generations
+        );
+        drop(store);
+        let mut store = MetadataStore::open(&path)?;
+        let current = store.catalog()?;
+        assert_eq!(
+            current.selection.window.panel_generations,
+            roundtrip.panel_generations
+        );
+
+        let mut viewport_update = current.selection.clone();
+        viewport_update
+            .window
+            .canvas_offsets
+            .insert(current.tabs[0].id, CanvasOffset { x: 20.0, y: 30.0 });
+        let after_viewport = store.apply_catalog(CatalogBatch {
+            selection: Some(update(viewport_update, current.selection.revision)),
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(
+            after_viewport.selection.window.panel_generations,
+            roundtrip.panel_generations
+        );
+
+        let mut invalid = after_viewport.selection.clone();
+        invalid
+            .window
+            .panel_generations
+            .insert(Uuid::nil(), generation);
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    selection: Some(update(invalid, after_viewport.selection.revision)),
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        let mut over_bound = BTreeMap::new();
+        for value in 1..=100_001 {
+            over_bound.insert(Uuid::from_u128(value), Uuid::new_v4());
+        }
+        assert!(validate_panel_generations(&over_bound).is_err());
         Ok(())
     }
     #[test]
@@ -1326,7 +1426,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            6
+            7
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -1421,7 +1521,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                6
+                7
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

@@ -50,3 +50,5 @@ and real SIGKILL of journal and SQLite writers. VM reboot and 24-hour soak remai
 integration validation outside this crate.
 
 Schema6 adds append-only user conversation bindings. A session head advances through revision CAS, preserving older bindings; the current provider/ID may belong to only one logical session. Bindings retain source generation, launch plan and context snapshot UUID, user author and save timestamp. Host code supplies and validates the actual launch provenance. This is metadata persistence, not provider existence validation or native resume. Existing schema1–5 databases receive a durable pre-v6 backup before migration.
+
+Schema7 assigns each launch intent a transactionally allocated per-session generation ordinal. Identical operation retries keep their ordinal; unknown outcomes retain their lock. Migration backfills existing intents in insertion order and durably backs up schemas1–6 first. Indexed generation pages use an exclusive ordinal cursor. WindowState persists optional exact generation pins by logical session independently of layout revisions and undo/redo.

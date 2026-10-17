@@ -47,6 +47,7 @@ IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
 LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
 CONTEXT_PASS = 'pass-private-x11-workspace-context-editor-fixture'
 MEMORY_PASS = 'pass-private-x11-startup-memory-review-fixture'
+GENERATIONS_PASS = 'pass-private-x11-generation-history-selection-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -350,7 +351,8 @@ def deactivate_private_fcitx(config, env):
 
 def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
-            'context': CONTEXT_PASS, 'memory': MEMORY_PASS}[name]
+            'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
+            'generations': GENERATIONS_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False):
@@ -397,6 +399,160 @@ def fixture_generations():
     views = reply.get('views', [])
     require(isinstance(views, list) and len(views) <= 32, 'fixture generation snapshot exceeds bounds')
     return sorted((view['session'], view['generation']) for view in views)
+
+
+def fixture_session_models(session):
+    reply = host_request({'command': 'list'})
+    views = reply.get('views', [])
+    require(isinstance(views, list) and len(views) <= 32,
+            'fixture generation snapshot exceeds bounds')
+    matching = [view for view in views if view.get('session') == session]
+    require(len(matching) <= 2, 'fixture session has an unexpected generation count')
+    return {view['generation']: view for view in matching}
+
+
+def fixture_generation_list(session):
+    result = host_request({'command': 'generations', 'session': session, 'before': None})
+    generations = result.get('generations')
+    require(isinstance(generations, dict) and generations.get('session') == session,
+            'host omitted fixture generation metadata')
+    entries = generations.get('entries')
+    require(isinstance(entries, list) and len(entries) <= 32,
+            'fixture generation metadata exceeds bounds')
+    return generations
+
+
+def fixture_panel_pin(session):
+    catalog = host_request({'command': 'catalog'}).get('catalog')
+    require(isinstance(catalog, dict), 'host omitted fixture catalog')
+    selection = catalog.get('selection', {})
+    window = selection.get('window', {})
+    pins = window.get('panel_generations', {})
+    require(isinstance(pins, dict), 'fixture panel generation pins have invalid shape')
+    return pins.get(session)
+
+
+def fixture_journal_hashes(generations):
+    result = {}
+    state = Path('/artifacts/state')
+    for generation in generations:
+        path = state / (generation + '.journal')
+        require(path.is_file() and not path.is_symlink(),
+                'fixture generation journal is unavailable')
+        require(path.stat().st_size <= 64 * 1024 * 1024,
+                'fixture journal exceeds the private diagnostic bound')
+        result[generation] = sha256(path)
+    return result
+
+
+def run_generations_fixture(config, report, env, save):
+    report['stage'] = 'generation-history-selection'
+    save()
+    deactivate_private_fcitx(config, env)
+    session = report['fixture']['session']
+    first_generation = report['fixture']['generation']
+
+    initial_models = fixture_session_models(session)
+    require(set(initial_models) == {first_generation},
+            'generation fixture did not start with its owned initial model')
+    initial = initial_models[first_generation]
+    require('PIGADE-IME-READY' in view_text(initial),
+            'original owned fixture frame lost its ready marker')
+    first_frame = initial.get('frame')
+    stop = host_request({'command': 'stop', 'session': session,
+                         'generation': first_generation})
+    require(stop.get('error') is None, 'could not stop original private fixture generation')
+    exited = wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        first_generation, {}).get('state') == 'exited' else None), time.monotonic() + 8)
+    require(exited[first_generation].get('frame') == first_frame,
+            'stopping the original fixture mutated its retained frame')
+
+    second_generation = '00000000-0000-4000-8000-000000000001'
+    launch = host_request({'command': 'launch', 'spec': {
+        'session': session, 'generation': second_generation, 'operation': str(uuid.uuid4()),
+        'executable': '/usr/bin/python3',
+        'args': ['-c', "import os; os.write(1, b'NEW_GENERATION_CELLS\\r\\n')"],
+        'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}})
+    require(launch.get('error') is None, 'second private fixture generation launch failed')
+    wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        second_generation, {}).get('state') == 'exited' and 'NEW_GENERATION_CELLS' in
+        view_text(models[second_generation]) else None), time.monotonic() + 8)
+
+    generation_list = fixture_generation_list(session)
+    require(generation_list.get('head') == second_generation and
+            len(generation_list['entries']) == 2 and
+            generation_list['entries'][0].get('generation') == second_generation and
+            generation_list['entries'][1].get('generation') == first_generation and
+            generation_list['entries'][0].get('ordinal') == 2 and
+            generation_list['entries'][1].get('ordinal') == 1,
+            'durable generation head/order differs from launch chronology')
+    require(int(first_generation.replace('-', ''), 16) >
+            int(second_generation.replace('-', ''), 16),
+            'fixture generation UUIDs do not oppose chronological order')
+
+    expected_generations = {first_generation, second_generation}
+    expected_models = fixture_session_models(session)
+    require(set(expected_models) == expected_generations,
+            'fixture created or lost a generation before UI selection')
+    journal_hashes = fixture_journal_hashes(expected_generations)
+
+    helper_call(config, 'generations-open')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/generations-picker.ppm')
+    require(0 < Path('/artifacts/generations-picker.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'generation picker capture exceeds bound')
+
+    helper_call(config, 'generations-select-old')
+    wait_until(lambda: fixture_panel_pin(session) == first_generation,
+               time.monotonic() + 8)
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/generation-pinned-old.ppm')
+    require(0 < Path('/artifacts/generation-pinned-old.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'pinned generation capture exceeds bound')
+    pinned_list = fixture_generation_list(session)
+    require(pinned_list.get('head') == second_generation and
+            pinned_list.get('pinned') == first_generation and
+            pinned_list['entries'][0].get('generation') == second_generation and
+            pinned_list['entries'][0].get('ordinal') == 2 and
+            pinned_list['entries'][1].get('generation') == first_generation and
+            pinned_list['entries'][1].get('ordinal') == 1,
+            'pin selection changed the durable head or failed to persist the old pin')
+    require(fixture_session_models(session) == expected_models and
+            fixture_journal_hashes(expected_generations) == journal_hashes,
+            'historical selection mutated a journal or generation model/frame')
+
+    helper_call(config, 'generations-open')
+    time.sleep(0.25)
+    helper_call(config, 'generations-follow')
+    wait_until(lambda: fixture_panel_pin(session) is None, time.monotonic() + 8)
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/generation-follow-head.ppm')
+    require(0 < Path('/artifacts/generation-follow-head.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'follow-head generation capture exceeds bound')
+    followed_list = fixture_generation_list(session)
+    require(followed_list.get('head') == second_generation and followed_list.get('pinned') is None and
+            followed_list['entries'][0].get('generation') == second_generation and
+            followed_list['entries'][0].get('ordinal') == 2 and
+            followed_list['entries'][1].get('generation') == first_generation and
+            followed_list['entries'][1].get('ordinal') == 1,
+            'following current generation changed head or retained the old pin')
+    require(fixture_session_models(session) == expected_models and
+            fixture_journal_hashes(expected_generations) == journal_hashes,
+            'follow-head selection mutated a journal or generation model/frame')
+    require(fixture_generations() == sorted((session, generation) for generation in expected_generations),
+            'generation selection spawned an extra PTY or changed the fixture generation set')
+    require(window_verified(helper_call(config, 'probe-window')),
+            'PigADE window disappeared during generation history fixture')
+    report['generationHistory'] = {
+        'head': second_generation, 'pinned_then_followed': first_generation,
+        'ordinals': [2, 1], 'journals_unchanged': True,
+        'models_and_cells_unchanged': True, 'extra_generations': False,
+        'captures': ['generations-picker.ppm', 'generation-pinned-old.ppm',
+                     'generation-follow-head.ppm'],
+        'scope': 'isolated Xvfb and private host; two exited fixture-owned PTYs only',
+    }
+    report.update({'status': GENERATIONS_PASS, 'stage': 'complete'})
+    save()
 
 
 def run_memory_fixture(config, report, env, save):
@@ -1168,7 +1324,10 @@ def inside_run() -> int:
         wait_until(lambda: Path('/artifacts/state/host.sock').is_socket() or host.poll() is not None,
                    time.monotonic() + 8)
         require(host.poll() is None, 'private host exited before fixture setup')
-        session, generation, operation = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+        session = str(uuid.uuid4())
+        generation = ('00000000-0000-4000-8000-000000000002'
+                      if config.get('fixture') == 'generations' else str(uuid.uuid4()))
+        operation = str(uuid.uuid4())
         spec = {'session': session, 'generation': generation, 'operation': operation,
                 'executable': '/usr/bin/python3', 'args': ['-c', LATENCY_FIXTURE if config.get('fixture') == 'latency' else FIXTURE, str(control_path),
                     (LATENCY_KEYS if config.get('fixture') == 'latency' else
@@ -1184,7 +1343,7 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
-        if config.get('fixture') in ('context', 'memory'):
+        if config.get('fixture') in ('context', 'memory', 'generations'):
             report['fixture'].update(seed_context_catalog(session, memory_fixture=config.get('fixture') == 'memory'))
         report['stage'] = 'pigade-app'
         save()
@@ -1224,6 +1383,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'memory':
             run_memory_fixture(config, report, app_env, save)
+            return 0
+        if config.get('fixture') == 'generations':
+            run_generations_fixture(config, report, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1357,9 +1519,11 @@ def outer_run(args) -> dict:
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
                 (['context-editor.ppm'] if args.fixture == 'context' else
                  ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else
+                 ['generations-picker.ppm', 'generation-pinned-old.ppm',
+                  'generation-follow-head.ppm'] if args.fixture == 'generations' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME/context/memory-review fixture only',
+            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1376,6 +1540,7 @@ def plan(args) -> dict:
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
                   'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
                   'memory': 'fixed Ctrl+Shift+Space, V, Tab, Tab, 2, Ctrl+R; no confirm/launch',
+                  'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
@@ -1386,6 +1551,8 @@ def plan(args) -> dict:
                        if args.fixture == 'context' else
                        'memory review prepares shell-only previews, verifies selected slices, and never confirms launch'
                        if args.fixture == 'memory' else
+                       'generation history changes only a per-panel pin; private fixture journals and models are checked unchanged'
+                       if args.fixture == 'generations' else
                        'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
@@ -1394,6 +1561,8 @@ def plan(args) -> dict:
                     if args.fixture == 'context' else
                     'initial and selected memory-review captures are retained for human review'
                     if args.fixture == 'memory' else
+                    'picker, pinned-old, and followed-head generation captures are retained for human review'
+                    if args.fixture == 'generations' else
                     'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
@@ -1403,8 +1572,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, context editor, or startup-memory review fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, or generation history fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

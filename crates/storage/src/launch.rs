@@ -52,6 +52,8 @@ impl LaunchState {
 pub struct LaunchRecord {
     pub session_id: Uuid,
     pub generation: Uuid,
+    #[serde(default)]
+    pub ordinal: u64,
     pub operation_id: Uuid,
     pub nonce: Uuid,
     pub state: LaunchState,
@@ -97,7 +99,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 6,
+            version <= 7,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -106,13 +108,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 6 {
-            Some(backup_before_migration(&connection, path, version, 6)?)
+        let migration_backup = if version > 0 && version < 7 {
+            Some(backup_before_migration(&connection, path, version, 7)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 6 {
+        if version < 7 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -137,8 +139,11 @@ impl MetadataStore {
                 crate::context::migrate_context_v5(&tx)?;
                 crate::prepared_launch::migrate_prepared_launch_schema(&tx)?;
             }
-            crate::conversation::migrate_conversation_schema(&tx)?;
-            tx.pragma_update(None, "user_version", 6)?;
+            if version < 6 {
+                crate::conversation::migrate_conversation_schema(&tx)?;
+            }
+            migrate_launch_ordinal_schema(&tx)?;
+            tx.pragma_update(None, "user_version", 7)?;
             tx.commit()?;
         }
         File::open(
@@ -184,6 +189,41 @@ impl MetadataStore {
         Ok(records)
     }
 
+    /// Read a bounded, newest-first page of one session's generation history.
+    /// `before` is an exclusive ordinal cursor, independent of generation UUIDs.
+    pub fn generation_records(
+        &self,
+        session: Uuid,
+        before: Option<u64>,
+        limit: u16,
+    ) -> Result<Vec<LaunchRecord>> {
+        ensure!(
+            (1..=33).contains(&limit),
+            "generation page limit must be 1..=33"
+        );
+        let before = before
+            .map(i64::try_from)
+            .transpose()
+            .context("generation page cursor exceeds SQLite integer range")?;
+        let mut statement = self.connection.prepare(
+            "SELECT operation_id FROM launch_intents
+             WHERE session_id=?1 AND (?2 IS NULL OR generation_ordinal<?2)
+             ORDER BY generation_ordinal DESC LIMIT ?3",
+        )?;
+        let operations = statement.query_map(
+            params![session.to_string(), before, i64::from(limit)],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut records = Vec::with_capacity(limit as usize);
+        for operation in operations {
+            records.push(
+                load_record(&self.connection, Uuid::parse_str(&operation?)?)?
+                    .context("launch disappeared during generation page read")?,
+            );
+        }
+        Ok(records)
+    }
+
     /// A retry returns created=false, even for an unresolved intent. Only the
     /// call that receives created=true may proceed to creating its helper.
     pub fn begin_launch(
@@ -217,7 +257,17 @@ impl MetadataStore {
             !locked,
             "generation locked: existing launch must be reconciled before another launch"
         );
-        tx.execute("INSERT INTO launch_intents(operation_id,session_id,generation,nonce,state) VALUES(?1,?2,?3,?4,'intent')", params![operation_id.to_string(), session_id.to_string(), generation.to_string(), nonce.to_string()])?;
+        let previous_ordinal: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(generation_ordinal),0) FROM launch_intents WHERE session_id=?1",
+            [session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            (0..i64::MAX).contains(&previous_ordinal),
+            "generation ordinal exhausted or invalid"
+        );
+        let ordinal = (previous_ordinal + 1) as u64;
+        tx.execute("INSERT INTO launch_intents(operation_id,session_id,generation,nonce,state,generation_ordinal) VALUES(?1,?2,?3,?4,'intent',?5)", params![operation_id.to_string(), session_id.to_string(), generation.to_string(), nonce.to_string(), ordinal as i64])?;
         tx.execute(
             "INSERT INTO generation_locks(session_id,generation,operation_id) VALUES(?1,?2,?3)",
             params![
@@ -231,6 +281,7 @@ impl MetadataStore {
             record: LaunchRecord {
                 session_id,
                 generation,
+                ordinal,
                 operation_id,
                 nonce,
                 state: LaunchState::IntentCommitted,
@@ -396,6 +447,28 @@ impl MetadataStore {
         Ok(result)
     }
 }
+
+/// Schema v7 gives every historical and new generation a stable, per-session
+/// order based on its original durable intent insertion order.
+fn migrate_launch_ordinal_schema(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE launch_intents
+            ADD COLUMN generation_ordinal INTEGER NOT NULL DEFAULT 0;
+        WITH ordered AS (
+            SELECT operation_id,
+                   ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY rowid) AS ordinal
+            FROM launch_intents
+        )
+        UPDATE launch_intents
+        SET generation_ordinal=(
+            SELECT ordinal FROM ordered
+            WHERE ordered.operation_id=launch_intents.operation_id
+        );
+        CREATE UNIQUE INDEX launch_session_generation_ordinal
+            ON launch_intents(session_id,generation_ordinal);",
+    )?;
+    Ok(())
+}
 /// SQLite documents VACUUM INTO as a consistent live-database snapshot:
 /// https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause
 /// An empty private temp file is explicitly synced, renamed and directory-synced
@@ -451,24 +524,29 @@ fn load_record(connection: &Connection, operation_id: Uuid) -> Result<Option<Lau
     type LaunchRow = (
         String,
         String,
+        i64,
         String,
         String,
         Option<String>,
         Option<String>,
     );
-    let record: Option<LaunchRow> = connection.query_row("SELECT session_id,generation,nonce,state,identity,reason FROM launch_intents WHERE operation_id=?1", [operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+    let record: Option<LaunchRow> = connection.query_row("SELECT session_id,generation,generation_ordinal,nonce,state,identity,reason FROM launch_intents WHERE operation_id=?1", [operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
     record
-        .map(|(session, generation, nonce, state, identity, reason)| {
-            Ok(LaunchRecord {
-                session_id: Uuid::parse_str(&session)?,
-                generation: Uuid::parse_str(&generation)?,
-                operation_id,
-                nonce: Uuid::parse_str(&nonce)?,
-                state: LaunchState::parse(&state)?,
-                identity: identity.map(|s| serde_json::from_str(&s)).transpose()?,
-                reason,
-            })
-        })
+        .map(
+            |(session, generation, ordinal, nonce, state, identity, reason)| {
+                ensure!(ordinal > 0, "invalid stored generation ordinal");
+                Ok(LaunchRecord {
+                    session_id: Uuid::parse_str(&session)?,
+                    generation: Uuid::parse_str(&generation)?,
+                    ordinal: ordinal as u64,
+                    operation_id,
+                    nonce: Uuid::parse_str(&nonce)?,
+                    state: LaunchState::parse(&state)?,
+                    identity: identity.map(|s| serde_json::from_str(&s)).transpose()?,
+                    reason,
+                })
+            },
+        )
         .transpose()
 }
 
@@ -492,12 +570,23 @@ mod tests {
         assert!(MetadataStore::open(&path).is_err());
         let (session, generation, op, nonce) = (
             Uuid::new_v4(),
-            Uuid::new_v4(),
+            Uuid::from_u128(900),
             Uuid::new_v4(),
             Uuid::new_v4(),
         );
-        assert!(store.begin_launch(session, generation, op, nonce)?.created);
-        assert!(!store.begin_launch(session, generation, op, nonce)?.created);
+        let first = store.begin_launch(session, generation, op, nonce)?;
+        assert!(first.created);
+        assert_eq!(first.record.ordinal, 1);
+        let mut legacy_wire = serde_json::to_value(&first.record)?;
+        legacy_wire
+            .as_object_mut()
+            .context("serialized launch record must be an object")?
+            .remove("ordinal");
+        let legacy_record: LaunchRecord = serde_json::from_value(legacy_wire)?;
+        assert_eq!(legacy_record.ordinal, 0);
+        let retry = store.begin_launch(session, generation, op, nonce)?;
+        assert!(!retry.created);
+        assert_eq!(retry.record.ordinal, 1);
         assert!(
             store
                 .begin_launch(session, Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())
@@ -527,19 +616,225 @@ mod tests {
         store.permit_exec(op)?;
         store.mark_running(op)?;
         store.mark_exited(op)?;
+        let second_generation = Uuid::from_u128(100);
+        let second =
+            store.begin_launch(session, second_generation, Uuid::new_v4(), Uuid::new_v4())?;
+        assert!(second.created);
+        assert_eq!(second.record.ordinal, 2);
+        store.mark_unknown(second.record.operation_id, "uncertain")?;
         assert!(
             store
-                .begin_launch(session, Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())?
-                .created
+                .begin_launch(session, Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())
+                .is_err()
         );
-        assert_eq!(store.list_launches()?.len(), 2);
+        store.resolve_unknown_as_exited(second.record.operation_id, "verified absent")?;
+        let third = store.begin_launch(session, Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())?;
+        assert_eq!(third.record.ordinal, 3);
+        assert_eq!(store.list_launches()?.len(), 3);
         drop(store);
+        let reopened = MetadataStore::open(path)?;
+        let reopened_first = reopened.get_launch(op)?.unwrap();
+        assert_eq!(reopened_first.state, LaunchState::Exited);
+        assert_eq!(reopened_first.ordinal, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn schema_v6_migration_backfills_per_session_in_rowid_order_and_keeps_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("state.sqlite");
+        let first_session = Uuid::new_v4();
+        let other_session = Uuid::new_v4();
+        let first_generation = Uuid::from_u128(900);
+        let other_generation = Uuid::new_v4();
+        let second_generation = Uuid::from_u128(100);
+        let first_operation = Uuid::new_v4();
+        let other_operation = Uuid::new_v4();
+        let second_operation = Uuid::new_v4();
+        let first_nonce = Uuid::new_v4();
+        let other_nonce = Uuid::new_v4();
+        let second_nonce = Uuid::new_v4();
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(
+                "CREATE TABLE launch_intents (
+                    operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                    generation TEXT NOT NULL UNIQUE, nonce TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('intent','helper','permitted','running','unknown','exited')),
+                    identity TEXT, reason TEXT
+                );
+                CREATE TABLE generation_locks (
+                    session_id TEXT PRIMARY KEY, generation TEXT NOT NULL UNIQUE,
+                    operation_id TEXT NOT NULL UNIQUE REFERENCES launch_intents(operation_id)
+                );
+                PRAGMA user_version=6;",
+            )?;
+            for (operation, session, generation, nonce, state) in [
+                (
+                    first_operation,
+                    first_session,
+                    first_generation,
+                    first_nonce,
+                    "exited",
+                ),
+                (
+                    other_operation,
+                    other_session,
+                    other_generation,
+                    other_nonce,
+                    "exited",
+                ),
+                (
+                    second_operation,
+                    first_session,
+                    second_generation,
+                    second_nonce,
+                    "unknown",
+                ),
+            ] {
+                connection.execute(
+                    "INSERT INTO launch_intents(operation_id,session_id,generation,nonce,state)
+                     VALUES(?1,?2,?3,?4,?5)",
+                    params![
+                        operation.to_string(),
+                        session.to_string(),
+                        generation.to_string(),
+                        nonce.to_string(),
+                        state,
+                    ],
+                )?;
+            }
+            connection.execute(
+                "INSERT INTO generation_locks(session_id,generation,operation_id)
+                 VALUES(?1,?2,?3)",
+                params![
+                    first_session.to_string(),
+                    second_generation.to_string(),
+                    second_operation.to_string(),
+                ],
+            )?;
+        }
+
+        let store = MetadataStore::open(&path)?;
+        assert_eq!(store.get_launch(first_operation)?.unwrap().ordinal, 1);
+        assert_eq!(store.get_launch(other_operation)?.unwrap().ordinal, 1);
+        assert_eq!(store.get_launch(second_operation)?.unwrap().ordinal, 2);
         assert_eq!(
-            MetadataStore::open(path)?.get_launch(op)?.unwrap().state,
-            LaunchState::Exited
+            store.get_launch(second_operation)?.unwrap().generation,
+            second_generation
+        );
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            7
+        );
+        assert_eq!(
+            store.connection.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM generation_locks WHERE session_id=?1 AND operation_id=?2",
+                params![first_session.to_string(), second_operation.to_string()],
+                |row| row.get(0),
+            )?,
+            1
+        );
+        let backup_path = store.migration_backup_path().context("v6 backup absent")?;
+        assert!(backup_path.to_string_lossy().contains(".pre-v7."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            6
+        );
+        assert_eq!(
+            backup
+                .query_row::<usize, _, _>("SELECT COUNT(*) FROM launch_intents", [], |row| row
+                    .get(0))?,
+            3
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM generation_locks",
+                [],
+                |row| row.get(0)
+            )?,
+            1
         );
         Ok(())
     }
+
+    #[test]
+    fn generation_records_pages_by_exclusive_ordinal_with_strict_bounds() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
+        let session = Uuid::new_v4();
+        for offset in 1..=5u128 {
+            let generation = Uuid::from_u128(1_000 - offset);
+            let operation = Uuid::new_v4();
+            store.begin_launch(session, generation, operation, Uuid::new_v4())?;
+            store.register_helper(operation, identity())?;
+            store.permit_exec(operation)?;
+            store.mark_running(operation)?;
+            store.mark_exited(operation)?;
+        }
+        let other_session = Uuid::new_v4();
+        let other_operation = Uuid::new_v4();
+        store.begin_launch(
+            other_session,
+            Uuid::new_v4(),
+            other_operation,
+            Uuid::new_v4(),
+        )?;
+        store.register_helper(other_operation, identity())?;
+        store.permit_exec(other_operation)?;
+        store.mark_running(other_operation)?;
+        store.mark_exited(other_operation)?;
+
+        let latest = store.generation_records(session, None, 3)?;
+        assert_eq!(
+            latest
+                .iter()
+                .map(|record| record.ordinal)
+                .collect::<Vec<_>>(),
+            [5, 4, 3]
+        );
+        assert_eq!(
+            latest
+                .iter()
+                .map(|record| record.generation)
+                .collect::<Vec<_>>(),
+            [
+                Uuid::from_u128(995),
+                Uuid::from_u128(996),
+                Uuid::from_u128(997)
+            ]
+        );
+        let older = store.generation_records(session, Some(3), 33)?;
+        assert_eq!(
+            older
+                .iter()
+                .map(|record| record.ordinal)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert!(store.generation_records(session, Some(1), 33)?.is_empty());
+        assert!(store.generation_records(session, Some(0), 33)?.is_empty());
+        assert!(store.generation_records(session, None, 0).is_err());
+        assert!(store.generation_records(session, None, 34).is_err());
+        assert!(
+            store
+                .generation_records(session, Some(u64::MAX), 33)
+                .is_err()
+        );
+        assert!(
+            store
+                .generation_records(Uuid::new_v4(), None, 33)?
+                .is_empty()
+        );
+        Ok(())
+    }
+
     #[test]
     fn every_crash_boundary_keeps_lock_until_explicit_reconciliation() -> Result<()> {
         // Isolate fork/exec crash probes: a child can briefly inherit unrelated flock descriptors.
@@ -612,7 +907,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 7)?;
+        store.connection.pragma_update(None, "user_version", 8)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

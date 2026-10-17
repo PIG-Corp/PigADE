@@ -9,7 +9,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
 | crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
-| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema6, launch locks, catalog CAS and migration backups |
+| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema7, launch locks, catalog CAS and migration backups |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, geometry/focus projection and schema1 persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout command routes |
@@ -18,7 +18,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/replay_cache.rs | Leased, marked private replay caches and bounded fail-closed orphan collection; sources are preserved |
 | crates/session-host/tests/query_backpressure.rs | Real PTY cyclic-wait regression, exact50k query FIFO and bounded-response degradation/raw-tail recovery |
 | crates/session-host/src/metrics.rs | Bounded cumulative counters plus independent fixed-size actor/reader stage probe in liveSnapshot/List; no terminal content or input bytes |
-| crates/session-host/src/poll.rs | Conditional bounded polling: stable `(session,generation)` selection and metadata-only replies when the client watermark is current |
+| crates/session-host/src/poll.rs | Conditional bounded polling: exact panel generation or authoritative durable head, one model per logical session, metadata-only replies when current |
+| crates/session-host/src/generations.rs | Indexed launch-order pages, explicit historical pins and follow-head selection; metadata-only catalog CAS, no spawn |
 | crates/session-host/src/recovery_diagnostics.rs | Bounded unavailable-artifact notices with escaped display basenames; no fabricated sessions or source changes |
 | crates/session-host/src/request_decode.rs | Streaming Input-array preflight before internally tagged Serde buffering; bounded raw IPC frame remains a separate limit |
 | crates/session-host/src/catalog.rs | Authoritative layout/projection validation and atomic persistence; explicit legacy projection import |
@@ -27,6 +28,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/memory.rs | Lossless #/## source sections outside fenced code, bounded review metadata and explicit revision/hash-bound 32KiB UTF-8 selection |
 | crates/app/src/memory_choice.rs | Number-entry selection and dirty-preview gating using host section identities; UI never reparses Markdown |
 | crates/storage/src/conversation.rs | Immutable user conversation bindings, per-session CAS, current provider/ID uniqueness and schema6 migration with durable backup |
+| crates/storage/src/launch.rs, catalog.rs | Schema7 launch-order ordinals allocated with intent/lock, indexed exclusive-cursor pages, durable pre-v7 backups and per-pane generation pins in WindowState |
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
 | crates/session-host/src/prepared.rs | Review/start/session-context routes; frozen snapshots and exact generation identity; no retries after admission |
 | crates/session-host/src/adapters.rs | Bounded version detection and versioned Claude/Codex startup arguments; OpenCode generic-only pending transport verification |

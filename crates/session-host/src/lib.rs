@@ -4,6 +4,7 @@ mod catalog;
 pub mod changes;
 #[doc(hidden)]
 pub mod checkpoint;
+pub mod generations;
 pub mod history;
 pub mod history_read;
 pub mod input;
@@ -119,6 +120,18 @@ pub enum Command {
         timeout_ms: u16,
     },
     Catalog,
+    Generations {
+        session: Uuid,
+        before: Option<u64>,
+    },
+    SelectGeneration {
+        session: Uuid,
+        generation: Option<Uuid>,
+    },
+    PollPanels {
+        panels: Vec<poll::PanelTarget>,
+        known: Vec<poll::Known>,
+    },
     GetContext {
         scope_id: Uuid,
     },
@@ -247,6 +260,10 @@ pub struct Response {
     /// Current host publication epoch; absent for older peers and non-poll replies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_token: Option<changes::Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generations: Option<generations::GenerationList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_selection: Option<bool>,
 }
 
 /// Stable machine-readable proof that no part of a command was admitted.
@@ -451,6 +468,7 @@ struct Host {
     root: PathBuf,
     endpoint_root: PathBuf,
     sessions: Vec<Session>,
+    generation_heads: std::collections::BTreeMap<Uuid, Uuid>,
     metadata: MetadataStore,
     catalog_notice: Option<String>,
     recovery: RecoveryDiagnostics,
@@ -655,7 +673,10 @@ impl Host {
         if matches!(&command, Command::WaitForChange { .. }) {
             bail!("wait_for_change is only available through the IPC notification service");
         }
-        if matches!(&command, Command::Poll { .. } | Command::PollVisible { .. }) {
+        if matches!(
+            &command,
+            Command::Poll { .. } | Command::PollVisible { .. } | Command::PollPanels { .. }
+        ) {
             self.reconcile_exits()?;
             let result = match command {
                 Command::Poll { known } => poll::poll(
@@ -668,6 +689,13 @@ impl Host {
                     &known,
                     &self.changes,
                     &sessions,
+                )?,
+                Command::PollPanels { panels, known } => poll::poll_panels(
+                    self.sessions.iter().map(|s| s.view.as_ref()),
+                    &known,
+                    &self.changes,
+                    &panels,
+                    &self.generation_heads,
                 )?,
                 _ => unreachable!(),
             };
@@ -686,6 +714,8 @@ impl Host {
                 selected: Some(result.selected),
                 history_chunk: None,
                 change_token: result.change_token,
+                generations: None,
+                generation_selection: None,
             });
         }
         if matches!(
@@ -726,6 +756,8 @@ impl Host {
                 selected: None,
                 history_chunk: None,
                 change_token: None,
+                generations: None,
+                generation_selection: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -745,9 +777,57 @@ impl Host {
                 selected: None,
                 history_chunk: None,
                 change_token: None,
+                generations: None,
+                generation_selection: None,
             });
         }
         match &command {
+            Command::Generations { session, before } => {
+                let generations = generations::list(self, *session, *before)?;
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: Vec::new(),
+                    error: None,
+                    rejected_before_admission: None,
+                    catalog: None,
+                    selection: None,
+                    context: None,
+                    launch_preview: None,
+                    launch_phase: None,
+                    catalog_notice: None,
+                    recovery: self.recovery.response(),
+                    selected: None,
+                    history_chunk: None,
+                    change_token: None,
+                    generations: Some(generations),
+                    generation_selection: Some(true),
+                });
+            }
+            Command::SelectGeneration {
+                session,
+                generation,
+            } => {
+                let selection = generations::select(self, *session, *generation)?;
+                notify_actor_change(&self.changes, "generation selection");
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: Vec::new(),
+                    error: None,
+                    rejected_before_admission: None,
+                    catalog: None,
+                    selection: Some(selection),
+                    context: None,
+                    launch_preview: None,
+                    launch_phase: None,
+                    catalog_notice: None,
+                    recovery: self.recovery.response(),
+                    selected: None,
+                    history_chunk: None,
+                    change_token: None,
+                    generations: None,
+                    generation_selection: Some(true),
+                });
+            }
             Command::PrepareLaunch { request } => {
                 let preview = prepared::prepare(self, request.clone())?;
                 return Ok(self.launch_response(None, preview, None));
@@ -826,6 +906,8 @@ impl Host {
                     selected: None,
                     history_chunk: None,
                     change_token: None,
+                    generations: None,
+                    generation_selection: None,
                 });
             }
         };
@@ -844,6 +926,8 @@ impl Host {
             selected: None,
             history_chunk: None,
             change_token: None,
+            generations: None,
+            generation_selection: Some(true),
         })
     }
     fn launch_response(
@@ -867,6 +951,8 @@ impl Host {
             selected: None,
             history_chunk: None,
             change_token: None,
+            generations: None,
+            generation_selection: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -918,6 +1004,19 @@ impl Host {
                 }
             }
         }
+        let mut ordered_heads = std::collections::BTreeMap::new();
+        for record in metadata.list_launches()? {
+            let head = ordered_heads
+                .entry(record.session_id)
+                .or_insert((0, record.generation));
+            if record.ordinal > head.0 {
+                *head = (record.ordinal, record.generation);
+            }
+        }
+        let generation_heads = ordered_heads
+            .into_iter()
+            .map(|(session, (_, generation))| (session, generation))
+            .collect();
         // Never spawn on recovery. Every unfinished launch remains locked for investigation.
         for record in metadata.list_launches()? {
             if !matches!(record.state, pigade_storage::LaunchState::Exited) {
@@ -937,6 +1036,7 @@ impl Host {
             endpoint_root: root.clone(),
             root,
             sessions,
+            generation_heads,
             metadata,
             catalog_notice,
             recovery,
@@ -1100,6 +1200,8 @@ impl Host {
             begin.created,
             "operation already exists; no duplicate spawn"
         );
+        self.generation_heads.insert(spec.session, spec.generation);
+        notify_actor_change(&self.changes, "generation intent");
         let path = self.root.join(format!("{}.journal", spec.generation));
         let journal = Journal::create(
             &path,
@@ -2015,6 +2117,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 selected: None,
                 history_chunk: None,
                 change_token: None,
+                generations: None,
+                generation_selection: None,
             },
         };
         let _ = job.reply.try_send(response);

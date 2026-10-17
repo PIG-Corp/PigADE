@@ -111,5 +111,7 @@ pub(crate) fn response(
         selected: None,
         history_chunk,
         change_token: None,
+        generations: None,
+        generation_selection: None,
     }
 }

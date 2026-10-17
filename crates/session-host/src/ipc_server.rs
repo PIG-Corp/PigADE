@@ -114,6 +114,8 @@ fn error_response(
         selected: None,
         history_chunk: None,
         change_token: None,
+        generations: None,
+        generation_selection: None,
     }
 }
 
@@ -190,6 +192,8 @@ fn process_connection(
                 selected: None,
                 history_chunk: None,
                 change_token: Some(result.token),
+                generations: None,
+                generation_selection: None,
             },
             Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
         };
@@ -262,6 +266,8 @@ mod tests {
             selected: None,
             history_chunk: None,
             change_token: None,
+            generations: None,
+            generation_selection: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -423,6 +429,8 @@ mod tests {
             selected: None,
             history_chunk: None,
             change_token: None,
+            generations: None,
+            generation_selection: None,
         })?;
         assert!(receive::<Response>(&mut command_client)?.error.is_none());
         command_worker.join().unwrap()?;

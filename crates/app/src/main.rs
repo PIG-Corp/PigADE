@@ -53,9 +53,30 @@ struct State {
     command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
     poll_backpressured: bool,
-    visible_sessions: Option<Vec<uuid::Uuid>>,
+    visible_panels: Option<Vec<protocol::PanelTarget>>,
+    supports_generation_selection: bool,
 }
 impl State {
+    fn set_visible_panels(&mut self, panels: Vec<protocol::PanelTarget>) {
+        if self.visible_panels.as_ref() == Some(&panels) {
+            return;
+        }
+        self.views.retain(|view| {
+            panels.iter().any(|target| {
+                target.session.to_string() == view.session
+                    && self
+                        .visible_panels
+                        .as_ref()
+                        .is_some_and(|old| old.contains(target))
+                    && target
+                        .generation
+                        .is_none_or(|generation| generation.to_string() == view.generation)
+            })
+        });
+        self.visible_panels = Some(panels);
+        self.views_revision = self.views_revision.wrapping_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
     fn fail(&mut self, error: String) {
         if self.error.is_none() {
             self.error = Some(error);
@@ -331,6 +352,21 @@ fn catalog_panes(catalog: &pigade_storage::Catalog) -> Vec<uuid::Uuid> {
         .unwrap_or_default()
 }
 
+fn catalog_panel_targets(catalog: &pigade_storage::Catalog) -> Vec<protocol::PanelTarget> {
+    catalog_panes(catalog)
+        .into_iter()
+        .map(|session| protocol::PanelTarget {
+            session,
+            generation: catalog
+                .selection
+                .window
+                .panel_generations
+                .get(&session)
+                .copied(),
+        })
+        .collect()
+}
+
 struct WorkerConnection {
     tx: mpsc::SyncSender<IpcMessage>,
     shared: Arc<Mutex<State>>,
@@ -355,20 +391,43 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
     let product_wake = wake.clone();
     thread::spawn(move || {
         let mut next = json!({"command":"catalog"});
+        let mut routing_catalog: Option<pigade_storage::Catalog> = None;
         loop {
             let reply = protocol::product_request(&product_socket, next);
-            if let Ok(reply) = &reply
-                && let Some(catalog) = &reply.catalog
-            {
-                let ids = catalog_panes(catalog);
-                {
-                    let mut state = product_shared.lock().unwrap();
-                    state.visible_sessions = Some(ids.clone());
+            if let Ok(reply) = &reply {
+                if let Some(catalog) = &reply.catalog {
+                    routing_catalog = Some(catalog.clone());
                 }
-                if let Ok(result) = protocol::poll_visible(&product_socket, &[], &ids) {
-                    let mut state = product_shared.lock().unwrap();
-                    if state.visible_sessions.as_ref() == Some(&ids) {
-                        apply_poll_result(&mut state, Ok(result));
+                if let Some(selection) = &reply.selection
+                    && let Some(catalog) = &mut routing_catalog
+                    && selection.revision >= catalog.selection.revision
+                {
+                    catalog.selection = selection.clone();
+                }
+                if (reply.catalog.is_some() || reply.generation_selected)
+                    && let Some(catalog) = &routing_catalog
+                {
+                    let panels = catalog_panel_targets(catalog);
+                    let supports = reply.generation_selection;
+                    {
+                        let mut state = product_shared.lock().unwrap();
+                        state.supports_generation_selection = supports;
+                        state.set_visible_panels(panels.clone());
+                    }
+                    let result = if supports {
+                        protocol::poll_panels(&product_socket, &[], &panels)
+                    } else {
+                        protocol::poll_visible(
+                            &product_socket,
+                            &[],
+                            &panels.iter().map(|panel| panel.session).collect::<Vec<_>>(),
+                        )
+                    };
+                    if let Ok(result) = result {
+                        let mut state = product_shared.lock().unwrap();
+                        if state.visible_panels.as_ref() == Some(&panels) {
+                            apply_poll_result(&mut state, Ok(result));
+                        }
                     }
                 }
             }
@@ -593,23 +652,32 @@ fn spawn_poll_worker(
                 thread::sleep(next_poll.saturating_duration_since(Instant::now()));
             }
             let started = Instant::now();
-            let (known, visible) = {
+            let (known, visible, supports_generations) = {
                 let state = shared.lock().unwrap();
                 (
                     state.views.iter().map(View::known).collect::<Vec<_>>(),
-                    state.visible_sessions.clone(),
+                    state.visible_panels.clone(),
+                    state.supports_generation_selection,
                 )
             };
             let visible_snapshot = visible.clone();
-            let result = if let Some(sessions) = visible {
-                protocol::poll_visible(&socket, &known, &sessions)
+            let result = if let Some(panels) = visible {
+                if supports_generations {
+                    protocol::poll_panels(&socket, &known, &panels)
+                } else {
+                    protocol::poll_visible(
+                        &socket,
+                        &known,
+                        &panels.iter().map(|panel| panel.session).collect::<Vec<_>>(),
+                    )
+                }
             } else {
                 protocol::poll(&socket, &known)
             };
             let changed = {
                 let mut state = shared.lock().unwrap();
                 let revision = state.revision;
-                if state.visible_sessions != visible_snapshot {
+                if state.visible_panels != visible_snapshot {
                     token = None;
                 } else {
                     token = apply_poll_result(&mut state, result);
@@ -776,6 +844,7 @@ struct CanvasApp {
     pending_launch_review: bool,
     pending_context_inspection: bool,
     pending_conversation_inspection: bool,
+    pending_generation_picker: bool,
     pending_context_editor: Option<uuid::Uuid>,
     editor_dialog: Option<uuid::Uuid>,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
@@ -901,11 +970,19 @@ impl CanvasApp {
                             match reply {
                                 Ok(reply) => {
                                     if let Some(selection) = reply.selection {
+                                        let generation_changed = this.product.catalog.as_ref().is_some_and(|catalog| catalog.selection.window.panel_generations != selection.window.panel_generations);
                                         if let Some(catalog) = &mut this.product.catalog
                                             && selection.revision >= catalog.selection.revision {
                                             catalog.selection = selection;
                                         }
                                         this.canvas_saving = None;
+                                        if generation_changed || reply.generation_selected {
+                                            this.sync_product_selection(window,cx);
+                                        }
+                                        if reply.generation_selected && this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::Generations) {
+                                            this.product.dialog = None;
+                                            this.product.notice = Some("Выбор поколения сохранён".into());
+                                        }
                                         // A click/focus key can arrive during the
                                         // short background save. Persist that
                                         // local focus once the writer is free.
@@ -957,6 +1034,13 @@ impl CanvasApp {
                                         this.pending_conversation_inspection = false;
                                         this.product.launch_preview = Some(preview);
                                     }
+                                    if let Some(generations) = reply.generations {
+                                        if this.pending_generation_picker {
+                                            this.product.generation_page = Some(generations);
+                                            this.product.dialog = Some(product::Dialog::new(product::DialogKind::Generations));
+                                        }
+                                        this.pending_generation_picker = false;
+                                    }
                                     if let Some(context) = reply.context {
                                         this.product.apply_context_reply(context.clone(),reply.context_saved,this.pending_context_editor == Some(context.scope_id));
                                         this.pending_context_editor = None;
@@ -971,6 +1055,7 @@ impl CanvasApp {
                                     this.pending_context_inspection = false;
                                     this.pending_conversation_inspection = false;
                                     this.pending_context_editor = None;
+                                    this.pending_generation_picker = false;
                                     if error.rejected_before_launch {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
@@ -1128,6 +1213,7 @@ impl CanvasApp {
             pending_launch_review: false,
             pending_context_inspection: false,
             pending_conversation_inspection: false,
+            pending_generation_picker: false,
             pending_context_editor: None,
             editor_dialog: None,
             layout_geometry: None,
@@ -1598,11 +1684,15 @@ impl CanvasApp {
         let Some(catalog) = &self.product.catalog else {
             return;
         };
-        let previous_target = self.selected_pane();
+        let previous_target = self
+            .state
+            .views
+            .get(self.selected)
+            .map(|view| (view.session.clone(), view.generation.clone()));
         let ids = catalog_panes(catalog);
         {
             let mut shared = self.shared.lock().unwrap();
-            shared.visible_sessions = Some(ids.clone());
+            shared.set_visible_panels(catalog_panel_targets(catalog));
             shared
                 .views
                 .retain(|v| ids.iter().any(|id| v.session == id.to_string()));
@@ -1622,7 +1712,13 @@ impl CanvasApp {
                 })
                 .unwrap_or(0);
         }
-        if previous_target != self.selected_pane() {
+        if previous_target
+            != self
+                .state
+                .views
+                .get(self.selected)
+                .map(|view| (view.session.clone(), view.generation.clone()))
+        {
             self.finish_pointer(cx);
             self.selection = None;
             self.selection_dragging = false;
@@ -1695,9 +1791,45 @@ impl CanvasApp {
             self.pending_launch_review = false;
             self.pending_context_inspection = false;
             self.pending_conversation_inspection = false;
+            self.pending_generation_picker = false;
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenGenerations | A::LoadGenerations(_) => {
+                if self.product.busy {
+                    return;
+                }
+                let session = if matches!(action, A::LoadGenerations(_)) {
+                    self.product
+                        .generation_page
+                        .as_ref()
+                        .map(|page| page.session)
+                } else {
+                    self.selected_pane()
+                        .or_else(|| self.tab_layout().and_then(|(_, layout)| layout.focused))
+                };
+                if let Some(session) = session {
+                    let before = if let A::LoadGenerations(before) = action {
+                        before
+                    } else {
+                        None
+                    };
+                    self.pending_generation_picker = true;
+                    self.product_command(
+                        json!({"command":"generations","session":session,"before":before}),
+                        cx,
+                    );
+                } else {
+                    self.product.notice = Some("Сначала выберите терминальную панель".into());
+                }
+            }
+            A::SelectGeneration(generation) => {
+                if !self.product.busy
+                    && let Some(page) = &self.product.generation_page
+                {
+                    self.product_command(json!({"command":"select_generation","session":page.session,"generation":generation}),cx);
+                }
+            }
             A::PanCanvas => {
                 self.product.dialog = None;
                 self.finish_pointer(cx);
@@ -2013,6 +2145,30 @@ impl CanvasApp {
                     DialogKind::Context => {
                         if let Some(context) = &self.product.context {
                             self.product_command(json!({"command":"save_context","expected_revision":context.revision,"document":{"scope_id":context.scope_id,"revision":context.revision,"instructions":field(0),"role":field(1),"memory":field(2)}}),cx);
+                        }
+                    }
+                    DialogKind::Generations => {
+                        let selected = field(0).trim();
+                        let action = if selected.eq_ignore_ascii_case("текущее")
+                            || selected.eq_ignore_ascii_case("current")
+                        {
+                            Some(A::SelectGeneration(None))
+                        } else {
+                            selected
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|index| index.checked_sub(1))
+                                .and_then(|index| {
+                                    self.product.generation_page.as_ref()?.entries.get(index)
+                                })
+                                .filter(|entry| entry.has_frame)
+                                .map(|entry| A::SelectGeneration(Some(entry.generation)))
+                        };
+                        if let Some(action) = action {
+                            self.product_action(action, window, cx);
+                        } else {
+                            self.product.notice =
+                                Some("Выберите доступную строку или введите «текущее»".into());
                         }
                     }
                     DialogKind::Conversation => {
@@ -3377,6 +3533,7 @@ impl CanvasApp {
                 } else {
                     product::ProductAction::EditContext
                 }),
+                "o" => Some(product::ProductAction::OpenGenerations),
                 "b" => Some(product::ProductAction::InspectConversation),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
@@ -4590,15 +4747,18 @@ fn paint_panel(
                 }
             };
             format!(
-                "{} · {state}",
+                "{} · {state} · {}",
                 if v.frame.title.is_empty() {
                     "Терминал"
                 } else {
                     &v.frame.title
-                }
+                },
+                protocol::generation_label(&v.generation)
             )
         })
-        .unwrap_or_else(|| "Нет сессии — запустите через host CLI".into());
+        .unwrap_or_else(|| {
+            "Модель выбранного поколения недоступна · режим PigADE, O — поколения".into()
+        });
     text(
         title,
         bounds.origin + point(px(8.), px(5.)),
@@ -5192,6 +5352,53 @@ mod tests {
             }],
             omitted: 0,
         }
+    }
+
+    #[test]
+    fn generation_choice_drops_only_changed_pane_before_loading_new_cells() {
+        use super::protocol::PanelTarget;
+        use uuid::Uuid;
+        let session = Uuid::from_u128(10);
+        let old_generation = Uuid::from_u128(999);
+        let other_session = Uuid::from_u128(20);
+        let old_target = PanelTarget {
+            session,
+            generation: Some(old_generation),
+        };
+        let following = PanelTarget {
+            session,
+            generation: None,
+        };
+        let other_target = PanelTarget {
+            session: other_session,
+            generation: None,
+        };
+        let mut historical = view(None);
+        historical.session = session.to_string();
+        historical.generation = old_generation.to_string();
+        historical.state = "history".into();
+        historical.pid = None;
+        let mut other = view(None);
+        other.session = other_session.to_string();
+        let mut ui = State {
+            views: vec![historical, other],
+            visible_panels: Some(vec![old_target, other_target.clone()]),
+            ..Default::default()
+        };
+        let mut shared = ui.clone();
+        let other_cells = shared.views[1].frame.cells.as_ptr();
+        shared.set_visible_panels(vec![following, other_target]);
+        assert_eq!(shared.views.len(), 1);
+        assert_eq!(shared.views[0].session, other_session.to_string());
+        assert_eq!(shared.views[0].frame.cells.as_ptr(), other_cells);
+        let update = state_update(&ui, &shared).unwrap();
+        assert!(composition_target_changed(&ui, 0, &update));
+        apply_state_update(&mut ui, update);
+        assert!(
+            !ui.views
+                .iter()
+                .any(|view| view.session == session.to_string())
+        );
     }
 
     #[test]

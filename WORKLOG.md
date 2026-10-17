@@ -2353,3 +2353,43 @@ Connect explicit CLI conversation binding to native UI and immutable launch prov
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/src/catalog.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/conversation.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs, README.md, crates/app/README.md, crates/storage/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
 - Verification: Full cargo test --workspace passes after repairing v2 test fixture to actually remove post-v2 tables; strict workspace Clippy and full release bins/examples build pass. App148 tests passed, final strict Clippy/debug build/fmt pass after shell/empty-selection guards and provenance labels. Real-host PTY test covers bind CAS, exact UUID validation, unlaunched-plan rejection, unchanged generation, context identity and binding reopen. Official OpenAI Docs resume page fetched; no native-resume certification inferred. Version/diff checks pass
 - Risks / next: Conversation sheet isolated visual/accessibility verification remains open. Native resume capability stays false: next implement logical-session generation head/history presentation and certified exact-ID resume through existing durable gate. No provider history/auth copied or desktop automation performed; full MVP gates stay open.
+
+## 2026-10-17T15:08:29+00:00 — /root/memory_selection
+
+Added panel-target polling by exact generation or authoritative session head, with fail-closed missing views and metadata-only cache hits
+
+- Files: crates/session-host/src/poll.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/poll.rs; cargo test -p pigade-session-host --lib poll::tests (13 passed); git diff --check -- crates/session-host/src/poll.rs
+- Risks / next: Root may wire poll_panels to the panel command route; legacy poll APIs remain unchanged.
+
+## 2026-10-17T15:09:37+00:00 — conversation_storage
+
+Add durable per-session generation ordinals, paged generation history, and persisted panel generation IDs
+
+- Files: crates/storage/src/launch.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs
+- Verification: cargo test -p pigade-storage --offline --locked (58 passed); cargo clippy -p pigade-storage --all-targets --offline --locked -- -D warnings (passed); rustfmt --edition 2024 --check on owned storage files (passed); git diff --check (passed).
+- Risks / next: Root wires the generation-record page and panel generation map into host/UI; native resume remains outside this storage slice.
+
+## 2026-10-17T15:17:00+00:00 — /root/memory_selection
+
+Added a real-PTY session-host integration test for ordinal generation heads, exact historical pinning, read-only history, and pin recovery without respawn
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: cargo test -p pigade-session-host --test context_launch panel_generation_selection_uses_ordinal_head_and_persists_history_pin -- --nocapture (1 passed); rustfmt --edition 2024 --check crates/session-host/tests/context_launch.rs; git diff --check -- crates/session-host/tests/context_launch.rs
+- Risks / next: Root can run broader host integration tests after route wiring settles.
+
+## 2026-10-17T15:20:39+00:00 — /root/memory_selection
+
+Added the opt-in private X11 generations history UI fixture with fixed picker keystrokes and journal/model invariance checks
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py; python3 scripts/test_isolated_ime_x11.py (22 passed); python3 scripts/isolated-ime-x11.py --fixture generations (plan-only-no-process-no-write); cc -std=c11 -Wall -Wextra -Werror -fsyntax-only scripts/x11-ime-input.c $(pkg-config --cflags x11 xtst xcb xcb-res); git diff --check -- scripts/isolated-ime-x11.py scripts/x11-ime-input.c
+- Risks / next: Root must rebuild host/app and run only in the existing isolated Xvfb harness: python3 scripts/isolated-ime-x11.py --run --fixture generations --app <built-app> --host <built-host> --output <new-private-path>.
+
+## 2026-10-17T15:26:55+00:00 — /root
+
+Ship per-pane generation history selection and durable follow-head routing
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/generations.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/catalog.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/launch.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, crates/storage/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
+- Verification: App150 tests, fmt, strict Clippy and debug build pass. Real-PTY generation pin/head/reopen regression passes. Prior integrated workspace tests/Clippy/release build passed. Existing private X11 generations fixture01 passes with unchanged journal hashes/models/no spawn; picker and old/new captures inspected. Fixed fixture asynchronous open sequencing and key count; generation labels now include ID suffix. Python22 harness tests, C syntax, version and diff checks pass.
+- Risks / next: Native conversation resume, indexed history viewer/search, complete platform/accessibility/performance acceptance remain open; no active desktop access.

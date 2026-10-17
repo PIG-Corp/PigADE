@@ -11,6 +11,15 @@ use std::{
 pub const LIMIT: usize = 8 * 1024 * 1024;
 pub const MAX_RECOVERY_ISSUES: usize = 16;
 pub const MAX_RECOVERY_TEXT_BYTES: usize = 1024;
+
+pub fn generation_label(value: &str) -> String {
+    let Ok(id) = uuid::Uuid::parse_str(value) else {
+        return "неизвестное поколение".into();
+    };
+    let id = id.simple().to_string();
+    format!("{}…{}", &id[..8], &id[28..])
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Geometry {
     pub rows: u16,
@@ -184,6 +193,33 @@ struct Response {
     launch_preview: Option<LaunchPreview>,
     #[serde(default)]
     launch_phase: Option<String>,
+    #[serde(default)]
+    generations: Option<GenerationList>,
+    #[serde(default)]
+    generation_selection: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PanelTarget {
+    pub session: uuid::Uuid,
+    pub generation: Option<uuid::Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GenerationInfo {
+    pub generation: uuid::Uuid,
+    pub ordinal: u64,
+    pub state: String,
+    pub has_frame: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GenerationList {
+    pub session: uuid::Uuid,
+    pub head: Option<uuid::Uuid>,
+    pub pinned: Option<uuid::Uuid>,
+    pub entries: Vec<GenerationInfo>,
+    pub next_before: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -226,6 +262,9 @@ pub struct LaunchPreview {
 }
 
 pub struct ProductReply {
+    pub generation_selection: bool,
+    pub generation_selected: bool,
+    pub generations: Option<GenerationList>,
     pub context_saved: bool,
     pub launch_preview: Option<LaunchPreview>,
     pub launch_phase: Option<String>,
@@ -246,6 +285,15 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
     let context_saved = command_name == Some("save_context");
+    let generation_selected = command_name == Some("select_generation");
+    let generation_owner = (command_name == Some("generations"))
+        .then(|| {
+            command
+                .get("session")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<uuid::Uuid>().ok())
+        })
+        .flatten();
     let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
         .map_err(|message| ProductError {
             message,
@@ -258,7 +306,25 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
                 && response.rejected_before_admission.as_deref() == Some("launch_preflight"),
         });
     }
+    if let Some(page) = &response.generations {
+        let mut unique = std::collections::HashSet::new();
+        if generation_owner != Some(page.session)
+            || page.entries.len() > 32
+            || page
+                .entries
+                .iter()
+                .any(|entry| entry.generation.is_nil() || !unique.insert(entry.generation))
+        {
+            return Err(ProductError {
+                message: "Недопустимый список поколений панели".into(),
+                rejected_before_launch: false,
+            });
+        }
+    }
     Ok(ProductReply {
+        generation_selection: response.generation_selection.unwrap_or(false),
+        generation_selected,
+        generations: response.generations,
         context_saved,
         launch_preview: response.launch_preview,
         launch_phase: response.launch_phase,
@@ -464,7 +530,52 @@ pub fn poll_visible(
         json!({"command":"poll_visible", "sessions":sessions, "known":known}),
     )
     .map_err(PollError::Failed)?;
-    decode_poll(reply)
+    decode_panel_poll(
+        reply,
+        &sessions
+            .iter()
+            .map(|session| PanelTarget {
+                session: *session,
+                generation: None,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn poll_panels(
+    socket: &Path,
+    known: &[Known],
+    panels: &[PanelTarget],
+) -> Result<(Poll, Option<ChangeToken>), PollError> {
+    let reply = request_response(
+        socket,
+        json!({"command":"poll_panels","panels":panels,"known":known}),
+    )
+    .map_err(PollError::Failed)?;
+    decode_panel_poll(reply, panels)
+}
+
+fn decode_panel_poll(
+    reply: Response,
+    panels: &[PanelTarget],
+) -> Result<(Poll, Option<ChangeToken>), PollError> {
+    let result = decode_poll(reply)?;
+    let mut unique = std::collections::HashSet::new();
+    for selected in &result.0.selected {
+        if !unique.insert(&selected.session)
+            || !panels.iter().any(|target| {
+                target.session.to_string() == selected.session
+                    && target
+                        .generation
+                        .is_none_or(|generation| generation.to_string() == selected.generation)
+            })
+        {
+            return Err(PollError::Failed(
+                "Host вернул другое или несколько поколений одной панели; кадр не применён".into(),
+            ));
+        }
+    }
+    Ok(result)
 }
 
 /// This read-only wait has no input/launch admission or retry semantics. An old
@@ -590,6 +701,8 @@ mod tests {
             context: None,
             launch_preview: None,
             launch_phase: None,
+            generations: None,
+            generation_selection: None,
             views: Vec::new(),
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),
@@ -674,6 +787,47 @@ mod tests {
             json!({"command":"snapshot","session":"s","generation":"g"})
         );
         assert_eq!(view.frame.cells[0].text, "界");
+    }
+
+    #[test]
+    fn panel_reply_never_substitutes_another_generation_or_two_models() {
+        let session = uuid::Uuid::from_u128(10);
+        let old = uuid::Uuid::from_u128(99);
+        let new = uuid::Uuid::from_u128(1);
+        let mut frame = fixture();
+        frame.session = session.to_string();
+        frame.generation = old.to_string();
+        let target = PanelTarget {
+            session,
+            generation: Some(old),
+        };
+        let reply = |views: Vec<View>| {
+            let mut reply = error_response("", None);
+            reply.error = None;
+            reply.selected = Some(views.iter().map(View::known).collect());
+            reply.views = views;
+            reply
+        };
+        assert!(
+            decode_panel_poll(reply(vec![frame.clone()]), std::slice::from_ref(&target)).is_ok()
+        );
+        let mut wrong = frame.clone();
+        wrong.generation = new.to_string();
+        wrong.sequence = 0;
+        assert!(
+            decode_panel_poll(reply(vec![wrong.clone()]), std::slice::from_ref(&target)).is_err()
+        );
+        assert!(
+            decode_panel_poll(
+                reply(vec![frame, wrong]),
+                &[PanelTarget {
+                    session,
+                    generation: None
+                }]
+            )
+            .is_err()
+        );
+        assert!(decode_panel_poll(reply(vec![]), &[target]).is_ok());
     }
     #[test]
     fn unchanged_poll_reuses_the_existing_cell_allocation() {

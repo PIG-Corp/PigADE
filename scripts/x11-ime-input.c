@@ -1,6 +1,6 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only fixed compose/commit,
- * EN/RU/CLI, and workspace-context edit/save sequences can synthesize input,
+ * EN/RU/CLI, workspace-context and generation-history sequences can synthesize input,
  * after private-server ownership checks. The latency stage uses50 fixed
  * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
@@ -73,7 +73,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency") &&
         strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
         strcmp(a.stage, "context-save") && strcmp(a.stage, "memory-open") &&
-        strcmp(a.stage, "memory-select"))
+        strcmp(a.stage, "memory-select") && strcmp(a.stage, "generations-open") &&
+        strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -286,6 +287,28 @@ static void memory_select_sequence(Display *dpy) {
     key(dpy, XK_Tab);
     key(dpy, XK_2);
     modified_key(dpy, XK_Control_L, XK_r);
+}
+
+static void generations_open_sequence(Display *dpy) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime)) fail("generation picker shortcut press failed");
+    key(dpy, XK_space);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("generation picker shortcut release failed");
+    key(dpy, XK_o);
+}
+
+static void generations_select_old_sequence(Display *dpy) {
+    key(dpy, XK_2);
+    key(dpy, XK_Return);
+}
+
+static void generations_follow_sequence(Display *dpy) {
+    const KeySym current[] = { XK_c, XK_u, XK_r, XK_r, XK_e, XK_n, XK_t };
+    for (size_t i = 0; i < sizeof(current) / sizeof(current[0]); ++i) key(dpy, current[i]);
+    key(dpy, XK_Return);
 }
 
 static void context_edit_sequence(Display *dpy) {
@@ -506,6 +529,12 @@ int main(int argc, char **argv) {
             memory_open_sequence(dpy);
         } else if (!strcmp(a.stage, "memory-select")) {
             memory_select_sequence(dpy);
+        } else if (!strcmp(a.stage, "generations-open")) {
+            generations_open_sequence(dpy);
+        } else if (!strcmp(a.stage, "generations-select-old")) {
+            generations_select_old_sequence(dpy);
+        } else if (!strcmp(a.stage, "generations-follow")) {
+            generations_follow_sequence(dpy);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -513,6 +542,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "context-open") ? "2" :
                             !strcmp(a.stage, "memory-open") ? "2" :
                             !strcmp(a.stage, "memory-select") ? "4" :
+                            !strcmp(a.stage, "generations-open") ? "2" :
+                            !strcmp(a.stage, "generations-select-old") ? "2" :
+                            !strcmp(a.stage, "generations-follow") ? "8" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

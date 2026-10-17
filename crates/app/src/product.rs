@@ -33,6 +33,9 @@ pub(super) enum ProductAction {
     ToggleContextDelivery,
     InspectSessionContext,
     InspectConversation,
+    OpenGenerations,
+    LoadGenerations(Option<u64>),
+    SelectGeneration(Option<Uuid>),
     PanCanvas,
     RevealFocusedPane,
     SelectProject(Uuid),
@@ -58,6 +61,7 @@ pub(super) enum DialogKind {
     LaunchReview,
     SessionContext,
     Conversation,
+    Generations,
     Transfer,
     Sessions,
 }
@@ -74,6 +78,7 @@ impl DialogKind {
             Self::LaunchReview => "Проверка запуска",
             Self::SessionContext => "Контекст выбранной сессии",
             Self::Conversation => "Диалог CLI",
+            Self::Generations => "Поколения панели",
             Self::Transfer => "Перенести панель",
             Self::Sessions => "Неразмещённые сессии",
         }
@@ -94,6 +99,7 @@ impl DialogKind {
             ],
             Self::SessionContext => &[],
             Self::Conversation => &["Точный ID диалога CLI"],
+            Self::Generations => &["Номер строки или «текущее»"],
             Self::Transfer => &[],
             Self::Sessions => &[],
         }
@@ -110,6 +116,7 @@ impl DialogKind {
             Self::LaunchReview => "Подтвердить и запустить",
             Self::SessionContext => "Закрыть",
             Self::Conversation => "Сохранить привязку",
+            Self::Generations => "Показать поколение",
             Self::Transfer => "Закрыть",
             Self::Sessions => "Закрыть",
         }
@@ -145,6 +152,7 @@ pub(super) struct ProductUi {
     pub(super) sessions: Vec<SessionSummary>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
     pub(super) launch_phase: Option<String>,
+    pub(super) generation_page: Option<protocol::GenerationList>,
     pub(super) notice: Option<String>,
     pub(super) busy: bool,
     pub(super) dialog: Option<Dialog>,
@@ -288,6 +296,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
             ProductAction::InspectConversation,
         ),
         ("Перенести панель", ProductAction::OpenTransfer),
+        (
+            "Поколения панели · история · O",
+            ProductAction::OpenGenerations,
+        ),
         ("Сессии", ProductAction::OpenSessions),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
@@ -1198,13 +1210,128 @@ impl ProductUi {
             fields = fields.child(field);
         }
 
+        if dialog.kind == DialogKind::Generations
+            && let Some(page) = &self.generation_page
+        {
+            let mode = if page.pinned.is_some() {
+                "Выбрано конкретное поколение"
+            } else {
+                "Автоматически показывается последнее поколение"
+            };
+            fields = fields.child(div().text_size(px(12.)).text_color(colors.muted).child(mode))
+                .child(div().text_size(px(11.)).text_color(colors.muted).child("Введите номер строки или выберите её мышью. Просмотр не запускает CLI. История не принимает ввод."));
+            let mut entries = div()
+                .id("generation-entries")
+                .role(Role::List)
+                .aria_label("Поколения выбранной панели")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .max_h(px(240.))
+                .overflow_y_scroll();
+            for (index, entry) in page.entries.iter().enumerate() {
+                let state = match entry.state.as_str() {
+                    "running" => "работает",
+                    "exited" => "завершён",
+                    "history" => "история",
+                    "launch_outcome_unknown" => "исход запуска неизвестен",
+                    "history_unavailable" => "история недоступна",
+                    "degraded" => "ошибка терминала",
+                    _ => "нет подтверждения запуска",
+                };
+                let order = if entry.ordinal == 0 {
+                    "порядок неизвестен".into()
+                } else {
+                    format!("поколение {}", entry.ordinal)
+                };
+                let label = format!(
+                    "{}. {} · {} · {}{}",
+                    index + 1,
+                    order,
+                    crate::protocol::generation_label(&entry.generation.to_string()),
+                    state,
+                    if Some(entry.generation) == page.head {
+                        " · последнее"
+                    } else {
+                        ""
+                    }
+                );
+                let id = format!("generation-{}", entry.generation);
+                if entry.has_frame {
+                    entries = entries.child(self.action_control(
+                        id,
+                        label,
+                        ProductAction::SelectGeneration(Some(entry.generation)),
+                        ControlStyle {
+                            role: Role::ListBoxOption,
+                            selected: page.pinned.or(page.head) == Some(entry.generation),
+                            compact: false,
+                        },
+                        cx,
+                    ));
+                } else {
+                    entries = entries.child(
+                        div()
+                            .id(id)
+                            .role(Role::Status)
+                            .px(px(10.))
+                            .py(px(5.))
+                            .text_size(px(12.))
+                            .text_color(colors.muted)
+                            .child(label),
+                    );
+                }
+            }
+            if page.entries.is_empty() {
+                entries = entries.child("У этой панели пока нет доступных поколений.");
+            }
+            fields = fields.child(entries);
+            if page.head.is_some() {
+                fields = fields.child(self.action_control(
+                    "generation-follow-head".into(),
+                    "Показывать последнее поколение".into(),
+                    ProductAction::SelectGeneration(None),
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: page.pinned.is_none(),
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
+            fields = fields.child(self.action_control(
+                "generation-refresh".into(),
+                "Последние поколения".into(),
+                ProductAction::LoadGenerations(None),
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+            if let Some(before) = page.next_before {
+                fields = fields.child(self.action_control(
+                    "generation-older".into(),
+                    "Более ранние поколения".into(),
+                    ProductAction::LoadGenerations(Some(before)),
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
+        }
+
         if dialog.kind == DialogKind::Conversation && can_bind {
             fields = fields.child(div().id("conversation-binding-note").role(Role::Status)
                 .text_size(px(12.)).text_color(colors.muted)
                 .child("Скопируйте точный ID средствами CLI. Для Codex и Claude нужен UUID; для OpenCode — ses_…. Привязка сохраняет ваш выбор, но не проверяет существование беседы и не запускает процесс. Содержимое и авторизация CLI не копируются."))
                 .child(div().id("conversation-resume-status").role(Role::Status)
                     .text_size(px(12.)).text_color(colors.accent)
-                    .child("Нативное продолжение пока недоступно: интерактивный resume и выбор нового поколения ещё не прошли проверку. История остаётся доступна."));
+                    .child("Нативное продолжение для этой версии CLI пока недоступно. История доступна через «Поколения панели»."));
             fields = fields.child(self.action_control(
                 "conversation-reload".into(),
                 "Обновить сохранённую привязку".into(),

@@ -740,6 +740,16 @@ mod tests {
             legacy.execute_batch(
                 "CREATE TABLE preserved(value TEXT NOT NULL);
                  INSERT INTO preserved(value) VALUES('schema-three-data');
+                 CREATE TABLE launch_intents (
+                    operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                    generation TEXT NOT NULL UNIQUE, nonce TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('intent','helper','permitted','running','unknown','exited')),
+                    identity TEXT, reason TEXT
+                 );
+                 CREATE TABLE generation_locks (
+                    session_id TEXT PRIMARY KEY, generation TEXT NOT NULL UNIQUE,
+                    operation_id TEXT NOT NULL UNIQUE REFERENCES launch_intents(operation_id)
+                 );
                  PRAGMA user_version=3;",
             )?;
         }
@@ -747,14 +757,14 @@ mod tests {
         let current: u32 = store
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        assert_eq!(current, 6);
+        assert_eq!(current, 7);
         let scope = Uuid::new_v4();
         assert_eq!(store.context(scope)?, ContextDocument::empty(scope));
         let saved = store.save_context(document(scope, 0, "after migration"), 0)?;
         assert_eq!(saved.revision, 1);
         assert_eq!(store.context(scope)?, saved);
         let backup_path = store.migration_backup_path().context("v3 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v6."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v7."));
         let backup = rusqlite::Connection::open_with_flags(
             backup_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

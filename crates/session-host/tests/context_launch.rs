@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use pigade_layout::{Direction, TabLayout};
 use pigade_session_host::{
-    Command, PROTOCOL, PrepareRequest, Request, Response, View, receive, send,
+    Command, Launch, PROTOCOL, PrepareRequest, Request, Response, View, receive, send,
 };
 use pigade_storage::{
     CatalogBatch, CatalogWrite, ContextDocument, MemorySelection, Project, Tab, Workspace,
@@ -567,5 +567,238 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         history[0].pid.is_none(),
         "reopen respawned the historical PTY"
     );
+    Ok(())
+}
+
+#[test]
+fn panel_generation_selection_uses_ordinal_head_and_persists_history_pin() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let session = Uuid::new_v4();
+    let first_generation = Uuid::from_u128(2);
+    let second_generation = Uuid::from_u128(1);
+
+    for (generation, operation, output) in [
+        (first_generation, Uuid::new_v4(), "FIRST_GENERATION"),
+        (second_generation, Uuid::new_v4(), "SECOND_GENERATION"),
+    ] {
+        success(
+            &host.socket(),
+            Command::Launch {
+                spec: Launch {
+                    session,
+                    generation,
+                    operation,
+                    executable: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".into(),
+                        format!("printf '\\033[31m{output}\\033[0m\\n'"),
+                    ],
+                    env: Default::default(),
+                    cwd: host.root().to_path_buf(),
+                    geometry: pigade_terminal::Geometry::new(12, 48)?,
+                },
+            },
+        )?;
+        host.wait_for(|views| {
+            views.iter().any(|view| {
+                view.session == session
+                    && view.generation == generation
+                    && view.state == "exited"
+                    && view.frame.text().contains(output)
+            })
+        })?;
+    }
+
+    let listed = success(
+        &host.socket(),
+        Command::Generations {
+            session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation response omitted history")?;
+    ensure!(listed.head == Some(second_generation));
+    ensure!(listed.entries.len() == 2);
+    ensure!(listed.entries[0].generation == second_generation);
+    ensure!(listed.entries[0].ordinal > listed.entries[1].ordinal);
+    ensure!(listed.entries[1].generation == first_generation);
+    ensure!(first_generation.as_u128() > second_generation.as_u128());
+
+    let follow_head = success(
+        &host.socket(),
+        Command::PollPanels {
+            panels: vec![pigade_session_host::poll::PanelTarget {
+                session,
+                generation: None,
+            }],
+            known: vec![pigade_session_host::poll::Known {
+                session,
+                generation: first_generation,
+                sequence: u64::MAX,
+                state: "running".into(),
+                pid: Some(u32::MAX),
+                storage_error: None,
+            }],
+        },
+    )?;
+    let selected = follow_head
+        .selected
+        .context("panel poll omitted selected metadata")?;
+    ensure!(selected.len() == 1 && selected[0].generation == second_generation);
+    ensure!(follow_head.views.len() == 1);
+    ensure!(follow_head.views[0].generation == second_generation);
+    ensure!(
+        follow_head.views[0]
+            .frame
+            .text()
+            .contains("SECOND_GENERATION")
+    );
+    ensure!(
+        !follow_head.views[0]
+            .frame
+            .text()
+            .contains("FIRST_GENERATION")
+    );
+
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session,
+            generation: Some(first_generation),
+        },
+    )?;
+    let pinned = success(
+        &host.socket(),
+        Command::Generations {
+            session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("pinned generation response omitted history")?;
+    ensure!(pinned.head == Some(second_generation));
+    ensure!(pinned.pinned == Some(first_generation));
+
+    let old_poll = success(
+        &host.socket(),
+        Command::PollPanels {
+            panels: vec![pigade_session_host::poll::PanelTarget {
+                session,
+                generation: Some(first_generation),
+            }],
+            known: vec![],
+        },
+    )?;
+    ensure!(old_poll.views.len() == 1);
+    ensure!(old_poll.views[0].generation == first_generation);
+    let before_input = success(
+        &host.socket(),
+        Command::Snapshot {
+            session,
+            generation: first_generation,
+        },
+    )?
+    .views
+    .into_iter()
+    .next()
+    .context("pinned generation snapshot missing")?;
+    let rejected_input = exchange(
+        &host.socket(),
+        Command::Input {
+            session,
+            generation: first_generation,
+            bytes: b"must-not-write".to_vec(),
+        },
+    )?;
+    ensure!(
+        rejected_input
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("read-only")),
+        "historical generation accepted input"
+    );
+    let after_input = success(
+        &host.socket(),
+        Command::Snapshot {
+            session,
+            generation: first_generation,
+        },
+    )?
+    .views
+    .into_iter()
+    .next()
+    .context("pinned generation snapshot missing after rejected input")?;
+    ensure!(before_input.frame == after_input.frame);
+
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session,
+            generation: None,
+        },
+    )?;
+    host.restart()?;
+    let restarted = success(
+        &host.socket(),
+        Command::Generations {
+            session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("restarted generation response omitted history")?;
+    ensure!(restarted.head == Some(second_generation));
+    ensure!(restarted.pinned.is_none());
+
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session,
+            generation: Some(first_generation),
+        },
+    )?;
+    let unknown = exchange(
+        &host.socket(),
+        Command::SelectGeneration {
+            session,
+            generation: Some(Uuid::new_v4()),
+        },
+    )?;
+    ensure!(
+        unknown.error.is_some(),
+        "unknown generation selection was accepted"
+    );
+    host.restart()?;
+    let recovered_pin = success(
+        &host.socket(),
+        Command::Generations {
+            session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("recovered generation response omitted history")?;
+    ensure!(recovered_pin.head == Some(second_generation));
+    ensure!(recovered_pin.pinned == Some(first_generation));
+    let recovered_view = success(
+        &host.socket(),
+        Command::PollPanels {
+            panels: vec![pigade_session_host::poll::PanelTarget {
+                session,
+                generation: Some(first_generation),
+            }],
+            known: vec![],
+        },
+    )?;
+    ensure!(recovered_view.views.len() == 1);
+    ensure!(recovered_view.views[0].generation == first_generation);
+    ensure!(recovered_view.views[0].pid.is_none());
+    let all_views = success(&host.socket(), Command::List)?.views;
+    ensure!(
+        all_views.len() == 2,
+        "host restart changed generation count"
+    );
+    ensure!(all_views.iter().all(|view| view.pid.is_none()));
     Ok(())
 }

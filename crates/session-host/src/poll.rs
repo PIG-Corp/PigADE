@@ -31,6 +31,14 @@ pub struct Known {
     pub storage_error: Option<String>,
 }
 
+/// One logical panel to poll. A generation pins the panel to an exact view;
+/// `None` follows the host's authoritative head for the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTarget {
+    pub session: Uuid,
+    pub generation: Option<Uuid>,
+}
+
 /// Small current-session metadata, independent of the terminal cell grid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -101,35 +109,108 @@ pub fn poll_visible<'a>(
     poll_selected(views, known, changes, Some(sessions))
 }
 
-fn poll_selected<'a>(
+/// Poll stable panel identities in caller order, resolving unpinned panels
+/// only through the supplied authoritative session-head map.
+///
+/// Missing heads and heads whose exact view is unavailable produce no entry;
+/// this function never falls back to another generation of that session.
+pub fn poll_panels<'a>(
     views: impl IntoIterator<Item = &'a Mutex<View>>,
     known: &[Known],
     changes: &ChangeHub,
-    sessions: Option<&[Uuid]>,
+    panels: &[PanelTarget],
+    heads: &std::collections::BTreeMap<Uuid, Uuid>,
 ) -> Result<PollResult> {
-    // Sample before taking any view locks. If publication races this walk, the
-    // returned epoch is stale and the next wait immediately observes the bump.
-    let change_token = match changes.token() {
+    let change_token = sample_change_token(changes);
+    ensure!(panels.len() <= MAX_VIEWS, "too many panel targets");
+    let mut panel_sessions = HashSet::with_capacity(panels.len());
+    for panel in panels {
+        ensure!(!panel.session.is_nil(), "nil panel session");
+        ensure!(
+            panel
+                .generation
+                .is_none_or(|generation| !generation.is_nil()),
+            "nil panel generation"
+        );
+        ensure!(
+            panel_sessions.insert(panel.session),
+            "duplicate panel target"
+        );
+    }
+    ensure!(
+        known.len() <= MAX_VIEWS,
+        "too many known session watermarks"
+    );
+    let known_by_session_generation = validate_known(known)?;
+
+    let mut by_pair = std::collections::HashMap::with_capacity(MAX_VIEWS);
+    for view in views {
+        ensure!(by_pair.len() < MAX_VIEWS, "too many host views");
+        let current = view
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session view lock poisoned"))?;
+        let key = (current.session, current.generation);
+        drop(current);
+        ensure!(
+            by_pair.insert(key, view).is_none(),
+            "duplicate host session generation view"
+        );
+    }
+
+    let mut selected = Vec::with_capacity(panels.len());
+    let mut changed_views = Vec::with_capacity(panels.len());
+    for panel in panels {
+        let generation = panel
+            .generation
+            .or_else(|| heads.get(&panel.session).copied());
+        let Some(generation) = generation else {
+            continue;
+        };
+        let Some(view) = by_pair.get(&(panel.session, generation)) else {
+            continue;
+        };
+        let current = view
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session view lock poisoned"))?;
+        let info = SessionInfo {
+            session: current.session,
+            generation: current.generation,
+            sequence: current.sequence,
+            state: current.state.clone(),
+            pid: current.pid,
+            storage_error: current.storage_error.clone(),
+            geometry: current.frame.geometry,
+            title: current.frame.title.clone(),
+        };
+        let unchanged = known_by_session_generation
+            .get(&(info.session, info.generation))
+            .is_some_and(|known| info.watermark_matches(known));
+        if !unchanged {
+            changed_views.push(current.clone());
+        }
+        selected.push(info);
+    }
+
+    Ok(PollResult {
+        selected,
+        views: changed_views,
+        change_token,
+    })
+}
+
+fn sample_change_token(changes: &ChangeHub) -> Option<Token> {
+    match changes.token() {
         Ok(token) => Some(token),
         Err(error) => {
-            // Preserve conditional polling when notification service state is
-            // poisoned or exhausted. `None` tells clients to use their bounded
-            // timer fallback; the failure remains visible in host diagnostics.
             changes.report_failure_once(|| {
                 eprintln!("host change token unavailable; Poll remains active: {error:#}");
             });
             None
         }
-    };
-    ensure!(
-        known.len()
-            <= if sessions.is_some() {
-                MAX_VIEWS
-            } else {
-                MAX_SELECTED
-            },
-        "too many known session watermarks"
-    );
+    }
+}
+
+fn validate_known(known: &[Known]) -> Result<std::collections::HashMap<(Uuid, Uuid), &Known>> {
     let mut known_by_session_generation = std::collections::HashMap::with_capacity(known.len());
     for watermark in known {
         ensure!(
@@ -150,6 +231,28 @@ fn poll_selected<'a>(
             "duplicate known session generation watermark"
         );
     }
+    Ok(known_by_session_generation)
+}
+
+fn poll_selected<'a>(
+    views: impl IntoIterator<Item = &'a Mutex<View>>,
+    known: &[Known],
+    changes: &ChangeHub,
+    sessions: Option<&[Uuid]>,
+) -> Result<PollResult> {
+    // Sample before taking any view locks. If publication races this walk, the
+    // returned epoch is stale and the next wait immediately observes the bump.
+    let change_token = sample_change_token(changes);
+    ensure!(
+        known.len()
+            <= if sessions.is_some() {
+                MAX_VIEWS
+            } else {
+                MAX_SELECTED
+            },
+        "too many known session watermarks"
+    );
+    let known_by_session_generation = validate_known(known)?;
 
     let mut candidates = Vec::with_capacity(MAX_VIEWS);
     let mut session_generations = HashSet::with_capacity(MAX_VIEWS);
@@ -387,5 +490,179 @@ mod tests {
         assert!(result.change_token.is_none());
         assert_eq!(result.views.len(), 1);
         assert_eq!(result.views[0].sequence, 7);
+    }
+
+    #[test]
+    fn panel_poll_follows_authoritative_head_and_pins_explicit_generation() {
+        let session = Uuid::from_u128(1);
+        let old = Arc::new(view(session, Uuid::from_u128(90)));
+        let new = Arc::new(view(session, Uuid::from_u128(2)));
+        let old_generation = old.lock().unwrap().generation;
+        let mut stale_old = watermark(&old);
+        stale_old.sequence = u64::MAX;
+        let following_panel = [PanelTarget {
+            session,
+            generation: None,
+        }];
+        let heads = std::collections::BTreeMap::from([(session, Uuid::from_u128(2))]);
+        let result = poll_panels(
+            [new.as_ref(), old.as_ref()],
+            &[stale_old],
+            &ChangeHub::new(),
+            &following_panel,
+            &heads,
+        )
+        .unwrap();
+
+        assert_eq!(result.selected.len(), 1);
+        assert_eq!(result.selected[0].generation, Uuid::from_u128(2));
+        assert_eq!(result.views.len(), 1);
+        assert_eq!(result.views[0].generation, Uuid::from_u128(2));
+
+        let pinned = poll_panels(
+            [new.as_ref(), old.as_ref()],
+            &[],
+            &ChangeHub::new(),
+            &[PanelTarget {
+                session,
+                generation: Some(old_generation),
+            }],
+            &heads,
+        )
+        .unwrap();
+        assert_eq!(pinned.selected.len(), 1);
+        assert_eq!(pinned.selected[0].generation, Uuid::from_u128(90));
+        assert_eq!(pinned.views[0].generation, Uuid::from_u128(90));
+    }
+
+    #[test]
+    fn panel_order_is_preserved_and_unavailable_head_never_falls_back() {
+        let first = Uuid::from_u128(100);
+        let second = Uuid::from_u128(1);
+        let first_view = view(first, Uuid::from_u128(10));
+        let second_old = view(second, Uuid::from_u128(20));
+        let panels = [
+            PanelTarget {
+                session: first,
+                generation: None,
+            },
+            PanelTarget {
+                session: second,
+                generation: None,
+            },
+        ];
+        let heads = std::collections::BTreeMap::from([
+            (first, Uuid::from_u128(10)),
+            (second, Uuid::from_u128(21)),
+        ]);
+        let result = poll_panels(
+            [&second_old, &first_view],
+            &[],
+            &ChangeHub::new(),
+            &panels,
+            &heads,
+        )
+        .unwrap();
+        assert_eq!(result.selected.len(), 1);
+        assert_eq!(result.selected[0].session, first);
+        assert_eq!(result.views.len(), 1);
+        assert_eq!(result.views[0].session, first);
+    }
+
+    #[test]
+    fn panel_poll_rejects_nil_duplicate_targets_and_excess_panels() {
+        let changes = ChangeHub::new();
+        let empty = std::collections::BTreeMap::new();
+        assert!(
+            poll_panels(
+                [],
+                &[],
+                &changes,
+                &[PanelTarget {
+                    session: Uuid::nil(),
+                    generation: None,
+                }],
+                &empty
+            )
+            .is_err()
+        );
+        let duplicate = PanelTarget {
+            session: Uuid::from_u128(1),
+            generation: None,
+        };
+        assert!(poll_panels([], &[], &changes, &[duplicate.clone(), duplicate], &empty).is_err());
+        let too_many = (1..=MAX_VIEWS + 1)
+            .map(|id| PanelTarget {
+                session: Uuid::from_u128(id as u128),
+                generation: None,
+            })
+            .collect::<Vec<_>>();
+        assert!(poll_panels([], &[], &changes, &too_many, &empty).is_err());
+    }
+
+    #[test]
+    fn panel_poll_rejects_duplicate_host_pairs_and_ignores_missing_heads() {
+        let session = Uuid::from_u128(7);
+        let generation = Uuid::from_u128(8);
+        let duplicate_a = view(session, generation);
+        let duplicate_b = view(session, generation);
+        assert!(
+            poll_panels(
+                [&duplicate_a, &duplicate_b],
+                &[],
+                &ChangeHub::new(),
+                &[PanelTarget {
+                    session,
+                    generation: None,
+                }],
+                &std::collections::BTreeMap::from([(session, generation)]),
+            )
+            .is_err()
+        );
+
+        let absent = poll_panels(
+            [&duplicate_a],
+            &[],
+            &ChangeHub::new(),
+            &[PanelTarget {
+                session,
+                generation: None,
+            }],
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(absent.selected.is_empty());
+        assert!(absent.views.is_empty());
+    }
+
+    #[test]
+    fn panel_poll_samples_change_token_before_view_scan() {
+        let session = Uuid::from_u128(8);
+        let current = view(session, Uuid::from_u128(9));
+        let changes = ChangeHub::new();
+        let panels = [PanelTarget {
+            session,
+            generation: None,
+        }];
+        let heads = std::collections::BTreeMap::from([(session, Uuid::from_u128(9))]);
+        let mut yielded = false;
+        let poll_views = std::iter::from_fn(|| {
+            if yielded {
+                None
+            } else {
+                yielded = true;
+                changes.notify().unwrap();
+                Some(&current)
+            }
+        });
+
+        let result = poll_panels(poll_views, &[], &changes, &panels, &heads).unwrap();
+        let token = result.change_token.unwrap();
+        assert_eq!(token.revision, 0);
+        let wake = changes
+            .wait(token, std::time::Duration::from_millis(100))
+            .unwrap();
+        assert!(wake.changed);
+        assert_eq!(wake.token.revision, 1);
     }
 }

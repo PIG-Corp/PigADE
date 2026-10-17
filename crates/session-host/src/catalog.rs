@@ -629,6 +629,8 @@ mod tests {
             DROP TABLE context_heads;
             DROP TABLE context_revisions;
             DROP TABLE layout_revisions;
+            DROP INDEX launch_session_generation_ordinal;
+            ALTER TABLE launch_intents DROP COLUMN generation_ordinal;
             PRAGMA user_version=2; COMMIT;",
         )?;
         assert_eq!(
