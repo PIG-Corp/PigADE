@@ -29,7 +29,9 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/mouse.rs, selection.rs | Pure mode-aware mouse encoding, bounded wheel accumulation and frame-bound Unicode cell selection; native event/clipboard integration remains in main.rs |
 | docs/reports/ime-composition.md, docs/research/linux-ime-reset.md | Local input/overlay evidence and the unverified native Linux reset boundary |
 | crates/app/src/font.rs, assets/fonts | Embedded unique-family OFL derivatives, exact manifests, disabled liga/calt and fixed JP CJK fallback policy; unsupported platform fallback is unpinned |
-| crates/app/bootstrap.sh | Immutable GPUI source+SHA verification and headless build; ignored .upstream source cache |
+| crates/app/bootstrap.sh, patches/gpui-x11-ime | Immutable GPUI archive plus guarded exact X11 focus lifecycle patch; ignored .upstream source cache |
+| scripts/apply-gpui-patches.py, test_gpui_xim_focus.py | Bounded locked patch pre/postimage guard and exact embedded XIM lifecycle tests |
+| scripts/prepare-x11-ime-sdk.py, isolated-ime-x11.py, x11-ime-input.c | Signed test-only Xvfb/Fcitx/Pinyin SDK, verified private namespaces/display/window ownership and fixed native commit proof; no active desktop access |
 | crates/app/evidence/conditional-poll-20261017 | Fresh isolated software-rendered UI reopen evidence; not GPU or platform certification |
 | vendor/vte |0.15.0 maintained UTF8/full-parser-state/OSC-bound patches, original licenses |
 | vendor/alacritty_terminal |0.26.0 explicit Term/Grid export/import, allocation-aware pools, borrowed row export and runtime normal-history retirement notifications |
@@ -62,3 +64,5 @@ through `gpui_platform`; ADR0007 and the target-filtered Linux license inventory
 record the upgrade. Separate short runtime sockets and marked/leased replay-cache
 maintenance are described in `reports/runtime-and-replay-cache.md`. Storage quota,
 compression and global model heap admission remain independent unfinished work.
+
+The pinned GPUI X11 focus correction now passes one native Pinyin commit in the actual debug/release app; a settled clean-upstream baseline lacked an active IC. See [ADR0010](adr/0010-gpui-x11-ime-focus-lifecycle.md) and [source-bound report](reports/x11-ime-20261017.md). Composition-generation barriers, inline preedit and the full platform gate remain open.

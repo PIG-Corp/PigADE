@@ -1,0 +1,47 @@
+{
+  "app_command": [
+    "/pigade/app",
+    "/artifacts/state/host.sock"
+  ],
+  "app_path_sha256": "b4d63952a32eb02d2c0d00834e0b67ed314dfe6d58b049e3a60c4bdbb7148ff9",
+  "app_sha256": "b4d63952a32eb02d2c0d00834e0b67ed314dfe6d58b049e3a60c4bdbb7148ff9",
+  "fixture_token": "__PIGADE_IME_CHILD_ACK_20261017__",
+  "harness_sha256": "bd03aa7674d014ca581392c6a71df947ac9e35ce07e06c35cf3a885afb41fa33",
+  "helper_sha256": "c4fc64d12d83895aee6862d1286a9f12218d65b76e2f5e0d1e1fcbaa6da4bf73",
+  "host_command": [
+    "/pigade/host",
+    "serve",
+    "/artifacts/state"
+  ],
+  "host_path_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+  "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+  "icd_private_sha256": "0d6b1e131d5b43b90d7756245b4ed91b2543e8fb58f78753a47e9cb7406d7b8d",
+  "icd_source_library_path": "/tmp/pigade-platform-sdk/root/usr/lib/libvulkan_lvp.so",
+  "icd_source_sha256": "00293856881a670ebdd604be484572eb9f361bf990762b447f9225e5156d0bd2",
+  "namespaces": [
+    "mnt",
+    "pid",
+    "user",
+    "ipc",
+    "net"
+  ],
+  "outer_namespaces": {
+    "ipc": "ipc:[4026531839]",
+    "mnt": "mnt:[4026531832]",
+    "net": "net:[4026531833]",
+    "pid": "pid:[4026531836]",
+    "user": "user:[4026531837]"
+  },
+  "platform_manifest_sha256": "a7426b082a9224227392f964e9da3238066e9c2887201501e69a3fa5f59caa59",
+  "platform_root": "/tmp/pigade-platform-sdk/root",
+  "private_icd": "/pigade/platform-sdk/lavapipe-icd.json",
+  "private_icd_host": "/home/afterburner/.local/state/pigade/ime-x11-20261017-focus-v1-release/lavapipe-icd.json",
+  "screen": [
+    1280,
+    800,
+    24
+  ],
+  "x11_extraction_root": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5",
+  "x11_manifest_sha256": "7a3198632791a7fea235e3d2604ee21c838a5df823588fe2581cf9e506976d6a",
+  "x11_root": "/pigade/x11-sdk"
+}

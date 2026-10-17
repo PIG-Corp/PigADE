@@ -51,13 +51,17 @@ injection, `--last`, automatic repeated task or silent new conversation.
   stable pane IDs, split/move/swap/transfer/resize/equalize/rotate/focus and100
   persistent undo/redo. Full hierarchy and tiling UI are still pending.
 - GPUI commit322cd509dcccaee1f6bc44725d270598ae8171ad is pinned/hashed; Linux
-  Wayland+X11 builds use a separate compatible Cargo workspace. No Electron or
+  Wayland+X11 builds use a separate compatible Cargo workspace. Bootstrap now
+  applies the exact `pigade-x11-ime-focus-v1` X11 lifecycle profile with guarded
+  pre/postimages; see ADR0010. No Electron or
   imported Zed GPL terminal integration. Bundled OFL font aliases, fixed JP CJK
   fallback and cell-span clipping are documented in ADR0008. Unsupported glyph
   fallback is not deterministic across platforms.
 - Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and font-exact decoration positions are still open. Cell underline variants/custom color/strikeout and decorated spaces now render from host attributes; fixed-scale1/2 captures are in reports/terminal-decorations.md. Typed cursor shapes/visibility/blink now reach the painter; four source-bound steady software captures verify block/underline/beam/hollow/hidden pixels. Actual blink timing remains open; see reports/terminal-cursor.md.
 - Native local IME has UTF16 range/selection handling and a clipped overlay;
-  actual Linux IME reset ordering is unverified. Do not reintroduce the removed
+  one real X11 Fcitx-Pinyin commit passes in debug/release with no premature or
+  duplicate PTY input. Clean upstream failed IC activation after render/focus.
+  Native Linux session-generation reset ordering remains unverified. Do not reintroduce the removed
   cancelled-until-KeyDown latch: IMEs may consume physical keys themselves.
 - Mode-aware mouse input, stable generation drag capture, visible cell selection
   and explicit clipboard paste are integrated. Shift selects locally. Prefix
@@ -73,7 +77,7 @@ injection, `--last`, automatic repeated task or silent new conversation.
 - Root workspace fmt, strict all-target Clippy and177 tests passed (including
   the25-test input target:23 shared pure codec tests and2 real raw-PTY tests).
   Release workspace bins/examples build passed. Native app90 tests, strict
-  all-target Clippy, fmt and debug/release builds passed. Python92 tests passed.
+  all-target Clippy, fmt and debug/release builds passed. Python126 tests and9 explicit pinned XIM state tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
   identities. Root inspected selection/Unicode/child ACKs/footer controls in
@@ -130,9 +134,15 @@ and the exact frozen binary remain in
 `soak-20261017T000738Z-6244149d/state/host-release`, with new instrumentation.
 It is not a24h acceptance run. Raw journals are CRC-valid and the missing token is absent from durable output. All four complete hot/parser/frame recovery comparisons passed afterward (cold counts0 in this prefix). New bounded producer milestones and identity-checked wait-channel diagnostics are covered by15 tests; see reports/soak-ack-timeout-20261017.md.
 
-**Running1200s ACK reproducer:** tool9206,
-`~/.local/state/pigade/soak/resize-ack-repro-20261017`, same frozen67ed712c binary,
-with the new telemetry. No24h or isolated PERF claim. Do not duplicate it.
+**Completed1200s ACK reproducer:** tool9206 exited0 after1200.068s,
+`~/.local/state/pigade/soak/resize-ack-repro-20261017`, same frozen67ed712c binary.
+All four CRC/full-recovery checks passed,238 ACK cycles per stream,2856 producer
+records with no sequence gaps. This neither explains prior failures nor passes24h.
+
+**Running7200s diagnostic:** tool10513,
+`~/.local/state/pigade/soak/resize-ack-long-20261017`, same frozen67ed712c binary
+with bounded producer/process telemetry. No24h or isolated PERF claim. Do not
+duplicate/restart it or infer a pass before final exit.
 
 **Completed VM run:** tool50099 exited successfully,
 `~/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e`.

@@ -1,0 +1,108 @@
+{
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 33,
+    "start_time_ticks": 2654197,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "bwrap_exit_status": 0,
+  "commit": {
+    "capture_settle_seconds": 0.25,
+    "child_ack_seen": true,
+    "exact_once": true,
+    "expected_fixture_hash": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "extra_bytes": 0,
+    "payload_sha256": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "received_bytes": 6
+  },
+  "fcitx": {
+    "active_input_method": "pinyin",
+    "input_method": "pinyin",
+    "pid": 12,
+    "private_profile": true,
+    "start_time_ticks": 2654173,
+    "xim_owner_verified_by": "XRes local client PID",
+    "xim_selection": "@server=fcitx"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "dc658911-91df-4f56-9a00-ccf2a08f3947",
+    "ready": true,
+    "session": "e966fd27-4abb-4f90-ab7b-eed7ceb6c030",
+    "tty": "raw/no-echo"
+  },
+  "preedit": {
+    "capture": "preedit.ppm",
+    "capture_bytes": 3072016,
+    "capture_scope": "private Xvfb root window",
+    "host_output_unchanged": true,
+    "pty_bytes_before_commit": 0,
+    "visibility": "captured before commit; requires screenshot review"
+  },
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 4966,
+      "stream_sha256": "9236c07ae77059a16cf991631fe0ed9a0d2c94ca02c21ef4a7447d1a524f83ac",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5930,
+      "stream_sha256": "f507ac98af9fcb5a66e005f9321c78f0031573aaa01be6ba47da092d959bd289",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "schema": 1,
+  "stage": "complete",
+  "status": "pass-private-x11-xim-pinyin-commit-fixture",
+  "xvfb": {
+    "display": ":0",
+    "pid": 4,
+    "socket_inode": 3,
+    "start_time_ticks": 2654164,
+    "tcp": false,
+    "transport": "private local Unix socket"
+  }
+}

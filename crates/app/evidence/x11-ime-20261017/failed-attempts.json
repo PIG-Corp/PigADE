@@ -1,0 +1,92 @@
+[
+  {
+    "attempt": "run1",
+    "status": "failed-closed",
+    "stage": "bwrap-exit",
+    "reason": "private run exited without a terminal report",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "36581ba7468b7f631a201c39d7af491286e17ae3e404adea3937cab277e66cb7"
+  },
+  {
+    "attempt": "run2",
+    "status": "failed-closed",
+    "stage": "bwrap-exit",
+    "reason": "private run exited without a terminal report",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "4b8eb2ef15b82e92d7dd9c034dced4061efafe94aa98967a4ae2ec1b65882b93"
+  },
+  {
+    "attempt": "run3",
+    "status": "failed-closed",
+    "stage": "xvfb-start",
+    "reason": "Xvfb returned invalid display number",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "7e0a2e8765dca85052e2da2cb7a553ed0da593d6f94cbc730cf1f9161d55c24a"
+  },
+  {
+    "attempt": "run4",
+    "status": "failed-closed",
+    "stage": "private-dbus-fcitx",
+    "reason": "private Fcitx XIM readiness timed out: private X11 helper failed its identity/protocol check: x11-ime-input: _XIM_SERVERS is absent",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "a6df251e3945426036ade0a9c047371b4d6cb7ec9e9f402a2505bf22846ceaab"
+  },
+  {
+    "attempt": "run5",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin as its active input method",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "0a67c8b9ca114944fc4bced0487ec451ea26bbf86e9e4bfbe7dadba9fe2738f4"
+  },
+  {
+    "attempt": "run6",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+    "app_sha256": "3a836ec92af453f78009e864a3e2c921aec53f7904fb3c3db38bfc23ec08da8e",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "2c5979b8a0c4449b58f304b4c816f0633744c187705b6486722d5274e8a01ad4"
+  },
+  {
+    "attempt": "baseline-style",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+    "app_sha256": "0cecf217ef698bcb022c9737f4435e3f4003d39267952594fbf9f8a99fe61948",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "2c5979b8a0c4449b58f304b4c816f0633744c187705b6486722d5274e8a01ad4"
+  },
+  {
+    "attempt": "baseline-capture",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+    "app_sha256": "0cecf217ef698bcb022c9737f4435e3f4003d39267952594fbf9f8a99fe61948",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "2c5979b8a0c4449b58f304b4c816f0633744c187705b6486722d5274e8a01ad4"
+  },
+  {
+    "attempt": "baseline-capture2",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+    "app_sha256": "0cecf217ef698bcb022c9737f4435e3f4003d39267952594fbf9f8a99fe61948",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "46303c2ad7720bf94ce3d2a2d4d6aceb69c238e5027d30fa2b7903fcb2e30710"
+  },
+  {
+    "attempt": "baseline-settled",
+    "status": "failed-closed",
+    "stage": "pigade-app",
+    "reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+    "app_sha256": "0cecf217ef698bcb022c9737f4435e3f4003d39267952594fbf9f8a99fe61948",
+    "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+    "harness_sha256": "4af987a6de7111193f8896c8cee5c9be493df7c5e444c478c62d498948297c54"
+  }
+]

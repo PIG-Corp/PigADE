@@ -2,7 +2,7 @@
 
 ## Conclusion
 
-The pinned GPUI revision exposes no application-level Linux IME reset operation. A small `Window::reset_text_input` forwarding API could request local reset behavior on both backends, but the available backend operations do not establish a boundary that lets PigADE reject every callback from the prior session generation. Therefore this note intentionally proposes no tracked upstream source patch and makes no claim that reset prevents stale native commits.
+The pinned GPUI revision exposes no application-level Linux IME reset operation. A small `Window::reset_text_input` forwarding API could request local reset behavior on both backends, but the available backend operations do not establish a boundary that lets PigADE reject every callback from the prior session generation. This reset-boundary review makes no claim that reset prevents stale native commits. A separate, now integrated X11 focus lifecycle correction is described below; it does not establish a generation barrier.
 
 ## Evidence in the pinned source
 
@@ -31,3 +31,7 @@ has not been observed. Keep local cancellation, native notification requests,
 input-availability checks and an explicit unverified native reset/ordering gate.
 Add a regression accepting a new composition after cancellation without an
 intervening synthetic printable key. This decision does not certify Linux IME.
+
+## Subsequent X11 focus correction
+
+[ADR0010](../adr/0010-gpui-x11-ime-focus-lifecycle.md) adds the tracked `pigade-x11-ime-focus-v1` profile to this upstream revision. It orders IC creation/readiness, Set/UnsetICFocus and ResetIC, and filters callbacks by locally focused IC identity. Actual private Fcitx Pinyin commits pass in debug/release after a rendered clean-upstream baseline failed activation. The references above describe the original reset audit; patched line numbers differ. One-way focus submission and reused same-window ICs still provide no PigADE session-generation reset acknowledgement. Do not treat the focus correction as closure of this reset boundary.

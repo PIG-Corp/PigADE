@@ -1,0 +1,93 @@
+{
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 33,
+    "start_time_ticks": 2640717,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "bwrap_exit_status": 1,
+  "failure_reason": "private Fcitx did not confirm Pinyin: rc=0 current='\\n' stderr=''",
+  "failure_stage": "pigade-app",
+  "failure_type": "RuntimeError",
+  "fcitx": {
+    "input_method": "pinyin",
+    "pid": 12,
+    "private_profile": true,
+    "start_time_ticks": 2640693,
+    "xim_owner_verified_by": "XRes local client PID",
+    "xim_selection": "fcitx"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "f94cffa7-38ab-4db8-853c-af49c40b312f",
+    "ready": true,
+    "session": "08856d9d-fbd0-44c5-8282-d04f5cb2e699",
+    "tty": "raw/no-echo"
+  },
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 4966,
+      "stream_sha256": "9236c07ae77059a16cf991631fe0ed9a0d2c94ca02c21ef4a7447d1a524f83ac",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "c1dd823b6e858d85dff1a8937faa50376f19a26493b978ec7527212418ada558",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "schema": 1,
+  "stage": "pigade-app",
+  "status": "failed-closed",
+  "xvfb": {
+    "display": ":0",
+    "pid": 4,
+    "socket_inode": 3,
+    "start_time_ticks": 2640685,
+    "tcp": false,
+    "transport": "private local Unix socket"
+  }
+}

@@ -25,6 +25,8 @@ if ! test -d "$source_dir"; then
   rmdir -- "$extract"
   trap - EXIT
 fi
+python3 "$app_dir/../../scripts/apply-gpui-patches.py" "$source_dir" \
+  "$app_dir/patches/gpui-x11-ime/manifest.json" --archive "$archive"
 # GPUI inherits source-workspace dependencies. Isolate its compatible lockfile
 # from the host workspace, without adding a second terminal/parser/runtime.
 export CARGO_HOME="${PIGADE_GPUI_CARGO_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pigade/cargo}"

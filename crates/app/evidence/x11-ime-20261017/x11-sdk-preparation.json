@@ -1,0 +1,534 @@
+{
+  "extraction_profile": "pinyin-punctuation-runtime-v2",
+  "extraction_root": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5",
+  "keyring_sha256": "d76e2750e2c505cc9ac78e743b239ba38a848a6ebe9cc4e8c8c786c8b239103e",
+  "keyring_source": "/usr/share/pacman/keyrings/archlinux.gpg",
+  "keyring_source_sha256": "45be20e923b6d156203b73daf96c3b0fc0b4e646967ed7942d7bebc80a6151f3",
+  "limits": [
+    "Signed pinned Arch payloads only; package installer hooks are not run",
+    "No package installation, executable launch, Xvfb/Fcitx start, GUI or input occurred",
+    "XTEST API/library is present but has not been queried against an X server",
+    "No namespace/socket isolation has been established by SDK preparation",
+    "A later isolated run must validate actual Fcitx plugin load and XIM Unicode commit",
+    "Pinyin test payload is GPL-2.0-or-later and is test-only, not a product dependency"
+  ],
+  "omitted_declared_dependencies": {
+    "fcitx5-chinese-addons": [
+      "fcitx5-qt and qt6-webengine are declared by the full package but optional Qt editor/UI payloads are not extracted; libpinyin.so and its Pinyin descriptors/data plus its required punctuation addon/plugin/data are selected"
+    ],
+    "other host libraries": [
+      "System /usr libraries can satisfy dependencies; exact ldd output is recorded. This is not a portable or ABI-independent sysroot."
+    ]
+  },
+  "packages": [
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 873530,
+      "archive_members": 15,
+      "archive_sha256": "52c6d0394109b0bdfd0e4d00dd8d89d7e38bfe7576d96145179f216480eb7564",
+      "archive_uncompressed_bytes": 2091557,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "MIT",
+        "GPL-2.0-only"
+      ],
+      "name": "xorg-server-xvfb",
+      "package_runtime_dependencies": [
+        "libxfont2",
+        "libunwind",
+        "pixman",
+        "xorg-server-common",
+        "xorg-xauth",
+        "libgl",
+        "nettle",
+        "libtirpc",
+        "systemd-libs",
+        "libxdmcp",
+        "sh",
+        "glibc",
+        "libxau"
+      ],
+      "selected_members": 12,
+      "signature_sha256": "21d0cb243c1c56fe71222bd523e74c09889ff02d3a48c6f870997bfb31a09405",
+      "signature_url": "https://archive.archlinux.org/packages/x/xorg-server-xvfb/xorg-server-xvfb-21.1.25-2-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xorg-server-xvfb/xorg-server-xvfb-21.1.25-2-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID as1t5Z2z4h6quSUYmgbAvDk0SUE 2026-10-14 1792006169\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2026-10-14 1792006169 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Thu Oct 15 00:29:29 2026 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "21.1.25-2"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 28329,
+      "archive_members": 18,
+      "archive_sha256": "851b8e7ad135d99ce263334f64512a10c69d6b19231a6de48953fe44227c0dcc",
+      "archive_uncompressed_bytes": 140814,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "LicenseRef-Adobe-Display-PostScript",
+        "BSD-3-Clause",
+        "LicenseRef-DEC-3-Clause",
+        "HPND",
+        "LicenseRef-HPND-sell-MIT-disclaimer-xserver",
+        "HPND-sell-variant",
+        "ICU",
+        "ISC",
+        "MIT",
+        "MIT-open-group",
+        "NTP",
+        "SGI-B-2.0",
+        "SMLNJ",
+        "X11",
+        "X11-distribute-modifications-variant"
+      ],
+      "name": "xorg-server-common",
+      "package_runtime_dependencies": [
+        "xkeyboard-config",
+        "xorg-xkbcomp",
+        "xorg-setxkbmap"
+      ],
+      "selected_members": 15,
+      "signature_sha256": "a02facb2141ff7f730cda9fd8e870de74c9b5bbf4e3a77694b799027864ec698",
+      "signature_url": "https://archive.archlinux.org/packages/x/xorg-server-common/xorg-server-common-21.1.25-2-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xorg-server-common/xorg-server-common-21.1.25-2-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID Ca23b+yogGGnnCWlci4zHJ5Ohtc 2026-10-14 1792006169\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2026-10-14 1792006169 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Thu Oct 15 00:29:29 2026 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "21.1.25-2"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 24920,
+      "archive_members": 13,
+      "archive_sha256": "df9e0d1f29ae0135a49b17157841a4cc7c97869f9f27fd7480fff64f9afb94b7",
+      "archive_uncompressed_bytes": 56163,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "MIT-open-group"
+      ],
+      "name": "xorg-xauth",
+      "package_runtime_dependencies": [
+        "libxmu",
+        "libxau",
+        "libxext",
+        "libx11",
+        "glibc"
+      ],
+      "selected_members": 10,
+      "signature_sha256": "6643971afb233adb4e2bc84309fe4b58c7b3b0d6282db4f2852f440696119868",
+      "signature_url": "https://archive.archlinux.org/packages/x/xorg-xauth/xorg-xauth-1.1.5-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xorg-xauth/xorg-xauth-1.1.5-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID kh9+IifrBhRA9G8z2DY5Skd0k+E 2026-01-03 1767474343\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2026-01-03 1767474343 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Sun Jan  4 02:05:43 2026 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "1.1.5-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 93470,
+      "archive_members": 16,
+      "archive_sha256": "662f4ad50763b9d4192bb4f2bbd81ba3c50630a0ec2a83a13deb8770f785734d",
+      "archive_uncompressed_bytes": 229920,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "LicenseRef-xkbcomp"
+      ],
+      "name": "xorg-xkbcomp",
+      "package_runtime_dependencies": [
+        "libxkbfile",
+        "libx11",
+        "glibc"
+      ],
+      "selected_members": 13,
+      "signature_sha256": "a8dc7d5c533e914f6c3e29c265b4ab1526c08b4470267076814c74c88ad3206c",
+      "signature_url": "https://archive.archlinux.org/packages/x/xorg-xkbcomp/xorg-xkbcomp-1.5.0-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xorg-xkbcomp/xorg-xkbcomp-1.5.0-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID mTAzXhnhp1f9DN7laghIi9O1Qic 2025-12-03 1764777962\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2025-12-03 1764777962 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Wed Dec  3 21:06:02 2025 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "1.5.0-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 14149,
+      "archive_members": 13,
+      "archive_sha256": "dc1dce9a0aa737d39344d15232a62ab6b1963bb5763360bf166c11699c37e3f5",
+      "archive_uncompressed_bytes": 41488,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "HPND"
+      ],
+      "name": "xorg-setxkbmap",
+      "package_runtime_dependencies": [
+        "libxkbfile",
+        "libxrandr",
+        "libx11",
+        "glibc"
+      ],
+      "selected_members": 10,
+      "signature_sha256": "9c7576a360fb80e9b25b0c812b8c05c40626b543a37ea1255b08e1d83c4dee1e",
+      "signature_url": "https://archive.archlinux.org/packages/x/xorg-setxkbmap/xorg-setxkbmap-1.3.5-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xorg-setxkbmap/xorg-setxkbmap-1.3.5-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID 6UfKb22ng1KDV3/8emgL1jK8fJE 2026-03-29 1774773964\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2026-03-29 1774773964 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Sun Mar 29 13:46:04 2026 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "1.3.5-1"
+    },
+    {
+      "architecture": "any",
+      "archive_bytes": 910202,
+      "archive_members": 523,
+      "archive_sha256": "7f7f8656dbd0b37e36d3a97f6e188fc5c6cbccc4c1e5d34ff35f1d7a79b1cc73",
+      "archive_uncompressed_bytes": 10767252,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "LicenseRef-xkeyboard-config"
+      ],
+      "name": "xkeyboard-config",
+      "package_runtime_dependencies": [],
+      "selected_members": 520,
+      "signature_sha256": "c671576adf0c6f376a4eb98421e6c1855acd0da7cbbcc4267803b02ddb95dbe1",
+      "signature_url": "https://archive.archlinux.org/packages/x/xkeyboard-config/xkeyboard-config-2.48-1-any.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/x/xkeyboard-config/xkeyboard-config-2.48-1-any.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID h4/EAv7pBaRAH6eeskJDq9iKPrw 2026-06-21 1782026968\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2026-06-21 1782026968 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Sun Jun 21 12:29:28 2026 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "2.48-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 29670,
+      "archive_members": 36,
+      "archive_sha256": "7e036fc4ae02ec16d09efed08b111e33d4753aa959d12148461d653659a9f529",
+      "archive_uncompressed_bytes": 121809,
+      "expected_signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "MIT-open-group",
+        "HPND-sell-variant",
+        "X11",
+        "HPND-doc",
+        "HPND-doc-sell"
+      ],
+      "name": "libxtst",
+      "package_runtime_dependencies": [
+        "libxext",
+        "libxi",
+        "libx11",
+        "glibc",
+        "xorgproto"
+      ],
+      "selected_members": 33,
+      "signature_sha256": "ddb973f3dd5726fa7db155456fa2920b7980179d95c05533bbe485917a921e1c",
+      "signature_url": "https://archive.archlinux.org/packages/l/libxtst/libxtst-1.2.5-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/l/libxtst/libxtst-1.2.5-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "ADC8A1FCC15E01D45310419E94657AB20F2A092B",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED ADC8A1FCC15E01D45310419E94657AB20F2A092B 0\n[GNUPG:] SIG_ID /a4CvMu10NpucU3CRiFxJ9owXe8 2024-08-04 1722765910\n[GNUPG:] GOODSIG 94657AB20F2A092B Andreas Radke <andyrtr@archlinux.org>\n[GNUPG:] VALIDSIG ADC8A1FCC15E01D45310419E94657AB20F2A092B 2024-08-04 1722765910 0 4 0 1 10 00 ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Signature made Sun Aug  4 15:05:10 2024 +05\ngpgv:                using RSA key ADC8A1FCC15E01D45310419E94657AB20F2A092B\ngpgv: Good signature from \"Andreas Radke <andyrtr@archlinux.org>\"\ngpgv:                 aka \"Andreas Radke <andreas.radke@mailbox.org>\"\ngpgv:                 aka \"Andreas Radke <andyrtr@mailbox.org>\""
+      },
+      "version": "1.2.5-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 8906182,
+      "archive_members": 565,
+      "archive_sha256": "37d26735c03a923a69bacd2ec950ebb26f2f89dcde4318be7e36550e676df9a7",
+      "archive_uncompressed_bytes": 18906693,
+      "expected_signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "LGPL-2.1-or-later",
+        "Unicode-DFS-2016"
+      ],
+      "name": "fcitx5",
+      "package_runtime_dependencies": [
+        "cairo",
+        "enchant",
+        "iso-codes",
+        "libgl",
+        "libxkbcommon-x11",
+        "pango",
+        "systemd",
+        "wayland",
+        "xcb-imdkit",
+        "xcb-util-wm",
+        "libxkbfile",
+        "gdk-pixbuf2",
+        "librsvg",
+        "yoga"
+      ],
+      "selected_members": 562,
+      "signature_sha256": "5df47efe0dcf4ff1a91861a620026a67a1e933a8a7c7a285e96cf72fa9bf5372",
+      "signature_url": "https://archive.archlinux.org/packages/f/fcitx5/fcitx5-5.1.23-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/f/fcitx5/fcitx5-5.1.23-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED B5971F2C5C10A9A08C60030F786C63F330D7CB92 0\n[GNUPG:] SIG_ID tG7WYIuJThWgBuFN0FKVe0KjoYk 2026-09-24 1790278869\n[GNUPG:] GOODSIG 786C63F330D7CB92 Felix Yan <felixonmars@archlinux.org>\n[GNUPG:] VALIDSIG B5971F2C5C10A9A08C60030F786C63F330D7CB92 2026-09-24 1790278869 0 4 0 1 10 00 B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Signature made Fri Sep 25 00:41:09 2026 +05\ngpgv:                using RSA key B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Good signature from \"Felix Yan <felixonmars@archlinux.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@163.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@189.cn>\"\ngpgv:                 aka \"Felix Yan <felixonmars@archlinuxcn.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@fedoraproject.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@gmail.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@member.fsf.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@nyaa.cat>\"\ngpgv:                 aka \"Felix Yan <felixonmars@qq.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@ubuntukylin.com>\"\ngpgv:                 aka \"Felix Yan <felixyan@bbtechgroup.com>\"\ngpgv:                 aka \"Felix Yan <i@felixc.at>\"\ngpgv:                 aka \"Felix Yan <yanran@deepin.com>\"\ngpgv:                 aka \"Felix Yan <yanran@uniontech.com>\"\ngpgv:                 aka \"Yan, Ran (Name on Passport) <felixonmars@gmail.com>\"\ngpgv:                 aka \"keybase.io/felixonmars <felixonmars@keybase.io>\""
+      },
+      "version": "5.1.23-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 1479493,
+      "archive_members": 274,
+      "archive_sha256": "719a7cd8ea9829d16a57937d5565385af3fad2ea4d9e6b3a6281bf7eb67810ab",
+      "archive_uncompressed_bytes": 4434883,
+      "expected_signer": "C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8",
+      "extraction": "selected-pinyin-and-required-punctuation-payloads",
+      "licenses": [
+        "GPL-2.0-or-later"
+      ],
+      "name": "fcitx5-chinese-addons",
+      "package_runtime_dependencies": [
+        "curl",
+        "fcitx5-qt",
+        "libime",
+        "opencc",
+        "qt6-webengine"
+      ],
+      "selected_members": 8,
+      "signature_sha256": "6ff8889f63d2b5c16cacc23e16dce6293585e30f75e14f93e36b77686c36a598",
+      "signature_url": "https://archive.archlinux.org/packages/f/fcitx5-chinese-addons/fcitx5-chinese-addons-5.1.15-2-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/f/fcitx5-chinese-addons/fcitx5-chinese-addons-5.1.15-2-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8 0\n[GNUPG:] SIG_ID 1QIZiYln701g8JpgpJcOJ9cp1Ao 2026-10-13 1791869296\n[GNUPG:] GOODSIG 06313911057DD5A8 George Hu <integral@archlinuxcn.org>\n[GNUPG:] VALIDSIG C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8 2026-10-13 1791869296 0 4 0 1 10 00 C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8\ngpgv: Signature made Tue Oct 13 10:28:16 2026 +05\ngpgv:                using RSA key C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8\ngpgv: Good signature from \"George Hu <integral@archlinuxcn.org>\"\ngpgv:                 aka \"George Hu <integral@archlinux.org>\"\ngpgv:                 aka \"Integral <integral@member.fsf.org>\"\ngpgv:                 aka \"Integral <integral@murena.io>\""
+      },
+      "version": "5.1.15-2"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 45641699,
+      "archive_members": 99,
+      "archive_sha256": "82b8a0cad9cba17b8423b3f9b41fbdb4acb5f76211ff408e11b10ecb0a8dd2ea",
+      "archive_uncompressed_bytes": 56691387,
+      "expected_signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "LGPL-2.1-or-later",
+        "BSD-3-Clause",
+        "MIT"
+      ],
+      "name": "libime",
+      "package_runtime_dependencies": [
+        "boost-libs",
+        "fcitx5"
+      ],
+      "selected_members": 96,
+      "signature_sha256": "8907172a96d7dda868ff998794ebd1ef4aaa52085d958812f6f7e4ac08482ff4",
+      "signature_url": "https://archive.archlinux.org/packages/l/libime/libime-1.1.17-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/l/libime/libime-1.1.17-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED B5971F2C5C10A9A08C60030F786C63F330D7CB92 0\n[GNUPG:] SIG_ID ocKKDHckcEGr1nrWZCPBuvLQd+Y 2026-09-24 1790280779\n[GNUPG:] GOODSIG 786C63F330D7CB92 Felix Yan <felixonmars@archlinux.org>\n[GNUPG:] VALIDSIG B5971F2C5C10A9A08C60030F786C63F330D7CB92 2026-09-24 1790280779 0 4 0 1 10 00 B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Signature made Fri Sep 25 01:12:59 2026 +05\ngpgv:                using RSA key B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Good signature from \"Felix Yan <felixonmars@archlinux.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@163.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@189.cn>\"\ngpgv:                 aka \"Felix Yan <felixonmars@archlinuxcn.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@fedoraproject.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@gmail.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@member.fsf.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@nyaa.cat>\"\ngpgv:                 aka \"Felix Yan <felixonmars@qq.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@ubuntukylin.com>\"\ngpgv:                 aka \"Felix Yan <felixyan@bbtechgroup.com>\"\ngpgv:                 aka \"Felix Yan <i@felixc.at>\"\ngpgv:                 aka \"Felix Yan <yanran@deepin.com>\"\ngpgv:                 aka \"Felix Yan <yanran@uniontech.com>\"\ngpgv:                 aka \"Yan, Ran (Name on Passport) <felixonmars@gmail.com>\"\ngpgv:                 aka \"keybase.io/felixonmars <felixonmars@keybase.io>\""
+      },
+      "version": "1.1.17-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 6460100,
+      "archive_members": 165,
+      "archive_sha256": "4b1392e578e46c1b23910d1c26956927d7e986d6afd5090be59045afb3c04f8d",
+      "archive_uncompressed_bytes": 53595534,
+      "expected_signer": "F00B96D15228013FFC9C9D0393B11DAA4C197E3D",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "BSL-1.0"
+      ],
+      "name": "boost-libs",
+      "package_runtime_dependencies": [
+        "bzip2",
+        "glibc",
+        "icu",
+        "libgcc",
+        "libstdc++",
+        "xz",
+        "zlib",
+        "zstd"
+      ],
+      "selected_members": 162,
+      "signature_sha256": "04c0bf322e5dd9d594b0a087a35f3740116b41488311f3c34fff9b7c35af0fc2",
+      "signature_url": "https://archive.archlinux.org/packages/b/boost-libs/boost-libs-1.92.0-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/b/boost-libs/boost-libs-1.92.0-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "F00B96D15228013FFC9C9D0393B11DAA4C197E3D",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED F00B96D15228013FFC9C9D0393B11DAA4C197E3D 0\n[GNUPG:] SIG_ID o4h7nwBMPHcYe1LHFr07GNm2vv4 2026-08-13 1786621782\n[GNUPG:] GOODSIG 93B11DAA4C197E3D Christian Heusel (gromit packager key) <gromit@archlinux.org>\n[GNUPG:] VALIDSIG F00B96D15228013FFC9C9D0393B11DAA4C197E3D 2026-08-13 1786621782 0 4 0 1 10 00 F00B96D15228013FFC9C9D0393B11DAA4C197E3D\ngpgv: Signature made Thu Aug 13 16:49:42 2026 +05\ngpgv:                using RSA key F00B96D15228013FFC9C9D0393B11DAA4C197E3D\ngpgv: Good signature from \"Christian Heusel (gromit packager key) <gromit@archlinux.org>\""
+      },
+      "version": "1.92.0-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 786755,
+      "archive_members": 103,
+      "archive_sha256": "1ebb3fdd742f41fd8d51e7de528c84c4db63746705dbe6cdf9870693774ca886",
+      "archive_uncompressed_bytes": 2063608,
+      "expected_signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "opencc",
+      "package_runtime_dependencies": [
+        "marisa"
+      ],
+      "selected_members": 100,
+      "signature_sha256": "029d332847e9857b2caa439a73197ff96cac3566a9e64db8fc6ecd96771aef22",
+      "signature_url": "https://archive.archlinux.org/packages/o/opencc/opencc-1.2.0-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/o/opencc/opencc-1.2.0-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED B5971F2C5C10A9A08C60030F786C63F330D7CB92 0\n[GNUPG:] SIG_ID 9wZy/zY/qkm7mcEkG4iS0Le3Cls 2026-03-08 1772995889\n[GNUPG:] GOODSIG 786C63F330D7CB92 Felix Yan <felixonmars@archlinux.org>\n[GNUPG:] VALIDSIG B5971F2C5C10A9A08C60030F786C63F330D7CB92 2026-03-08 1772995889 0 4 0 1 10 00 B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Signature made Sun Mar  8 23:51:29 2026 +05\ngpgv:                using RSA key B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Good signature from \"Felix Yan <felixonmars@archlinux.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@163.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@189.cn>\"\ngpgv:                 aka \"Felix Yan <felixonmars@archlinuxcn.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@fedoraproject.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@gmail.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@member.fsf.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@nyaa.cat>\"\ngpgv:                 aka \"Felix Yan <felixonmars@qq.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@ubuntukylin.com>\"\ngpgv:                 aka \"Felix Yan <felixyan@bbtechgroup.com>\"\ngpgv:                 aka \"Felix Yan <i@felixc.at>\"\ngpgv:                 aka \"Felix Yan <yanran@deepin.com>\"\ngpgv:                 aka \"Felix Yan <yanran@uniontech.com>\"\ngpgv:                 aka \"Yan, Ran (Name on Passport) <felixonmars@gmail.com>\"\ngpgv:                 aka \"keybase.io/felixonmars <felixonmars@keybase.io>\""
+      },
+      "version": "1.2.0-1"
+    },
+    {
+      "architecture": "x86_64",
+      "archive_bytes": 112662,
+      "archive_members": 45,
+      "archive_sha256": "ad6aa2b6cf3dd4f41dba48c8ca28c49830c8ba8ea4f9bfe45d4a9b9762d0497a",
+      "archive_uncompressed_bytes": 453595,
+      "expected_signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+      "extraction": "full-package-payload",
+      "licenses": [
+        "BSD-2-Clause OR LGPL-2.1-or-later"
+      ],
+      "name": "marisa",
+      "package_runtime_dependencies": [
+        "gcc-libs"
+      ],
+      "selected_members": 42,
+      "signature_sha256": "40a1839fdee5e78cf1e5f8180333a68b45d9315c38b0a6751b776b8f5da837d0",
+      "signature_url": "https://archive.archlinux.org/packages/m/marisa/marisa-0.3.1-1-x86_64.pkg.tar.zst.sig",
+      "url": "https://archive.archlinux.org/packages/m/marisa/marisa-0.3.1-1-x86_64.pkg.tar.zst",
+      "verified_signer": {
+        "primary_fingerprint": "B5971F2C5C10A9A08C60030F786C63F330D7CB92",
+        "status": "[GNUPG:] NEWSIG\n[GNUPG:] KEY_CONSIDERED B5971F2C5C10A9A08C60030F786C63F330D7CB92 0\n[GNUPG:] SIG_ID GttCNBQ7cQuvsH1Qc7JZE5MUYW0 2026-04-06 1775493799\n[GNUPG:] GOODSIG 786C63F330D7CB92 Felix Yan <felixonmars@archlinux.org>\n[GNUPG:] VALIDSIG B5971F2C5C10A9A08C60030F786C63F330D7CB92 2026-04-06 1775493799 0 4 0 1 10 00 B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Signature made Mon Apr  6 21:43:19 2026 +05\ngpgv:                using RSA key B5971F2C5C10A9A08C60030F786C63F330D7CB92\ngpgv: Good signature from \"Felix Yan <felixonmars@archlinux.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@163.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@189.cn>\"\ngpgv:                 aka \"Felix Yan <felixonmars@archlinuxcn.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@fedoraproject.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@gmail.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@member.fsf.org>\"\ngpgv:                 aka \"Felix Yan <felixonmars@nyaa.cat>\"\ngpgv:                 aka \"Felix Yan <felixonmars@qq.com>\"\ngpgv:                 aka \"Felix Yan <felixonmars@ubuntukylin.com>\"\ngpgv:                 aka \"Felix Yan <felixyan@bbtechgroup.com>\"\ngpgv:                 aka \"Felix Yan <i@felixc.at>\"\ngpgv:                 aka \"Felix Yan <yanran@deepin.com>\"\ngpgv:                 aka \"Felix Yan <yanran@uniontech.com>\"\ngpgv:                 aka \"Yan, Ran (Name on Passport) <felixonmars@gmail.com>\"\ngpgv:                 aka \"keybase.io/felixonmars <felixonmars@keybase.io>\""
+      },
+      "version": "0.3.1-1"
+    }
+  ],
+  "preparer_sha256": "9714a9d4624390864136dc12303c66482af70f5f9c6eaabd93a075035673d010",
+  "runtime_ldd_checks": {
+    "usr/bin/Xvfb": {
+      "output": "linux-vdso.so.1 (0x00007f400030e000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f3fffeb8000)\n\tlibpixman-1.so.0 => /usr/lib/libpixman-1.so.0 (0x00007f400022c000)\n\tlibXfont2.so.2 => /usr/lib/libXfont2.so.2 (0x00007f3fffe89000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007f4000224000)\n\tlibunwind.so.8 => /usr/lib/libunwind.so.8 (0x00007f3fffe6e000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f3fffd37000)\n\tlibnettle.so.9 => /usr/lib/libnettle.so.9 (0x00007f3fffcdb000)\n\tlibtirpc.so.3 => /usr/lib/libtirpc.so.3 (0x00007f3fffcad000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007f3fffca8000)\n\tlibGL.so.1 => /usr/lib/libGL.so.1 (0x00007f3fffc36000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f3fffa00000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f3fff9d3000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007f4000310000)\n\tlibz.so.1 => /usr/lib/libz.so.1 (0x00007f3fff9b8000)\n\tlibfontenc.so.1 => /usr/lib/libfontenc.so.1 (0x00007f3fffc2d000)\n\tlibfreetype.so.6 => /usr/lib/libfreetype.so.6 (0x00007f3fff8e8000)\n\tliblzma.so.5 => /usr/lib/liblzma.so.5 (0x00007f3fff8b3000)\n\tlibgssapi_krb5.so.2 => /usr/lib/libgssapi_krb5.so.2 (0x00007f3fff85b000)\n\tlibGLdispatch.so.0 => /usr/lib/libGLdispatch.so.0 (0x00007f3fff7e2000)\n\tlibGLX.so.0 => /usr/lib/libGLX.so.0 (0x00007f3fff7b1000)\n\tlibbz2.so.1.0 => /usr/lib/libbz2.so.1.0 (0x00007f3fff79e000)\n\tlibpng16.so.16 => /usr/lib/libpng16.so.16 (0x00007f3fff761000)\n\tlibbrotlidec.so.1 => /usr/lib/libbrotlidec.so.1 (0x00007f3fff752000)\n\tlibkrb5.so.3 => /usr/lib/libkrb5.so.3 (0x00007f3fff683000)\n\tlibk5crypto.so.3 => /usr/lib/libk5crypto.so.3 (0x00007f3fff655000)\n\tlibcom_err.so.2 => /usr/lib/libcom_err.so.2 (0x00007f3fffc25000)\n\tlibkrb5support.so.0 => /usr/lib/libkrb5support.so.0 (0x00007f3fff646000)\n\tlibkeyutils.so.1 => /usr/lib/libkeyutils.so.1 (0x00007f3fff63f000)\n\tlibresolv.so.2 => /usr/lib/libresolv.so.2 (0x00007f3fff62c000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007f3fff4ea000)\n\tlibbrotlicommon.so.1 => /usr/lib/libbrotlicommon.so.1 (0x00007f3fff4c7000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007f3fff49c000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/bin/fcitx5": {
+      "output": "linux-vdso.so.1 (0x00007f9eccda9000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007f9eccc38000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007f9eccbfa000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f9eccb4c000)\n\tlibexpat.so.1 => /usr/lib/libexpat.so.1 (0x00007f9eccb1e000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f9eccabd000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f9ecc600000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f9ecca90000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f9ecc200000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007f9ecca86000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f9ecc93e000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f9ecc4c9000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007f9eccdab000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/bin/fcitx5-remote": {
+      "output": "linux-vdso.so.1 (0x00007f39b320e000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f39b3126000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f39b2e00000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f39b30f9000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f39b2a00000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f39b2cb8000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f39b28c9000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007f39b3210000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/bin/setxkbmap": {
+      "output": "linux-vdso.so.1 (0x00007fe99f496000)\n\tlibxkbfile.so.1 => /usr/lib/libxkbfile.so.1 (0x00007fe99f433000)\n\tlibXrandr.so.2 => /usr/lib/libXrandr.so.2 (0x00007fe99f426000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007fe99f2e4000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007fe99f000000)\n\tlibXext.so.6 => /usr/lib/libXext.so.6 (0x00007fe99f2ce000)\n\tlibXrender.so.1 => /usr/lib/libXrender.so.1 (0x00007fe99f2c2000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007fe99f297000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007fe99f498000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007fe99f292000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007fe99f28a000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/bin/xauth": {
+      "output": "linux-vdso.so.1 (0x00007f167f175000)\n\tlibXext.so.6 => /usr/lib/libXext.so.6 (0x00007f167f123000)\n\tlibXmuu.so.1 => /usr/lib/libXmuu.so.1 (0x00007f167f11d000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007f167efdb000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007f167efd6000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f167ec00000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007f167efa9000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007f167f177000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007f167efa1000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/bin/xkbcomp": {
+      "output": "linux-vdso.so.1 (0x00007fd42fa14000)\n\tlibxkbfile.so.1 => /usr/lib/libxkbfile.so.1 (0x00007fd42f983000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007fd42f841000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007fd42f600000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007fd42f5d5000)\n\t/lib64/ld-linux-x86-64.so.2 => /usr/lib64/ld-linux-x86-64.so.2 (0x00007fd42fa16000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007fd42f83a000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007fd42f832000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libdbus.so": {
+      "output": "linux-vdso.so.1 (0x00007f06d1e58000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007f06d1d05000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007f06d1cda000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007f06d1c9c000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f06d1bee000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f06d1800000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f06d1bbf000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f06d1400000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f06d1b60000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007f06d1b56000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007f06d1b51000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007f06d1b47000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f06d16b8000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f06d12c9000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f06d1e5a000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libdbusfrontend.so": {
+      "output": "linux-vdso.so.1 (0x00007f6d952a7000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007f6d95169000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f6d950bb000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f6d94c00000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f6d9508e000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f6d94800000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007f6d9504e000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f6d94fef000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007f6d94fe5000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f6d94ab8000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f6d946c9000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f6d952a9000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libpinyin.so": {
+      "output": "linux-vdso.so.1 (0x00007f59f2c4d000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007f59f2aa2000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007f59f2a64000)\n\tlibIMEPinyin.so.0 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libIMEPinyin.so.0 (0x00007f59f29c6000)\n\tlibIMECore.so.0 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libIMECore.so.0 (0x00007f59f2916000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f59f2866000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f59f2400000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f59f2839000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f59f2000000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f59f2c4f000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f59f27da000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007f59f27d0000)\n\tlibzstd.so.1 => /usr/lib/libzstd.so.1 (0x00007f59f26e8000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f59f22c9000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f59f1eb8000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libpunctuation.so": {
+      "output": "linux-vdso.so.1 (0x00007feacc35f000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007feacc226000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007feacc1e8000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007feacc13a000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007feacbe00000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007feacc10b000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007feacba00000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007feacbda1000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007feacc101000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007feacbc59000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007feacb8c9000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007feacc361000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libxcb.so": {
+      "output": "linux-vdso.so.1 (0x00007fede877b000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007fede8631000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007fede8606000)\n\tlibxcb-util.so.1 => /usr/lib/libxcb-util.so.1 (0x00007fede8600000)\n\tlibxcb-xkb.so.1 => /usr/lib/libxcb-xkb.so.1 (0x00007fede85e1000)\n\tlibxcb-xfixes.so.0 => /usr/lib/libxcb-xfixes.so.0 (0x00007fede85d6000)\n\tlibxcb-ewmh.so.2 => /usr/lib/libxcb-ewmh.so.2 (0x00007fede85c8000)\n\tlibxcb-randr.so.0 => /usr/lib/libxcb-randr.so.0 (0x00007fede85b6000)\n\tlibxcb-keysyms.so.1 => /usr/lib/libxcb-keysyms.so.1 (0x00007fede85b1000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007fede8552000)\n\tlibxkbcommon-x11.so.0 => /usr/lib/libxkbcommon-x11.so.0 (0x00007fede8548000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007fede8508000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007fede845a000)\n\tlibxkbfile.so.1 => /usr/lib/libxkbfile.so.1 (0x00007fede8433000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007fede8000000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007fede8406000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007fede7c00000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007fede83fa000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007fede83f5000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007fede83ed000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007fede7eb8000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007fede7ac9000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007fede877d000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007fede7987000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/fcitx5/libxim.so": {
+      "output": "linux-vdso.so.1 (0x00007f0319fbc000)\n\tlibFcitx5Core.so.7 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Core.so.7 (0x00007f0319e95000)\n\tlibxcb-imdkit.so.1 => /usr/lib/libxcb-imdkit.so.1 (0x00007f0319e13000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007f0319de8000)\n\tlibxcb-util.so.1 => /usr/lib/libxcb-util.so.1 (0x00007f0319de2000)\n\tlibxcb-ewmh.so.2 => /usr/lib/libxcb-ewmh.so.2 (0x00007f0319dd2000)\n\tlibxkbcommon.so.0 => /usr/lib/libxkbcommon.so.0 (0x00007f0319d73000)\n\tlibFcitx5Config.so.6 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Config.so.6 (0x00007f0319d35000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f0319c87000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f0319800000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f0319c5a000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f0319400000)\n\tlibuuid.so.1 => /usr/lib/libuuid.so.1 (0x00007f0319c4e000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007f0319c49000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007f0319c41000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f0319af9000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f03196c9000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f0319fbe000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/libIMECore.so.0": {
+      "output": "linux-vdso.so.1 (0x00007f47ea40e000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f47ea27d000)\n\tlibzstd.so.1 => /usr/lib/libzstd.so.1 (0x00007f47ea197000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f47e9e00000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f47e9cc9000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f47ea168000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f47e9a00000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f47e98b8000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f47ea410000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/libIMEPinyin.so.0": {
+      "output": "linux-vdso.so.1 (0x00007f8f75f44000)\n\tlibIMECore.so.0 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libIMECore.so.0 (0x00007f8f75dc3000)\n\tlibFcitx5Utils.so.2 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libFcitx5Utils.so.2 (0x00007f8f75d15000)\n\tlibzstd.so.1 => /usr/lib/libzstd.so.1 (0x00007f8f75c2f000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f8f75800000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f8f75c00000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f8f75400000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f8f756c9000)\n\tlibsystemd.so.0 => /usr/lib/libsystemd.so.0 (0x00007f8f752b8000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f8f75f46000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/libXtst.so": {
+      "output": "linux-vdso.so.1 (0x00007f85902ca000)\n\tlibX11.so.6 => /usr/lib/libX11.so.6 (0x00007f859014d000)\n\tlibXext.so.6 => /usr/lib/libXext.so.6 (0x00007f8590139000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f858fe00000)\n\tlibxcb.so.1 => /usr/lib/libxcb.so.1 (0x00007f859010e000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f85902cc000)\n\tlibXau.so.6 => /usr/lib/libXau.so.6 (0x00007f8590107000)\n\tlibXdmcp.so.6 => /usr/lib/libXdmcp.so.6 (0x00007f85900ff000)",
+      "returncode": 0,
+      "unresolved": []
+    },
+    "usr/lib/libopencc.so": {
+      "output": "linux-vdso.so.1 (0x00007f2fb0a5a000)\n\tlibmarisa.so.0 => /tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libmarisa.so.0 (0x00007f2fb09bd000)\n\tlibstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x00007f2fb0600000)\n\tlibm.so.6 => /usr/lib/libm.so.6 (0x00007f2fb04c9000)\n\tlibgcc_s.so.1 => /usr/lib/libgcc_s.so.1 (0x00007f2fb0990000)\n\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f2fb0200000)\n\t/usr/lib64/ld-linux-x86-64.so.2 (0x00007f2fb0a5c000)",
+      "returncode": 0,
+      "unresolved": []
+    }
+  },
+  "runtime_paths": {
+    "usr/bin/Xvfb": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/Xvfb",
+    "usr/bin/fcitx5": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/fcitx5",
+    "usr/bin/fcitx5-remote": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/fcitx5-remote",
+    "usr/bin/setxkbmap": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/setxkbmap",
+    "usr/bin/xauth": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/xauth",
+    "usr/bin/xkbcomp": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/bin/xkbcomp",
+    "usr/include/X11/extensions/XTest.h": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/include/X11/extensions/XTest.h",
+    "usr/lib/fcitx5/libdbus.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libdbus.so",
+    "usr/lib/fcitx5/libdbusfrontend.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libdbusfrontend.so",
+    "usr/lib/fcitx5/libpinyin.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libpinyin.so",
+    "usr/lib/fcitx5/libpunctuation.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libpunctuation.so",
+    "usr/lib/fcitx5/libxcb.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libxcb.so",
+    "usr/lib/fcitx5/libxim.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/fcitx5/libxim.so",
+    "usr/lib/libIMECore.so.0": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libIMECore.so.0",
+    "usr/lib/libIMEPinyin.so.0": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libIMEPinyin.so.0",
+    "usr/lib/libXtst.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libXtst.so",
+    "usr/lib/libime/zh_CN.lm": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libime/zh_CN.lm",
+    "usr/lib/libopencc.so": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/lib/libopencc.so",
+    "usr/share/X11/xkb": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/share/X11/xkb",
+    "usr/share/fcitx5/addon/pinyin.conf": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/share/fcitx5/addon/pinyin.conf",
+    "usr/share/fcitx5/addon/punctuation.conf": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/share/fcitx5/addon/punctuation.conf",
+    "usr/share/fcitx5/inputmethod/pinyin.conf": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/share/fcitx5/inputmethod/pinyin.conf",
+    "usr/share/fcitx5/punctuation/punc.mb.zh_CN": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5/usr/share/fcitx5/punctuation/punc.mb.zh_CN"
+  },
+  "schema": 1,
+  "sdk_directory": "/tmp/pigade-x11-ime-sdk-20261017",
+  "status": "ready-for-isolated-review",
+  "unresolved_runtime_dependencies": []
+}

@@ -8,3 +8,6 @@ crates/app/assets/fonts/jetbrains-mono-v2.304/AUTHORS.txt -text whitespace=-blan
 crates/app/assets/fonts/jetbrains-mono-v2.304/OFL.txt -text whitespace=-blank-at-eol
 crates/app/assets/fonts/derived-terminal-v1/JetBrainsMono-AUTHORS.txt -text whitespace=-blank-at-eol
 crates/app/assets/fonts/derived-terminal-v1/LICENSE-JetBrainsMono-OFL.txt -text whitespace=-blank-at-eol
+# Unified-diff blank context lines contain the required leading space.
+# Exact patch/pre/postimage hashes enforce this single immutable profile.
+crates/app/patches/gpui-x11-ime/focus.patch -text whitespace=-blank-at-eol

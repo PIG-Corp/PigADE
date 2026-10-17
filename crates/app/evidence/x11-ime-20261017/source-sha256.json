@@ -1,0 +1,10 @@
+{
+  "crates/app/bootstrap.sh": "1adc134536e64554920af3124622a30c619ac43ed7059ab985ce40f7a51beea8",
+  "crates/app/src/main.rs": "469edcdedebf5a747f9096587386c65a9490bc742725c989960baa4cc083d040",
+  "scripts/isolated-ime-x11.py": "bd03aa7674d014ca581392c6a71df947ac9e35ce07e06c35cf3a885afb41fa33",
+  "scripts/x11-ime-input.c": "f1b8dea26041abded282e5ca7d1fd228dd587aef32bbf039739bfb549a8c267d",
+  "scripts/prepare-x11-ime-sdk.py": "9714a9d4624390864136dc12303c66482af70f5f9c6eaabd93a075035673d010",
+  "scripts/apply-gpui-patches.py": "353cbf6fdf1ec488cfb6d55b1f5b0e72f572187f0c4b230d2c1fd00691212d11",
+  "crates/app/patches/gpui-x11-ime/manifest.json": "85f3b64518f300dcfc7127385f57f9d84ab10fc3177f68df8cb484b8cd76c069",
+  "crates/app/patches/gpui-x11-ime/focus.patch": "156c3842dcbb5fb69ff6f7d337aaf8c2ef3c5263448379ba19a39e023af7489b"
+}

@@ -1,0 +1,158 @@
+{
+  "app_sha256": "b4d63952a32eb02d2c0d00834e0b67ed314dfe6d58b049e3a60c4bdbb7148ff9",
+  "captures": [
+    "/home/afterburner/.local/state/pigade/ime-x11-20261017-focus-v1-release/preedit.ppm",
+    "/home/afterburner/.local/state/pigade/ime-x11-20261017-focus-v1-release/committed.ppm"
+  ],
+  "fonts": {
+    "embedded_faces": [
+      {
+        "bytes": 272016,
+        "path": "PigADETerminalMonoV1-Regular.ttf",
+        "sha256": "9eab97106f8af1e0f9c8617a36a8c5fec2b572764be997ae4224f6329ec7a9f8"
+      },
+      {
+        "bytes": 275904,
+        "path": "PigADETerminalMonoV1-Bold.ttf",
+        "sha256": "8eb93d5349b81f004c31118adacc8954f406e8f7ae8816fdd8e91548c8184104"
+      },
+      {
+        "bytes": 274972,
+        "path": "PigADETerminalMonoV1-Italic.ttf",
+        "sha256": "ee764684b2ac7e4c122ee2a7840823463bde9814857b5138b091f5a4fdca4b41"
+      },
+      {
+        "bytes": 277940,
+        "path": "PigADETerminalMonoV1-BoldItalic.ttf",
+        "sha256": "740f80d509a5d5440304680adeddccf4efa21f12ece97fd8e5ed13d3e9cb65f2"
+      },
+      {
+        "bytes": 16424284,
+        "path": "PigADETerminalCJKJPV1-Regular.otf",
+        "sha256": "62eae011b3edc1d1ec57616330b51931a912768fe74dcda3b012ce290fb029f4"
+      }
+    ],
+    "manifest_sha256": "f2a3ad82c22a5be1cf21c431ff04473b31b4cb4919a30c1379f957cb6edd82e3",
+    "profile_id": "pigade-terminal-render-profile-aliases-v1",
+    "scope": "exact font payloads present in selected executable; runtime family registration still tested inside namespace"
+  },
+  "helper": {
+    "libraries": [
+      "X11",
+      "Xtst",
+      "xcb",
+      "xcb-res"
+    ],
+    "path": "/home/afterburner/.local/state/pigade/ime-x11-20261017-focus-v1-release/tools/x11-ime-input",
+    "sha256": "c4fc64d12d83895aee6862d1286a9f12218d65b76e2f5e0d1e1fcbaa6da4bf73",
+    "source_sha256": "f1b8dea26041abded282e5ca7d1fd228dd587aef32bbf039739bfb549a8c267d"
+  },
+  "host_sha256": "9c22265d83669e522b1ea44ebbfa27c1b0ef61d1b59ccc2f239964ab3a03776f",
+  "limits": [
+    "one local X11/XIM/Fcitx-Pinyin fixture only",
+    "does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK"
+  ],
+  "platform_sdk": {
+    "lavapipe_icd_sha256": "00293856881a670ebdd604be484572eb9f361bf990762b447f9225e5156d0bd2",
+    "manifest_sha256": "a7426b082a9224227392f964e9da3238066e9c2887201501e69a3fa5f59caa59",
+    "package_hashes_checked": 2,
+    "package_signatures_verified": 2,
+    "status": "prepared-not-executed"
+  },
+  "run": "/home/afterburner/.local/state/pigade/ime-x11-20261017-focus-v1-release/run.json",
+  "status": "pass-private-x11-xim-pinyin-commit-fixture",
+  "x11_sdk": {
+    "extraction_root": "/tmp/pigade-x11-ime-sdk-20261017/root/x11-ime-4efed4828ba785c5",
+    "limits": [
+      "Signed pinned Arch payloads only; package installer hooks are not run",
+      "No package installation, executable launch, Xvfb/Fcitx start, GUI or input occurred",
+      "XTEST API/library is present but has not been queried against an X server",
+      "No namespace/socket isolation has been established by SDK preparation",
+      "A later isolated run must validate actual Fcitx plugin load and XIM Unicode commit",
+      "Pinyin test payload is GPL-2.0-or-later and is test-only, not a product dependency"
+    ],
+    "manifest_sha256": "7a3198632791a7fea235e3d2604ee21c838a5df823588fe2581cf9e506976d6a",
+    "package_set_id": "4efed4828ba785c5",
+    "packages": [
+      {
+        "package": "xorg-server-xvfb",
+        "sha256": "52c6d0394109b0bdfd0e4d00dd8d89d7e38bfe7576d96145179f216480eb7564",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "xorg-server-common",
+        "sha256": "851b8e7ad135d99ce263334f64512a10c69d6b19231a6de48953fe44227c0dcc",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "xorg-xauth",
+        "sha256": "df9e0d1f29ae0135a49b17157841a4cc7c97869f9f27fd7480fff64f9afb94b7",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "xorg-xkbcomp",
+        "sha256": "662f4ad50763b9d4192bb4f2bbd81ba3c50630a0ec2a83a13deb8770f785734d",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "xorg-setxkbmap",
+        "sha256": "dc1dce9a0aa737d39344d15232a62ab6b1963bb5763360bf166c11699c37e3f5",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "xkeyboard-config",
+        "sha256": "7f7f8656dbd0b37e36d3a97f6e188fc5c6cbccc4c1e5d34ff35f1d7a79b1cc73",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "libxtst",
+        "sha256": "7e036fc4ae02ec16d09efed08b111e33d4753aa959d12148461d653659a9f529",
+        "signature_verified": true,
+        "signer": "ADC8A1FCC15E01D45310419E94657AB20F2A092B"
+      },
+      {
+        "package": "fcitx5",
+        "sha256": "37d26735c03a923a69bacd2ec950ebb26f2f89dcde4318be7e36550e676df9a7",
+        "signature_verified": true,
+        "signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92"
+      },
+      {
+        "package": "fcitx5-chinese-addons",
+        "sha256": "719a7cd8ea9829d16a57937d5565385af3fad2ea4d9e6b3a6281bf7eb67810ab",
+        "signature_verified": true,
+        "signer": "C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8"
+      },
+      {
+        "package": "libime",
+        "sha256": "82b8a0cad9cba17b8423b3f9b41fbdb4acb5f76211ff408e11b10ecb0a8dd2ea",
+        "signature_verified": true,
+        "signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92"
+      },
+      {
+        "package": "boost-libs",
+        "sha256": "4b1392e578e46c1b23910d1c26956927d7e986d6afd5090be59045afb3c04f8d",
+        "signature_verified": true,
+        "signer": "F00B96D15228013FFC9C9D0393B11DAA4C197E3D"
+      },
+      {
+        "package": "opencc",
+        "sha256": "1ebb3fdd742f41fd8d51e7de528c84c4db63746705dbe6cdf9870693774ca886",
+        "signature_verified": true,
+        "signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92"
+      },
+      {
+        "package": "marisa",
+        "sha256": "ad6aa2b6cf3dd4f41dba48c8ca28c49830c8ba8ea4f9bfe45d4a9b9762d0497a",
+        "signature_verified": true,
+        "signer": "B5971F2C5C10A9A08C60030F786C63F330D7CB92"
+      }
+    ],
+    "runtime_checks": 16
+  }
+}

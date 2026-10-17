@@ -40,7 +40,7 @@ cargo test --workspace
 python3 scripts/check-version.py
 ```
 
-Для UI: `crates/app/bootstrap.sh build --locked` и `crates/app/bootstrap.sh test --locked`. Bootstrap проверяет SHA-256 закреплённого GPUI archive. Он только собирает код, без открытия окон. `bash scripts/check.sh` выполняет проверки host/model workspace. Полные vendor/regression-команды и фактические результаты находятся в patch notes и отчётах.
+Для UI: `crates/app/bootstrap.sh build --locked` и `crates/app/bootstrap.sh test --locked`. Bootstrap проверяет SHA-256 закреплённого GPUI archive и применяет [точный профиль X11 IME](crates/app/patches/gpui-x11-ime/) с проверкой исходных/итоговых хешей; неизвестное состояние кэша останавливает сборку. Он только собирает код, без открытия окон. `bash scripts/check.sh` выполняет проверки host/model workspace. Полные vendor/regression-команды и фактические результаты находятся в patch notes и отчётах.
 
 ## Запуск Rust host
 

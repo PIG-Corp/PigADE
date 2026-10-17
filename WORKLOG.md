@@ -1321,3 +1321,51 @@ Integrate bounded cell decorations, fix decorated-space omission and verify fixe
 - Files: crates/app/src/main.rs, crates/app/src/cell_style.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/decorations-20261017, docs/reports/terminal-decorations.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Failing blank-decoration regression reproduced before implementation;90 native app tests pass afterward, strict all-target Clippy/fmt/debug/release builds pass.16 fixture tests pass. Real four-PTY private render/resize/reopen passes scale1/2; root visually inspected both PNGs, custom RGB pixel counts36/68. Root corrected fixture missing underline flag and actual Spec(Rgb) wire color; no new ANSI parser.
 - Risks / next: Apply/review tracked GPUI XIM focus fix after baseline capture; ACK reproducer9206 still active. No full MVP/platform/GPU/fractional-scale acceptance.
+
+## 2026-10-17T01:57:22+00:00 — terminal_memory_budget
+
+Add archive-backed GPUI patch mode and require exact Git root in Git mode; reject ancestor HEAD masquerading as upstream
+
+- Files: scripts/apply-gpui-patches.py, scripts/test_apply_gpui_patches.py
+- Verification: python3 -m unittest scripts.test_apply_gpui_patches (12 tests passed); py_compile passed; git diff --check passed
+- Risks / next: Root can use --archive with the pinned bootstrap tarball; neither the actual extracted GPUI source nor bootstrap files were changed.
+
+## 2026-10-17T01:58:20+00:00 — /root/font_render_profile
+
+Added pinned GPUI X11 XIM focus lifecycle patch profile with bounded pure-state verification
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py: PASS (pinned archive/pre/post hashes, patch apply, 6 rustc state tests); python3 -m py_compile scripts/test_gpui_xim_focus.py: PASS; git diff --check on owned new paths: PASS
+- Risks / next: Root review and apply patch in pinned GPUI workspace; run app build and isolated XIM fixture. Pure tests do not validate live XIM acknowledgements, reset barriers, or preedit spot placement.
+
+## 2026-10-17T02:00:05+00:00 — /root/font_render_profile
+
+Hardened GPUI XIM focus patch against stale IC callbacks and request failures
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py: PASS (pinned archive/pre/post hashes, patch apply, 9 rustc state tests); python3 -m py_compile scripts/test_gpui_xim_focus.py: PASS; git diff --check on owned paths: PASS
+- Risks / next: Root to review/apply and run pinned GPUI build plus isolated XIM fixture; XIM one-way focus requests and reset-generation barriers remain unverified.
+
+## 2026-10-17T02:08:31+00:00 — terminal_memory_budget
+
+Curate completed 1200-second ACK reproducer results and correct soak report status without copying raw journals
+
+- Files: docs/reports/soak-ack-timeout-20261017.md, benchmarks/results/soak-ack-timeout-20261017/completed-1200s-summary.json
+- Verification: Parsed curated JSON; asserted completion, no 24h claim, all-session CRC/recovery, sidechannel completeness/order, resize totals, and RCA=false; git diff --check passed
+- Risks / next: Wait for root-owned 7200-second run to finish, then inspect only its bounded manifest/sidechannel/recovery summary.
+
+## 2026-10-17T02:08:55+00:00 — /root
+
+Integrate pinned GPUI X11 focus lifecycle and isolated native Pinyin verification with exact baseline and release evidence
+
+- Files: crates/app/bootstrap.sh, crates/app/patches, scripts/apply-gpui-patches.py, scripts/isolated-ime-x11.py, scripts/prepare-x11-ime-sdk.py, scripts/x11-ime-input.c, scripts/test_gpui_xim_focus.py, crates/app/evidence/x11-ime-20261017, docs/adr/0010-gpui-x11-ime-focus-lifecycle.md, docs/reports/x11-ime-20261017.md, docs/research/linux-ime-reset.md, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Root inspected settled baseline/preedit/release PNGs; private actual-app debug/release exact6-byte native commit passed without precommit or duplicate input.90 native tests, strict Clippy, debug/release builds passed; fresh fmt,126 Python tests, version and diff checks pass. Reviewer independently passed12 applier/9 embedded tests and bash syntax. No active desktop access.
+- Risks / next: Native generation-reset barrier, inline preedit and full Linux/platform gates remain open.1200s diagnostic passed;7200s run10513 active, no RCA/24h acceptance.
+
+## 2026-10-17T02:09:14+00:00 — /root
+
+Preserve mandatory blank unified-diff context in exact hash-pinned GPUI patch
+
+- Files: .gitattributes
+- Verification: Initial staged diff check correctly flagged single-space context lines in new patch file. Added exact-path blank-at-eol attribute, without changing patch/runtime/source hashes or bypassing hook; rerun staged check required.
+- Risks / next: Keep all ordinary source whitespace validation enabled; profile hashes continue to pin exact patch bytes.

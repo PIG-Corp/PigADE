@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "upstream_commit": "322cd509dcccaee1f6bc44725d270598ae8171ad",
+  "upstream_archive_sha256": "27e6a724515cb6e6fa8a456098d075bfa2a50b4f6145491105555e56de2d256d",
+  "profile": "pigade-x11-ime-focus-v1",
+  "patches": [
+    {
+      "path": "focus.patch",
+      "sha256": "156c3842dcbb5fb69ff6f7d337aaf8c2ef3c5263448379ba19a39e023af7489b"
+    }
+  ],
+  "files": [
+    {
+      "path": "crates/gpui_linux/src/linux/x11/xim_handler.rs",
+      "before_sha256": "5a1f5b1a6a436a82c6bbbf9222a7470d537c5fac6b06da4e898aca497ee2adf2",
+      "after_sha256": "da9779b554c1360dcca4956f27031235e5239666e97313fa7b0283c652495115"
+    },
+    {
+      "path": "crates/gpui_linux/src/linux/x11/client.rs",
+      "before_sha256": "9dc83361d502a8d0ed1729276f0d5f4eff97b584eb73acf233968016aa7b1057",
+      "after_sha256": "58231306aa6d15d897d24991e09ed8df20c7910945259e67c08e1a73110e553d"
+    }
+  ]
+}
