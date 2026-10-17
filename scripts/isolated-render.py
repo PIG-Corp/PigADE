@@ -23,6 +23,14 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMESPACES = ('mnt', 'pid', 'user', 'ipc', 'net')
+IME_PREEDIT = '日本😀'
+
+
+def app_command(ime_preedit):
+    command = ['/pigade/app', '/artifacts/state/host.sock']
+    if ime_preedit:
+        command.append('--diagnostic-preedit')
+    return command
 
 
 def require(condition, message):
@@ -514,7 +522,7 @@ def inside():
                 'omitted': initial_reply['recovery'].get('omitted'),
             }
         initial_ids = sorted((v['session'], v['generation'], v['pid']) for v in initial)
-        first = start(['/pigade/app', '/artifacts/state/host.sock'])
+        first = start(app_command(config.get('ime_preedit', False)))
         # Wait for host acknowledgement of app-computed viewport dimensions.
         wait_for(lambda: all(v['frame']['geometry'] != {'rows': 24, 'cols': 80} for v in request({'command': 'list'})))
         require(first.poll() is None, 'application exited before capture')
@@ -594,12 +602,21 @@ def inside():
                             'scope': 'one fixed integer-scale private software output; no fractional or multi-monitor claim'}
         first.kill()
         first.wait(timeout=5)
-        reopened = start(['/pigade/app', '/artifacts/state/host.sock'])
+        reopened = start(app_command(config.get('ime_preedit', False)))
         time.sleep(1)
         require(reopened.poll() is None, 'reopened app exited')
         final = request({'command': 'list'})
         require(sorted((v['session'], v['generation'], v['pid']) for v in final) == initial_ids, 'UI reopen changed live process identity')
         require(all(v['state'] == 'running' and v['storage_error'] is None for v in final), 'generation unavailable/degraded')
+        if config.get('ime_preedit'):
+            require(all(IME_PREEDIT not in ''.join(cell['text'] for cell in view['frame']['cells'])
+                        for view in final), 'local IME fixture reached host cells')
+            require(all(IME_PREEDIT.encode() not in path.read_bytes()
+                        for path in Path('/artifacts/state').glob('*.journal')),
+                    'local IME fixture reached a journal')
+            report['imePreedit'] = {'text': IME_PREEDIT, 'selectionUtf16': [0, 2],
+                                    'absentFromHostCellsAndJournals': True,
+                                    'scope': 'Explicit same-app local composition overlay; screenshot review required. No actual IME protocol/input or commit performed.'}
         report['views'] = [{k: v[k] for k in ('session', 'generation', 'pid', 'sequence', 'state')} | {'geometry': v['frame']['geometry']} for v in final]
         report['screenshots'] = [{'name': p.name, 'sha256': sha(p), 'bytes': p.stat().st_size} for p in images]
         report['status'] = 'render_and_reopen_pass'
@@ -632,6 +649,7 @@ def outside(args):
     (output / 'run.json').write_text(json.dumps({'sdk': str(sdk), 'outer_namespaces': {name: os.readlink('/proc/self/ns/' + name) for name in NAMESPACES},
         'app_sha256': sha(args.app), 'host_sha256': sha(args.host), 'sdk_packages': manifest['packages'],
         'accessibility_probe': args.accessibility, 'recovery_warning': args.recovery_warning,
+        'ime_preedit': args.ime_preedit,
         'output_scale': args.scale,
         'font_preflight': embedded_fonts}, indent=2) + '\n')
     (output / 'passwd').write_text(f'pigade:x:{os.getuid()}:{os.getgid()}:Isolated test:/home/test:/usr/bin/bash\n')
@@ -671,4 +689,6 @@ if __name__ == '__main__':
                         help='opt in to a private-bus, read-only AT-SPI tree inspection (not Orca/full acceptance)')
     parser.add_argument('--recovery-warning', action='store_true',
                         help='opt in to malformed-journal recovery, healthy PTY input and Alert coverage')
+    parser.add_argument('--ime-preedit', action='store_true',
+                        help='show a local same-app composition fixture without desktop input or PTY commit')
     sys.exit(outside(parser.parse_args()))

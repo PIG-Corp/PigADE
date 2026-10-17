@@ -192,6 +192,8 @@ pub fn protocol_error(modes: u32) -> Option<&'static str> {
 #[derive(Default)]
 pub struct TextInput {
     pub preedit: String,
+    selection: std::ops::Range<usize>,
+    marked: Option<std::ops::Range<usize>>,
     meta: bool,
 }
 impl TextInput {
@@ -200,16 +202,98 @@ impl TextInput {
     }
     pub fn cancel(&mut self) {
         self.preedit.clear();
+        self.selection = 0..0;
+        self.marked = None;
         self.meta = false;
     }
-    pub fn commit(&mut self, text: &str) -> Vec<u8> {
-        self.preedit.clear();
+    pub fn len_utf16(&self) -> usize {
+        self.preedit.encode_utf16().count()
+    }
+    /// The IME document contains only undelivered composition, never terminal
+    /// output or text already sent to a process.
+    pub fn selection(&self) -> std::ops::Range<usize> {
+        self.selection.clone()
+    }
+    pub fn selection_bytes(&self) -> std::ops::Range<usize> {
+        self.normalized_range(self.selection.clone()).0
+    }
+    pub fn range_bytes(&self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        self.normalized_range(range).0
+    }
+    pub fn marked(&self) -> Option<std::ops::Range<usize>> {
+        self.marked.clone()
+    }
+    pub fn select(&mut self, range: std::ops::Range<usize>) {
+        self.selection = self.normalized_range(range).1;
+    }
+    fn normalized_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+        let start = range.start.min(self.len_utf16());
+        let end = range.end.max(start).min(self.len_utf16());
+        let mut byte_start = self.preedit.len();
+        let mut byte_end = self.preedit.len();
+        let mut unit_start = self.len_utf16();
+        let mut unit_end = self.len_utf16();
+        let mut units = 0;
+        for (byte, character) in self.preedit.char_indices() {
+            let next = units + character.len_utf16();
+            if start >= units && start < next {
+                byte_start = byte;
+                unit_start = units;
+            }
+            if end >= units && end < next {
+                if end == units || start == end {
+                    byte_end = byte;
+                    unit_end = units;
+                } else {
+                    byte_end = byte + character.len_utf8();
+                    unit_end = next;
+                }
+            }
+            units = next;
+        }
+        (byte_start..byte_end, unit_start..unit_end)
+    }
+    pub fn text_for_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> (String, std::ops::Range<usize>) {
+        let (bytes, actual) = self.normalized_range(range);
+        (self.preedit[bytes].to_owned(), actual)
+    }
+    pub fn mark(
+        &mut self,
+        range: Option<std::ops::Range<usize>>,
+        text: &str,
+        selection: Option<std::ops::Range<usize>>,
+    ) {
+        let range = range
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.selection.clone());
+        let (bytes, actual) = self.normalized_range(range);
+        self.preedit.replace_range(bytes, text);
+        let end = actual.start + text.encode_utf16().count();
+        self.marked = (!text.is_empty()).then_some(actual.start..end);
+        self.select(selection.map_or(end..end, |selected| {
+            actual.start + selected.start.min(end - actual.start)
+                ..actual.start + selected.end.min(end - actual.start)
+        }));
+    }
+    pub fn commit(&mut self, range: Option<std::ops::Range<usize>>, text: &str) -> Vec<u8> {
+        let range = range
+            .or_else(|| self.marked.clone())
+            .unwrap_or(0..self.len_utf16());
+        let (bytes, _) = self.normalized_range(range);
+        self.preedit.replace_range(bytes, text);
         let meta = std::mem::take(&mut self.meta);
-        let mut bytes = Vec::with_capacity(text.len() + usize::from(meta));
-        if meta && !text.is_empty() {
+        let mut bytes = Vec::with_capacity(self.preedit.len() + usize::from(meta));
+        if meta && !self.preedit.is_empty() {
             bytes.push(27);
         }
-        bytes.extend_from_slice(text.as_bytes());
+        bytes.extend_from_slice(self.preedit.as_bytes());
+        self.cancel();
         bytes
     }
 }
@@ -328,7 +412,7 @@ mod tests {
             );
             assert_eq!(encoded, Encoded::PlatformText { meta: false });
             input.key(false);
-            bytes.extend(input.commit(text));
+            bytes.extend(input.commit(None, text));
         }
         assert_eq!(String::from_utf8(bytes).unwrap(), "aф界e\u{301} ");
     }
@@ -340,14 +424,72 @@ mod tests {
         };
         input.key(true);
         input.preedit = "日本".into();
-        assert_eq!(input.commit("日本"), "日本".as_bytes());
+        assert_eq!(input.commit(None, "日本"), "日本".as_bytes());
         assert!(input.preedit.is_empty());
         input.key(true);
-        assert_eq!(input.commit("b"), b"\x1bb");
-        assert_eq!(input.commit("c"), b"c");
+        assert_eq!(input.commit(None, "b"), b"\x1bb");
+        assert_eq!(input.commit(None, "c"), b"c");
         input.key(true);
         input.cancel();
-        assert_eq!(input.commit("d"), b"d");
+        input.key(false);
+        assert_eq!(input.commit(None, "d"), b"d");
+    }
+    #[test]
+    fn ime_utf16_ranges_preserve_surrogates_and_report_actual_text() {
+        let mut input = TextInput::default();
+        input.mark(None, "a😀界", Some(1..3));
+        assert_eq!(input.len_utf16(), 4);
+        assert_eq!(input.marked(), Some(0..4));
+        assert_eq!(input.selection(), 1..3);
+        assert_eq!(input.text_for_range(2..3), ("😀".into(), 1..3));
+        assert_eq!(input.text_for_range(2..2), (String::new(), 1..1));
+        assert_eq!(input.text_for_range(3..usize::MAX), ("界".into(), 3..4));
+        input.select(2..3);
+        assert_eq!(input.selection(), 1..3);
+        input.mark(Some(1..3), "に", Some(1..1));
+        assert_eq!(input.preedit, "aに界");
+        assert_eq!(input.marked(), Some(1..2));
+        assert_eq!(input.selection(), 2..2);
+        assert_eq!(input.commit(None, "日"), "a日界".as_bytes());
+        assert_eq!(input.selection(), 0..0);
+        assert_eq!(input.marked(), None);
+        assert!(input.preedit.is_empty());
+    }
+    #[test]
+    fn ime_partial_commit_cancel_and_replacement_are_local() {
+        let mut input = TextInput::default();
+        input.mark(None, "にほん", None);
+        input.mark(None, "日本", Some(0..2));
+        assert_eq!(input.preedit, "日本");
+        assert_eq!(input.selection(), 0..2);
+        assert_eq!(input.commit(Some(1..2), "語"), "日語".as_bytes());
+        assert_eq!(input.commit(None, "x"), b"x");
+        input.mark(None, "discarded", None);
+        input.cancel();
+        assert_eq!(input.marked(), None);
+        assert_eq!(input.len_utf16(), 0);
+        // IBus/Fcitx can consume the physical key. A new composition must not
+        // require a synthetic/ASCII KeyDown to become usable after cancellation.
+        input.mark(None, "新しい", None);
+        assert_eq!(input.preedit, "新しい");
+        assert_eq!(input.commit(None, "新規"), "新規".as_bytes());
+    }
+    #[test]
+    fn ime_range_queries_are_scalar_aligned_and_idempotent() {
+        for text in ["", "😀", "a😀界e\u{301}"] {
+            let mut input = TextInput::default();
+            input.mark(None, text, None);
+            for start in 0..input.len_utf16() + 3 {
+                for end in 0..input.len_utf16() + 3 {
+                    let (part, actual) = input.text_for_range(start..end);
+                    assert!(actual.start <= actual.end);
+                    assert!(actual.end <= input.len_utf16());
+                    assert_eq!(part.encode_utf16().count(), actual.end - actual.start);
+                    assert_eq!(input.text_for_range(actual.clone()), (part, actual));
+                    assert_eq!(input.preedit, text);
+                }
+            }
+        }
     }
     #[test]
     fn platform_shortcuts_and_unimplemented_extensions_are_explicit() {

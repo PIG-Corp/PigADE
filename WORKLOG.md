@@ -937,3 +937,51 @@ Bound parser/cache growth and IPC input buffering; preserve explicit unknown out
 - Files: crates/session-host/src/input.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/lib.rs, crates/session-host/src/request_decode.rs, crates/terminal/src/lib.rs, crates/terminal/examples/allocation_census.rs, vendor/vte/src/ansi.rs, vendor/vte/src/lib.rs, vendor/vte/PIGADE-PATCH.md, vendor/alacritty_terminal/src/grid/storage.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, benchmarks/results/terminal-allocation-census-shapes.json, benchmarks/results/terminal-allocation-census-cache-target.json, docs/research/terminal-admission-plan.md, docs/reports/terminal-memory-census.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Root workspace146tests/fmt/strictClippy/release pass; Python29 before subsequent UI/provider harness edits. VTE60stdserde +59no-defaultANSI +doctest/strictClippy pass. Vendor177lib +45ref +doctest/no-default pass; new checked-division Clippy failure repaired, focused19storage and strict all-target Clippy with exactly3oldtty forcedwarnings pass. Encoding regression red EOF then green explicitunknown; independent Luna review caught internallytaggedContent preallocation, streaming preflight repaired and6regressions pass. Both source-bound census snapshots retained; cache alignment can slightly increase fullhot payload.
 - Risks / next: Commit coherent backend slice; app IME/localoverlay and provider harness remain separate uncommitted work. Whole-event/global memory budget and remaining stage0 gates open; frozen corpus finaloracle and third actual24h soak stillrunning, no acceptance claim.
+
+## 2026-10-17T00:39:05+00:00 — font_render_profile
+
+Harden provider PTY diagnostic lifecycle and preserve redacted failed-run evidence
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md
+- Verification: python3 scripts/test_provider_pty.py (15 passed); python3 -m py_compile scripts/provider-pty.py scripts/test_provider_pty.py; python3 scripts/provider-pty.py --provider codex/claude/opencode (all plan-only, spawned_processes=false); git diff --check for owned files
+- Risks / next: No provider CLI was launched. Root review before any isolated live provider startup; failure runtime is private and retained on error.
+
+## 2026-10-17T00:40:46+00:00 — font_render_profile
+
+Fix DSR exit race and separate short IPC runtime path from durable state
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md
+- Verification: python3 scripts/test_provider_pty.py (18 passed); python3 -m py_compile scripts/provider-pty.py scripts/test_provider_pty.py; provider plans for codex/claude/opencode (all plan-only); git diff --check for owned files
+- Risks / next: No provider CLI launched. Root can run the reviewed isolated live startup/resizes with private socket runtime and retained failure state.
+
+## 2026-10-17T00:45:27+00:00 — recovery_slice_review
+
+Document pinned GPUI Linux IME reset boundary; found no provable Wayland stale-commit barrier, so no upstream patch was prepared
+
+- Files: docs/research/linux-ime-reset.md
+- Verification: Read-only source inspection of pinned GPUI Wayland/X11 event, reset, and text-input notification paths; no tests run (documentation-only evidence note)
+- Risks / next: Root should integrate the best-effort/reset limitation explicitly; pursue a stronger native reset only with real compositor and IME evidence
+
+## 2026-10-17T00:45:31+00:00 — font_render_profile
+
+Add exact standalone provider ELF override and redacted host failure classification
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md
+- Verification: python3 scripts/test_provider_pty.py (20 passed); python3 -m py_compile scripts/provider-pty.py scripts/test_provider_pty.py; python3 scripts/provider-pty.py --help; git diff --check for owned files; inspected retained-run manifests and replay metadata without emitting terminal text or provider logs
+- Risks / next: No provider CLI launched. Root should review exact Claude ELF override and the new safe OpenCode/host failure fields before rerunning providers.
+
+## 2026-10-17T00:51:27+00:00 — font_render_profile
+
+Record provider PTY harness source SHA-256 in live and failure results
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py
+- Verification: python3 scripts/test_provider_pty.py (20 passed); python3 -m py_compile scripts/provider-pty.py scripts/test_provider_pty.py; codex plan-only check; git diff --check for owned files
+- Risks / next: No provider launched. Root may run the Claude exact ELF override and OpenCode once, with results bound to this harness hash.
+
+## 2026-10-17T00:51:37+00:00 — /root
+
+Implement local UTF16 composition document and clipped native overlay with input lifecycle cancellation; preserve actual native IME limits
+
+- Files: crates/app/src/input.rs, crates/app/src/main.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/ime-composition-20261017, docs/research/ime-composition-plan.md, docs/research/linux-ime-reset.md, docs/reports/ime-composition.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Freshapp33tests/fmt/strictalltargetClippy/debugbuild pass. Python50tests pass (providerharness concurrent). Finalprivate100/200percent render/reopen passes appa3559318; rootvisuallyinspectedbothscreenshots, scale1fourdistinctchildACKs/warning/localJapaneseemoji preedit; textabsentfromhostframes/journals andsamePIDs/generations. IndependentLunareviewfoundmissingnativeinvalidation/modeclear, repaired. PinnedLinuxAPIreviewprovesnotificationnoop; noformalresetclaim. Speculativelatchremoved aftersource-evidencedIMEusabilitydefect, freshIMEwithoutKeyDown regressionpasses.
+- Risks / next: Commit localIME foundation; true IBus/Fcitx/Wayland/X11 ordering/candidate/clipboard gates remainopen. Fullcorpus completed and30hostreopens pass; bigVMreboot tool69343 running. ReleaseGPUI build tool38685 running. Provider script independentuncommitted; next native mouse protocol/UI integration.

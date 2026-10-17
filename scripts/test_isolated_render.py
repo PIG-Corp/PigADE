@@ -50,6 +50,13 @@ class EmbeddedFontTests(unittest.TestCase):
 
 
 class RecoveryWarningTests(unittest.TestCase):
+    def test_ime_overlay_is_explicit_and_does_not_change_the_host_command(self):
+        plain = RENDER.app_command(False)
+        diagnostic = RENDER.app_command(True)
+        self.assertEqual(diagnostic[:-1], plain)
+        self.assertEqual(diagnostic[-1], '--diagnostic-preedit')
+        self.assertNotIn(RENDER.IME_PREEDIT, ' '.join(diagnostic))
+
     def test_recovery_reason_is_required_for_the_named_journal(self):
         reply = {'recovery': {'issues': [
             {'journal': 'broken.journal', 'message': 'invalid journal header'}], 'omitted': 0}}

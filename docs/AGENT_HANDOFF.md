@@ -346,3 +346,13 @@ Root is independently implementing local IME ranges/overlay in app input/main
 and a same-app isolated fixture. Those edits are a subsequent uncommitted slice;
 read git status and the IME plan before touching them. A Luna agent owns new
 provider-pty script/plan files; real provider calls have not been run.
+
+Local composition integration: app33 tests, strictClippy/fmt/debugbuild pass;
+root inspected final private100%/200% captures on appSHAa3559318… and curated
+metadata/screenshots in crates/app/evidence/ime-composition-20261017. UTF16
+replacement/selection/candidate geometry and local overlay are implemented;
+focus/prefix/generation/unavailable-mode cancellation requests GPUI invalidation.
+Linux's hook is a no-op. A speculative cancel-until-KeyDown latch was removed
+because it blocks legitimate IME-only gestures. Real IBus/Fcitx/XIM and native
+reset/ordering remain open; see reports/ime-composition.md and research note.
+Do not infer IME/platform certification from local fixture screenshots.

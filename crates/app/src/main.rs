@@ -63,6 +63,26 @@ fn apply_state_update(state: &mut State, update: StateUpdate) {
     }
 }
 
+fn composition_target_changed(state: &State, selected: usize, update: &StateUpdate) -> bool {
+    if update.error.is_some() {
+        return true;
+    }
+    let Some(views) = update.views.as_ref() else {
+        return false;
+    };
+    match (state.views.get(selected), views.get(selected)) {
+        (Some(old), Some(new)) => {
+            old.session != new.session
+                || old.generation != new.generation
+                || new.state != "running"
+                || new.storage_error.is_some()
+                || input::protocol_error(new.frame.modes).is_some()
+        }
+        (None, None) => false,
+        _ => true,
+    }
+}
+
 fn can_send_to_view(view: &View, state: &State, local_error: Option<&str>) -> bool {
     view.state == "running"
         && state.error.is_none()
@@ -191,26 +211,58 @@ struct CanvasApp {
     text_input: input::TextInput,
     input_error: Option<String>,
     resized: Vec<(String, u16, u16)>,
+    _input_subscriptions: Vec<Subscription>,
+    diagnostic_preedit_pending: bool,
 }
 impl CanvasApp {
-    fn new(cx: &mut Context<Self>, tx: mpsc::SyncSender<Value>, shared: Arc<Mutex<State>>) -> Self {
+    fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        tx: mpsc::SyncSender<Value>,
+        shared: Arc<Mutex<State>>,
+        diagnostic_preedit_pending: bool,
+    ) -> Self {
+        let focus = cx.focus_handle();
+        let input_subscriptions = vec![
+            cx.on_blur(&focus, window, |this, window, cx| {
+                this.text_input.cancel();
+                window.notify_text_input_changed(&this.focus);
+                cx.notify();
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.text_input.cancel();
+                    window.notify_text_input_changed(&this.focus);
+                    cx.notify();
+                }
+            }),
+        ];
         cx.spawn(async move |weak, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
                 if weak
-                    .update(cx, |this, cx| {
+                    .update_in(cx, |this, window, cx| {
                         let next = {
                             let shared = this.shared.lock().unwrap();
                             state_update(&this.state, &shared)
                         };
                         if let Some(next) = next {
+                            if composition_target_changed(&this.state, this.selected, &next) {
+                                this.text_input.cancel();
+                                window.notify_text_input_changed(&this.focus);
+                            }
                             let views_changed = next.views.is_some();
                             apply_state_update(&mut this.state, next);
                             if views_changed {
                                 this.selected =
                                     this.selected.min(this.state.views.len().saturating_sub(1));
+                            }
+                            if this.diagnostic_preedit_pending && !this.state.views.is_empty() {
+                                this.text_input.key(false);
+                                this.text_input.mark(None, "日本😀", Some(0..2));
+                                this.diagnostic_preedit_pending = false;
                             }
                             cx.notify();
                         }
@@ -223,7 +275,7 @@ impl CanvasApp {
         })
         .detach();
         Self {
-            focus: cx.focus_handle(),
+            focus,
             selected: 0,
             prefix: false,
             state: State::default(),
@@ -233,6 +285,8 @@ impl CanvasApp {
             text_input: input::TextInput::default(),
             input_error: None,
             resized: Vec::new(),
+            _input_subscriptions: input_subscriptions,
+            diagnostic_preedit_pending,
         }
     }
     fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
@@ -259,7 +313,7 @@ impl CanvasApp {
     fn error(&self) -> Option<&str> {
         self.input_error.as_deref().or(self.state.error.as_deref())
     }
-    fn key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &event.keystroke;
         if k.modifiers.control
             && k.modifiers.shift
@@ -269,6 +323,7 @@ impl CanvasApp {
         {
             self.prefix = !self.prefix;
             self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
             cx.notify();
             cx.stop_propagation();
             return;
@@ -286,6 +341,7 @@ impl CanvasApp {
                 self.input_error = None;
             }
             self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
             cx.notify();
             cx.stop_propagation();
             return;
@@ -312,14 +368,17 @@ impl CanvasApp {
             },
             modes,
         );
-        self.text_input.key(false);
         match encoded {
             input::Encoded::Bytes(bytes) => {
+                self.text_input.cancel();
+                window.notify_text_input_changed(&self.focus);
                 self.send(bytes, cx);
                 cx.stop_propagation();
             }
             input::Encoded::PlatformText { meta } => self.text_input.key(meta),
             input::Encoded::Unsupported(reason) => {
+                self.text_input.cancel();
+                window.notify_text_input_changed(&self.focus);
                 self.input_error = Some(reason.into());
                 cx.notify();
                 cx.stop_propagation();
@@ -447,14 +506,23 @@ fn project_panels(bounds: Bounds<Pixels>, count: usize, scale: f32) -> Vec<Bound
         .collect()
 }
 impl EntityInputHandler for CanvasApp {
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        !self.prefix
+            && self.state.views.get(self.selected).is_some_and(|view| {
+                can_send_to_view(view, &self.state, self.input_error.as_deref())
+                    && input::protocol_error(view.frame.modes).is_none()
+            })
+    }
     fn text_for_range(
         &mut self,
-        _: Range<usize>,
-        _: &mut Option<Range<usize>>,
+        range: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        Some(self.text_input.preedit.clone())
+        let (text, actual) = self.text_input.text_for_range(range);
+        *actual_range = Some(actual);
+        Some(text)
     }
     fn selected_text_range(
         &mut self,
@@ -463,26 +531,36 @@ impl EntityInputHandler for CanvasApp {
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: 0..0,
+            range: self.text_input.selection(),
             reversed: false,
         })
     }
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        if self.text_input.preedit.is_empty() {
-            None
-        } else {
-            Some(0..self.text_input.preedit.encode_utf16().count())
-        }
+    fn set_selected_text_range(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.text_input.select(range);
+        window.notify_text_selection_changed(&self.focus);
+        cx.notify();
     }
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        Some(self.text_input.len_utf16())
+    }
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        self.text_input.marked()
+    }
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.text_input.cancel();
+        window.notify_text_input_changed(&self.focus);
         cx.notify();
     }
     fn replace_text_in_range(
         &mut self,
-        _: Option<Range<usize>>,
+        range: Option<Range<usize>>,
         text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let modes = self
@@ -491,39 +569,58 @@ impl EntityInputHandler for CanvasApp {
             .get(self.selected)
             .map_or(0, |v| v.frame.modes);
         if let Some(error) = input::protocol_error(modes) {
+            self.text_input.cancel();
             self.input_error = Some(error.into());
         } else {
-            let bytes = self.text_input.commit(text);
+            let bytes = self.text_input.commit(range, text);
             self.send(bytes, cx);
         }
+        window.notify_text_input_changed(&self.focus);
         cx.notify();
+    }
+    fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = item.text() {
+            // Paste must not inherit a staged Meta key from ordinary typing.
+            self.text_input.key(false);
+            self.replace_text_in_range(None, &text, window, cx);
+        }
     }
     fn replace_and_mark_text_in_range(
         &mut self,
-        _: Option<Range<usize>>,
+        range: Option<Range<usize>>,
         text: &str,
-        _: Option<Range<usize>>,
-        _: &mut Window,
+        selection: Option<Range<usize>>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.text_input.preedit = text.into();
+        self.text_input.mark(range, text, selection);
+        window.notify_text_input_changed(&self.focus);
         cx.notify();
     }
     fn bounds_for_range(
         &mut self,
-        _: Range<usize>,
+        range: Range<usize>,
         _: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let pane = self.panes.get(self.selected)?;
         let view = self.state.views.get(self.selected)?;
+        let area = preedit_area(*pane, view)?;
+        if self.text_input.preedit.is_empty() {
+            return Some(Bounds::new(area.origin, pane.cell));
+        }
+        let line = preedit_line(
+            &self.text_input.preedit,
+            &crate::font::terminal_font(),
+            window,
+        );
+        let bytes = self.text_input.range_bytes(range);
+        let left = line.x_for_index(bytes.start).min(area.size.width);
+        let right = line.x_for_index(bytes.end).max(left).min(area.size.width);
         Some(Bounds::new(
-            point(
-                pane.origin.x + pane.cell.width * view.frame.cursor.1 as f32,
-                pane.origin.y + pane.cell.height * view.frame.cursor.0.max(0) as f32,
-            ),
-            pane.cell,
+            area.origin + point(left, px(0.)),
+            size((right - left).max(px(1.)), pane.cell.height),
         ))
     }
     fn character_index_for_point(
@@ -540,6 +637,8 @@ impl Render for CanvasApp {
         let entity = cx.entity();
         let painter = entity.clone();
         let views = self.state.views.clone();
+        let preedit = self.text_input.preedit.clone();
+        let preedit_selection = self.text_input.selection_bytes();
         let selected = self.selected;
         let attached = self.state.error.is_none();
         let terminal_label = self.state.views.get(selected).map_or_else(
@@ -634,6 +733,17 @@ impl Render for CanvasApp {
                                             window,
                                             cx,
                                         );
+                                        if index == selected && !preedit.is_empty() {
+                                            paint_preedit(
+                                                pane,
+                                                views.get(index),
+                                                &preedit,
+                                                preedit_selection.clone(),
+                                                &font,
+                                                window,
+                                                cx,
+                                            );
+                                        }
                                     }
                                 });
                             },
@@ -754,6 +864,93 @@ fn text(
     );
     let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
 }
+fn preedit_area(pane: PaneGeometry, view: &View) -> Option<Bounds<Pixels>> {
+    let (row, col) = view.frame.cursor;
+    if row < 0 || row as u16 >= pane.rows || col >= pane.cols as usize {
+        return None;
+    }
+    Some(Bounds::new(
+        pane.origin + point(pane.cell.width * col as f32, pane.cell.height * row as f32),
+        size(
+            pane.cell.width * (pane.cols as usize - col) as f32,
+            pane.cell.height,
+        ),
+    ))
+}
+
+fn preedit_line(text: &str, font: &Font, window: &Window) -> ShapedLine {
+    window.text_system().shape_line(
+        text.to_owned().into(),
+        px(crate::font::SIZE),
+        &[TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: rgb(0xf2f4f7).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    )
+}
+
+fn paint_preedit(
+    pane: PaneGeometry,
+    view: Option<&View>,
+    preedit: &str,
+    selection: Range<usize>,
+    font: &Font,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(area) = view.and_then(|view| preedit_area(pane, view)) else {
+        return;
+    };
+    let line = preedit_line(preedit, font, window);
+    // This is undelivered IME text. It overlays the acknowledged cursor only;
+    // terminal cells and PTY geometry never change during composition.
+    window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
+        let width = line.width().max(pane.cell.width).min(area.size.width);
+        window.paint_quad(fill(
+            Bounds::new(area.origin, size(width, area.size.height)),
+            rgb(0x252d39),
+        ));
+        let start = line.x_for_index(selection.start);
+        let end = line.x_for_index(selection.end);
+        if end > start {
+            window.paint_quad(fill(
+                Bounds::new(
+                    area.origin + point(start, px(0.)),
+                    size(end - start, area.size.height),
+                ),
+                rgb(0x354c70),
+            ));
+        }
+        let _ = line.paint(
+            area.origin,
+            pane.cell.height,
+            TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+        window.paint_quad(fill(
+            Bounds::new(
+                area.origin + point(px(0.), pane.cell.height - px(1.)),
+                size(width, px(1.)),
+            ),
+            rgb(0x7dafff),
+        ));
+        window.paint_quad(fill(
+            Bounds::new(
+                area.origin + point(end, px(0.)),
+                size(px(1.), pane.cell.height),
+            ),
+            rgb(0x7dafff),
+        ));
+    });
+}
+
 fn paint_panel(
     pane: PaneGeometry,
     view: Option<&View>,
@@ -942,6 +1139,7 @@ fn main() {
     let socket = std::env::args()
         .nth(1)
         .expect("usage: pigade-app /path/to/host.sock");
+    let diagnostic_preedit = std::env::args().nth(2).as_deref() == Some("--diagnostic-preedit");
     let (tx, shared) = ipc(socket.into());
     application().run(move |cx: &mut App| {
         crate::font::install(cx).expect("bundled terminal font profile must load");
@@ -959,7 +1157,7 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
-                let view = cx.new(|cx| CanvasApp::new(cx, tx, shared));
+                let view = cx.new(|cx| CanvasApp::new(window, cx, tx, shared, diagnostic_preedit));
                 let focus = view.read(cx).focus.clone();
                 focus.focus(window, cx);
                 view
@@ -974,8 +1172,8 @@ mod tests {
     use super::protocol::{Cell, RecoveryDiagnostics, RecoveryIssue, View};
     use super::{
         CellPaint, PaneGeometry, State, apply_poll, apply_state_update, can_send_to_view,
-        cell_paint_order, color, glyph_span_bounds, glyph_span_cells, project_panels,
-        recovery_warning, state_update, terminal_line_height,
+        cell_paint_order, color, composition_target_changed, glyph_span_bounds, glyph_span_cells,
+        project_panels, recovery_warning, state_update, terminal_line_height,
     };
     use gpui::{Bounds, point, px, size};
     use serde_json::json;
@@ -997,6 +1195,33 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn composition_is_cancelled_when_its_generation_or_input_availability_changes() {
+        let state = State {
+            views: vec![view(None)],
+            ..State::default()
+        };
+        let mut shared = state.clone();
+        shared.revision += 1;
+        shared.views_revision += 1;
+        shared.views[0].sequence += 1;
+        let mut update = state_update(&state, &shared).unwrap();
+        assert!(!composition_target_changed(&state, 0, &update));
+        update.views.as_mut().unwrap()[0].generation = "new-generation".into();
+        assert!(composition_target_changed(&state, 0, &update));
+        update.views = Some(vec![view(Some("storage unavailable"))]);
+        assert!(composition_target_changed(&state, 0, &update));
+        let mut unsupported = view(None);
+        unsupported.frame.modes |= 1 << 18;
+        update.views = Some(vec![unsupported]);
+        assert!(composition_target_changed(&state, 0, &update));
+        update.views = Some(vec![]);
+        assert!(composition_target_changed(&state, 0, &update));
+        update.views = None;
+        update.error = Some("disconnected".into());
+        assert!(composition_target_changed(&state, 0, &update));
     }
 
     fn recovery() -> RecoveryDiagnostics {

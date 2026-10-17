@@ -28,6 +28,7 @@
 - Parser sync storage starts empty and grows on demand. Spare grid rows use a width-sensitive payload target; logical rows and checkpoint compatibility are preserved. Numeric censuses expose grid/cache shapes, logical payloads and parser buffers.
 - IPC input arrays are checked before Serde's internally tagged buffering. A response that cannot be encoded returns an explicit unknown-outcome error before any frame header is written; dispatched commands are never retried.
 - Frame hyperlink interning retains shallow handles instead of a second owned copy of every ID/URI, preserving content deduplication and wire indices.
+- Native local IME composition now has UTF-16 range/selection handling, a clipped cursor overlay and lifecycle cancellation. Same-app private 100%/200% captures verify the overlay stays out of host history; actual Linux IME/reset ordering remains unverified.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

@@ -1,0 +1,140 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "render_and_reopen_pass",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532959]",
+      "pid": "pid:[4026533024]",
+      "user": "user:[4026533136]",
+      "ipc": "ipc:[4026533020]",
+      "net": "net:[4026533026]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "compositor": {
+    "pid": 5,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[3064587]",
+      "socket:[3064587]"
+    ]
+  },
+  "output": {
+    "scale": 2,
+    "physical_pixels": [
+      2560,
+      1600
+    ],
+    "logical_size_requested": [
+      1280,
+      800
+    ],
+    "scope": "one fixed integer-scale private software output; no fractional or multi-monitor claim"
+  },
+  "imePreedit": {
+    "text": "日本😀",
+    "selectionUtf16": [
+      0,
+      2
+    ],
+    "absentFromHostCellsAndJournals": true,
+    "scope": "Explicit same-app local composition overlay; screenshot review required. No actual IME protocol/input or commit performed."
+  },
+  "views": [
+    {
+      "session": "37493066-737a-4132-a41d-9aa0e00888ba",
+      "generation": "c783f613-0a51-4e57-918b-0ee0c61e6217",
+      "pid": 12,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 14,
+        "cols": 73
+      }
+    },
+    {
+      "session": "ab886b6a-d3d4-4aeb-96e8-070704f64f3d",
+      "generation": "906d59fa-49ec-4a46-8a0f-77af22cd0b48",
+      "pid": 17,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 14,
+        "cols": 73
+      }
+    },
+    {
+      "session": "8b6382a0-1aa7-491f-bf06-f897b4243e47",
+      "generation": "dd278038-877b-42b1-be0e-bcfe06e0bddd",
+      "pid": 22,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 14,
+        "cols": 73
+      }
+    },
+    {
+      "session": "cdd175b5-6e0c-42a1-9b44-a18d6bcb9d3e",
+      "generation": "ea4808c5-997c-41ac-b5c1-c94ab906da4a",
+      "pid": 27,
+      "sequence": 3,
+      "state": "running",
+      "geometry": {
+        "rows": 14,
+        "cols": 73
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "wayland-screenshot-2026-10-17_00-49-47.png",
+      "sha256": "bcc5e50f98ab85e10467158b4d3416834397f0ba9eda1d7ea4e6b1f9628a4d33",
+      "bytes": 145358
+    }
+  ]
+}
