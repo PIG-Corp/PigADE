@@ -2953,3 +2953,75 @@ Integrate durable pane aliases and scoped global palette navigation; verify poin
 - Files: crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, SPEC.md, DESIGN.md, crates/app/README.md, docs/AGENT_HANDOFF.md
 - Verification: Workspace301 tests passed serially before final activation fix; final host119/app191/harness30 tests pass. Strict workspace/app Clippy, formats, version alignment and release builds pass. Private pointer-current-20261018-01 and navigation-release-20261018-04 pass with unchanged process identities; held/drop/undo and alias/palette captures inspected. Native01/02 exposed alias ranking;03 exposed inconsistent activation projection; both corrected and04 passed.
 - Risks / next: Full platform/Wayland/accessibility/provider/performance/MVP acceptance remains open. Preserve unrelated research/stress edits, quarantined patches and deferred preferences; never restart user host/CLI to expose capabilities.
+
+## 2026-10-17T23:31:10+00:00 — recipe_native_luna
+
+Extended catalog fixture with exact-generation stop review, cancel safety, and explicit confirmation verification.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed; fixed X11 helper compiled to /tmp. No native fixture run.
+- Risks / next: Parent owns release build and private native execution; inspect stop-review and stop-complete captures.
+
+## 2026-10-17T23:34:44+00:00 — layout_templates_luna
+
+Added explicit exact-generation CLI stop confirmation and hidden-session stop actions, including read-only pending-state controls, visible scoped error notices, keyboard-selectable session actions, and live-generation preference when duplicate session rows include history.
+
+- Files: crates/app/src/product.rs, crates/app/src/session_control_ui.rs
+- Verification: rustfmt --edition 2024 --check passed for both owned Rust files; git diff --check passed for product.rs and the untracked stop UI module.
+- Risks / next: Root owns app Cargo, typecheck, and native verification. Sessions action-index scrolling can be improved by mapping selected actions to their containing session row; current selection/highlight and action dispatch are aligned.
+
+## 2026-10-17T23:35:12+00:00 — layout_templates_luna
+
+Completed exact-generation stop UI and keyboard navigation: Sessions Attach/Stop actions map selection to composite rows, and stop confirmation exposes phase-matched keyboard actions with visible status/error notices.
+
+- Files: crates/app/src/product.rs, crates/app/src/session_control_ui.rs
+- Verification: rustfmt --edition 2024 --check passed for both owned Rust files; git diff --check passed for product.rs and the new stop UI module. Cargo/native checks remain with root.
+- Risks / next: Root owns integration tests, app compilation and native verification; root should use ProductUi::session_action_row when scrolling Sessions actions.
+
+## 2026-10-17T23:35:47+00:00 — catalog_flow_luna
+
+Document the explicit generation-bound CLI Stop flow, its non-undo placement/history behavior, acknowledgement semantics, and Unix top-level-only signal limit.
+
+- Files: README.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Reviewed current session_control, stop dialog/menu, product reply validation and host Stop implementation; git diff --check passed. No tests or native run performed; native verification remains pending.
+- Risks / next: Root owns the current build and private native Stop verification.
+
+## 2026-10-17T23:35:48+00:00 — recipe_native_luna
+
+Updated catalog stop confirmation to explicitly tab-select Confirm before Enter.
+
+- Files: scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed; helper compiled to /tmp. No native fixture run.
+- Risks / next: Parent owns release build and private stop-flow execution.
+
+## 2026-10-17T23:41:48+00:00 — recipe_native_luna
+
+Extend catalog fixture to stop the unplaced bootstrap generation through hidden Sessions UI with exact process and tree preservation checks
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Focused catalog plan test passed; py_compile passed for both Python files; fixed XTEST helper compiled successfully to /tmp/pigade-recipe-native-luna-x11-ime-input; native run intentionally not performed
+- Risks / next: Root owns release build and isolated native catalog run; inspect the two hidden-stop captures and result proof
+
+## 2026-10-17T23:42:08+00:00 — recipe_native_luna
+
+Tighten hidden-Sessions stop proof to establish the bootstrap is the unique unplaced session and include both captures in retained artifacts
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Focused catalog plan test passed; Python syntax checks passed; helper compile passed to a fresh /tmp output; scoped git diff --check passed. Native run remains intentionally unperformed.
+- Risks / next: Hand fixture to root for release-build native validation and capture review
+
+## 2026-10-17T23:50:59+00:00 — catalog_flow_luna
+
+Added bounded read-only Git status snapshots for revision-pinned Ready workspaces, with safe porcelain parsing and temp-repo coverage.
+
+- Files: crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/projects.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs
+- Verification: cargo fmt --package pigade-session-host; cargo test -p pigade-session-host workspace_git::tests -- --nocapture (6 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check -- crates/session-host
+- Risks / next: Root owns app protocol/UI integration and end-to-end workspace review.
+
+## 2026-10-17T23:51:52+00:00 — root
+
+Integrate explicit generation-bound Stop for selected and hidden CLI sessions, with cancel-first confirmation and read-only outcome reconciliation; preserve Hyprland pointer controls.
+
+- Files: crates/app/src/session_control.rs, crates/app/src/session_control_ui.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: App198 and harness30 tests pass; strict app Clippy, locked release build, format/diff and version checks pass. Private release stop-20261018-05 passes selected cancel/Stop and hidden Stop with exact generations, unchanged other processes/tree and inspected captures. Runs02-04 retained missing fixture close transition; corrected before05. Prior pointer-current01 covers hover/Dwindle with preserved processes.
+- Risks / next: Top-level Unix SIGHUP may leave descendants; history/degraded never prove exit and unknown ACK never retries Stop. Git snapshot backend is independently logged and awaiting app integration; full platform/MVP gates remain open. Preserve unrelated research and stress edits.

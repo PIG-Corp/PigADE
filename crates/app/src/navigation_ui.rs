@@ -2,6 +2,15 @@
 use super::*;
 use crate::navigation::{PaletteEntry, search_matches, search_score};
 
+fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
+    match action {
+        ProductAction::RenamePane => &["rename", "alias", "имя"],
+        ProductAction::OpenStop => &["stop", "terminate", "остановить"],
+        ProductAction::OpenSessions => &["sessions", "hidden", "сессии"],
+        _ => &[],
+    }
+}
+
 impl ProductUi {
     pub(crate) fn pane_names_supported(&self) -> bool {
         self.catalog
@@ -10,19 +19,21 @@ impl ProductUi {
     }
 
     pub(crate) fn pane_title<'a>(&'a self, view: &'a protocol::View) -> &'a str {
-        let session = view.session.parse::<Uuid>().ok();
+        self.display_title(&view.session, &view.frame.title)
+    }
+
+    pub(crate) fn display_title<'a>(&'a self, session: &str, title: &'a str) -> &'a str {
+        let session = session.parse::<Uuid>().ok();
         self.catalog
             .as_ref()
             .and_then(|catalog| catalog.pane_labels.as_ref())
             .and_then(|labels| labels.iter().find(|label| Some(label.session) == session))
             .map(|label| label.name.as_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| {
-                if view.frame.title.is_empty() {
-                    "Терминал"
-                } else {
-                    &view.frame.title
-                }
+            .unwrap_or(if title.is_empty() {
+                "Терминал"
+            } else {
+                title
             })
     }
 
@@ -53,11 +64,7 @@ impl ProductUi {
             if dialog.kind == DialogKind::PaneMenu && !panel_action(&action) {
                 continue;
             }
-            let keywords = if action == ProductAction::RenamePane {
-                format!("{label} rename alias имя")
-            } else {
-                label.into()
-            };
+            let keywords = format!("{label} {}", command_aliases(&action).join(" "));
             if search_matches(query, &keywords) {
                 result.push(PaletteEntry {
                     label: label.into(),
@@ -174,10 +181,8 @@ impl ProductUi {
             result.sort_by(|first, second| {
                 let score = |entry: &PaletteEntry| {
                     let mut rank = search_score(query, &entry.label);
-                    if entry.action == ProductAction::RenamePane {
-                        for alias in ["rename", "alias", "имя"] {
-                            rank = rank.max(search_score(query, alias));
-                        }
+                    for alias in command_aliases(&entry.action) {
+                        rank = rank.max(search_score(query, alias));
                     }
                     (
                         rank,

@@ -92,6 +92,10 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-pane-palette-open") &&
         strcmp(a.stage, "catalog-pane-palette-query") &&
         strcmp(a.stage, "catalog-pane-palette-select") &&
+        strcmp(a.stage, "catalog-stop-open") && strcmp(a.stage, "catalog-stop-action") &&
+        strcmp(a.stage, "catalog-stop-cancel") && strcmp(a.stage, "catalog-stop-confirm") &&
+        strcmp(a.stage, "catalog-sessions-open") && strcmp(a.stage, "catalog-sessions-action") &&
+        strcmp(a.stage, "catalog-hidden-stop-review") && strcmp(a.stage, "catalog-hidden-stop-confirm") &&
         strcmp(a.stage, "recipe-select-first") &&
         strcmp(a.stage, "recipe-open-editor") &&
         strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
@@ -896,6 +900,33 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "catalog-pane-palette-select")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-stop-open")) {
+            setup_prefix(dpy, XK_p, 0);
+        } else if (!strcmp(a.stage, "catalog-stop-action")) {
+            const KeySym query[] = { XK_s, XK_t, XK_o, XK_p };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-stop-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "catalog-stop-confirm")) {
+            key(dpy, XK_Tab);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-sessions-open")) {
+            setup_prefix(dpy, XK_p, 0);
+        } else if (!strcmp(a.stage, "catalog-sessions-action")) {
+            const KeySym query[] = { XK_s, XK_e, XK_s, XK_s, XK_i, XK_o, XK_n, XK_s };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, "/artifacts/catalog-sessions-query.ppm");
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-hidden-stop-review") ||
+                   !strcmp(a.stage, "catalog-hidden-stop-confirm")) {
+            key(dpy, XK_Tab);
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "recipe-select-first")) {
             key(dpy, XK_Down);
         } else if (!strcmp(a.stage, "recipe-open-editor")) {
@@ -1065,6 +1096,14 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-pane-palette-open") ? "4" :
                             !strcmp(a.stage, "catalog-pane-palette-query") ? "6" :
                             !strcmp(a.stage, "catalog-pane-palette-select") ? "1" :
+                            !strcmp(a.stage, "catalog-stop-open") ? "4" :
+                            !strcmp(a.stage, "catalog-stop-action") ? "5" :
+                            !strcmp(a.stage, "catalog-stop-cancel") ? "1" :
+                            !strcmp(a.stage, "catalog-stop-confirm") ? "2" :
+                            !strcmp(a.stage, "catalog-sessions-open") ? "4" :
+                            !strcmp(a.stage, "catalog-sessions-action") ? "9" :
+                            !strcmp(a.stage, "catalog-hidden-stop-review") ? "2" :
+                            !strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2" :
                             !strcmp(a.stage, "recipe-select-first") ? "1" :
                             !strcmp(a.stage, "recipe-open-editor") ? "2" :
                             !strcmp(a.stage, "recipe-save-editor") ? "2" :

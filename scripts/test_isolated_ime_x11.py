@@ -288,8 +288,10 @@ class IsolatedImePlanTests(unittest.TestCase):
             self.assertEqual(IME.main(['--fixture', 'catalog']), 0)
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['fixture'], 'catalog')
-        self.assertIn('save/apply/undo/delete a geometry template', plan['input']['catalog'])
-        self.assertIn('searchable keyboard palette', plan['input']['catalog'])
+        self.assertIn('save/apply/undo/delete geometry', plan['input']['catalog'])
+        self.assertIn('rename/find a pane', plan['input']['catalog'])
+        self.assertIn('exact-generation stop action', plan['input']['catalog'])
+        self.assertIn('stop hidden bootstrap through Sessions', plan['input']['catalog'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         for action in ('open-library', 'close-library', 'open-save-dialog', 'save-template',
@@ -299,6 +301,11 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('from Xlib', source)
         self.assertIn('tab_rename_persisted', source)
         self.assertIn('pane_alias_saved_and_found_by_palette', source)
+        self.assertIn('confirmed_stop_exited_only_named_generation', source)
+        self.assertIn('stop_confirmation_cancel_preserved_named_generation', source)
+        self.assertIn('hidden_sessions_stop_exited_only_unplaced_bootstrap', source)
+        self.assertIn('other_four_process_states_and_pane_tree_preserved_after_hidden_stop', source)
+        self.assertIn('current_panes == process_sessions - {bootstrap_key[0]}', source)
         self.assertIn("label.get('name') == 'Review'", source)
         self.assertIn("'pane_labels'", source)
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
@@ -307,7 +314,11 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-mutate', 'catalog-rename-tab', 'catalog-pane-rename-open',
                       'catalog-pane-rename-action', 'catalog-pane-rename-type',
                       'catalog-pane-rename-save', 'catalog-pane-palette-open',
-                      'catalog-pane-palette-query', 'catalog-pane-palette-select'):
+                      'catalog-pane-palette-query', 'catalog-pane-palette-select',
+                      'catalog-stop-open', 'catalog-stop-action', 'catalog-stop-cancel',
+                      'catalog-stop-confirm', 'catalog-sessions-open',
+                      'catalog-sessions-action', 'catalog-hidden-stop-review',
+                      'catalog-hidden-stop-confirm'):
             self.assertIn(f'\"{stage}\"', helper)
         self.assertIn('modified_key(dpy, XK_Shift_L, XK_r)', helper)
         rename_action = helper.split('} else if (!strcmp(a.stage, "catalog-pane-rename-action")) {', 1)[1].split(
@@ -317,6 +328,31 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("time.sleep(.4)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-palette.ppm')", source)
         self.assertIn("'/artifacts/catalog-pane-renamed.ppm'", source)
         self.assertIn("'/artifacts/catalog-pane-palette.ppm'", source)
+        self.assertIn("'/artifacts/catalog-stop-review.ppm'", source)
+        self.assertIn("'/artifacts/catalog-stop-complete.ppm'", source)
+        between = source.split("'capture', '/artifacts/catalog-stop-complete.ppm'", 1)[1].split("'catalog-sessions-open'", 1)[0]
+        self.assertIn("helper_call(config, 'catalog-stop-cancel')", between)
+        stop_action = helper.split('} else if (!strcmp(a.stage, "catalog-stop-action")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-stop-cancel")) {', 1)[0]
+        self.assertIn('XK_s, XK_t, XK_o, XK_p', stop_action)
+        self.assertIn('.tv_nsec = 400000000', stop_action)
+        self.assertLess(stop_action.index('nanosleep'), stop_action.index('key(dpy, XK_Return)'))
+        stop_confirm = helper.split('} else if (!strcmp(a.stage, "catalog-stop-confirm")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
+        self.assertLess(stop_confirm.index('key(dpy, XK_Tab)'), stop_confirm.index('key(dpy, XK_Return)'))
+        self.assertIn('!strcmp(a.stage, "catalog-stop-confirm") ? "2"', helper)
+        sessions_action = helper.split('} else if (!strcmp(a.stage, "catalog-sessions-action")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-hidden-stop-review")', 1)[0]
+        self.assertIn('XK_s, XK_e, XK_s, XK_s, XK_i, XK_o, XK_n, XK_s', sessions_action)
+        self.assertIn('.tv_nsec = 400000000', sessions_action)
+        self.assertLess(sessions_action.index('nanosleep'), sessions_action.index('key(dpy, XK_Return)'))
+        hidden_stop = helper.split('} else if (!strcmp(a.stage, "catalog-hidden-stop-review") ||', 1)[1].split(
+            '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
+        self.assertIn('key(dpy, XK_Tab)', hidden_stop)
+        self.assertIn('key(dpy, XK_Return)', hidden_stop)
+        self.assertIn("'/artifacts/catalog-hidden-stop-review.ppm'", source)
+        self.assertIn("'/artifacts/catalog-hidden-stop-complete.ppm'", source)
+        self.assertIn('!strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2"', helper)
         self.assertIn("'stage'] = 'catalog-pane-rename-action'", source)
         self.assertIn("'stage'] = 'catalog-pane-rename-input'", source)
         self.assertIn("time.sleep(.25)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-dialog.ppm')", source)
@@ -327,7 +363,8 @@ class IsolatedImePlanTests(unittest.TestCase):
             "report['catalog'] =", 1)[0]
         self.assertNotIn("original_layout.get('root')", alias_checks)
         self.assertGreaterEqual(alias_checks.count("get('root') == rename_layout.get('root')"), 3)
-        self.assertIn('session_generation_pid_identities_unchanged', source)
+        self.assertIn('initial_five_process_identities_unchanged_until_stop', source)
+        self.assertIn('remaining_four_process_identities_and_states_unchanged_after_stop', source)
 
     def test_recipes_mode_is_plan_only_and_uses_only_fixed_input_stages(self):
         output = io.StringIO()

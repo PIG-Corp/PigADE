@@ -415,6 +415,7 @@ pub struct ProductReply {
     pub launch_preview: Option<LaunchPreview>,
     pub launch_phase: Option<String>,
     pub sessions: Option<Vec<View>>,
+    pub process_view: Option<View>,
     pub launch_confirmed: bool,
     pub catalog: Option<pigade_storage::Catalog>,
     pub selection: Option<pigade_storage::Selection>,
@@ -473,7 +474,19 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
                 .and_then(|id| id.parse::<uuid::Uuid>().ok())
         })
         .flatten();
-    let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
+    let process_target = matches!(command_name, Some("stop" | "snapshot")).then(|| {
+        (
+            command
+                .get("session")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<uuid::Uuid>().ok()),
+            command
+                .get("generation")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<uuid::Uuid>().ok()),
+        )
+    });
+    let mut response = request_response_with_timeout(socket, command, Duration::from_secs(15))
         .map_err(|message| ProductError {
             ui_request: None,
             providers_request: false,
@@ -537,6 +550,24 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             });
         }
     }
+    let process_view = if let Some((session, generation)) = process_target {
+        if response.views.len() != 1
+            || session.is_none()
+            || generation.is_none()
+            || response.views[0].session.parse::<uuid::Uuid>().ok() != session
+            || response.views[0].generation.parse::<uuid::Uuid>().ok() != generation
+        {
+            return Err(ProductError {
+                ui_request: None,
+                providers_request: false,
+                message: "Ответ остановки/проверки не соответствует выбранному поколению".into(),
+                rejected_before_launch: false,
+            });
+        }
+        Some(response.views.remove(0))
+    } else {
+        None
+    };
     Ok(ProductReply {
         ui_request: None,
         providers: response.providers,
@@ -548,6 +579,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         launch_preview: response.launch_preview,
         launch_phase: response.launch_phase,
         sessions: list_sessions.then_some(response.views),
+        process_view,
         launch_confirmed,
         catalog: response.catalog,
         selection: response.selection,
@@ -916,6 +948,61 @@ pub fn command(view: &View, name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_receipt_is_bound_to_the_frozen_generation_and_does_not_open_sessions() {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        for correct_generation in [true, false] {
+            let session = uuid::Uuid::from_u128(101);
+            let generation = uuid::Uuid::from_u128(102);
+            let path =
+                std::env::temp_dir().join(format!("pigade-stop-{}.sock", uuid::Uuid::new_v4()));
+            let listener = UnixListener::bind(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                let request: Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(request["command"]["command"], "stop");
+                assert_eq!(request["command"]["generation"], generation.to_string());
+                let reply = json!({"protocol":2,"error":null,"views":[{
+                    "session":session,"generation":if correct_generation {generation} else {uuid::Uuid::from_u128(103)},
+                    "sequence":1,"state":"running","recovery_path":"live","pid":123,"storage_error":null,
+                    "frame":{"geometry":{"rows":1,"cols":1},"cells":[{"text":" ","fg":"Named(Foreground)","bg":"Named(Background)","flags":0,"underline":null,"hyperlink":null}],
+                        "hyperlinks":[],"cursor":[0,0],"cursor_style":"Block","modes":0,"colors":"","history_lines":0,"sync_pending_bytes":0,"title":"Review"}
+                }]});
+                let bytes = serde_json::to_vec(&reply).unwrap();
+                stream
+                    .write_all(&(bytes.len() as u32).to_le_bytes())
+                    .unwrap();
+                stream.write_all(&bytes).unwrap();
+            });
+            let request_id = uuid::Uuid::new_v4();
+            let reply = product_request(
+                &path,
+                json!({"command":"stop","session":session,"generation":generation,"_ui_request":request_id}),
+            );
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            if correct_generation {
+                let reply = reply.unwrap_or_else(|error| panic!("{}", error.message));
+                assert_eq!(reply.ui_request, Some(request_id));
+                assert!(reply.sessions.is_none());
+                assert!(!reply.launch_confirmed);
+                assert_eq!(reply.process_view.unwrap().state, "running");
+            } else {
+                let error = match reply {
+                    Err(error) => error,
+                    Ok(_) => panic!("accepted another generation"),
+                };
+                assert_eq!(error.ui_request, Some(request_id));
+                assert!(error.message.contains("поколению"));
+            }
+        }
+    }
 
     fn error_response(error: &str, rejection: Option<&str>) -> Response {
         Response {

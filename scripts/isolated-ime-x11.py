@@ -1264,6 +1264,21 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
             'catalog pane labels are malformed or exceed the fixture bound')
         return labels
 
+    def process_state_snapshot():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'catalog stop process snapshot exceeds bounds')
+        result = {}
+        for view in views:
+            session, generation = view.get('session'), view.get('generation')
+            pid, state = view.get('pid'), view.get('state')
+            require(isinstance(session, str) and isinstance(generation, str) and
+                    (pid is None or type(pid) is int and pid > 0) and isinstance(state, str) and
+                    (session, generation) not in result,
+                    'catalog stop process snapshot has an invalid or duplicate identity')
+            result[(session, generation)] = (pid, state)
+        return result
+
     initial, original_layout = catalog_layout()
     original_panes = set(pane_ids(original_layout.get('root')))
     identities = process_identities()
@@ -1402,6 +1417,123 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                 label.get('revision') == renamed_label['revision']
                 for label in pane_labels(host_request({'command': 'catalog'})['catalog'])),
             'palette search did not focus the renamed pane without changing its label or processes')
+
+    stop_tree = json.loads(json.dumps(focused_label.get('root')))
+    stop_generations = sorted((session, generation) for session, generation, _ in identities)
+    stop_session = renamed_session
+    stop_generation = next(generation for session, generation, _ in identities
+                           if session == stop_session)
+    stop_key = (stop_session, stop_generation)
+    stop_state_before = process_state_snapshot()
+    require(set(stop_state_before) == set(stop_generations) and
+            all(pid is not None and state == 'running' for pid, state in stop_state_before.values()) and
+            stop_key in stop_state_before and
+            catalog_layout()[1].get('root') == stop_tree,
+            'named pane is not an exact running generation before stop review')
+
+    report['stage'] = 'catalog-stop-review'
+    save()
+    helper_call(config, 'catalog-stop-open')
+    helper_call(config, 'catalog-stop-action')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-stop-review.ppm')
+    review_snapshot = process_state_snapshot()
+    require(review_snapshot == stop_state_before and
+            catalog_layout()[1].get('root') == stop_tree and
+            set(pane_ids(catalog_layout()[1].get('root'))) == original_panes,
+            'stop confirmation exited or changed a process before explicit confirmation')
+
+    report['stage'] = 'catalog-stop-cancel'
+    save()
+    helper_call(config, 'catalog-stop-cancel')
+    cancel_snapshot = process_state_snapshot()
+    require(cancel_snapshot == stop_state_before and
+            catalog_layout()[1].get('root') == stop_tree and
+            process_identities() == identities,
+            'cancelling stop changed the named generation, layout, or process identities')
+
+    report['stage'] = 'catalog-stop-confirm-review'
+    save()
+    helper_call(config, 'catalog-stop-open')
+    helper_call(config, 'catalog-stop-action')
+    require(process_state_snapshot() == stop_state_before and
+            catalog_layout()[1].get('root') == stop_tree,
+            'reopened stop confirmation changed a process or the pane tree')
+    report['stage'] = 'catalog-stop-confirm'
+    save()
+    helper_call(config, 'catalog-stop-confirm')
+    report['stage'] = 'catalog-stop-wait-exited'
+    save()
+    stopped_snapshot = wait_until(
+        lambda: (snapshot if (snapshot := process_state_snapshot()).get(stop_key, (None, None))[1]
+                 == 'exited' else None), time.monotonic() + 10)
+    remaining_keys = set(stop_generations) - {stop_key}
+    require(set(stopped_snapshot) == set(stop_generations) and
+            all(stopped_snapshot[key] == stop_state_before[key] for key in remaining_keys) and
+            catalog_layout()[1].get('root') == stop_tree and
+            set(pane_ids(catalog_layout()[1].get('root'))) == original_panes and
+            fixture_generations() == stop_generations and
+            any(label.get('session') == stop_session and label.get('name') == 'Review' and
+                label.get('revision') == renamed_label['revision']
+                for label in pane_labels(host_request({'command': 'catalog'})['catalog'])),
+            'confirmed stop did not exit only the named generation or changed the saved pane tree')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/catalog-stop-complete.ppm')
+    helper_call(config, 'catalog-stop-cancel')
+
+    bootstrap_key = (report['fixture']['session'], report['fixture']['generation'])
+    post_review_snapshot = process_state_snapshot()
+    current_root = catalog_layout()[1].get('root')
+    current_panes = set(pane_ids(current_root))
+    process_sessions = {session for session, _generation in stop_generations}
+    require(set(post_review_snapshot) == set(stop_generations) and
+            post_review_snapshot.get(bootstrap_key, (None, None))[1] == 'running' and
+            len(process_sessions) == 5 and current_panes == process_sessions - {bootstrap_key[0]} and
+            current_root == stop_tree,
+            'hidden-stop fixture did not retain exactly the unplaced live bootstrap generation')
+
+    report['stage'] = 'catalog-hidden-stop-sessions'
+    save()
+    helper_call(config, 'catalog-sessions-open')
+    helper_call(config, 'catalog-sessions-action')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-hidden-sessions.ppm')
+    require(process_state_snapshot() == post_review_snapshot and
+            catalog_layout()[1].get('root') == stop_tree,
+            'opening Sessions changed a process or the pane tree before stop review')
+
+    report['stage'] = 'catalog-hidden-stop-review'
+    save()
+    helper_call(config, 'catalog-hidden-stop-review')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-hidden-stop-review.ppm')
+    hidden_review_snapshot = process_state_snapshot()
+    require(hidden_review_snapshot == post_review_snapshot and
+            catalog_layout()[1].get('root') == stop_tree and
+            set(pane_ids(catalog_layout()[1].get('root'))) == current_panes,
+            'hidden bootstrap stop confirmation changed a process or pane tree before confirmation')
+
+    report['stage'] = 'catalog-hidden-stop-confirm'
+    save()
+    helper_call(config, 'catalog-hidden-stop-confirm')
+    report['stage'] = 'catalog-hidden-stop-wait-exited'
+    save()
+    hidden_stopped_snapshot = wait_until(
+        lambda: (snapshot if (snapshot := process_state_snapshot()).get(
+            bootstrap_key, (None, None))[1] == 'exited' else None), time.monotonic() + 10)
+    preserved_after_bootstrap = set(stop_generations) - {bootstrap_key}
+    require(set(hidden_stopped_snapshot) == set(stop_generations) and
+            all(hidden_stopped_snapshot[key] == post_review_snapshot[key]
+                for key in preserved_after_bootstrap) and
+            catalog_layout()[1].get('root') == stop_tree and
+            set(pane_ids(catalog_layout()[1].get('root'))) == current_panes and
+            fixture_generations() == stop_generations,
+            'confirmed hidden stop did not exit only the bootstrap generation or changed panes')
+    # Hidden generations reconcile through the first bounded readonly probe.
+    # Capture settling is not an input-to-present measurement.
+    time.sleep(1.25)
+    helper_call(config, 'capture', '/artifacts/catalog-hidden-stop-complete.ppm')
+
     report['catalog'] = {
         'saved_geometry_schema': template['geometry']['schema'],
         'saved_template_survived_ui_reopen': True,
@@ -1411,12 +1543,20 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'tab_rename_persisted': renamed is not None,
         'pane_alias_saved_and_found_by_palette': True,
         'palette_focus_preserved_all_process_identities': True,
+        'stop_confirmation_cancel_preserved_named_generation': True,
+        'confirmed_stop_exited_only_named_generation': True,
+        'initial_five_process_identities_unchanged_until_stop': True,
+        'remaining_four_process_identities_and_states_unchanged_after_stop': True,
+        'hidden_sessions_stop_confirmation_preserved_bootstrap_until_confirm': True,
+        'hidden_sessions_stop_exited_only_unplaced_bootstrap': True,
+        'other_four_process_states_and_pane_tree_preserved_after_hidden_stop': True,
         'delete_removed_template': True,
-        'session_generation_pid_identities_unchanged': True,
         'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
                      'catalog-library-reopened.ppm', 'catalog-library-deleted.ppm',
                      'catalog-pane-rename-dialog.ppm', 'catalog-pane-rename-input.ppm',
-                     'catalog-pane-renamed.ppm', 'catalog-pane-palette.ppm'],
+                     'catalog-pane-renamed.ppm', 'catalog-pane-palette.ppm',
+                     'catalog-stop-review.ppm', 'catalog-stop-complete.ppm',
+                     'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
     save()
@@ -2934,7 +3074,9 @@ def outer_run(args) -> dict:
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
                   'catalog-library-deleted.ppm', 'catalog-pane-rename-dialog.ppm',
                   'catalog-pane-rename-input.ppm', 'catalog-pane-renamed.ppm',
-                  'catalog-pane-palette.ppm'] if args.fixture == 'catalog' else
+                  'catalog-pane-palette.ppm', 'catalog-stop-review.ppm',
+                  'catalog-stop-complete.ppm', 'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm',
+                  'catalog-hidden-stop-complete.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
@@ -2964,7 +3106,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete a geometry template, rename a pane, and find it through the searchable keyboard palette',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, then stop hidden bootstrap through Sessions',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',

@@ -9,13 +9,15 @@ use gpui::{
     px, rgb,
 };
 use pigade_storage::{Catalog, ContextDocument, Tab, Workspace, WorkspaceStatus};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
+#[path = "session_control_ui.rs"]
+mod session_control_ui;
 #[path = "template_ui.rs"]
 mod template_ui;
 
@@ -75,6 +77,10 @@ pub(super) enum ProductAction {
     OpenSessions,
     RefreshSessions,
     AttachSession(Uuid),
+    OpenStop,
+    StopSession { session: Uuid, generation: Uuid },
+    ConfirmStop,
+    InspectStop,
     RefreshLaunchPreview,
     ConfirmPreparedLaunch,
     PrepareResume,
@@ -145,6 +151,7 @@ pub(super) enum DialogKind {
     Generations,
     Transfer,
     Sessions,
+    StopSession,
     History,
 }
 
@@ -180,6 +187,7 @@ impl DialogKind {
             Self::Generations => "Поколения панели",
             Self::Transfer => "Перенести панель",
             Self::Sessions => "Неразмещённые сессии",
+            Self::StopSession => "Остановить CLI?",
             Self::History => "История сессии",
         }
     }
@@ -194,7 +202,11 @@ impl DialogKind {
             Self::NewTab => &["Название вкладки"],
             Self::RecipeSlot => &["Роль · инструкции агенту", "Дополнительные инструкции"],
             Self::NewTemplateTab => &["Название вкладки"],
-            Self::Recipe | Self::TemplateRun | Self::TemplateRunContext | Self::TemplateRuns => &[],
+            Self::Recipe
+            | Self::TemplateRun
+            | Self::TemplateRunContext
+            | Self::TemplateRuns
+            | Self::StopSession => &[],
             Self::Rename | Self::SaveLayout => &["Название"],
             Self::RenamePane => &["Имя панели · пусто — название CLI"],
             Self::Manage | Self::Layouts | Self::DeleteLayout => &[],
@@ -244,6 +256,7 @@ impl DialogKind {
             Self::Generations => "Показать поколение",
             Self::Transfer => "Закрыть",
             Self::Sessions => "Закрыть",
+            Self::StopSession => "Остановить CLI",
             Self::History => "Закрыть",
         }
     }
@@ -296,6 +309,7 @@ pub(super) struct ProductUi {
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) stop_sheet: Option<crate::session_control::StopSheet>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
     pub(super) launch_phase: Option<String>,
     pub(super) providers: Option<Vec<protocol::ProviderInfo>>,
@@ -311,17 +325,21 @@ pub(super) struct ProductUi {
 }
 
 pub(super) struct SessionSummary {
-    session: String,
-    title: String,
-    state: String,
+    pub(super) session: String,
+    pub(super) generation: String,
+    pub(super) title: String,
+    pub(super) state: String,
+    pub(super) pid: Option<u32>,
 }
 
 impl From<protocol::View> for SessionSummary {
     fn from(view: protocol::View) -> Self {
         Self {
             session: view.session,
+            generation: view.generation,
             title: view.frame.title,
             state: view.state,
+            pid: view.pid,
         }
     }
 }
@@ -466,6 +484,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
             ProductAction::OpenGenerations,
         ),
         ("Сессии", ProductAction::OpenSessions),
+        ("Остановить CLI", ProductAction::OpenStop),
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
         (
@@ -540,6 +559,7 @@ fn panel_action(action: &ProductAction) -> bool {
         action,
         ProductAction::Layout(_)
             | ProductAction::RenamePane
+            | ProductAction::OpenStop
             | ProductAction::OpenHistory
             | ProductAction::OpenGenerations
             | ProductAction::OpenTransfer
@@ -720,8 +740,151 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
 }
 
 impl ProductUi {
+    pub(super) fn replace_sessions(&mut self, sessions: Vec<SessionSummary>) {
+        let picker = self
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == DialogKind::Sessions)
+            .map(|dialog| dialog.active_field);
+        let selected = if self.unplaced_sessions().is_empty() {
+            None
+        } else {
+            picker.and_then(|index| {
+                self.session_menu_entries()
+                    .get(index)
+                    .map(|(_, action)| action.clone())
+            })
+        };
+        self.sessions = sessions;
+        if picker.is_some() {
+            let entries = self.session_menu_entries();
+            let index = selected
+                .and_then(|action| {
+                    entries
+                        .iter()
+                        .position(|(_, candidate)| *candidate == action)
+                })
+                .unwrap_or(0);
+            if let Some(dialog) = &mut self.dialog {
+                dialog.active_field = index;
+            }
+            self.layout_scroll
+                .scroll_to_item(self.session_action_row(index));
+        }
+    }
+
+    fn unplaced_sessions(&self) -> Vec<&SessionSummary> {
+        let placed = placed_session_ids(self.catalog.as_ref());
+        let mut by_session = HashMap::<Uuid, usize>::new();
+        let mut sessions = Vec::<&SessionSummary>::new();
+        for view in &self.sessions {
+            let (Ok(session), Ok(generation)) = (
+                Uuid::parse_str(&view.session),
+                Uuid::parse_str(&view.generation),
+            ) else {
+                continue;
+            };
+            if session.is_nil() || generation.is_nil() || placed.contains(&session) {
+                continue;
+            }
+            if let Some(&index) = by_session.get(&session) {
+                let prior = sessions[index];
+                let is_live =
+                    matches!(view.state.as_str(), "running" | "degraded") && view.pid.is_some();
+                let prior_is_live =
+                    matches!(prior.state.as_str(), "running" | "degraded") && prior.pid.is_some();
+                if is_live && !prior_is_live {
+                    sessions[index] = view;
+                }
+            } else {
+                by_session.insert(session, sessions.len());
+                sessions.push(view);
+            }
+        }
+        sessions.truncate(128);
+        sessions
+    }
+
+    fn session_menu_entries(&self) -> Vec<(String, ProductAction)> {
+        let has_tab = self.catalog.as_ref().and_then(selected_tab).is_some();
+        let mut entries = Vec::new();
+        for view in self.unplaced_sessions() {
+            let Some(session) = Uuid::parse_str(&view.session).ok() else {
+                continue;
+            };
+            let Some(generation) = Uuid::parse_str(&view.generation).ok() else {
+                continue;
+            };
+            if has_tab {
+                entries.push((
+                    format!(
+                        "Разместить · {}",
+                        self.display_title(&view.session, &view.title)
+                    ),
+                    ProductAction::AttachSession(session),
+                ));
+            }
+            if crate::session_control::can_stop(&view.state, view.pid) {
+                entries.push((
+                    format!(
+                        "Остановить CLI · {}",
+                        self.display_title(&view.session, &view.title)
+                    ),
+                    ProductAction::StopSession {
+                        session,
+                        generation,
+                    },
+                ));
+            }
+        }
+        entries.push(("Обновить список".into(), ProductAction::RefreshSessions));
+        entries.push(("Закрыть".into(), ProductAction::CloseDialog));
+        entries
+    }
+
+    fn stop_menu_entries(&self) -> Vec<(String, ProductAction)> {
+        use crate::session_control::Phase;
+        match self.stop_sheet.as_ref().map(|sheet| sheet.phase) {
+            Some(Phase::Draft) => vec![
+                ("Отмена".into(), ProductAction::CloseDialog),
+                ("Остановить CLI".into(), ProductAction::ConfirmStop),
+            ],
+            Some(Phase::Waiting | Phase::Unknown | Phase::Unavailable) => vec![
+                ("Проверить состояние".into(), ProductAction::InspectStop),
+                ("Закрыть".into(), ProductAction::CloseDialog),
+            ],
+            Some(Phase::Sending | Phase::Complete) | None => {
+                vec![("Закрыть".into(), ProductAction::CloseDialog)]
+            }
+        }
+    }
+
+    pub(super) fn session_action_row(&self, action_index: usize) -> usize {
+        let has_tab = self.catalog.as_ref().and_then(selected_tab).is_some();
+        let sessions = self.unplaced_sessions();
+        let mut action = 0;
+        for (row, view) in sessions.iter().enumerate() {
+            if has_tab {
+                if action == action_index {
+                    return row;
+                }
+                action += 1;
+            }
+            if crate::session_control::can_stop(&view.state, view.pid) {
+                if action == action_index {
+                    return row;
+                }
+                action += 1;
+            }
+        }
+        let empty_message = usize::from(sessions.is_empty());
+        sessions.len() + empty_message + action_index.saturating_sub(action)
+    }
+
     pub(super) fn menu_entries(&self) -> Vec<(String, ProductAction)> {
         match self.dialog.as_ref().map(|dialog| dialog.kind) {
+            Some(DialogKind::Sessions) => self.session_menu_entries(),
+            Some(DialogKind::StopSession) => self.stop_menu_entries(),
             Some(
                 DialogKind::Recipe
                 | DialogKind::TemplateRun
@@ -2206,6 +2369,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Sessions {
             return self.sessions_overlay(cx);
+        }
+        if dialog.kind == DialogKind::StopSession {
+            return self.stop_overlay(cx);
         }
         if dialog.kind == DialogKind::History {
             return self.history_overlay(dialog, layouts, cx);
@@ -4102,8 +4268,7 @@ impl ProductUi {
 
     fn sessions_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
-        let placed = placed_session_ids(self.catalog.as_ref());
-        let mut seen = HashSet::new();
+        let mut menu_index = 0;
         let mut entries = div()
             .id("unplaced-session-list")
             .role(Role::List)
@@ -4113,38 +4278,37 @@ impl ProductUi {
             .gap_1()
             .mt(px(14.))
             .max_h(px(360.))
-            .overflow_y_scroll();
+            .overflow_y_scroll()
+            .track_scroll(&self.layout_scroll);
         let has_tab = self.catalog.as_ref().and_then(selected_tab).is_some();
         let mut count = 0;
 
-        for view in &self.sessions {
+        for view in self.unplaced_sessions() {
             let Ok(session_id) = Uuid::parse_str(&view.session) else {
                 continue;
             };
-            if placed.contains(&session_id) || !seen.insert(session_id) {
-                continue;
-            }
             count += 1;
             let short_id = session_id.simple().to_string()[..8].to_owned();
-            let title = if view.title.trim().is_empty() {
-                "Без названия"
-            } else {
-                view.title.as_str()
-            };
+            let title = self.display_title(&view.session, &view.title);
             let state = session_state_label(&view.state);
             let attach = if has_tab {
-                self.action_control_with_accessible_name(
+                let attach = self.action_control_with_accessible_name(
                     format!("attach-session-{session_id}"),
                     "Разместить".into(),
                     format!("Разместить сессию {short_id} в выбранной вкладке"),
                     ProductAction::AttachSession(session_id),
                     ControlStyle {
                         role: Role::Button,
-                        selected: true,
+                        selected: self
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.active_field == menu_index),
                         compact: true,
                     },
                     cx,
-                )
+                );
+                menu_index += 1;
+                attach
             } else {
                 div()
                     .id(format!("attach-session-unavailable-{session_id}"))
@@ -4152,6 +4316,33 @@ impl ProductUi {
                     .text_color(colors.muted)
                     .child("Выберите вкладку")
                     .into_any_element()
+            };
+            let stop = if crate::session_control::can_stop(&view.state, view.pid) {
+                let Ok(generation) = Uuid::parse_str(&view.generation) else {
+                    continue;
+                };
+                let action = ProductAction::StopSession {
+                    session: session_id,
+                    generation,
+                };
+                let control = self.action_control(
+                    format!("stop-session-{}-{}", session_id, generation),
+                    "Остановить CLI".into(),
+                    action,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: self
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.active_field == menu_index),
+                        compact: true,
+                    },
+                    cx,
+                );
+                menu_index += 1;
+                Some(control)
+            } else {
+                None
             };
             entries = entries.child(
                 div()
@@ -4189,7 +4380,8 @@ impl ProductUi {
                                     .child(format!("{state} · {short_id}")),
                             ),
                     )
-                    .child(attach),
+                    .child(attach)
+                    .children(stop),
             );
         }
 
@@ -4200,7 +4392,11 @@ impl ProductUi {
                     .px(px(10.))
                     .py(px(16.))
                     .text_color(colors.muted)
-                    .child("Все сессии размещены"),
+                    .child(if self.busy {
+                        "Обновляем список сессий…"
+                    } else {
+                        "Все сессии размещены"
+                    }),
             );
         }
 
@@ -4211,22 +4407,32 @@ impl ProductUi {
             ProductAction::RefreshSessions,
             ControlStyle {
                 role: Role::Button,
-                selected: false,
+                selected: self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.active_field == menu_index),
                 compact: true,
             },
             cx,
         );
+        menu_index += 1;
         let close = self.action_control(
             "sessions-dialog-close".into(),
             "Закрыть".into(),
             ProductAction::CloseDialog,
             ControlStyle {
                 role: Role::Button,
-                selected: false,
+                selected: self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.active_field == menu_index),
                 compact: true,
             },
             cx,
         );
+        entries = entries
+            .child(div().flex().justify_end().mt(px(8.)).child(refresh))
+            .child(div().flex().justify_end().child(close));
         div()
             .id("sessions-dialog-overlay")
             .accessibility_id("sessions-dialog-overlay")
@@ -4272,11 +4478,9 @@ impl ProductUi {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(colors.text)
                                     .child("Неразмещённые сессии"),
-                            )
-                            .child(refresh),
+                            ),
                     )
-                    .child(entries)
-                    .child(div().flex().justify_end().mt(px(12.)).child(close)),
+                    .child(entries),
             )
             .into_any_element()
     }
@@ -4876,5 +5080,88 @@ mod context_edit_tests {
         ui.dialog = None;
         ui.apply_context_reply(document(), true, false);
         assert!(ui.dialog.is_none());
+    }
+    #[test]
+    fn stop_confirmation_defaults_to_cancel_and_never_offers_resend() {
+        use crate::session_control::{Phase, StopSheet, Target};
+        let dialog = Dialog::new(DialogKind::StopSession);
+        let mut ui = ProductUi {
+            stop_sheet: Some(StopSheet {
+                dialog: dialog.id,
+                target: Target {
+                    session: Uuid::from_u128(1),
+                    generation: Uuid::from_u128(2),
+                    title: "Review".into(),
+                },
+                phase: Phase::Draft,
+            }),
+            dialog: Some(dialog),
+            ..Default::default()
+        };
+        assert_eq!(ui.menu_entries()[0].1, ProductAction::CloseDialog);
+        assert_eq!(ui.menu_entries()[1].1, ProductAction::ConfirmStop);
+        for phase in [
+            Phase::Sending,
+            Phase::Waiting,
+            Phase::Unknown,
+            Phase::Unavailable,
+            Phase::Complete,
+        ] {
+            ui.stop_sheet.as_mut().unwrap().phase = phase;
+            assert!(
+                ui.menu_entries()
+                    .iter()
+                    .all(|(_, action)| *action != ProductAction::ConfirmStop)
+            );
+        }
+    }
+
+    #[test]
+    fn hidden_session_actions_keep_live_generation_and_keyboard_row_together() {
+        let session = Uuid::from_u128(11);
+        let historical = SessionSummary {
+            session: session.to_string(),
+            generation: Uuid::from_u128(12).to_string(),
+            title: "History".into(),
+            state: "history".into(),
+            pid: None,
+        };
+        let live = SessionSummary {
+            session: session.to_string(),
+            generation: Uuid::from_u128(13).to_string(),
+            title: "Review".into(),
+            state: "running".into(),
+            pid: Some(42),
+        };
+        let mut ui = ProductUi {
+            dialog: Some(Dialog::new(DialogKind::Sessions)),
+            ..Default::default()
+        };
+        ui.replace_sessions(vec![historical, live]);
+        assert_eq!(ui.dialog.as_ref().unwrap().active_field, 0);
+        let entries = ui.menu_entries();
+        assert_eq!(
+            entries[0].1,
+            ProductAction::StopSession {
+                session,
+                generation: Uuid::from_u128(13)
+            }
+        );
+        assert_eq!(entries.len(), 3);
+        assert_eq!(ui.session_action_row(0), 0);
+        assert_eq!(ui.session_action_row(1), 1);
+        assert_eq!(ui.session_action_row(2), 2);
+    }
+    #[test]
+    fn a_late_session_list_cannot_reopen_or_replace_another_dialog() {
+        let mut ui = ProductUi::default();
+        ui.replace_sessions(vec![]);
+        assert!(ui.dialog.is_none());
+        let dialog = Dialog::new(DialogKind::StopSession);
+        let id = dialog.id;
+        ui.dialog = Some(dialog);
+        ui.replace_sessions(vec![]);
+        assert_eq!(ui.dialog.as_ref().unwrap().kind, DialogKind::StopSession);
+        assert_eq!(ui.dialog.as_ref().unwrap().id, id);
     }
 }

@@ -20,6 +20,7 @@ mod product;
 mod protocol;
 mod publication_trace;
 mod selection;
+mod session_control;
 mod setup_flow;
 mod startup;
 mod template_commands;
@@ -1091,6 +1092,7 @@ struct CanvasApp {
     focus_queue: pointer_layout::FocusQueue,
     hover_position: Option<Point<Pixels>>,
     navigation: navigation::Navigation,
+    stop_control: session_control::StopControl,
     deferred_placement: Option<pigade_layout::Command>,
     focus: FocusHandle,
     selected: usize,
@@ -1196,6 +1198,7 @@ impl CanvasApp {
                 if weak
                     .update_in(cx, |this, window, cx| {
                         while let Ok(reply) = this.product_rx.try_recv() {
+                            let stop_pending=this.stop_control.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let mut navigation_pending=this.navigation.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let template_pending=this.template_flow.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let focus_reply = this.focus_queue.matches(match &reply { Ok(reply)=>reply.ui_request, Err(error)=>error.ui_request });
@@ -1207,6 +1210,7 @@ impl CanvasApp {
                             match reply {
                                 Ok(reply) => {
                                     let ui_request = reply.ui_request;
+                                    if let Some(pending)=stop_pending { this.receive_stop(pending,reply.process_view,cx); }
                                     if let Some(providers) = reply.providers {
                                         this.product.providers = Some(providers);
                                         this.product.provider_error = None;
@@ -1276,10 +1280,7 @@ impl CanvasApp {
                                             this.pending_launch = None;
                                             this.product.notice = Some("Предыдущая сессия найдена; её можно вернуть во вкладку".into());
                                         }
-                                        this.product.sessions = sessions.into_iter().map(Into::into).collect();
-                                        this.product.dialog = Some(product::Dialog::new(
-                                            product::DialogKind::Sessions,
-                                        ));
+                                        this.product.replace_sessions(sessions.into_iter().map(Into::into).collect());
                                     }
                                     if let Some(preview) = reply.launch_preview {
                                         let direct_request = this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(ui_request));
@@ -1337,6 +1338,7 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
                                     let template_error=error.message.clone();
                                     let navigation_error=error.message.clone();
                                     if focus_reply {
@@ -1483,6 +1485,7 @@ impl CanvasApp {
                         }
                         this.flush_canvas_offset(cx);
                         this.service_panel_search(cx);
+                        this.service_stops(cx);
                         if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
                             window.remove_window();
                             return;
@@ -1571,6 +1574,7 @@ impl CanvasApp {
             focus_queue: Default::default(),
             hover_position: None,
             navigation: Default::default(),
+            stop_control: Default::default(),
             deferred_placement: None,
             focus,
             selected: 0,
@@ -3107,6 +3111,9 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
+                self.session_control_action(action, cx)
+            }
             A::RenamePane
             | A::ActivatePane { .. }
             | A::MorePanelResults
@@ -3537,7 +3544,17 @@ impl CanvasApp {
                 }
             }
             A::OpenSessions | A::RefreshSessions => {
-                self.product_command(json!({"command":"list"}), cx)
+                if action == A::OpenSessions
+                    || !self
+                        .product
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.kind == DialogKind::Sessions)
+                {
+                    self.product.dialog = Some(Dialog::new(DialogKind::Sessions));
+                    self.product.layout_scroll.scroll_to_item(0);
+                }
+                self.product_command(json!({"command":"list"}), cx);
             }
             A::AttachSession(pane) => {
                 if let Some((tab, layout)) = self.tab_layout() {
@@ -3977,6 +3994,7 @@ impl CanvasApp {
                         }
                     }
                     DialogKind::RenamePane => self.submit_pane_name(cx),
+                    DialogKind::StopSession => self.confirm_stop(cx),
                     DialogKind::Palette | DialogKind::PaneMenu => {
                         if let Some(action) = self.product.palette_action() {
                             self.choose_palette(action, window, cx);
@@ -5235,6 +5253,8 @@ impl CanvasApp {
             matches!(
                 dialog.kind,
                 product::DialogKind::Manage
+                    | product::DialogKind::StopSession
+                    | product::DialogKind::Sessions
                     | product::DialogKind::Layouts
                     | product::DialogKind::Recipe
                     | product::DialogKind::TemplateRun
@@ -5305,10 +5325,13 @@ impl CanvasApp {
                 let previous = k.key == "up" || k.key == "tab" && k.modifiers.shift;
                 if let Some(dialog) = &mut self.product.dialog {
                     dialog.active_field = (selected + if previous { count - 1 } else { 1 }) % count;
-                    if dialog.kind == product::DialogKind::Layouts {
-                        self.product
-                            .layout_scroll
-                            .scroll_to_item(dialog.active_field);
+                    let kind = dialog.kind;
+                    let selected = dialog.active_field;
+                    if kind == product::DialogKind::Sessions {
+                        let row = self.product.session_action_row(selected);
+                        self.product.layout_scroll.scroll_to_item(row);
+                    } else if kind == product::DialogKind::Layouts {
+                        self.product.layout_scroll.scroll_to_item(selected);
                     }
                 }
                 cx.notify();
