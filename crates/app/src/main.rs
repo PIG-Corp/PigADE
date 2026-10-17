@@ -864,6 +864,26 @@ struct PaneDrag {
     drop: Option<(pigade_layout::Command, pigade_layout::Rect)>,
 }
 
+struct DirectLaunch {
+    tab: uuid::Uuid,
+    request: uuid::Uuid,
+    provider: String,
+}
+
+impl DirectLaunch {
+    fn matches(&self, request: Option<uuid::Uuid>) -> bool {
+        request == Some(self.request)
+    }
+    fn target_matches(
+        &self,
+        selected_tab: Option<uuid::Uuid>,
+        tab: uuid::Uuid,
+        provider: &str,
+    ) -> bool {
+        selected_tab == Some(self.tab) && tab == self.tab && provider == self.provider
+    }
+}
+
 struct CanvasApp {
     product: product::ProductUi,
     editor_layouts: std::collections::BTreeMap<usize, edit_field::FieldLayout>,
@@ -875,7 +895,7 @@ struct CanvasApp {
     product_launch_unknown: bool,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
-    pending_quick_shell: Option<(uuid::Uuid, uuid::Uuid)>,
+    pending_direct_launch: Option<DirectLaunch>,
     setup_flow: Option<setup_flow::SetupFlow>,
     picker_request: Option<uuid::Uuid>,
     providers_checked: bool,
@@ -1061,11 +1081,14 @@ impl CanvasApp {
                                         ));
                                     }
                                     if let Some(preview) = reply.launch_preview {
-                                        let quick_shell = this.pending_quick_shell.is_some_and(|(tab, request)|
-                                            ui_request == Some(request) && this.product.catalog.as_ref().is_some_and(|catalog| catalog.selection.tab_id == Some(tab))
-                                            && preview.provider == "shell" && preview.tab_id == tab && preview.resume.is_none()
-                                            && !preview.deliver_context && preview.can_launch && reply.launch_phase.is_none());
-                                        if this.pending_quick_shell.is_some_and(|(_, request)| ui_request == Some(request)) { this.pending_quick_shell = None; }
+                                        let direct_request = this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(ui_request));
+                                        let direct_start = this.pending_direct_launch.as_ref().is_some_and(|pending|
+                                            pending.matches(ui_request) && pending.target_matches(this.product.catalog.as_ref().and_then(|catalog| catalog.selection.tab_id), preview.tab_id, &preview.provider)
+                                            && preview.resume.is_none() && !preview.deliver_context && !preview.include_memory
+                                            && preview.role_override.is_empty() && preview.agent_instructions.is_empty()
+                                            && preview.can_launch && reply.launch_phase.is_none());
+                                        let direct_error = preview.unavailable_reason.clone().unwrap_or_else(|| "Запуск не подтверждён: параметры или выбранная вкладка изменились".into());
+                                        if direct_request { this.pending_direct_launch = None; }
                                         this.product.launch_phase = reply.launch_phase;
                                         if reply.launch_confirmed {
                                             if this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview) {
@@ -1089,9 +1112,10 @@ impl CanvasApp {
                                         this.pending_context_inspection = false;
                                         this.pending_conversation_inspection = false;
                                         this.product.launch_preview = Some(preview);
-                                        if quick_shell {
-                                            this.confirm_prepared_launch(cx);
-                                            if this.product_launch_unknown { this.product.dialog = None; }
+                                        if direct_request {
+                                            if direct_start {this.confirm_prepared_launch(cx);} else {this.product.notice=Some(direct_error);}
+                                            // The ordinary creation path never exposes the advanced review.
+                                            this.product.dialog = None;
                                         }
                                     }
                                     if let Some(generations) = reply.generations {
@@ -1113,7 +1137,7 @@ impl CanvasApp {
                                 }
                                 Err(error) => {
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
-                                    if this.pending_quick_shell.is_some_and(|(_,request)| error.ui_request==Some(request)) { this.pending_quick_shell=None; }
+                                    if this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(error.ui_request)) { this.pending_direct_launch=None; }
                                     if error.providers_request { this.product.provider_error=Some("Не удалось проверить CLI. Терминал можно открыть сразу; проверку агентов можно повторить.".into()); }
                                     if this.product.history_sheet.as_ref().is_some_and(|history| history.pending.is_some()) {
                                         this.apply_history_error(error.message.clone(), cx);
@@ -1284,7 +1308,7 @@ impl CanvasApp {
             product_launch_unknown: false,
             pending_launch: None,
             pending_launch_review: false,
-            pending_quick_shell: None,
+            pending_direct_launch: None,
             setup_flow: None,
             picker_request: None,
             providers_checked: false,
@@ -2670,7 +2694,7 @@ impl CanvasApp {
                 | A::OpenSessions
         ) {
             self.pending_launch_review = false;
-            self.pending_quick_shell = None;
+            self.pending_direct_launch = None;
             self.pending_context_inspection = false;
             self.pending_conversation_inspection = false;
             self.pending_generation_picker = false;
@@ -3248,11 +3272,10 @@ impl CanvasApp {
                 }
             }
             A::Launch(provider) => {
-                let quick_shell = provider == "shell";
-                self.launch_panel(provider, pigade_layout::Direction::Right, quick_shell, cx)
+                self.launch_panel(provider, pigade_layout::Direction::Right, true, cx)
             }
-            A::ReviewShell => {
-                self.launch_panel("shell".into(), pigade_layout::Direction::Right, false, cx)
+            A::ReviewLaunch(provider) => {
+                self.launch_panel(provider, pigade_layout::Direction::Right, false, cx)
             }
             A::Layout(name) => {
                 let Some((tab, layout)) = self.tab_layout() else {
@@ -3298,7 +3321,7 @@ impl CanvasApp {
         &mut self,
         provider: String,
         side: pigade_layout::Direction,
-        quick_shell: bool,
+        direct: bool,
         cx: &mut Context<Self>,
     ) {
         if self.product_launch_unknown {
@@ -3316,11 +3339,14 @@ impl CanvasApp {
         }
         self.pending_launch_review = true;
         let request = uuid::Uuid::new_v4();
-        let quick_shell = quick_shell && provider == "shell";
         let command = json!({"command":"prepare_launch","_ui_request":request,"request":{"tab":tab,"provider":provider,"side":side,
-            "target":self.selected_pane().or(layout.focused),"role_override":"","agent_instructions":"","include_memory":false,"deliver_context":!quick_shell}});
-        if self.try_product_command(command, cx) && quick_shell {
-            self.pending_quick_shell = Some((tab, request));
+            "target":self.selected_pane().or(layout.focused),"role_override":"","agent_instructions":"","include_memory":false,"deliver_context":!direct}});
+        if self.try_product_command(command, cx) && direct {
+            self.pending_direct_launch = Some(DirectLaunch {
+                tab,
+                request,
+                provider,
+            });
         }
         cx.notify();
     }
@@ -4686,7 +4712,7 @@ impl CanvasApp {
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
                 "enter" => Some(if k.modifiers.shift {
-                    product::ProductAction::ReviewShell
+                    product::ProductAction::ReviewLaunch("shell".into())
                 } else {
                     product::ProductAction::Launch("shell".into())
                 }),
@@ -6359,6 +6385,27 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn direct_launch_binds_exact_request_provider_and_still_selected_tab() {
+        let tab = uuid::Uuid::new_v4();
+        let request = uuid::Uuid::new_v4();
+        for provider in ["shell", "codex", "claude", "opencode"] {
+            let pending = super::DirectLaunch {
+                tab,
+                request,
+                provider: provider.into(),
+            };
+            assert!(pending.matches(Some(request)));
+            assert!(!pending.matches(None));
+            assert!(!pending.matches(Some(uuid::Uuid::new_v4())));
+            assert!(pending.target_matches(Some(tab), tab, provider));
+            assert!(!pending.target_matches(None, tab, provider));
+            assert!(!pending.target_matches(Some(uuid::Uuid::new_v4()), tab, provider));
+            assert!(!pending.target_matches(Some(tab), uuid::Uuid::new_v4(), provider));
+            assert!(!pending.target_matches(Some(tab), tab, "other-provider"));
+        }
     }
 
     #[test]

@@ -847,22 +847,6 @@ def run_setup_fixture(config, report, control, env, save):
     require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
             'setup UI sent input to the unplaced bootstrap PTY')
     helper_call(config, 'capture', '/artifacts/first-terminal.ppm')
-    baseline_plans = prepared_launches_read_only()
-    helper_call(config, 'setup-launcher')
-    time.sleep(1)
-    helper_call(config, 'capture', '/artifacts/agent-picker.ppm')
-    helper_call(config, 'setup-codex')
-    def codex_review():
-        plans = prepared_launches_read_only()
-        added = [plan for key, plan in plans.items() if key not in baseline_plans]
-        return added[0] if len(added) == 1 and added[0]['payload']['preview']['provider'] == 'codex' else None
-    plan = wait_until(codex_review, time.monotonic() + 8)
-    require(plan['phase'] == 'prepared', 'AI choice attempted launch before confirmation')
-    require(fixture_generations() == sorted(baseline_generations + [(session, generation)]),
-            'AI choice created a process before review confirmation')
-    time.sleep(1)
-    helper_call(config, 'capture', '/artifacts/agent-review.ppm')
-    helper_call(config, 'setup-close')
     tree_before = host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json']
     helper_call(config, 'setup-compact')
     time.sleep(.8)
@@ -899,12 +883,38 @@ def run_setup_fixture(config, report, control, env, save):
     helper_call(config, 'capture', '/artifacts/four-panels-compact.ppm')
     require(host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json'] == grid_catalog['tabs'][0]['layout_json'],
             'compact four-pane resize rebuilt the tiling tree')
+    helper_call(config, 'setup-wide')
+    time.sleep(.6)
+    before_agent_generations = fixture_generations()
+    baseline_plans = prepared_launches_read_only()
+    helper_call(config, 'setup-launcher')
+    time.sleep(1)
+    helper_call(config, 'capture', '/artifacts/agent-picker.ppm')
+    helper_call(config, 'setup-codex')
+    def codex_started():
+        plans = prepared_launches_read_only()
+        added = [plan for key, plan in plans.items() if key not in baseline_plans]
+        if len(added) != 1: return None
+        preview = added[0]['payload']['preview']
+        if preview['provider'] != 'codex' or added[0]['phase'] != 'not_requested': return None
+        if preview.get('deliver_context') or preview.get('include_memory') or preview.get('role_override') or preview.get('agent_instructions'): return None
+        views = fixture_session_models(preview['session'])
+        view = views.get(preview['generation'])
+        return preview if view and view.get('state') == 'exited' and 'OLD_RESUME_FRAME' in view_text(view) else None
+    direct_agent = wait_until(codex_started, time.monotonic() + 10)
+    require(fixture_generations() == sorted(before_agent_generations + [(direct_agent['session'], direct_agent['generation'])]),
+            'one agent choice created other or multiple generations')
+    starts=Path('/artifacts/codex-starts.jsonl').read_text().splitlines()
+    require(len(starts) == 1 and json.loads(starts[0]) == [],
+            'direct agent received context/prompt arguments or launched more than once')
+    time.sleep(.6)
+    helper_call(config, 'capture', '/artifacts/agent-direct.ppm')
     report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
         'tab': tab['name'], 'shell_session': session, 'shell_generation': generation,
         'no_automatic_cli': True, 'one_shell_generation': True,
-        'bootstrap_pty_received_no_input': True, 'fake_codex_review_without_launch': True, 'four_panes_accept_native_input': True,
+        'bootstrap_pty_received_no_input': True, 'fake_codex_direct_launch_no_context': True, 'four_panes_accept_native_input': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                     'agent-picker.ppm', 'agent-review.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                     'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                      'four-panels.ppm', 'four-panels-compact.ppm']}
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
     save()
@@ -1610,6 +1620,8 @@ def inside_run() -> int:
             fake_codex = private_bin / 'codex'
             fake_codex.write_text("#!/usr/bin/python3\nimport sys\n"
                 "if sys.argv[1:] == ['--version']:\n print('codex-cli 0.162.1'); raise SystemExit(0)\n"
+                "import json\n"
+                "with open('/artifacts/codex-starts.jsonl','a') as log: log.write(json.dumps(sys.argv[1:])+'\\n')\n"
                 "print('NEW_RESUME_FRAME' if sys.argv[1:2] == ['resume'] else 'OLD_RESUME_FRAME')\n")
             fake_codex.chmod(0o700)
             host_path = '/artifacts/bin:/usr/bin'
@@ -1831,7 +1843,7 @@ def outer_run(args) -> dict:
                  ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
                  ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                  'agent-picker.ppm', 'agent-review.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                  'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],

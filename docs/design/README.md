@@ -1,6 +1,6 @@
 # Native chrome references — 0.0.1-dev
 
-Generated with the built-in `image_gen` tool on 2026-10-17 after the user explicitly requested BridgeMind styling and image generation. These are design references, not screenshots or acceptance evidence. The app uses native GPUI controls and original embedded SVGs, not these raster images as its interface. Actual private X11 captures are produced by `python3 scripts/isolated-ime-x11.py --run --fixture setup --output /fresh/private/path`; they include welcome, selected agent review, four live panes and675×734 layouts. These narrow fixture checks do not certify the full platform/accessibility matrix.
+Generated with the built-in `image_gen` tool on 2026-10-17 after the user explicitly requested BridgeMind styling and image generation. These are design references, not screenshots or acceptance evidence. The app uses native GPUI controls and original embedded SVGs, not these raster images as its interface. Actual private X11 captures are produced by `python3 scripts/isolated-ime-x11.py --run --fixture setup --output /fresh/private/path`; they include welcome, direct agent launch, four live panes and675×734 layouts. These narrow fixture checks do not certify the full platform/accessibility matrix.
 
 - [Working workspace](workspace-reference-v2.png)
 - [First launch](welcome-reference-v2.png)

@@ -61,7 +61,7 @@ pub(super) enum ProductAction {
     SelectWorkspace(Uuid),
     SelectTab(Uuid),
     Launch(String),
-    ReviewShell,
+    ReviewLaunch(String),
     Layout(String),
     EditContext,
     EditProjectContext,
@@ -361,7 +361,22 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
-        ("Настроить запуск терминала", ProductAction::ReviewShell),
+        (
+            "Настроить запуск терминала",
+            ProductAction::ReviewLaunch("shell".into()),
+        ),
+        (
+            "Настроить запуск Claude Code",
+            ProductAction::ReviewLaunch("claude".into()),
+        ),
+        (
+            "Настроить запуск Codex",
+            ProductAction::ReviewLaunch("codex".into()),
+        ),
+        (
+            "Настроить запуск OpenCode",
+            ProductAction::ReviewLaunch("opencode".into()),
+        ),
         ("Запустить Claude", ProductAction::Launch("claude".into())),
         ("Запустить Codex", ProductAction::Launch("codex".into())),
         (
@@ -1698,7 +1713,7 @@ impl ProductUi {
             ProductAction::SelectWorkspace(_)
             | ProductAction::CreateWorkspace
             | ProductAction::CreateWorkspaceFor(_) => Some("branch"),
-            ProductAction::Launch(_) | ProductAction::ReviewShell => Some("terminal"),
+            ProductAction::Launch(_) | ProductAction::ReviewLaunch(_) => Some("terminal"),
             ProductAction::EditContext | ProductAction::EditProjectContext => Some("layers"),
             _ => None,
         };
