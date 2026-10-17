@@ -19,6 +19,7 @@ import select
 import shutil
 import signal
 import socket
+import sqlite3
 import stat
 import struct
 import subprocess
@@ -45,6 +46,7 @@ KEYBOARD_PASS = 'pass-private-x11-en-ru-cli-keyboard-fixture'
 IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
 LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
 CONTEXT_PASS = 'pass-private-x11-workspace-context-editor-fixture'
+MEMORY_PASS = 'pass-private-x11-startup-memory-review-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -348,10 +350,10 @@ def deactivate_private_fcitx(config, env):
 
 def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
-            'context': CONTEXT_PASS}[name]
+            'context': CONTEXT_PASS, 'memory': MEMORY_PASS}[name]
 
 
-def seed_context_catalog(session):
+def seed_context_catalog(session, memory_fixture=False):
     catalog = host_request({'command': 'catalog'})['catalog']
     project, workspace, tab = (str(uuid.uuid4()) for _ in range(3))
     selection = dict(catalog['selection'], project_id=project, workspace_id=workspace, tab_id=tab)
@@ -372,7 +374,95 @@ def seed_context_catalog(session):
                   'action': {'action': 'apply', 'command': {'Insert': {
                       'tab': tab, 'pane': session, 'target': None, 'side': 'Right',
                       'split': str(uuid.uuid4())}}}})
+    if memory_fixture:
+        memory = '# Факты\n' + ('x' * (40 * 1024)) + '\n## Решения\nSELECTED_MEMORY λ決定\n## Что осталось\nLATER\n'
+        host_request({'command': 'save_context', 'expected_revision': 0, 'document': {
+            'scope_id': workspace, 'revision': 0, 'instructions': '', 'role': '',
+            'memory': memory, 'content_hash': '', 'saved_at_unix_ms': None, 'author': ''}})
     return {'project': project, 'workspace': workspace, 'tab': tab}
+
+
+def prepared_launches_read_only():
+    connection = sqlite3.connect('file:/artifacts/state/metadata.sqlite?mode=ro', uri=True, timeout=2)
+    try:
+        rows = connection.execute('SELECT id,payload,phase FROM prepared_launches').fetchall()
+        require(len(rows) <= 64, 'fixture prepared launch count exceeds diagnostic bound')
+        return {row[0]: {'payload': json.loads(row[1]), 'phase': row[2]} for row in rows}
+    finally:
+        connection.close()
+
+
+def fixture_generations():
+    reply = host_request({'command': 'poll', 'known': []})
+    views = reply.get('views', [])
+    require(isinstance(views, list) and len(views) <= 32, 'fixture generation snapshot exceeds bounds')
+    return sorted((view['session'], view['generation']) for view in views)
+
+
+def run_memory_fixture(config, report, env, save):
+    report['stage'] = 'startup-memory-review'
+    save()
+    deactivate_private_fcitx(config, env)
+    baseline_generations = fixture_generations()
+    baseline_plans = prepared_launches_read_only()
+    helper_call(config, 'memory-open')
+    initial_plans = wait_until(
+        lambda: (plans if len(plans := prepared_launches_read_only()) > len(baseline_plans) else None),
+        time.monotonic() + 8)
+    initial_ids = set(initial_plans) - set(baseline_plans)
+    require(len(initial_ids) == 1, 'opening memory review did not create exactly one preview plan')
+    initial_plan = initial_plans[next(iter(initial_ids))]['payload']['preview']
+    require(initial_plan.get('provider') == 'shell',
+            'memory review fixture selected a provider other than the local shell adapter')
+    require(initial_plan.get('memory', {}).get('selected') == [],
+            'initial memory preview unexpectedly includes sections')
+    require(not any(block.get('source') == 'workspace_memory'
+                    for block in initial_plan['context']['blocks']),
+            'initial memory review unexpectedly includes a memory block')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/memory-review-initial.ppm')
+    require(0 < Path('/artifacts/memory-review-initial.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'initial memory review capture exceeds bound')
+
+    helper_call(config, 'memory-select')
+    def selected_preview():
+        plans = prepared_launches_read_only()
+        new_ids = set(plans) - set(baseline_plans)
+        candidates = [(plan_id, plans[plan_id]) for plan_id in new_ids
+                      if plans[plan_id]['payload'].get('preview', {}).get('memory', {}).get('selected') == [1]]
+        return candidates[0] if len(candidates) == 1 else None
+    selected_plan_id, selected_plan = wait_until(selected_preview, time.monotonic() + 8)
+    require(selected_plan['phase'] == 'prepared', 'selected review plan was already attempted')
+    preview = selected_plan['payload']['preview']
+    require(preview['include_memory'] is True, 'selected review did not include memory')
+    memory_review = preview['memory']
+    require(memory_review['revision'] > 0 and memory_review['selected_bytes'] == len('## Решения\nSELECTED_MEMORY λ決定\n'.encode()),
+            'selected section metadata differs from the exact UTF-8 source slice')
+    blocks = preview['context']['blocks']
+    memory_blocks = [block for block in blocks if block.get('source') == 'workspace_memory']
+    expected = '## Решения\nSELECTED_MEMORY λ決定\n'
+    require(len(memory_blocks) == 1 and memory_blocks[0]['text'] == expected,
+            'prepared context memory block differs from the selected source slice')
+    require('x' * 128 not in preview['context']['text'] and 'LATER' not in preview['context']['text'],
+            'unselected memory text leaked into prepared context')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/memory-review-selected.ppm')
+    require(0 < Path('/artifacts/memory-review-selected.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'selected memory review capture exceeds bound')
+    require(fixture_generations() == baseline_generations,
+            'memory preview created or changed a PTY generation')
+    require(window_verified(helper_call(config, 'probe-window')),
+            'PigADE window disappeared during memory review')
+    report['memoryReview'] = {
+        'plan_id': selected_plan_id, 'selected': memory_review['selected'],
+        'selected_bytes': memory_review['selected_bytes'],
+        'prepared_context_exact': True, 'unselected_text_absent': True,
+        'pty_generations_unchanged': True, 'launch_confirmed': False,
+        'captures': ['memory-review-initial.ppm', 'memory-review-selected.ppm'],
+        'scope': 'isolated Xvfb and host metadata; prepared launch only',
+    }
+    report.update({'status': MEMORY_PASS, 'stage': 'complete'})
+    save()
 
 
 def run_context_fixture(config, report, env, save):
@@ -1094,8 +1184,8 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
-        if config.get('fixture') == 'context':
-            report['fixture'].update(seed_context_catalog(session))
+        if config.get('fixture') in ('context', 'memory'):
+            report['fixture'].update(seed_context_catalog(session, memory_fixture=config.get('fixture') == 'memory'))
         report['stage'] = 'pigade-app'
         save()
         app_env = dict(fcitx_env)
@@ -1131,6 +1221,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'context':
             run_context_fixture(config, report, app_env, save)
+            return 0
+        if config.get('fixture') == 'memory':
+            run_memory_fixture(config, report, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1263,9 +1356,10 @@ def outer_run(args) -> dict:
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
                 (['context-editor.ppm'] if args.fixture == 'context' else
+                 ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME/context-editor fixture only',
+            'limits': ['one fixed local X11 keyboard/IME/context/memory-review fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1281,6 +1375,7 @@ def plan(args) -> dict:
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
                   'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
+                  'memory': 'fixed Ctrl+Shift+Space, V, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
@@ -1289,12 +1384,16 @@ def plan(args) -> dict:
                       'XTEST extension and XRes local PID ownership for XIM and app window',
                       ('workspace context editing/saving occurs only in the private app and host'
                        if args.fixture == 'context' else
+                       'memory review prepares shell-only previews, verifies selected slices, and never confirms launch'
+                       if args.fixture == 'memory' else
                        'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
                    'actual X11/Fcitx/app/input remain unrun until separately reviewed --run',
                    ('context editor capture is retained for human review'
                     if args.fixture == 'context' else
+                    'initial and selected memory-review captures are retained for human review'
+                    if args.fixture == 'memory' else
                     'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
@@ -1304,8 +1403,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, or workspace-context editor fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, context editor, or startup-memory review fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

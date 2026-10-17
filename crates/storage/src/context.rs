@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::MetadataStore;
+use crate::{MemoryReview, MemorySelection};
 
 pub const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 
@@ -336,6 +337,31 @@ impl MetadataStore {
         agent_instructions: &str,
         include_memory: bool,
     ) -> Result<EffectiveContext> {
+        self.effective_context_with_memory_selection(
+            project,
+            workspace,
+            task,
+            workspace_revision,
+            role_override,
+            agent_instructions,
+            include_memory,
+            None,
+        )
+        .map(|(effective, _)| effective)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn effective_context_with_memory_selection(
+        &self,
+        project: Uuid,
+        workspace: Uuid,
+        task: &str,
+        workspace_revision: u64,
+        role_override: &str,
+        agent_instructions: &str,
+        include_memory: bool,
+        selection: Option<&MemorySelection>,
+    ) -> Result<(EffectiveContext, MemoryReview)> {
         let snapshot_id = Uuid::new_v4();
         let project_context = self.context(project)?;
         let workspace_context = self.context(workspace)?;
@@ -382,17 +408,16 @@ impl MetadataStore {
             &expanded_role,
         );
 
-        if include_memory {
-            ensure!(
-                workspace_context.memory.len() <= 32 * 1024,
-                "selected workspace memory exceeds 32 KiB"
-            );
+        let memory_review =
+            MemoryReview::from_document(&workspace_context, selection, include_memory)?;
+        if include_memory && memory_review.selected_bytes > 0 {
+            let memory_text = memory_review.selected_text(&workspace_context)?;
             push_block(
                 &mut blocks,
                 "workspace_memory",
                 workspace,
                 workspace_context.revision,
-                &workspace_context.memory,
+                &memory_text,
             );
         }
         push_block(
@@ -435,7 +460,7 @@ impl MetadataStore {
             text,
         };
         effective.validate()?;
-        Ok(effective)
+        Ok((effective, memory_review))
     }
 }
 
@@ -642,6 +667,66 @@ mod tests {
                 .effective_context(project, workspace, "task", 8, "", "", true)
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn effective_context_includes_exact_selected_memory_slices_with_document_revision() -> Result<()>
+    {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let directory = tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("metadata.sqlite"))?;
+        let project = Uuid::new_v4();
+        let workspace = Uuid::new_v4();
+        store.save_context(
+            ContextDocument {
+                scope_id: project,
+                revision: 0,
+                instructions: String::new(),
+                role: String::new(),
+                memory: String::new(),
+                content_hash: String::new(),
+                saved_at_unix_ms: None,
+                author: String::new(),
+            },
+            0,
+        )?;
+        let saved = store.save_context(
+            ContextDocument {
+                scope_id: workspace,
+                revision: 0,
+                instructions: String::new(),
+                role: String::new(),
+                memory: "# Facts\nlarge\n## Decisions\nλ\n# Agreements\nlast\n".into(),
+                content_hash: String::new(),
+                saved_at_unix_ms: None,
+                author: String::new(),
+            },
+            0,
+        )?;
+        let selection = MemorySelection {
+            revision: saved.revision,
+            content_hash: saved.content_hash.clone(),
+            sections: vec![1],
+        };
+        let (effective, review) = store.effective_context_with_memory_selection(
+            project,
+            workspace,
+            "task",
+            1,
+            "",
+            "",
+            true,
+            Some(&selection),
+        )?;
+        assert_eq!(review.selected_text(&saved)?, "## Decisions\nλ\n");
+        let block = effective
+            .blocks
+            .iter()
+            .find(|block| block.source == "workspace_memory")
+            .unwrap();
+        assert_eq!(block.text, "## Decisions\nλ\n");
+        assert_eq!(block.revision, saved.revision);
         Ok(())
     }
 

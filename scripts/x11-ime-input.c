@@ -72,7 +72,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "commit") && strcmp(a.stage, "capture") &&
         strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency") &&
         strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
-        strcmp(a.stage, "context-save"))
+        strcmp(a.stage, "context-save") && strcmp(a.stage, "memory-open") &&
+        strcmp(a.stage, "memory-select"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -267,6 +268,24 @@ static void context_open_sequence(Display *dpy) {
     if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
         !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("context shortcut release failed");
     key(dpy, XK_e);
+}
+
+static void memory_open_sequence(Display *dpy) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime)) fail("memory review shortcut press failed");
+    key(dpy, XK_space);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("memory review shortcut release failed");
+    key(dpy, XK_v);
+}
+
+static void memory_select_sequence(Display *dpy) {
+    key(dpy, XK_Tab);
+    key(dpy, XK_Tab);
+    key(dpy, XK_2);
+    modified_key(dpy, XK_Control_L, XK_r);
 }
 
 static void context_edit_sequence(Display *dpy) {
@@ -483,11 +502,17 @@ int main(int argc, char **argv) {
             context_edit_sequence(dpy);
         } else if (!strcmp(a.stage, "context-save")) {
             modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "memory-open")) {
+            memory_open_sequence(dpy);
+        } else if (!strcmp(a.stage, "memory-select")) {
+            memory_select_sequence(dpy);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
                             !strcmp(a.stage, "keyboard") ? "20" :
                             !strcmp(a.stage, "context-open") ? "2" :
+                            !strcmp(a.stage, "memory-open") ? "2" :
+                            !strcmp(a.stage, "memory-select") ? "4" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

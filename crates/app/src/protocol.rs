@@ -209,6 +209,8 @@ pub struct LaunchPreview {
     pub context: pigade_storage::EffectiveContext,
     pub capabilities: AdapterCapabilities,
     pub include_memory: bool,
+    #[serde(default)]
+    pub memory: Option<pigade_storage::MemoryReview>,
     pub role_override: String,
     pub agent_instructions: String,
     pub deliver_context: bool,

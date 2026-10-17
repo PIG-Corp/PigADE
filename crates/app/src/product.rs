@@ -28,6 +28,8 @@ pub(super) enum ProductAction {
     RefreshLaunchPreview,
     ConfirmPreparedLaunch,
     ToggleMemory,
+    ToggleMemorySection(usize),
+    ReloadMemory,
     ToggleContextDelivery,
     InspectSessionContext,
     PanCanvas,
@@ -82,7 +84,11 @@ impl DialogKind {
             Self::Palette => &["Поиск команды"],
             Self::Context => &["Инструкции", "Роль", "Память"],
             Self::ProjectContext => &["Инструкции проекта"],
-            Self::LaunchReview => &["Роль для запуска", "Дополнительные инструкции агенту"],
+            Self::LaunchReview => &[
+                "Роль для запуска",
+                "Дополнительные инструкции агенту",
+                "Разделы памяти: номера через запятую; пусто — без памяти",
+            ],
             Self::SessionContext => &[],
             Self::Transfer => &[],
             Self::Sessions => &[],
@@ -1274,6 +1280,11 @@ impl ProductUi {
         let fields_match = preview.is_some_and(|preview| {
             preview.role_override == role_override
                 && preview.agent_instructions == agent_instructions
+                && crate::memory_choice::matches_preview(
+                    dialog.fields.get(2).map(EditBuffer::text).unwrap_or(""),
+                    preview.memory.as_ref(),
+                    preview.include_memory,
+                )
         });
         let can_confirm = preview.is_some_and(|preview| preview.can_launch)
             && fields_match
@@ -1356,10 +1367,14 @@ impl ProductUi {
                 self.catalog.as_ref(),
             );
 
-            let memory_label = if preview.include_memory {
-                "Память включена"
+            let memory_label = if dialog
+                .fields
+                .get(2)
+                .is_some_and(|field| !field.text().trim().is_empty())
+            {
+                "Исключить память"
             } else {
-                "Память выключена"
+                "Выбрать всю память"
             };
             preview_controls = preview_controls.child(self.action_control(
                 "launch-review-memory".into(),
@@ -1452,6 +1467,7 @@ impl ProductUi {
         let fields = [
             (0usize, "Роль для запуска"),
             (1usize, "Дополнительные инструкции агенту"),
+            (2usize, "Разделы памяти: 1, 3 · пусто — без памяти"),
         ]
         .into_iter()
         .fold(
@@ -1499,6 +1515,130 @@ impl ProductUi {
                 )
             },
         );
+
+        let mut memory_picker = div()
+            .id("launch-memory-picker")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mt(px(8.));
+        if let Some(memory) = preview.and_then(|preview| preview.memory.as_ref()) {
+            let draft = dialog.fields.get(2).map(EditBuffer::text).unwrap_or("");
+            let selected = crate::memory_choice::parse_sections(draft, memory);
+            let summary = match &selected {
+                Ok(selected) => format!(
+                    "Память v{} · {} из {} разделов · {} / {} байт UTF-8",
+                    memory.revision,
+                    selected.len(),
+                    memory.sections.len(),
+                    crate::memory_choice::selected_bytes(selected, memory),
+                    crate::memory_choice::LIMIT,
+                ),
+                Err(error) => error.clone(),
+            };
+            memory_picker = memory_picker.child(
+                div()
+                    .id("launch-memory-counter")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(summary),
+            );
+            if let Some(reason) = &memory.unavailable_reason {
+                memory_picker = memory_picker.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child(reason.clone()),
+                );
+            } else if memory.sections.is_empty() {
+                memory_picker =
+                    memory_picker.child(div().text_size(px(12.)).text_color(colors.muted).child(
+                        "Память пока пуста. Добавьте Markdown-разделы в контекст воркспейса.",
+                    ));
+            } else {
+                let mut sections = div()
+                    .id("launch-memory-sections")
+                    .role(Role::Group)
+                    .aria_label("Выбор разделов памяти")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .max_h(px(144.))
+                    .overflow_y_scroll();
+                for section in &memory.sections {
+                    let index = section.index;
+                    let checked = selected
+                        .as_ref()
+                        .is_ok_and(|selected| selected.contains(&index));
+                    let title = if section.title.is_empty() {
+                        "Без заголовка"
+                    } else {
+                        &section.title
+                    };
+                    let label = format!("{}. {} · {} байт", index + 1, title, section.bytes);
+                    sections = sections.child(
+                        div()
+                            .id(format!("launch-memory-section-{index}"))
+                            .role(Role::CheckBox)
+                            .aria_label(label.clone())
+                            .aria_toggled(if checked {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px(px(8.))
+                            .py(px(5.))
+                            .rounded(px(5.))
+                            .bg(if checked {
+                                colors.selected
+                            } else {
+                                colors.base
+                            })
+                            .text_size(px(12.))
+                            .text_color(colors.text)
+                            .hover(move |style| style.bg(colors.hover))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.product_action(
+                                    ProductAction::ToggleMemorySection(index),
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                            }))
+                            .child(if checked { "☑" } else { "☐" })
+                            .child(div().truncate().child(label)),
+                    );
+                }
+                memory_picker = memory_picker.child(sections);
+            }
+            if let Err(error) = crate::memory_choice::selection(draft, memory) {
+                memory_picker = memory_picker.child(
+                    div()
+                        .id("launch-memory-error")
+                        .role(Role::Status)
+                        .text_size(px(12.))
+                        .text_color(colors.accent)
+                        .child(error),
+                );
+            }
+            memory_picker = memory_picker.child(div().text_size(px(11.)).text_color(colors.muted)
+                .child("Разделы по заголовкам # и ##; вложенные заголовки остаются внутри. Tab → номера → Ctrl+R. Ctrl+Shift+R — загрузить новую ревизию и сбросить выбор."));
+            memory_picker = memory_picker.child(self.action_control(
+                "launch-memory-reload".into(),
+                "Обновить ревизию памяти · сбросить выбор".into(),
+                ProductAction::ReloadMemory,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
 
         if let Some(notice) = &self.notice {
             warnings = warnings.child(
@@ -1586,7 +1726,7 @@ impl ProductUi {
             .flex()
             .items_start()
             .justify_center()
-            .overflow_y_scroll()
+            .overflow_hidden()
             .py(px(18.))
             .bg(rgb(0x090b0e).opacity(0.72))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -1598,6 +1738,8 @@ impl ProductUi {
                     .role(Role::Dialog)
                     .aria_label(DialogKind::LaunchReview.title())
                     .w_full()
+                    .h_full()
+                    .min_h(px(0.))
                     .max_w(px(760.))
                     .mx(px(16.))
                     .flex()
@@ -1615,30 +1757,44 @@ impl ProductUi {
                             .aria_level(2)
                             .text_size(px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
+                            .flex_shrink_0()
+                            .mb(px(8.))
                             .text_color(colors.text)
                             .child("Проверьте запуск до старта"),
                     )
-                    .child(metadata)
-                    .child(preview_controls)
-                    .child(fields)
                     .child(
                         div()
-                            .id("launch-review-context-heading")
-                            .role(Role::Heading)
-                            .aria_level(3)
-                            .mt(px(14.))
-                            .mb(px(6.))
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors.text)
-                            .child("Эффективный контекст · блоки по порядку"),
+                            .id("launch-review-body")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .overflow_y_scroll()
+                            .child(metadata.flex_shrink_0())
+                            .child(preview_controls.flex_shrink_0())
+                            .child(fields.flex_shrink_0())
+                            .child(memory_picker.flex_shrink_0())
+                            .child(
+                                div()
+                                    .id("launch-review-context-heading")
+                                    .role(Role::Heading)
+                                    .aria_level(3)
+                                    .mt(px(14.))
+                                    .mb(px(6.))
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(colors.text)
+                                    .flex_shrink_0()
+                                    .child("Эффективный контекст · блоки по порядку"),
+                            )
+                            .child(context_blocks.flex_shrink_0())
+                            .child(warnings.flex_shrink_0()),
                     )
-                    .child(context_blocks)
-                    .child(warnings)
                     .child(
                         div()
                             .flex()
                             .justify_end()
+                            .flex_shrink_0()
                             .gap_2()
                             .mt(px(16.))
                             .child(close)

@@ -5,8 +5,8 @@ use pigade_session_host::{
     Command, PROTOCOL, PrepareRequest, Request, Response, View, receive, send,
 };
 use pigade_storage::{
-    CatalogBatch, CatalogWrite, ContextDocument, Project, Tab, Workspace, WorkspaceMode,
-    WorkspaceStatus,
+    CatalogBatch, CatalogWrite, ContextDocument, MemorySelection, Project, Tab, Workspace,
+    WorkspaceMode, WorkspaceStatus,
 };
 use std::{
     fs,
@@ -61,11 +61,13 @@ impl TestHost {
             &codex,
             concat!(
                 "#!/usr/bin/python3\n",
-                "import json,os,sys\n",
+                "import json,os,sys,zlib\n",
                 "if sys.argv[1:] == ['--version']:\n",
                 " print('codex-cli 0.162.1'); raise SystemExit(0)\n",
                 "safe_env={k:os.environ[k] for k in ('TERM','COLORTERM') if k in os.environ}\n",
                 "print('FIXTURE_ARGS='+json.dumps(sys.argv[1:],ensure_ascii=False))\n",
+                "text=json.loads(sys.argv[2].split('=',1)[1])\n",
+                "print('FIXTURE_CONTEXT_CRC32='+str(zlib.crc32(text.encode('utf-8'))))\n",
                 "print('FIXTURE_ENV='+json.dumps(safe_env,ensure_ascii=False))\n",
             ),
         )?;
@@ -254,7 +256,10 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
             0,
             "OLD_WORKSPACE_CONTEXT",
             "implementer",
-            "MEMORY_SHOULD_NOT_BE_DELIVERED",
+            &format!(
+                "# Факты\nMEMORY_SHOULD_NOT_BE_DELIVERED{}\n## Решения\nSELECTED_MEMORY λ決定\n## Что осталось\nLATER_MEMORY_SHOULD_NOT_BE_DELIVERED\n",
+                "x".repeat(40 * 1024)
+            ),
         ),
     ] {
         success(
@@ -277,6 +282,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
                 role_override: "tester".into(),
                 agent_instructions: "AGENT_INSTRUCTIONS π".into(),
                 include_memory: false,
+                memory_selection: None,
                 deliver_context: true,
             },
         },
@@ -288,8 +294,6 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
     let preview = prepared
         .launch_preview
         .context("prepared launch omitted its preview")?;
-    let plan_id = preview.plan_id;
-    let old_hash = preview.context.content_hash.clone();
     ensure!(
         !preview
             .context
@@ -297,6 +301,53 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
             .contains("MEMORY_SHOULD_NOT_BE_DELIVERED"),
         "memory was included without explicit selection"
     );
+    let memory = preview
+        .memory
+        .as_ref()
+        .context("memory section review missing")?;
+    ensure!(memory.sections.len() == 3 && memory.sections[0].bytes > 32 * 1024);
+    ensure!(memory.selected.is_empty());
+    let memory_selection = MemorySelection {
+        revision: memory.revision,
+        content_hash: memory.content_hash.clone(),
+        sections: vec![1],
+    };
+    let preview = success(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: PrepareRequest {
+                tab,
+                provider: "codex".into(),
+                side: Direction::Right,
+                target: None,
+                role_override: "tester".into(),
+                agent_instructions: "AGENT_INSTRUCTIONS π".into(),
+                include_memory: true,
+                memory_selection: Some(memory_selection.clone()),
+                deliver_context: true,
+            },
+        },
+    )?
+    .launch_preview
+    .context("selected-memory preview missing")?;
+    ensure!(
+        preview
+            .context
+            .blocks
+            .iter()
+            .find(|block| block.source == "workspace_memory")
+            .context("selected memory missing")?
+            .text
+            == "## Решения\nSELECTED_MEMORY λ決定\n"
+    );
+    ensure!(
+        !preview
+            .context
+            .text
+            .contains("MEMORY_SHOULD_NOT_BE_DELIVERED")
+    );
+    let plan_id = preview.plan_id;
+    let old_hash = preview.context.content_hash.clone();
     ensure!(
         preview.context.text.contains("OLD_PROJECT_CONTEXT")
             && preview.context.text.contains("OLD_WORKSPACE_CONTEXT")
@@ -322,6 +373,30 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
             expected_revision: 1,
         },
     )?;
+    let stale = exchange(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: PrepareRequest {
+                tab,
+                provider: "codex".into(),
+                side: Direction::Right,
+                target: None,
+                role_override: "tester".into(),
+                agent_instructions: "".into(),
+                include_memory: true,
+                memory_selection: Some(memory_selection),
+                deliver_context: true,
+            },
+        },
+    )?;
+    ensure!(
+        stale
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("stale")),
+        "changed memory revision accepted a stale selection"
+    );
+    ensure!(success(&host.socket(), Command::List)?.views.is_empty());
     host.active = Some((preview.session, preview.generation));
     let started = success(&host.socket(), Command::StartPrepared { plan_id })?;
     ensure!(started.launch_phase.as_deref() == Some("delivered_unconfirmed"));
@@ -346,9 +421,19 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         "OLD_WORKSPACE_CONTEXT",
         "AGENT_INSTRUCTIONS π",
         "Role: validate behavior",
+        "SELECTED_MEMORY",
     ] {
         ensure!(output.contains(expected), "child argv omitted {expected:?}");
     }
+    // Cell text contains wide-character spacer cells; compare the actual UTF-8
+    // argument checksum reported by the fixture rather than flattening those cells.
+    ensure!(
+        output.contains(&format!(
+            "FIXTURE_CONTEXT_CRC32={}",
+            crc32fast::hash(preview.context.text.as_bytes())
+        )),
+        "child received different UTF-8 context bytes"
+    );
     ensure!(
         !output.contains("NEW_WORKSPACE_CONTEXT_MUST_NOT_REPLACE_REVIEW")
             && !output.contains("MEMORY_SHOULD_NOT_BE_DELIVERED")

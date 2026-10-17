@@ -7,12 +7,14 @@ mod catalog;
 mod context;
 mod journal;
 mod launch;
+mod memory;
 mod prepared_launch;
 
 pub use catalog::*;
 pub use context::*;
 pub use journal::*;
 pub use launch::*;
+pub use memory::*;
 
 use std::{fs::File, os::fd::AsRawFd};
 

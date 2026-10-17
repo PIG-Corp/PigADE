@@ -5,6 +5,7 @@ mod cursor;
 mod edit_field;
 mod font;
 mod input;
+mod memory_choice;
 mod mouse;
 mod mouse_delivery;
 mod palette;
@@ -945,7 +946,7 @@ impl CanvasApp {
                                             || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
                                             let kind = if this.product.launch_phase.is_some() {product::DialogKind::SessionContext} else {product::DialogKind::LaunchReview};
                                             let mut dialog = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).cloned().unwrap_or_else(|| product::Dialog::new(kind));
-                                            if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into()]; }
+                                            if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into(),preview.memory.as_ref().map(|memory| memory_choice::format_sections(&memory.selected)).unwrap_or_default().into()]; }
                                             this.product.dialog = Some(dialog);
                                         }
                                         this.pending_launch_review = false;
@@ -1662,6 +1663,8 @@ impl CanvasApp {
                 | A::ConfirmPreparedLaunch
                 | A::RefreshLaunchPreview
                 | A::ToggleMemory
+                | A::ToggleMemorySection(_)
+                | A::ReloadMemory
                 | A::ToggleContextDelivery
         ) && self
             .product
@@ -1761,7 +1764,69 @@ impl CanvasApp {
                     self.product_command(json!({"command":"get_session_context","session":view.session,"generation":view.generation}),cx);
                 }
             }
-            A::RefreshLaunchPreview | A::ToggleMemory | A::ToggleContextDelivery => {
+            A::ToggleMemory | A::ToggleMemorySection(_) => {
+                if let Some(memory) = self
+                    .product
+                    .launch_preview
+                    .as_ref()
+                    .and_then(|preview| preview.memory.as_ref())
+                    && let Some(dialog) = self
+                        .product
+                        .dialog
+                        .as_mut()
+                        .filter(|dialog| dialog.kind == DialogKind::LaunchReview)
+                    && let Some(field) = dialog.fields.get_mut(2)
+                {
+                    match memory_choice::parse_sections(field.text(), memory) {
+                        Ok(mut selected) => {
+                            if let A::ToggleMemorySection(index) = action {
+                                if let Some(position) =
+                                    selected.iter().position(|value| *value == index)
+                                {
+                                    selected.remove(position);
+                                } else if memory.sections.get(index).is_some() {
+                                    selected.push(index);
+                                    selected.sort_unstable();
+                                }
+                            } else if selected.is_empty() {
+                                selected = memory
+                                    .sections
+                                    .iter()
+                                    .map(|section| section.index)
+                                    .collect();
+                            } else {
+                                selected.clear();
+                            }
+                            let text = memory_choice::format_sections(&selected);
+                            let _ = field.replace(Some(0..field.len_utf16()), &text, false);
+                            self.product.notice = Some(
+                                "Выбор памяти изменён. Обновите предпросмотр перед запуском."
+                                    .into(),
+                            );
+                            self.editor_changed(window, cx);
+                        }
+                        Err(error) => self.product.notice = Some(error),
+                    }
+                } else {
+                    self.product.notice =
+                        Some("Выбор разделов недоступен: обновите session host".into());
+                }
+            }
+            A::RefreshLaunchPreview | A::ToggleContextDelivery | A::ReloadMemory => {
+                if self.product.busy {
+                    return;
+                }
+                if action == A::ReloadMemory
+                    && let Some(dialog) = self
+                        .product
+                        .dialog
+                        .as_mut()
+                        .filter(|dialog| dialog.kind == DialogKind::LaunchReview)
+                    && let Some(field) = dialog.fields.get_mut(2)
+                {
+                    let _ = field.replace(Some(0..field.len_utf16()), "", false);
+                    self.editor_changed(window, cx);
+                }
                 if self.product_launch_unknown {
                     self.product.notice =
                         Some("Сначала сверьте исход предыдущего запуска через «Сессии»".into());
@@ -1779,18 +1844,45 @@ impl CanvasApp {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let include_memory = if action == A::ToggleMemory {
-                        !preview.include_memory
-                    } else {
-                        preview.include_memory
+                    if preview.memory.is_none()
+                        && action != A::ReloadMemory
+                        && fields.get(2).is_some_and(|field| !field.trim().is_empty())
+                    {
+                        self.product.notice = Some("Session host не поддерживает выбор разделов. Обновите host; выбранный текст не будет отправлен автоматически.".into());
+                        cx.notify();
+                        return;
+                    }
+                    let memory_selection = match preview
+                        .memory
+                        .as_ref()
+                        .filter(|_| action != A::ReloadMemory)
+                        .map(|memory| {
+                            memory_choice::selection(
+                                fields.get(2).map(String::as_str).unwrap_or(""),
+                                memory,
+                            )
+                        })
+                        .transpose()
+                    {
+                        Ok(selection) => selection,
+                        Err(error) => {
+                            self.product.notice = Some(error);
+                            cx.notify();
+                            return;
+                        }
                     };
+                    let include_memory = action != A::ReloadMemory
+                        && memory_selection
+                            .as_ref()
+                            .map(|selection| !selection.sections.is_empty())
+                            .unwrap_or(preview.include_memory);
                     let deliver_context = if action == A::ToggleContextDelivery {
                         !preview.deliver_context
                     } else {
                         preview.deliver_context
                     };
                     self.product_command(json!({"command":"prepare_launch","request":{"tab":preview.tab_id,"provider":preview.provider,"side":preview.side,"target":preview.target,
-                        "role_override":fields.first().cloned().unwrap_or_default(),"agent_instructions":fields.get(1).cloned().unwrap_or_default(),"include_memory":include_memory,"deliver_context":deliver_context}}),cx);
+                        "role_override":fields.first().cloned().unwrap_or_default(),"agent_instructions":fields.get(1).cloned().unwrap_or_default(),"include_memory":include_memory,"memory_selection":memory_selection,"deliver_context":deliver_context}}),cx);
                 }
             }
             A::ConfirmPreparedLaunch => self.confirm_prepared_launch(cx),
@@ -2006,6 +2098,15 @@ impl CanvasApp {
                 != Some(preview.role_override.as_str())
             || dialog.fields.get(1).map(text_edit::EditBuffer::text)
                 != Some(preview.agent_instructions.as_str())
+            || !memory_choice::matches_preview(
+                dialog
+                    .fields
+                    .get(2)
+                    .map(text_edit::EditBuffer::text)
+                    .unwrap_or(""),
+                preview.memory.as_ref(),
+                preview.include_memory,
+            )
         {
             self.product.notice =
                 Some("Обновите просмотр после изменения параметров запуска".into());
@@ -2958,7 +3059,11 @@ impl CanvasApp {
                     .is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview)
             {
                 let action = match k.key.as_str() {
-                    "r" => Some(product::ProductAction::RefreshLaunchPreview),
+                    "r" => Some(if k.modifiers.shift {
+                        product::ProductAction::ReloadMemory
+                    } else {
+                        product::ProductAction::RefreshLaunchPreview
+                    }),
                     "m" => Some(product::ProductAction::ToggleMemory),
                     "d" => Some(product::ProductAction::ToggleContextDelivery),
                     _ => None,

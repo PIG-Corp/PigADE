@@ -3,7 +3,7 @@ use std::{os::unix::fs::MetadataExt, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use pigade_layout::{Command as LayoutCommand, Direction, LayoutHistory, LayoutModel};
-use pigade_storage::{Catalog, EffectiveContext, WorkspaceStatus};
+use pigade_storage::{Catalog, EffectiveContext, MemoryReview, MemorySelection, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -21,6 +21,8 @@ pub struct PrepareRequest {
     pub agent_instructions: String,
     #[serde(default)]
     pub include_memory: bool,
+    #[serde(default)]
+    pub memory_selection: Option<MemorySelection>,
     pub deliver_context: bool,
 }
 
@@ -39,6 +41,8 @@ pub struct LaunchPreview {
     pub context: EffectiveContext,
     pub capabilities: adapters::Capabilities,
     pub include_memory: bool,
+    #[serde(default)]
+    pub memory: Option<MemoryReview>,
     pub role_override: String,
     pub agent_instructions: String,
     pub deliver_context: bool,
@@ -107,7 +111,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             identity == binary_identity(&executable)?,
             "CLI changed during inspection; review again"
         );
-        let context = host.metadata.effective_context(
+        let (context, memory) = host.metadata.effective_context_with_memory_selection(
             workspace.project_id,
             workspace.id,
             &workspace.task,
@@ -115,6 +119,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             &request.role_override,
             &request.agent_instructions,
             request.include_memory,
+            request.memory_selection.as_ref(),
         )?;
         let session = Uuid::new_v4();
         let generation = Uuid::new_v4();
@@ -170,6 +175,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             context,
             capabilities: info.capabilities,
             include_memory: request.include_memory,
+            memory: Some(memory),
             role_override: request.role_override,
             agent_instructions: request.agent_instructions,
             deliver_context: request.deliver_context,
@@ -319,6 +325,55 @@ pub(crate) fn session_context(
 /// attempt is admitted. A damaged saved plan cannot silently launch other text.
 fn validate_plan(plan: &StoredPlan) -> Result<()> {
     plan.preview.context.validate()?;
+    let memory_block = plan
+        .preview
+        .context
+        .blocks
+        .iter()
+        .find(|block| block.source == "workspace_memory");
+    if let Some(memory) = &plan.preview.memory {
+        ensure!(
+            memory.selected.windows(2).all(|pair| pair[0] < pair[1]),
+            "saved memory selection indexes are invalid"
+        );
+        ensure!(
+            memory
+                .selected
+                .iter()
+                .all(|index| *index < memory.sections.len()),
+            "saved memory selection index is invalid"
+        );
+        let selected_bytes = memory.selected.iter().try_fold(0usize, |sum, index| {
+            sum.checked_add(memory.sections[*index].bytes)
+                .context("saved memory byte count overflow")
+        })?;
+        ensure!(
+            selected_bytes == memory.selected_bytes
+                && selected_bytes <= pigade_storage::MAX_SELECTED_MEMORY_BYTES,
+            "saved memory selection byte count is invalid"
+        );
+        if plan.preview.include_memory && memory.selected_bytes > 0 {
+            let block = memory_block.context("included memory block is missing")?;
+            ensure!(
+                block.revision == memory.revision && block.text.len() == memory.selected_bytes,
+                "saved memory block differs from its review"
+            );
+        } else {
+            ensure!(
+                memory_block.is_none(),
+                "memory block exists when memory was not included"
+            );
+        }
+    } else {
+        // Older frozen previews did not carry section metadata.
+        ensure!(
+            memory_block.is_none_or(|block| {
+                plan.preview.include_memory
+                    && block.text.len() <= pigade_storage::MAX_SELECTED_MEMORY_BYTES
+            }),
+            "legacy saved memory block is invalid"
+        );
+    }
     ensure!(
         plan.preview.session == plan.launch.session
             && plan.preview.generation == plan.launch.generation

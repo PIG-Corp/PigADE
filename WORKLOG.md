@@ -2289,3 +2289,51 @@ Integrate native Unicode context editor, IME geometry, bounded undo, clipboard a
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/text_edit.rs, crates/app/src/edit_field.rs, crates/app/Cargo.toml, crates/app/Cargo.lock, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 147 app tests pass; final strict app Clippy and debug build pass via bootstrap; existing private-X11 harness 22 unit tests pass; final isolated context fixture /tmp/pigade-context-editor-20261017-02 passes exact Fcitx/edit/undo/redo/save sequence: revision0 unchanged before save, revision1 contains 你好xb; final screenshot visually inspected; version and diff checks pass
 - Risks / next: Broader native clipboard/mouse/Wayland/reset and accessibility acceptance remain open; continue product memory selection and settings. Existing terminal/performance/MVP gates remain open; active desktop untouched.
+
+## 2026-10-17T14:43:12+00:00 — /root/memory_selection
+
+Added Markdown startup-memory section reviews and exact selected-slice context snapshots
+
+- Files: crates/storage/src/memory.rs, crates/storage/src/lib.rs, crates/storage/src/context.rs, crates/session-host/src/prepared.rs, crates/session-host/tests/context_launch.rs
+- Verification: cargo test -p pigade-storage (51 passed); cargo test -p pigade-session-host --test context_launch (1 passed); cargo clippy -p pigade-storage -p pigade-session-host --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: UI can use MemoryReview and MemorySelection helpers; documents exceeding 1024 headings permit no-memory review but reject explicit selection/inclusion
+
+## 2026-10-17T14:43:40+00:00 — /root/memory_selection
+
+Final Markdown heading parser constraints and validation refresh
+
+- Files: crates/storage/src/memory.rs
+- Verification: cargo fmt --all --check passed; focused memory tests (4 passed), selected-slice context test (1 passed), host context_launch (1 passed), strict storage/host Clippy, and git diff --check passed
+- Risks / next: UI integration can consume the exported selection and review helpers; heading metadata cap remains 1024
+
+## 2026-10-17T14:43:57+00:00 — /root/memory_selection
+
+Added a bounded unavailable-memory reason for documents with excessive heading counts
+
+- Files: crates/storage/src/memory.rs
+- Verification: cargo test -p pigade-storage memory::tests (5 passed); cargo test -p pigade-session-host --test context_launch (1 passed); strict storage/host Clippy passed; git diff --check passed
+- Risks / next: UI should display unavailable_reason and keep no-memory selection usable
+
+## 2026-10-17T14:45:31+00:00 — /root/memory_selection
+
+Bound Markdown heading collection during scan and localized fallback section titles
+
+- Files: crates/storage/src/memory.rs
+- Verification: cargo fmt --all; cargo test -p pigade-storage memory::tests (5 passed); selected-slice context test passed; strict storage Clippy passed; git diff --check passed
+- Risks / next: Excessive headings now return unavailable review without allocating metadata beyond the configured cap
+
+## 2026-10-17T14:48:05+00:00 — /root/memory_selection
+
+Added opt-in isolated X11 startup-memory review fixture with exact prepared-plan verification
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: Python source compile passed; isolated-ime-x11.py --help and --fixture memory plan passed; C helper cc -fsyntax-only with -Wall -Wextra -Werror passed; git diff --check passed; --run intentionally not executed because root will rebuild/run the isolated fixture
+- Risks / next: Run with --run --fixture memory after rebuilding app and session-host; fixture captures initial/selected review and leaves preview unconfirmed
+
+## 2026-10-17T14:52:04+00:00 — /root
+
+Ship revision-bound startup memory section selection and keep launch review actions visible
+
+- Files: crates/app/src/memory_choice.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/storage/src/memory.rs, crates/storage/src/context.rs, crates/storage/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/tests/context_launch.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: App 148 tests passed; final memory-choice regression and strict Clippy/debug build pass after integration; storage memory 7 tests pass; real-host PTY context_launch passes selected UTF-8 argv checksum, stale revision rejection, frozen context and host reopen; strict storage/host Clippy and release host build pass. Existing X11 harness 22 unit tests pass. Native isolated fixture02 verifies exact43-byte selection/no extra generation and fixed-footer capture visually inspected; subsequent preamble-cap/C# title edges verified by targeted tests and rebuilt binaries. Version/fmt/diff checks pass
+- Risks / next: Native mouse/small-window/provider-specific and full accessibility acceptance remain open. Continue product settings/theme and durable native conversation binding; terminal/performance/full MVP gates remain open. Desktop untouched.

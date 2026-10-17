@@ -24,6 +24,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/catalog.rs | Authoritative layout/projection validation and atomic persistence; explicit legacy projection import |
 | crates/session-host/tests | Real PTY/reconnect/resize/kill/Stop/query-burst and durable placement scenarios |
 | crates/storage/src/context.rs | Immutable scoped instructions/role/memory revisions with CAS, SHA-256/time/author and validated ordered effective snapshots; updates to running CLI remain separate |
+| crates/storage/src/memory.rs | Lossless #/## source sections outside fenced code, bounded review metadata and explicit revision/hash-bound 32KiB UTF-8 selection |
+| crates/app/src/memory_choice.rs | Number-entry selection and dirty-preview gating using host section identities; UI never reparses Markdown |
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
 | crates/session-host/src/prepared.rs | Review/start/session-context routes; frozen snapshots and exact generation identity; no retries after admission |
 | crates/session-host/src/adapters.rs | Bounded version detection and versioned Claude/Codex startup arguments; OpenCode generic-only pending transport verification |
