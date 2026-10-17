@@ -29,6 +29,9 @@ SPEC.loader.exec_module(STRESS)
 PROTOCOL = STRESS.PROTOCOL
 DEFAULT_RATE = 4096
 ROWS, COLS = 36, 120
+MAX_RESIZE_ADMISSION_DIAGNOSTIC_RECORDS = 1024
+RESIZE_ADMISSION_DIAGNOSTIC_INTERVAL = 1.0
+RESIZE_DIAGNOSTIC_SNAPSHOT_TIMEOUT = 0.020
 
 # The producer splits UTF-8, CSI/OSC, and synchronized-output sequences across
 # separate PTY writes. Every byte, including ACKs, is covered by its CRC.
@@ -117,10 +120,127 @@ def check(condition, message):
         raise RuntimeError(message)
 
 
+def signal_owned_identity(identity, sig):
+    """Signal only the process pinned by pidfd and revalidated against identity."""
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return False
+    _boot, pid, _started = identity
+    pidfd = None
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+        if STRESS.identity(pid) != identity:
+            return False
+        signal.pidfd_send_signal(pidfd, sig)
+        return True
+    except (OSError, ValueError, IndexError, TypeError):
+        return False
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
+
+
 def write_json_line(file, value):
     file.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
     file.flush()
     os.fsync(file.fileno())
+
+
+def write_diagnostic_line(file, value):
+    """Append a bounded diagnostic row; final manifest fsyncs the diagnostic stream."""
+    file.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
+    file.flush()
+
+
+class ResizeAdmissionDiagnostics:
+    """Rate-limited, bounded queue-full metadata; never writes frame contents."""
+
+    METRIC_FIELDS = ("events", "output_bytes", "journal_fsync_ns", "model_apply_ns",
+                     "archive_commit_ns", "checkpoint_ns", "frame_publish_ns", "checkpoints")
+
+    def __init__(self, file, started_at, host_pid, ticks, page_size):
+        self.file = file
+        self.started_at = started_at
+        self.host_pid = host_pid
+        self.ticks = ticks
+        self.page_size = page_size
+        self.last_by_generation = {}
+        self.records_written = 0
+        self.omitted_records = 0
+        self.last_diagnostic = None
+
+    def observe(self, endpoint, stream, command, retry_count, remaining_seconds):
+        now = time.monotonic()
+        generation = command.get("generation")
+        previous = self.last_by_generation.get(generation)
+        if previous is not None and now - previous < RESIZE_ADMISSION_DIAGNOSTIC_INTERVAL:
+            return False
+        if generation not in self.last_by_generation and len(self.last_by_generation) >= 4:
+            self.omitted_records += 1
+            return False
+        self.last_by_generation[generation] = now
+
+        record = {
+            "event": "resize_queue_full",
+            "elapsed_monotonic_seconds": max(0.0, now - self.started_at),
+            "stream": stream,
+            "session": command.get("session"),
+            "generation": generation,
+            "target_geometry": command.get("geometry"),
+            "retry_count": retry_count,
+        }
+        try:
+            resources = resource_sample(self.host_pid, self.ticks, self.page_size)
+            record["host_rss_bytes"] = resources.get("host_rss_bytes")
+            record["host_cpu_seconds"] = resources.get("host_cpu_seconds")
+        except (OSError, ValueError, IndexError):
+            record["host_rss_bytes"] = None
+            record["host_cpu_seconds"] = None
+
+        snapshot_command = {"command": "snapshot", "session": command.get("session"),
+                            "generation": generation}
+        timeout = min(RESIZE_DIAGNOSTIC_SNAPSHOT_TIMEOUT, max(0.0, remaining_seconds))
+        if timeout <= 0:
+            record["snapshot"] = {"available": False, "reason": "retry_deadline_elapsed"}
+        else:
+            try:
+                views = STRESS.request(endpoint, snapshot_command, timeout=timeout)
+                if len(views) != 1:
+                    record["snapshot"] = {"available": False, "reason": "missing_view"}
+                else:
+                    view = views[0]
+                    metrics = view.get("metrics") or {}
+                    record["snapshot"] = {
+                        "available": True,
+                        "generation": view.get("generation"),
+                        "state": view.get("state"),
+                        "sequence": view.get("sequence"),
+                        "storage_error": str(view.get("storage_error"))[:512]
+                        if view.get("storage_error") is not None else None,
+                        "metrics": {key: metrics[key] for key in self.METRIC_FIELDS
+                                    if isinstance(metrics.get(key), (int, float))},
+                    }
+            except Exception as error:  # Snapshot is diagnostic only; retry semantics stay unchanged.
+                record["snapshot"] = {"available": False, "reason": type(error).__name__}
+
+        self.last_diagnostic = record
+        if self.records_written >= MAX_RESIZE_ADMISSION_DIAGNOSTIC_RECORDS:
+            self.omitted_records += 1
+            return False
+        try:
+            write_diagnostic_line(self.file, record)
+        except OSError:
+            self.omitted_records += 1
+            return False
+        self.records_written += 1
+        return True
+
+    def summary(self):
+        return {"records_written": self.records_written,
+                "omitted_records": self.omitted_records,
+                "record_limit": MAX_RESIZE_ADMISSION_DIAGNOSTIC_RECORDS,
+                "sample_interval_seconds": RESIZE_ADMISSION_DIAGNOSTIC_INTERVAL,
+                "snapshot_timeout_seconds": RESIZE_DIAGNOSTIC_SNAPSHOT_TIMEOUT,
+                "last_diagnostic": self.last_diagnostic}
 
 
 def save_json(path, value):
@@ -146,7 +266,7 @@ def save_json(path, value):
         raise
 
 
-def resize_with_admission_retry(endpoint, command, stats, deadline_seconds=10):
+def resize_with_admission_retry(endpoint, command, stats, deadline_seconds=10, on_queue_full=None):
     """Retry only an explicit queue-full resize rejection, within one deadline."""
     check(command.get("command") == "resize", "admission retry is restricted to resize")
     deadline = time.monotonic() + deadline_seconds
@@ -161,11 +281,16 @@ def resize_with_admission_retry(endpoint, command, stats, deadline_seconds=10):
         except STRESS.HostRejection as error:
             if error.code != "queue_full":
                 raise
+            rejection_at = time.monotonic()
             remaining = deadline - time.monotonic()
+            retry_count = stats["retries"] + 1
+            if on_queue_full is not None:
+                on_queue_full(command, retry_count, remaining)
             if remaining <= 0:
                 raise RuntimeError("resize admission retry deadline exceeded") from error
             delay = min(.025, remaining)
-            time.sleep(delay)
+            diagnostic_elapsed = max(0.0, time.monotonic() - rejection_at)
+            time.sleep(max(0.0, delay - diagnostic_elapsed))
             stats["retries"] += 1
             stats["total_wait_seconds"] += delay
             stats["max_wait_seconds"] = max(stats["max_wait_seconds"], delay)
@@ -240,6 +365,7 @@ def run(args):
     manifest_path = run_dir / "manifest.json"
     progress_path = run_dir / "progress.jsonl"
     samples_path = run_dir / "samples.jsonl"
+    resize_diagnostics_path = run_dir / "resize-admission-diagnostics.jsonl"
     result = {"status": "running", "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "requested_seconds": args.seconds, "rate_bytes_per_second_per_session": args.rate,
               "sessions": [], "errors": [], "filesystem": filesystem, "run_directory": str(run_dir),
@@ -253,7 +379,9 @@ def run(args):
               "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
               "other_open_gates": ["4 sessions x 1 GiB plus 100000 resizes/session", "VM reboot", "UI/GPU and platform acceptance"]}
     save_json(manifest_path, result)
-    with open(progress_path, "a", buffering=1) as progress, open(samples_path, "a", buffering=1) as samples:
+    with open(progress_path, "a", buffering=1) as progress, \
+            open(samples_path, "a", buffering=1) as samples, \
+            open(resize_diagnostics_path, "a", buffering=1) as resize_diagnostic_file:
         host = None
         owned = []
         specs = []
@@ -302,6 +430,8 @@ def run(args):
             result["measurement_started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             sample_every = args.sample_seconds
             next_sample, next_ack, next_resize = actual_start, actual_start + 5, actual_start + 3
+            resize_diagnostics = ResizeAdmissionDiagnostics(
+                resize_diagnostic_file, actual_start, host.pid, ticks, page)
             ack_counts = [0] * len(specs)
             resize_counts = [0] * len(specs)
             resize_admission_stats = [{"attempts": 0, "retries": 0,
@@ -348,7 +478,10 @@ def run(args):
                         resize_with_admission_retry(endpoint, {"command": "resize", "session": spec["session"],
                                                               "generation": spec["generation"],
                                                               "geometry": {"rows": height, "cols": width}},
-                                                    resize_admission_stats[index])
+                                                    resize_admission_stats[index],
+                                                    on_queue_full=lambda command, retry_count, remaining,
+                                                    stream=index: resize_diagnostics.observe(
+                                                        endpoint, stream, command, retry_count, remaining))
                         resize_counts[index] += 1
                     next_resize = now + args.resize_seconds
                 if now >= next_sample:
@@ -445,13 +578,10 @@ def run(args):
             result["real_time_soak_24h_integrity_pass"] = False
             result["rec08_full_acceptance"] = False
         finally:
-            # Signal only processes whose boot-id/PID/start-time still match this run.
+            # Pin and revalidate process identities before signaling; never fall
+            # back to a racy PID-only kill if pidfd is unavailable.
             for identity in owned:
-                try:
-                    if STRESS.identity(identity[1]) == identity:
-                        os.kill(identity[1], signal.SIGTERM)
-                except (OSError, ValueError, FileNotFoundError):
-                    pass
+                signal_owned_identity(identity, signal.SIGTERM)
             if host is not None and host.poll() is None:
                 try:
                     if STRESS.identity(host.pid) == host_identity:
@@ -473,6 +603,17 @@ def run(args):
             result.setdefault("verify_recovery_passed_all_sessions", False)
             if "resize_admission_stats" in locals():
                 result["resize_admission_retry_summary"] = resize_admission_stats
+            if "resize_diagnostics" in locals():
+                diagnostic_flush_error = None
+                try:
+                    resize_diagnostic_file.flush()
+                    os.fsync(resize_diagnostic_file.fileno())
+                except OSError as error:
+                    diagnostic_flush_error = type(error).__name__
+                diagnostic_summary = resize_diagnostics.summary()
+                if diagnostic_flush_error is not None:
+                    diagnostic_summary["flush_error"] = diagnostic_flush_error
+                result["resize_admission_diagnostic_summary"] = diagnostic_summary
             save_json(manifest_path, result)
     print(json.dumps({key: result.get(key) for key in
                       ("status", "actual_elapsed_seconds", "real_time_elapsed", "elapsed_24h_completed",

@@ -117,6 +117,7 @@ class CorpusPreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'not completed successfully'):
                 fixture.validate()
 
+
     def test_partial_manifest_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = CorpusFixture(Path(temporary))
@@ -215,6 +216,27 @@ class CorpusPreflightTests(unittest.TestCase):
             fixture.reference_path.write_text(json.dumps(reference))
             with self.assertRaisesRegex(RuntimeError, 'lacks the canonical checkpoint-tail oracle'):
                 fixture.validate()
+
+
+class SerialResultTests(unittest.TestCase):
+    def test_partial_guest_result_line_waits_for_lf_before_json_decode(self):
+        marker = 'PIGADE_VM_RESULT:nonce:'
+        partial = 'PIGADE_BOOT:one\n' + marker + '{"status":"recovery_verified","second_boot_recovery":{"records'
+        self.assertIsNone(vm.completed_serial_payload(partial, marker))
+
+        completed = partial + '":4}}\n'
+        self.assertEqual(vm.completed_serial_payload(completed, marker),
+                         '{"status":"recovery_verified","second_boot_recovery":{"records":4}}')
+
+    def test_result_with_unterminated_json_line_is_not_accepted(self):
+        marker = 'PIGADE_VM_RESULT:nonce:'
+        serial = 'banner\r\n' + marker + '{"status":"recovery_verified"}'
+        self.assertIsNone(vm.completed_serial_payload(serial, marker))
+
+    def test_complete_result_line_supports_crlf_serial_termination(self):
+        marker = 'PIGADE_VM_RESULT:nonce:'
+        serial = 'banner\r\n' + marker + '{"status":"ok"}\r\n'
+        self.assertEqual(vm.completed_serial_payload(serial, marker), '{"status":"ok"}')
 
 
 class QemuPlanTests(unittest.TestCase):

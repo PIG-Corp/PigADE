@@ -1,0 +1,101 @@
+{
+  "REC08_acceptance": false,
+  "all_four_first_second_boot_views_equal": true,
+  "boot_ids_distinct": true,
+  "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+  "corpus_fixture_files": 2377,
+  "corpus_source_bytes": 27721894049,
+  "evidence_hashes": {
+    "guest_result_sha256": "2cb0b94073779e9de9bb8dd47d63869fa83ae94b964d62f11750a6c967ce2c28",
+    "run_manifest_sha256": "e7683ee360a25a3e92c763a9fca6778a3b78813ea1769ef2b7d34fc5b93ea5b7",
+    "serial_log_sha256": "decb5e3f9d2f840a99a5111e71a276e9ec0835a0b15d51af0d0370b89d773ecb"
+  },
+  "failed_prior_attempt_metadata": "failed-attempt.json",
+  "first_boot_four_frames_ms": 1063.2819819999213,
+  "first_boot_host_rss_bytes": 56164352,
+  "fixture_unchanged_after_guest": true,
+  "full_cold_oracle_in_vm": false,
+  "guest_boot_ids": [
+    "ee3ae8fd-39a0-44d2-8906-568deb508ab7",
+    "8f15e85f-b650-491d-920d-11be88320461"
+  ],
+  "host_binary_sha256": "42bc8f71cd2cd8bbf0d98823bf4e48c1049213b90250ecfbf7a0e1e159ed785d",
+  "reference_sha256": "86049df41bf8eb7148a80632d45a1e8ec0a7fc9029ef56788d8112f19d041b41",
+  "run_directory": "/home/afterburner/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e",
+  "schema": 1,
+  "scope": "completed prebuilt corpus copied to guest ext4; actual guest reboot; checkpoint-tail frames matched same-binary host reference; no provider, layout, real-time soak, in-VM full cold oracle, or REC-08 p95 claim",
+  "second_boot_four_frames_ms": 1665.9070910000012,
+  "second_boot_host_rss_bytes": 56188928,
+  "sessions": [
+    {
+      "canonical_tail_records_verified": 2,
+      "first_and_second_boot_equal": true,
+      "frame_sha256": "78d6a0d30ed4de41dd0347b30f2d2875d684631d8ede3cafbd9164c35a25b294",
+      "generation": "00000000-0000-0001-0000-504947434445",
+      "history": {
+        "digest": 3451865088,
+        "epoch": 0,
+        "records": 13590103,
+        "retired_rows": 13590103
+      },
+      "journal_bytes_read": 405,
+      "pid": null,
+      "sequence": 200016,
+      "session": "00000001-0000-0000-0000-000000000001",
+      "state": "history"
+    },
+    {
+      "canonical_tail_records_verified": 0,
+      "first_and_second_boot_equal": true,
+      "frame_sha256": "b89f21e62a4b1e67929f9478ce83bc19cb16a854049b7c8d27296ea584a9016f",
+      "generation": "00000000-0000-0002-0000-504947434445",
+      "history": {
+        "digest": 3150666080,
+        "epoch": 0,
+        "records": 13590101,
+        "retired_rows": 13590101
+      },
+      "journal_bytes_read": 418,
+      "pid": null,
+      "sequence": 200017,
+      "session": "00000002-0000-0000-0000-000000000001",
+      "state": "history"
+    },
+    {
+      "canonical_tail_records_verified": 2,
+      "first_and_second_boot_equal": true,
+      "frame_sha256": "df2339c5fcc60579661115e67887b256d2aae99ececc3b8219084cf695a23989",
+      "generation": "00000000-0000-0003-0000-504947434445",
+      "history": {
+        "digest": 3451865088,
+        "epoch": 0,
+        "records": 13590103,
+        "retired_rows": 13590103
+      },
+      "journal_bytes_read": 422,
+      "pid": null,
+      "sequence": 200017,
+      "session": "00000003-0000-0000-0000-000000000001",
+      "state": "history"
+    },
+    {
+      "canonical_tail_records_verified": 2,
+      "first_and_second_boot_equal": true,
+      "frame_sha256": "e0c1445a6989cf525f033f3cc0f62b8d01c0ca2aa184e5eb41a9bd1396d9d5ad",
+      "generation": "00000000-0000-0004-0000-504947434445",
+      "history": {
+        "digest": 3451865088,
+        "epoch": 0,
+        "records": 13590103,
+        "retired_rows": 13590103
+      },
+      "journal_bytes_read": 441,
+      "pid": null,
+      "sequence": 200018,
+      "session": "00000004-0000-0000-0000-000000000001",
+      "state": "history"
+    }
+  ],
+  "source_inventory_sha256": "e4fdd73b2664c3ae6eba8cc746b013bd4f8c2aafb4812b3b22d62533a37383a7",
+  "status": "recovery_verified"
+}

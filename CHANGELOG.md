@@ -31,6 +31,8 @@
 - Native local IME composition now has UTF-16 range/selection handling, a clipped cursor overlay and lifecycle cancellation. Same-app private 100%/200% captures verify the overlay stays out of host history; actual Linux IME/reset ordering remains unverified.
 - Isolated offline PTY runs exercise exact Codex/OpenCode binaries through startup, two resizes and a one-second running observation. Claude reaches both resizes but exits with an API-connectivity failure category; task/context/resume certification remains open.
 - Native mouse reports follow acknowledged modes and stable generation capture. Visible selection handles wide/combining text and soft wraps; explicit copy/paste uses local controls and bounded bracketed input. Raw PTY tests verify exact mouse/paste bytes and stale-generation rejection; platform gesture/clipboard certification remains open.
+- Full four-session1GiB/100k-resize corpus matches the live model, full replay, checkpoint+tail and all54.36M cold records. Thirty host kill/reopens and a real full-data two-boot VM preserve exact historical frames/canonical tails and sources; UI-present/provider-resume and complete MVP gates remain open.
+- A third24h soak attempt failed after3079s on sustained resize QueueFull. Post-failure hot/frame/cold recovery equality passes; bounded rejection diagnostics and pidfd cleanup prepare the retained same-binary reproducer. The24h gate remains open.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

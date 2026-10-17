@@ -1,0 +1,52 @@
+{
+  "captured_at": "2026-10-17T00:57:57.754740+00:00",
+  "elapsed_seconds": 3003.7901043210004,
+  "host_cpu_seconds": 493.67,
+  "host_rss_bytes": 235917312,
+  "sessions": [
+    {
+      "checkpoint_count": 3,
+      "checkpoint_sequence_lag": 59,
+      "frame_history_lines": 0,
+      "input_ack_count": 595,
+      "latest_checkpoint_age_seconds": 3.1596696376800537,
+      "resize_count": 980,
+      "sequence": 51947,
+      "state": "running",
+      "stream": 0
+    },
+    {
+      "checkpoint_count": 3,
+      "checkpoint_sequence_lag": 68,
+      "frame_history_lines": 0,
+      "input_ack_count": 595,
+      "latest_checkpoint_age_seconds": 3.688789129257202,
+      "resize_count": 980,
+      "sequence": 52231,
+      "state": "running",
+      "stream": 1
+    },
+    {
+      "checkpoint_count": 3,
+      "checkpoint_sequence_lag": 62,
+      "frame_history_lines": 9358,
+      "input_ack_count": 595,
+      "latest_checkpoint_age_seconds": 3.2996914386749268,
+      "resize_count": 980,
+      "sequence": 52162,
+      "state": "running",
+      "stream": 2
+    },
+    {
+      "checkpoint_count": 3,
+      "checkpoint_sequence_lag": 13,
+      "frame_history_lines": 0,
+      "input_ack_count": 595,
+      "latest_checkpoint_age_seconds": 0.6615822315216064,
+      "resize_count": 980,
+      "sequence": 52160,
+      "state": "running",
+      "stream": 3
+    }
+  ]
+}

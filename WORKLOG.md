@@ -1081,3 +1081,19 @@ Integrate generation-bound mouse reporting, local cell selection and atomic expl
 - Files: crates/app/src/main.rs, crates/app/src/input.rs, crates/app/src/mouse.rs, crates/app/src/selection.rs, crates/session-host/tests/mouse_input.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/mouse-20261017, crates/app/evidence/selection-20261017, docs/reports/mouse-input.md, docs/reports/selection-and-paste.md, crates/app/README.md, CHANGELOG.md
 - Verification: Root: 174 workspace tests, fmt/strict all-target Clippy/release bins/examples passed; app61 tests/fmt/strictClippy/debug+release builds passed; Python59 tests passed. Actual raw PTY confirms mouse+paste bytes, stalegeneration rejected. Private same-app selection render/reopen passed and final PNG visually inspected; binary/source hashes retained. Luna independent review found2 P2 bugs; root fixed nonblocking stale-paste notice and explicit locally-rejected release reconciliation, re-review passed.
 - Risks / next: Native pointer/clipboard/IME/platform acceptance, stable history selection/search and >16KiB streaming paste remain open. Resolve sustained resize saturation with same-frozen instrumented reproducer; no MVP completion claim.
+
+## 2026-10-17T01:13:54+00:00 — font_render_profile
+
+Add plan-only native Codex exact-thread conversation resume harness
+
+- Files: scripts/codex-conversation.py, scripts/test_codex_conversation.py, docs/research/codex-conversation-plan.md, WORKLOG.md
+- Verification: Official OpenAI Docs search/fetch for codex exec JSONL and thread.started; local codex-cli 0.162.1 --version, exec --help, exec resume --help, and safety flags before resume --help; python3 scripts/test_codex_conversation.py (13 passed, synthetic/mocked only); default script plan-only run (no CLI spawn); AST parse; git diff --check on owned files.
+- Risks / next: No provider/network turn was run. Root should inspect explicit live opt-in and native CODEX_HOME rollout-sharing limitation before running; isolated cwd and redacted metadata are outside Git, but resumable native rollout remains in Codex home.
+
+## 2026-10-17T01:13:55+00:00 — /root
+
+Integrate full corpus,30-cycle reopen and two-boot VM proof; preserve51-minute soak failure and launch bounded instrumented reproducer
+
+- Files: benchmarks/results/long-history-full-20261017, benchmarks/results/recovery-full-corpus-30-cycles.json, benchmarks/results/vm-reboot-full-20261017, benchmarks/results/soak-resize-saturation-20261017, docs/reports/long-history-full-20261017.md, docs/reports/soak-resize-saturation.md, scripts/vm-reboot.py, scripts/test_vm_reboot.py, scripts/soak-pty.py, scripts/test_soak_admission.py, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root verified completed full4x1GiB live/full/fast54.36M cold oracle,30 frozen-host SIGKILL/reopens source unchanged,p95=1367.28ms,p99=1731.69ms hostonly. Luna reran full-data actual2boots after regression-tested LF-gatedserial fix, finalinventory unchanged and4historicalframes/exacttails equal. Root59Python tests and174workspace tests/fmt/strictClippy/releasepassed. Failedsoak3079.132s kept; root samefrozen67ed verified all4 postfailurehot/parser/frame/cold equality. Instrumented3600s samefrozen reproducer launched tool50088; notcompleted/not24h. Handoff refreshed to currentstate; detailedhistoryretained inWORKLOG/reports.
+- Risks / next: Inspect bounded resize QueueFull diagnostics and fix hoststall before another24h acceptance run; no UI-present/GPU/provider-resume/globalmemory/MVP completion claim.

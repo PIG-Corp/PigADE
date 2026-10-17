@@ -1,5 +1,7 @@
 """Retry safety at the boundary between rejection and an unknown outcome."""
+import io
 import importlib.util
+import json
 import os
 import pty
 from pathlib import Path
@@ -36,15 +38,19 @@ class AdmissionRetryTests(unittest.TestCase):
     def test_only_proven_resize_rejection_can_be_retried(self):
         stats, clock = self.stats(), Clock()
         rejection = SOAK.STRESS.HostRejection("queue_full", "not admitted")
+        diagnostics = []
         with patch.object(SOAK.STRESS, "request", side_effect=[rejection, []]) as request, \
                 patch.object(SOAK.time, "monotonic", clock.monotonic), \
                 patch.object(SOAK.time, "sleep", clock.sleep):
             SOAK.resize_with_admission_retry(Path("/private/host.sock"),
-                                             {"command": "resize"}, stats)
+                                             {"command": "resize"}, stats,
+                                             on_queue_full=lambda *args: diagnostics.append(args))
         self.assertEqual(request.call_count, 2)
         self.assertEqual(stats["attempts"], 2)
         self.assertEqual(stats["retries"], 1)
         self.assertEqual(stats["total_wait_seconds"], .025)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertEqual(diagnostics[0][1], 1)
 
     def test_unknown_or_transport_outcome_is_never_retried(self):
         for error in (TimeoutError("may have been applied"),
@@ -52,13 +58,16 @@ class AdmissionRetryTests(unittest.TestCase):
                       RuntimeError("unmarked host error"),
                       SOAK.STRESS.HostRejection("future_code", "unknown proof")):
             with self.subTest(error=type(error).__name__):
+                on_queue_full = unittest.mock.Mock()
                 with patch.object(SOAK.STRESS, "request", side_effect=error) as request, \
                         patch.object(SOAK.time, "sleep") as sleep:
                     with self.assertRaises(type(error)):
                         SOAK.resize_with_admission_retry(Path("/private/host.sock"),
-                                                         {"command": "resize"}, self.stats())
+                                                         {"command": "resize"}, self.stats(),
+                                                         on_queue_full=on_queue_full)
                 self.assertEqual(request.call_count, 1)
                 sleep.assert_not_called()
+                on_queue_full.assert_not_called()
 
     def test_input_launch_and_stop_cannot_enter_retry_path(self):
         with patch.object(SOAK.STRESS, "request") as request:
@@ -166,6 +175,105 @@ class ProducerCommandQueueTests(unittest.TestCase):
                 child.wait(timeout=3)
             if master >= 0:
                 os.close(master)
+
+
+class ResizeAdmissionDiagnosticTests(unittest.TestCase):
+    def test_diagnostic_is_throttled_and_excludes_frame_contents(self):
+        clock = Clock()
+        output = io.StringIO()
+        recorder = SOAK.ResizeAdmissionDiagnostics(output, 0.0, 123, 100, 4096)
+        command = {"command": "resize", "session": "session-id", "generation": "generation-id",
+                   "geometry": {"rows": 32, "cols": 112}}
+        response = [{"generation": "generation-id", "state": "running", "sequence": 9,
+                     "storage_error": None,
+                     "metrics": {"events": 5, "output_bytes": 500, "checkpoint_ns": 12,
+                                 "secret_metric": "hidden"},
+                     "frame": {"cells": [{"text": "SENSITIVE FRAME TEXT"}]}}]
+        with patch.object(SOAK.time, "monotonic", clock.monotonic), \
+                patch.object(SOAK, "resource_sample", return_value={"host_rss_bytes": 4096,
+                                                                     "host_cpu_seconds": 1.25}), \
+                patch.object(SOAK.STRESS, "request", return_value=response) as request:
+            self.assertTrue(recorder.observe(Path("/private/host.sock"), 2, command, 1, 5.0))
+            clock.now = .5
+            self.assertFalse(recorder.observe(Path("/private/host.sock"), 2, command, 2, 5.0))
+            clock.now = 1.0
+            self.assertTrue(recorder.observe(Path("/private/host.sock"), 2, command, 3, 4.0))
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args.kwargs["timeout"], SOAK.RESIZE_DIAGNOSTIC_SNAPSHOT_TIMEOUT)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[-1]["elapsed_monotonic_seconds"], 1.0)
+        self.assertEqual(records[-1]["retry_count"], 3)
+        self.assertEqual(records[-1]["host_rss_bytes"], 4096)
+        self.assertEqual(records[-1]["snapshot"]["metrics"],
+                         {"events": 5, "output_bytes": 500, "checkpoint_ns": 12})
+        self.assertNotIn("frame", records[-1])
+        self.assertNotIn("cells", json.dumps(records))
+        self.assertNotIn("SENSITIVE FRAME TEXT", output.getvalue())
+
+    def test_diagnostic_record_cap_and_omitted_counter_are_hard_bounded(self):
+        clock = Clock()
+        output = io.StringIO()
+        recorder = SOAK.ResizeAdmissionDiagnostics(output, 0.0, 123, 100, 4096)
+        command = {"command": "resize", "session": "session-id", "generation": "generation-id",
+                   "geometry": {"rows": 32, "cols": 112}}
+        with patch.object(SOAK, "MAX_RESIZE_ADMISSION_DIAGNOSTIC_RECORDS", 2), \
+                patch.object(SOAK.time, "monotonic", clock.monotonic), \
+                patch.object(SOAK, "resource_sample", side_effect=OSError("gone")), \
+                patch.object(SOAK.STRESS, "request", return_value=[]):
+            for second in range(4):
+                clock.now = float(second)
+                recorder.observe(Path("/private/host.sock"), 0, command, second + 1, 5.0)
+        self.assertEqual(len(output.getvalue().splitlines()), 2)
+        summary = recorder.summary()
+        self.assertEqual(summary["records_written"], 2)
+        self.assertEqual(summary["omitted_records"], 2)
+        self.assertEqual(summary["last_diagnostic"]["elapsed_monotonic_seconds"], 3.0)
+        self.assertEqual(summary["last_diagnostic"]["host_rss_bytes"], None)
+
+    def test_diagnostic_time_is_taken_from_backoff_without_changing_retry_cadence(self):
+        stats, clock = AdmissionRetryTests().stats(), Clock()
+        command = {"command": "resize"}
+        rejection = SOAK.STRESS.HostRejection("queue_full", "not admitted")
+
+        def diagnostic(_command, _retry_count, _remaining):
+            clock.now += .020
+
+        with patch.object(SOAK.STRESS, "request", side_effect=[rejection, []]) as request, \
+                patch.object(SOAK.time, "monotonic", clock.monotonic), \
+                patch.object(SOAK.time, "sleep", clock.sleep):
+            SOAK.resize_with_admission_retry(Path("/private/host.sock"), command, stats,
+                                             on_queue_full=diagnostic)
+        self.assertEqual(request.call_count, 2)
+        self.assertAlmostEqual(clock.now, .025)
+
+
+class OwnedProcessSignalTests(unittest.TestCase):
+    def test_signal_requires_pidfd_and_matching_captured_identity(self):
+        identity = ("boot", 1234, 5678)
+        with patch.object(SOAK.os, "pidfd_open", return_value=91, create=True) as open_fd, \
+                patch.object(SOAK.os, "close") as close_fd, \
+                patch.object(SOAK.STRESS, "identity", return_value=identity), \
+                patch.object(SOAK.signal, "pidfd_send_signal", create=True) as send:
+            self.assertTrue(SOAK.signal_owned_identity(identity, SOAK.signal.SIGTERM))
+        open_fd.assert_called_once_with(1234, 0)
+        send.assert_called_once_with(91, SOAK.signal.SIGTERM)
+        close_fd.assert_called_once_with(91)
+
+    def test_identity_change_or_missing_pidfd_never_signals_by_pid(self):
+        identity = ("boot", 1234, 5678)
+        with patch.object(SOAK.os, "pidfd_open", return_value=91, create=True), \
+                patch.object(SOAK.os, "close") as close_fd, \
+                patch.object(SOAK.STRESS, "identity", return_value=("boot", 1234, 9999)), \
+                patch.object(SOAK.signal, "pidfd_send_signal", create=True) as send:
+            self.assertFalse(SOAK.signal_owned_identity(identity, SOAK.signal.SIGTERM))
+        send.assert_not_called()
+        close_fd.assert_called_once_with(91)
+
+        with patch.object(SOAK.os, "pidfd_open", create=True, new=None), \
+                patch.object(SOAK.signal, "pidfd_send_signal", create=True) as send:
+            self.assertFalse(SOAK.signal_owned_identity(identity, SOAK.signal.SIGTERM))
+        send.assert_not_called()
 
 
 if __name__ == "__main__":

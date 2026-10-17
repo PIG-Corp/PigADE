@@ -1,0 +1,54 @@
+{
+  "last_ack_release_observed_per_stream": [
+    {
+      "ack_to_release_dispatch_seconds": 0.00580977699792129,
+      "stream": 0,
+      "token_index": 604
+    },
+    {
+      "ack_to_release_dispatch_seconds": 0.005470549000165192,
+      "stream": 1,
+      "token_index": 604
+    },
+    {
+      "ack_to_release_dispatch_seconds": 0.005253996001556516,
+      "stream": 2,
+      "token_index": 604
+    },
+    {
+      "ack_to_release_dispatch_seconds": 0.0052240389995859005,
+      "stream": 3,
+      "token_index": 604
+    }
+  ],
+  "last_periodic_progress": {
+    "ack_counts": [
+      595,
+      595,
+      595,
+      595
+    ],
+    "elapsed_seconds": 3003.7901043210004,
+    "host_rss_bytes": 235917312,
+    "resize_admission_retry_counts": [
+      482,
+      108,
+      45,
+      10
+    ],
+    "resize_admission_retry_wait_seconds": [
+      12.050000000000104,
+      2.6999999999999944,
+      1.125,
+      0.24999999999999997
+    ],
+    "resize_counts": [
+      980,
+      980,
+      980,
+      980
+    ],
+    "target_seconds": 86400
+  },
+  "note": "Progress contains only numeric scheduling metadata and synthetic stream indices; no PTY input/output bytes."
+}

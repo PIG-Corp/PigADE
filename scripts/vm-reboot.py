@@ -324,6 +324,15 @@ def run(command: list[str], *, env: dict[str, str] | None = None,
     return result.stdout + result.stderr
 
 
+def completed_serial_payload(serial_text: str, marker: str) -> str | None:
+    """Return a result payload only after its complete serial line is written."""
+    for line in serial_text.splitlines(keepends=True):
+        if not line.endswith('\n') or marker not in line:
+            continue
+        return line.split(marker, 1)[1].rstrip('\r\n')
+    return None
+
+
 def private_dir(path: Path) -> Path:
     absolute = Path(os.path.abspath(path))
     for component in (absolute, *absolute.parents):
@@ -1234,9 +1243,8 @@ def run_vm_with_qmp(run_dir: Path, manifest: dict, args, qmp: Path) -> int:
                 text = serial.read_text(errors='replace') if serial.exists() else ''
                 if failure in text:
                     raise RuntimeError(text.split(failure, 1)[1][-2000:])
-                if marker in text:
-                    line = next((line for line in text.splitlines() if marker in line), None)
-                    payload = line.split(marker, 1)[1]
+                payload = completed_serial_payload(text, marker)
+                if payload is not None:
                     result = json.loads(payload)
                     check(result.get('status') == 'recovery_verified', 'guest did not report recovery_verified')
                     if manifest.get('corpus'):

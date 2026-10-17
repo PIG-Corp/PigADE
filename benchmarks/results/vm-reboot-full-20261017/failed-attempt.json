@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "status": "failed_incomplete_result_line",
+  "run_directory": "/home/afterburner/.local/state/pigade/vm-reboot-full-20261017/run-20261017T004517Z-080ef00c",
+  "nonce": "e41eb94feff34e8595abebae5a8eaf60",
+  "manifest_status": "failed",
+  "manifest_error": "Unterminated string starting at: line 1 column 2644 (char 2643)",
+  "serial_sha256": "53abe508add1efee77a968abfb18a44af38632a0559902afb38be01beaf4cba7",
+  "serial_bytes": 78015,
+  "result_marker_found": true,
+  "result_line_bytes_at_failure": 2731,
+  "result_line_terminated": false,
+  "result_line_parse_error": "Unterminated string while JSON-decoding the observed partial result line",
+  "observed_boot_ids": [
+    "a7865edc-4d61-427e-b2c9-62a5c94303ff",
+    "90e62c6f-56d3-443f-b535-f3a18532ee1f"
+  ],
+  "qemu_log_tail": "qemu-system-x86_64: terminating on signal 15 from pid 1100522 (python3)\n",
+  "scope": "The guest had emitted the result marker, but host parsed it before the serial JSON line was complete; result was not accepted or verified by the harness. No complete guest-result artifact retained."
+}

@@ -1,0 +1,41 @@
+{
+  "binary_sha256": "354b5987feef92acb77186576a99745d63e6fced0a04a7d95c99123f49f47625",
+  "binary_source": "/home/afterburner/Projects/PigADE/target/release/examples/history_corpus",
+  "build_command": null,
+  "builder_stdout": "{\n  \"corpus_directory\": \"/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef/long-history-4feb97cb-5cdd-4b31-bca6-bfae0931883b\",\n  \"manifest\": \"/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef/long-history-4feb97cb-5cdd-4b31-bca6-bfae0931883b/manifest.json\"\n}",
+  "command": [
+    "/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef/history_corpus.frozen",
+    "--directory",
+    "/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef",
+    "--sessions",
+    "4",
+    "--output-bytes",
+    "1073741824",
+    "--resize-events",
+    "100000",
+    "--logical-hours",
+    "24.0",
+    "--seed",
+    "1",
+    "--verify"
+  ],
+  "completed_unix": 1792197594.0069966,
+  "created_unix": 1792189573.1277986,
+  "estimated_bytes_required": 52076478464,
+  "exit_code": 0,
+  "filesystem": "btrfs",
+  "free_bytes_before_run": 186813046784,
+  "frozen_binary": "/home/afterburner/.local/state/pigade/long-history/long-history-run-32c6f5c4-645d-4845-a029-8f61da9a7cef/history_corpus.frozen",
+  "limitations": [
+    "Logical hours are metadata only; no 24-hour elapsed soak is performed.",
+    "No VM reboot, UI/GPU, PTY, provider CLI, authentication, or resume claim is made.",
+    "Full recovery verification is omitted unless --verify is supplied.",
+    "Available space is checked; no filesystem quota is configured or claimed.",
+    "The run directory is private and retained even if generation fails."
+  ],
+  "mountpoint": "/home",
+  "schema": 1,
+  "space_estimate_basis": "12x requested raw output plus 512 MiB; conservative preflight estimate, not a filesystem quota.",
+  "status": "completed",
+  "verification_requested": true
+}

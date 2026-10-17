@@ -1,0 +1,89 @@
+{
+  "actual_elapsed_seconds": 3079.1319832829977,
+  "binary_sha256": "67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58",
+  "environment": {
+    "filesystem": "btrfs",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44"
+  },
+  "failure": [
+    "RuntimeError: resize admission retry deadline exceeded"
+  ],
+  "frozen_host_source_commit": "1c6c05a4c276257a8c8f562c45524a1d1c459c38",
+  "frozen_runner_sha256": "ece8dca23f68a74d5d2b266364b4b0221631d928267813c15ad78ee429df51d2",
+  "frozen_session_host_source_sha256": "85e4c8a5e4299bbb642fdd6ed59f0bcd55dcbe3c9ffcac24ae82e3c4fdbd5d6b",
+  "frozen_stress_helper_sha256": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806",
+  "journal_tail_check": {
+    "exit_records_per_generation": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "last_event_kind_per_generation": [
+      "output",
+      "output",
+      "output",
+      "output"
+    ],
+    "raw_journals_included": false,
+    "resize_records_per_generation": [
+      996,
+      996,
+      996,
+      996
+    ]
+  },
+  "limitations": [
+    "No snapshot or metrics sample exists after elapsed 3003.79s.",
+    "Queue saturation is confirmed; the internal reason the actor did not drain its bounded command queue is not established by retained metadata.",
+    "Concurrent VM/disk I/O is only a hypothesis and is not measured by this artifact."
+  ],
+  "real_time_24h_integrity_pass": false,
+  "requested_seconds": 86400,
+  "resize_admission": {
+    "accepted_resize_counts": [
+      996,
+      996,
+      996,
+      996
+    ],
+    "attempts_and_rejections": [
+      {
+        "accepted": 996,
+        "attempts": 1875,
+        "cumulative_retry_sleep_seconds": 21.9598723299996,
+        "explicit_queue_full_retries": 879,
+        "stream": 0
+      },
+      {
+        "accepted": 996,
+        "attempts": 1104,
+        "cumulative_retry_sleep_seconds": 2.6999999999999944,
+        "explicit_queue_full_retries": 108,
+        "stream": 1
+      },
+      {
+        "accepted": 996,
+        "attempts": 1041,
+        "cumulative_retry_sleep_seconds": 1.125,
+        "explicit_queue_full_retries": 45,
+        "stream": 2
+      },
+      {
+        "accepted": 996,
+        "attempts": 1006,
+        "cumulative_retry_sleep_seconds": 0.24999999999999997,
+        "explicit_queue_full_retries": 10,
+        "stream": 3
+      }
+    ],
+    "deadline_seconds": 10,
+    "first_blocked_attempt_inferred": "stream 0, attempt 997, because all streams have 996 accepted resizes and the runner visits stream 0 first",
+    "resize_interval_seconds": 3,
+    "retry_scope": "Only explicit pre-admission queue_full resize rejections",
+    "retry_sleep_max_seconds": 0.025
+  },
+  "run_status": "failed"
+}
