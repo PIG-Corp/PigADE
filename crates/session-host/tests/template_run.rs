@@ -613,3 +613,267 @@ fn run_freezes_slots_then_advances_once_and_commits_template_with_undo() -> Resu
     );
     Ok(())
 }
+
+#[test]
+fn pane_directory_rename_search_and_cross_workspace_activation_are_durable() -> Result<()> {
+    let mut fixture = Fixture::new()?;
+    let (project, _first_workspace, first_tab, _) = fixture.setup_catalog()?;
+    let second_workspace = Uuid::new_v4();
+    let second_tab = Uuid::new_v4();
+    let cwd = fixture.state.path().canonicalize()?;
+    exchange(
+        &fixture.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                workspaces: vec![CatalogWrite {
+                    value: Workspace {
+                        id: second_workspace,
+                        project_id: project,
+                        task: "second task".into(),
+                        cwd: cwd.clone(),
+                        mode: WorkspaceMode::SharedCheckout,
+                        status: WorkspaceStatus::Ready,
+                        error: None,
+                        context_revision: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                tabs: vec![CatalogWrite {
+                    value: Tab {
+                        id: second_tab,
+                        workspace_id: second_workspace,
+                        name: "Second tab".into(),
+                        layout_json: serde_json::to_string(&TabLayout::default())?,
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            },
+        },
+    )?;
+
+    let launch = |tab, role: &str| Command::PrepareLaunch {
+        request: pigade_session_host::PrepareRequest {
+            tab,
+            provider: "codex".into(),
+            side: pigade_layout::Direction::Right,
+            target: None,
+            role_override: role.into(),
+            agent_instructions: String::new(),
+            include_memory: false,
+            memory_selection: None,
+            deliver_context: false,
+        },
+    };
+    let first_preview = exchange(&fixture.socket(), launch(first_tab, "reviewer"))?
+        .launch_preview
+        .context("first launch preview missing")?;
+    exchange(
+        &fixture.socket(),
+        Command::StartPrepared {
+            plan_id: first_preview.plan_id,
+        },
+    )?;
+    let second_preview = exchange(&fixture.socket(), launch(second_tab, "builder"))?
+        .launch_preview
+        .context("second launch preview missing")?;
+    exchange(
+        &fixture.socket(),
+        Command::StartPrepared {
+            plan_id: second_preview.plan_id,
+        },
+    )?;
+    fixture.sessions.extend([
+        (first_preview.session, first_preview.generation),
+        (second_preview.session, second_preview.generation),
+    ]);
+
+    let renamed = exchange(
+        &fixture.socket(),
+        Command::RenamePane {
+            session: first_preview.session,
+            name: "Reviewer desk".into(),
+            expected_revision: None,
+        },
+    )?;
+    let catalog = renamed.catalog.context("rename catalog missing")?;
+    let label = catalog
+        .pane_labels
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|label| label.session == first_preview.session)
+        .context("renamed pane label missing")?;
+    ensure!(
+        label.name == "Reviewer desk" && label.revision == 1,
+        "pane rename did not persist"
+    );
+    ensure!(
+        exchange(
+            &fixture.socket(),
+            Command::RenamePane {
+                session: first_preview.session,
+                name: "stale rename".into(),
+                expected_revision: None,
+            },
+        )
+        .is_err(),
+        "stale pane label revision was accepted"
+    );
+    let directory = exchange(
+        &fixture.socket(),
+        Command::SearchPanels {
+            query: "reviewer desk codex reviewer".into(),
+            after: None,
+        },
+    )?
+    .panel_directory
+    .context("panel directory missing")?;
+    ensure!(
+        directory.entries.len() == 1
+            && directory.entries[0].session == first_preview.session
+            && directory.entries[0].provider.as_deref() == Some("codex")
+            && directory.entries[0].role == "reviewer",
+        "directory query did not match alias/provider/role on current head"
+    );
+    let first_page = exchange(
+        &fixture.socket(),
+        Command::SearchPanels {
+            query: String::new(),
+            after: None,
+        },
+    )?
+    .panel_directory
+    .context("first panel page missing")?;
+    ensure!(
+        first_page.entries.len() == 2
+            && first_page.entries[0].session < first_page.entries[1].session,
+        "panel directory order is not stable by session ID"
+    );
+    let second_page = exchange(
+        &fixture.socket(),
+        Command::SearchPanels {
+            query: String::new(),
+            after: Some(first_page.entries[0].session),
+        },
+    )?
+    .panel_directory
+    .context("cursor panel page missing")?;
+    ensure!(
+        second_page.entries.len() == 1
+            && second_page.entries[0].session == first_page.entries[1].session,
+        "exclusive panel cursor skipped or repeated an entry"
+    );
+    ensure!(
+        exchange(
+            &fixture.socket(),
+            Command::SearchPanels {
+                query: "работает".into(),
+                after: None,
+            },
+        )?
+        .panel_directory
+        .is_some_and(|result| result.entries.len() == 2),
+        "localized live-state alias was not searchable"
+    );
+    let before = exchange(&fixture.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing")?;
+    let mut selection = before.selection.clone();
+    let selection_revision = selection.revision;
+    selection
+        .window
+        .panel_generations
+        .insert(first_preview.session, first_preview.generation);
+    exchange(
+        &fixture.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                selection: Some(CatalogWrite {
+                    value: selection,
+                    expected_revision: Some(selection_revision),
+                }),
+                ..CatalogBatch::default()
+            },
+        },
+    )?;
+    let before = exchange(&fixture.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing")?;
+    let undo_before =
+        pigade_layout::LayoutModel::from_history(serde_json::from_str(&before.layout.json)?)?
+            .undo_len();
+    let activated = exchange(
+        &fixture.socket(),
+        Command::ActivatePane {
+            tab: second_tab,
+            session: second_preview.session,
+            expected_layout_revision: before.layout.revision,
+        },
+    )?
+    .catalog
+    .context("activation catalog missing")?;
+    ensure!(
+        activated.selection.project_id == Some(project)
+            && activated.selection.workspace_id == Some(second_workspace)
+            && activated.selection.tab_id == Some(second_tab)
+            && activated
+                .selection
+                .window
+                .panel_generations
+                .get(&first_preview.session)
+                == Some(&first_preview.generation)
+            && activated
+                .tabs
+                .iter()
+                .find(|tab| tab.id == second_tab)
+                .unwrap()
+                .active_pane
+                == Some(second_preview.session),
+        "pane activation did not atomically select and focus the cross-workspace pane"
+    );
+    let undo_after =
+        pigade_layout::LayoutModel::from_history(serde_json::from_str(&activated.layout.json)?)?
+            .undo_len();
+    ensure!(
+        undo_after == undo_before,
+        "focus consumed a layout undo slot"
+    );
+    ensure!(
+        exchange(&fixture.socket(), Command::List)?
+            .views
+            .iter()
+            .any(|view| {
+                view.session == first_preview.session
+                    && view.generation == first_preview.generation
+                    && view.pid.is_some()
+            })
+            && exchange(&fixture.socket(), Command::List)?
+                .views
+                .iter()
+                .any(|view| {
+                    view.session == second_preview.session
+                        && view.generation == second_preview.generation
+                        && view.pid.is_some()
+                }),
+        "activation changed live process identities"
+    );
+    fixture.restart()?;
+    let reopened = exchange(&fixture.socket(), Command::Catalog)?
+        .catalog
+        .context("reopened catalog missing")?;
+    ensure!(
+        reopened
+            .pane_labels
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|label| label.session == first_preview.session && label.name == "Reviewer desk")
+            && reopened.selection.tab_id == Some(second_tab),
+        "pane alias or selection did not survive host reopen"
+    );
+    Ok(())
+}

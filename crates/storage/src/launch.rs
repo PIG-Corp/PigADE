@@ -99,7 +99,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 9,
+            version <= 10,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -108,13 +108,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 9 {
-            Some(backup_before_migration(&connection, path, version, 9)?)
+        let migration_backup = if version > 0 && version < 10 {
+            Some(backup_before_migration(&connection, path, version, 10)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 9 {
+        if version < 10 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -152,7 +152,10 @@ impl MetadataStore {
                 crate::catalog::migrate_template_launches(&tx)?;
                 crate::template_run::migrate_template_runs(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 9)?;
+            if version < 10 {
+                crate::catalog::migrate_pane_labels(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 10)?;
             tx.commit()?;
         }
         File::open(
@@ -174,6 +177,27 @@ impl MetadataStore {
     }
     pub fn get_launch(&self, operation_id: Uuid) -> Result<Option<LaunchRecord>> {
         load_record(&self.connection, operation_id)
+    }
+    /// Read the exact durable state for a pane generation without loading a
+    /// history page or unrelated launch records.
+    pub fn launch_state_for_generation(
+        &self,
+        session: Uuid,
+        generation: Uuid,
+    ) -> Result<Option<LaunchState>> {
+        let mut statement = self.connection.prepare(
+            "SELECT state FROM launch_intents WHERE session_id=?1 AND generation=?2 LIMIT 2",
+        )?;
+        let mut rows = statement.query(params![session.to_string(), generation.to_string()])?;
+        let Some(first) = rows.next()? else {
+            return Ok(None);
+        };
+        let state = LaunchState::parse(&first.get::<_, String>(0)?)?;
+        ensure!(
+            rows.next()?.is_none(),
+            "duplicate launch state for session generation"
+        );
+        Ok(Some(state))
     }
     /// Bounded manifest read; exceeding the supported live registry is explicit.
     pub fn list_launches(&self) -> Result<Vec<LaunchRecord>> {
@@ -578,7 +602,9 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(
-                "DROP TABLE template_runs; DROP TABLE layout_templates; PRAGMA user_version=7;",
+                "DROP INDEX prepared_launch_generation_lookup;
+                 DROP TABLE pane_labels; DROP TABLE template_runs; DROP TABLE layout_templates;
+                 PRAGMA user_version=7;",
             )?;
         }
         let store = MetadataStore::open(&path)?;
@@ -588,12 +614,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            9
+            10
         );
         let backup = store
             .migration_backup_path()
             .context("schema-7 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v9."));
+        assert!(backup.to_string_lossy().contains(".pre-v10."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -645,6 +671,8 @@ mod tests {
                    SELECT id,name,geometry_json,revision FROM layout_templates_v9;
                  DROP TABLE layout_templates_v9;
                  DROP TABLE template_runs;
+                 DROP INDEX prepared_launch_generation_lookup;
+                 DROP TABLE pane_labels;
                  PRAGMA user_version=8;",
             )?;
         }
@@ -657,7 +685,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            9
+            10
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -670,12 +698,50 @@ mod tests {
         let backup_path = store
             .migration_backup_path()
             .context("schema-8 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v9."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v10."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
             backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
             8
+        );
+        Ok(())
+    }
+    #[test]
+    fn schema_v9_migration_adds_pane_labels_and_preserves_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        drop(MetadataStore::open(&path)?);
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch("DROP INDEX prepared_launch_generation_lookup; DROP TABLE pane_labels; PRAGMA user_version=9;")?;
+        }
+        let store = MetadataStore::open(&path)?;
+        assert_eq!(store.catalog()?.pane_labels, Some(Vec::new()));
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            10
+        );
+        let backup = store
+            .migration_backup_path()
+            .context("schema-9 backup absent")?;
+        assert!(backup.to_string_lossy().contains(".pre-v10."));
+        let backup =
+            Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            9
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pane_labels'",
+                [],
+                |row| row.get(0)
+            )?,
+            0
         );
         Ok(())
     }
@@ -787,6 +853,12 @@ mod tests {
                     session_id TEXT PRIMARY KEY, generation TEXT NOT NULL UNIQUE,
                     operation_id TEXT NOT NULL UNIQUE REFERENCES launch_intents(operation_id)
                 );
+                CREATE TABLE prepared_launches (
+                    id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                    phase TEXT NOT NULL CHECK(phase IN (
+                        'prepared','attempting','delivered_unconfirmed','not_requested','unknown'
+                    ))
+                ) WITHOUT ROWID;
                 PRAGMA user_version=6;",
             )?;
             for (operation, session, generation, nonce, state) in [
@@ -847,7 +919,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            9
+            10
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -858,7 +930,7 @@ mod tests {
             1
         );
         let backup_path = store.migration_backup_path().context("v6 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v9."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v10."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1026,7 +1098,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 10)?;
+        store.connection.pragma_update(None, "user_version", 11)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

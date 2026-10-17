@@ -42,6 +42,22 @@ class IsolatedImePlanTests(unittest.TestCase):
                                                  '--diagnostic-publication-trace'])
         self.assertEqual(IME.app_command('arbitrary'), IME.app_command())
 
+    def test_private_host_rejection_reports_bounded_escaped_protocol_error(self):
+        reader, writer = socket.socketpair()
+        try:
+            payload = json.dumps({'protocol': 2, 'error': 'bad\n' + ('x' * 900)}).encode()
+            writer.sendall(len(payload).to_bytes(4, 'little') + payload)
+            with self.assertRaises(RuntimeError) as raised:
+                IME.read_framed(reader)
+        finally:
+            reader.close(); writer.close()
+        message = str(raised.exception)
+        self.assertIn('protocol=2', message)
+        error_text = message.split(', error=', 1)[1]
+        self.assertLessEqual(len(error_text), 512)
+        self.assertIn('\\n', error_text)
+        self.assertNotIn('\nbad', message)
+
     def test_real_run_requires_a_new_external_output_directory(self):
         result = subprocess.run([os.environ.get('PYTHON', '/usr/bin/python3'), str(SCRIPT), '--run'],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -272,20 +288,45 @@ class IsolatedImePlanTests(unittest.TestCase):
             self.assertEqual(IME.main(['--fixture', 'catalog']), 0)
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['fixture'], 'catalog')
-        self.assertIn('save a geometry template', plan['input']['catalog'])
+        self.assertIn('save/apply/undo/delete a geometry template', plan['input']['catalog'])
+        self.assertIn('searchable keyboard palette', plan['input']['catalog'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         for action in ('open-library', 'close-library', 'open-save-dialog', 'save-template',
                        'apply-first-template', 'undo-layout', 'delete-template',
-                       'mutate-layout', 'rename-tab'):
+                       'mutate-layout', 'rename-tab', 'focus-right'):
             self.assertIn(f"'{action}'", source)
         self.assertNotIn('from Xlib', source)
         self.assertIn('tab_rename_persisted', source)
+        self.assertIn('pane_alias_saved_and_found_by_palette', source)
+        self.assertIn("label.get('name') == 'Review'", source)
+        self.assertIn("'pane_labels'", source)
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('catalog-open-library', 'catalog-close-library', 'catalog-open-save',
                       'catalog-save', 'catalog-apply', 'catalog-undo', 'catalog-delete',
-                      'catalog-mutate', 'catalog-rename-tab'):
+                      'catalog-mutate', 'catalog-rename-tab', 'catalog-pane-rename-open',
+                      'catalog-pane-rename-action', 'catalog-pane-rename-type',
+                      'catalog-pane-rename-save', 'catalog-pane-palette-open',
+                      'catalog-pane-palette-query', 'catalog-pane-palette-select'):
             self.assertIn(f'\"{stage}\"', helper)
+        self.assertIn('modified_key(dpy, XK_Shift_L, XK_r)', helper)
+        rename_action = helper.split('} else if (!strcmp(a.stage, "catalog-pane-rename-action")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-pane-rename-type"', 1)[0]
+        self.assertLess(rename_action.index('nanosleep'), rename_action.index('key(dpy, XK_Return)'))
+        self.assertIn('.tv_nsec = 400000000', rename_action)
+        self.assertIn("time.sleep(.4)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-palette.ppm')", source)
+        self.assertIn("'/artifacts/catalog-pane-renamed.ppm'", source)
+        self.assertIn("'/artifacts/catalog-pane-palette.ppm'", source)
+        self.assertIn("'stage'] = 'catalog-pane-rename-action'", source)
+        self.assertIn("'stage'] = 'catalog-pane-rename-input'", source)
+        self.assertIn("time.sleep(.25)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-dialog.ppm')", source)
+        self.assertIn("time.sleep(.25)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-input.ppm')", source)
+        self.assertIn("'stage'] = 'catalog-pane-palette-select'", source)
+        self.assertIn("'stage'] = 'catalog-pane-palette-verify'", source)
+        alias_checks = source.split('rename_layout = catalog_layout()[1]', 1)[1].split(
+            "report['catalog'] =", 1)[0]
+        self.assertNotIn("original_layout.get('root')", alias_checks)
+        self.assertGreaterEqual(alias_checks.count("get('root') == rename_layout.get('root')"), 3)
         self.assertIn('session_generation_pid_identities_unchanged', source)
 
     def test_recipes_mode_is_plan_only_and_uses_only_fixed_input_stages(self):

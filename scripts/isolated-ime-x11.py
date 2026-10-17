@@ -1255,6 +1255,15 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                 'catalog fixture process identity snapshot is invalid')
         return result
 
+    def pane_labels(catalog):
+        labels = catalog.get('pane_labels') or []
+        require(isinstance(labels, list) and len(labels) <= 32 and all(
+            isinstance(label, dict) and isinstance(label.get('session'), str) and
+            isinstance(label.get('name'), str) and type(label.get('revision')) is int and
+            label['revision'] >= 0 for label in labels),
+            'catalog pane labels are malformed or exceed the fixture bound')
+        return labels
+
     initial, original_layout = catalog_layout()
     original_panes = set(pane_ids(original_layout.get('root')))
     identities = process_identities()
@@ -1334,6 +1343,65 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     catalog_key_action(config, 'open-library')
     time.sleep(0.2)
     helper_call(config, 'capture', '/artifacts/catalog-library-deleted.ppm')
+    catalog_key_action(config, 'close-library')
+
+    rename_layout = catalog_layout()[1]
+    renamed_session = rename_layout.get('focused')
+    require(renamed_session in original_panes,
+            'catalog fixture has no stable focused pane to rename')
+    helper_call(config, 'catalog-pane-rename-open')
+    report['stage'] = 'catalog-pane-rename-action'
+    save()
+    helper_call(config, 'catalog-pane-rename-action')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-dialog.ppm')
+    report['stage'] = 'catalog-pane-rename-input'
+    save()
+    helper_call(config, 'catalog-pane-rename-type')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-input.ppm')
+    report['stage'] = 'catalog-pane-rename-save'
+    save()
+    helper_call(config, 'catalog-pane-rename-save')
+    renamed_label_catalog = wait_until(
+        lambda: (value if any(label.get('session') == renamed_session and
+                              label.get('name') == 'Review' and label.get('revision', 0) > 0
+                              for label in pane_labels(value)) else None)
+        if (value := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    renamed_label = next(label for label in pane_labels(renamed_label_catalog)
+                         if label.get('session') == renamed_session)
+    require(process_identities() == identities and
+            catalog_layout()[1].get('root') == rename_layout.get('root'),
+            'renaming a pane changed its layout or process identities')
+    time.sleep(.2)
+    helper_call(config, 'capture', '/artifacts/catalog-pane-renamed.ppm')
+
+    catalog_key_action(config, 'focus-right')
+    other_focus = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('focused') in original_panes and
+                 layout.get('focused') != renamed_session else None), time.monotonic() + 5)
+    require(other_focus.get('root') == rename_layout.get('root') and
+            process_identities() == identities,
+            'moving pane focus changed layout or process identities before palette search')
+    helper_call(config, 'catalog-pane-palette-open')
+    helper_call(config, 'catalog-pane-palette-query')
+    time.sleep(.4)
+    helper_call(config, 'capture', '/artifacts/catalog-pane-palette.ppm')
+    report['stage'] = 'catalog-pane-palette-select'
+    save()
+    helper_call(config, 'catalog-pane-palette-select')
+    report['stage'] = 'catalog-pane-palette-verify'
+    save()
+    focused_label = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('focused') == renamed_session else None),
+        time.monotonic() + 8)
+    require(focused_label.get('root') == rename_layout.get('root') and
+            process_identities() == identities and
+            any(label.get('session') == renamed_session and label.get('name') == 'Review' and
+                label.get('revision') == renamed_label['revision']
+                for label in pane_labels(host_request({'command': 'catalog'})['catalog'])),
+            'palette search did not focus the renamed pane without changing its label or processes')
     report['catalog'] = {
         'saved_geometry_schema': template['geometry']['schema'],
         'saved_template_survived_ui_reopen': True,
@@ -1341,10 +1409,14 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'apply_preserved_all_pane_ids': True,
         'undo_restored_exact_pre_apply_layout_wire': True,
         'tab_rename_persisted': renamed is not None,
+        'pane_alias_saved_and_found_by_palette': True,
+        'palette_focus_preserved_all_process_identities': True,
         'delete_removed_template': True,
         'session_generation_pid_identities_unchanged': True,
         'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
-                     'catalog-library-reopened.ppm', 'catalog-library-deleted.ppm'],
+                     'catalog-library-reopened.ppm', 'catalog-library-deleted.ppm',
+                     'catalog-pane-rename-dialog.ppm', 'catalog-pane-rename-input.ppm',
+                     'catalog-pane-renamed.ppm', 'catalog-pane-palette.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
     save()
@@ -2095,8 +2167,17 @@ def read_framed(stream: socket.socket) -> dict:
     size, = struct.unpack('<I', read_exact(4))
     require(0 < size <= MAX_IPC, 'host IPC frame exceeds bound')
     value = json.loads(read_exact(size))
-    require(value.get('protocol') == 2 and value.get('error') is None,
-            'private host rejected fixture request')
+    if not isinstance(value, dict) or value.get('protocol') != 2 or value.get('error') is not None:
+        response_protocol = value.get('protocol') if isinstance(value, dict) else None
+        response_error = value.get('error') if isinstance(value, dict) else None
+        protocol_text = json.dumps(response_protocol, ensure_ascii=True, separators=(',', ':'))
+        if len(protocol_text) > 64:
+            protocol_text = protocol_text[:61] + '...'
+        error_text = json.dumps(response_error, ensure_ascii=True, separators=(',', ':'))
+        if len(error_text) > 512:
+            error_text = error_text[:509] + '...'
+        raise RuntimeError('private host rejected fixture request: protocol=' + protocol_text +
+                           ', error=' + error_text)
     return value
 
 
@@ -2231,6 +2312,7 @@ def catalog_key_action(config, action):
         'delete-template': 'catalog-delete',
         'mutate-layout': 'catalog-mutate',
         'rename-tab': 'catalog-rename-tab',
+        'focus-right': 'controls-focus-right',
     }
     require(action in stages, 'catalog fixture requested an unknown fixed helper stage')
     helper_call(config, stages[action])
@@ -2850,7 +2932,9 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
-                  'catalog-library-deleted.ppm'] if args.fixture == 'catalog' else
+                  'catalog-library-deleted.ppm', 'catalog-pane-rename-dialog.ppm',
+                  'catalog-pane-rename-input.ppm', 'catalog-pane-renamed.ppm',
+                  'catalog-pane-palette.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
@@ -2880,7 +2964,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
-                  'catalog': 'fixed private four-shell setup; save a geometry template, change layout, apply and undo it, reopen library, and delete it',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete a geometry template, rename a pane, and find it through the searchable keyboard palette',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',

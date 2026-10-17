@@ -9,12 +9,14 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
 | crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
-| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema9, launch locks, catalog CAS, optional template launch settings, durable template-run records and migration backups |
+| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema10, launch locks, catalog CAS, optional template launch settings, durable template runs and CAS pane aliases |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run command routes |
 | crates/session-host/src/template_run.rs | Durable explicit template runs: freeze reviewed plans without launching, advance one CLI per command, reconcile existing plan/launch records without retry, and atomically commit final placement with completion |
 | crates/app/src/template_flow.rs, template_ui.rs, template_commands.rs | Four optional launch presets, per-slot configuration and context/count/cwd review; user-driven prepare/advance/history/cancel flow |
+| crates/session-host/src/panel_directory.rs | Bounded64-entry search pages over placed panes, matching alias, provider, frozen role/state and project/workspace/tab metadata without returning terminal frames |
+| crates/app/src/navigation.rs, navigation_ui.rs | Dialog/query/editor-revision-scoped panel search receipts, alias editing, mouse/keyboard result ordering and atomic pane activation requests |
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
 | crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |

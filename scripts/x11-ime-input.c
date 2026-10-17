@@ -84,7 +84,15 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-save") &&
         strcmp(a.stage, "catalog-apply") && strcmp(a.stage, "catalog-undo") &&
         strcmp(a.stage, "catalog-delete") && strcmp(a.stage, "catalog-mutate") &&
-        strcmp(a.stage, "catalog-rename-tab") && strcmp(a.stage, "recipe-select-first") &&
+        strcmp(a.stage, "catalog-rename-tab") &&
+        strcmp(a.stage, "catalog-pane-rename-open") &&
+        strcmp(a.stage, "catalog-pane-rename-action") &&
+        strcmp(a.stage, "catalog-pane-rename-type") &&
+        strcmp(a.stage, "catalog-pane-rename-save") &&
+        strcmp(a.stage, "catalog-pane-palette-open") &&
+        strcmp(a.stage, "catalog-pane-palette-query") &&
+        strcmp(a.stage, "catalog-pane-palette-select") &&
+        strcmp(a.stage, "recipe-select-first") &&
         strcmp(a.stage, "recipe-open-editor") &&
         strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
         strcmp(a.stage, "recipe-name-tab") && strcmp(a.stage, "recipe-submit-name") &&
@@ -868,6 +876,26 @@ int main(int argc, char **argv) {
             setup_prefix(dpy, XK_r, 0); key(dpy, XK_Right); key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-rename-tab")) {
             catalog_rename_tab(dpy, app_window);
+        } else if (!strcmp(a.stage, "catalog-pane-rename-open") ||
+                   !strcmp(a.stage, "catalog-pane-palette-open")) {
+            setup_prefix(dpy, XK_p, 0);
+        } else if (!strcmp(a.stage, "catalog-pane-rename-action")) {
+            const KeySym query[] = { XK_r, XK_e, XK_n, XK_a, XK_m, XK_e };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-pane-rename-type") ||
+                   !strcmp(a.stage, "catalog-pane-palette-query")) {
+            if (!strcmp(a.stage, "catalog-pane-rename-type"))
+                modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym query[] = { XK_e, XK_v, XK_i, XK_e, XK_w };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+        } else if (!strcmp(a.stage, "catalog-pane-rename-save")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-pane-palette-select")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "recipe-select-first")) {
             key(dpy, XK_Down);
         } else if (!strcmp(a.stage, "recipe-open-editor")) {
@@ -1030,6 +1058,13 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-delete") ? "3" :
                             !strcmp(a.stage, "catalog-mutate") ? "6" :
                             !strcmp(a.stage, "catalog-rename-tab") ? "14" :
+                            !strcmp(a.stage, "catalog-pane-rename-open") ? "4" :
+                            !strcmp(a.stage, "catalog-pane-rename-action") ? "7" :
+                            !strcmp(a.stage, "catalog-pane-rename-type") ? "9" :
+                            !strcmp(a.stage, "catalog-pane-rename-save") ? "2" :
+                            !strcmp(a.stage, "catalog-pane-palette-open") ? "4" :
+                            !strcmp(a.stage, "catalog-pane-palette-query") ? "6" :
+                            !strcmp(a.stage, "catalog-pane-palette-select") ? "1" :
                             !strcmp(a.stage, "recipe-select-first") ? "1" :
                             !strcmp(a.stage, "recipe-open-editor") ? "2" :
                             !strcmp(a.stage, "recipe-save-editor") ? "2" :

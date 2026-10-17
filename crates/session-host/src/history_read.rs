@@ -117,5 +117,6 @@ pub(crate) fn response(
         providers: None,
         template_run: None,
         template_runs: None,
+        panel_directory: None,
     }
 }

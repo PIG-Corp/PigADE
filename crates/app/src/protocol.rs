@@ -205,6 +205,28 @@ struct Response {
     template_run: Option<TemplateRunView>,
     #[serde(default)]
     template_runs: Option<pigade_storage::TemplateRunPage>,
+    #[serde(default)]
+    panel_directory: Option<PanelDirectory>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PanelDirectory {
+    pub query: String,
+    pub entries: Vec<PanelEntry>,
+    pub next_after: Option<uuid::Uuid>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct PanelEntry {
+    pub session: uuid::Uuid,
+    pub tab_id: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub project_id: uuid::Uuid,
+    pub generation: Option<uuid::Uuid>,
+    pub title: String,
+    pub provider: Option<String>,
+    pub role: String,
+    pub deliver_context: bool,
+    pub state: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -401,6 +423,7 @@ pub struct ProductReply {
     pub history_view_request: bool,
     pub template_run: Option<TemplateRunView>,
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
+    pub panel_directory: Option<PanelDirectory>,
 }
 
 pub struct ProductError {
@@ -533,6 +556,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         history_view_request,
         template_run: response.template_run,
         template_runs: response.template_runs,
+        panel_directory: response.panel_directory,
     })
 }
 
@@ -903,6 +927,7 @@ mod tests {
             launch_phase: None,
             template_run: None,
             template_runs: None,
+            panel_directory: None,
             generations: None,
             generation_selection: None,
             history_view: None,

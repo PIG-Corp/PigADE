@@ -13,6 +13,7 @@ mod input;
 mod memory_choice;
 mod mouse;
 mod mouse_delivery;
+mod navigation;
 mod palette;
 mod pointer_layout;
 mod product;
@@ -1013,6 +1014,7 @@ mod focus_placement_tests {
             layout: LayoutDocument::default(),
             layout_templates: Some(vec![]),
             template_launch_schema: Some(1),
+            pane_labels: Some(vec![]),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1088,6 +1090,7 @@ struct CanvasApp {
     pane_drag: Option<PaneDrag>,
     focus_queue: pointer_layout::FocusQueue,
     hover_position: Option<Point<Pixels>>,
+    navigation: navigation::Navigation,
     deferred_placement: Option<pigade_layout::Command>,
     focus: FocusHandle,
     selected: usize,
@@ -1193,6 +1196,7 @@ impl CanvasApp {
                 if weak
                     .update_in(cx, |this, window, cx| {
                         while let Ok(reply) = this.product_rx.try_recv() {
+                            let mut navigation_pending=this.navigation.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let template_pending=this.template_flow.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let focus_reply = this.focus_queue.matches(match &reply { Ok(reply)=>reply.ui_request, Err(error)=>error.ui_request });
                             let provider_reply = match &reply {
@@ -1251,7 +1255,7 @@ impl CanvasApp {
                                         if let Some(edit)=edit {
                                             this.product.notice=Some(edit.notice);
                                             this.product.dialog=if same_dialog {edit.return_to.map(product::Dialog::new)} else {current_dialog};
-                                        } else if template_pending.is_some() {
+                                        } else if template_pending.is_some() || navigation_pending.is_some() {
                                             this.product.dialog=current_dialog;
                                         }
                                     }
@@ -1260,6 +1264,9 @@ impl CanvasApp {
                                     }
                                     if let (Some(page),Some(pending))=(reply.template_runs,template_pending) {
                                         this.receive_template_list(page,pending,cx);
+                                    }
+                                    if let Some(pending)=navigation_pending.take() {
+                                        this.receive_navigation(pending,reply.panel_directory,cx);
                                     }
                                     if let Some(sessions) = reply.sessions {
                                         if this.pending_launch.is_some_and(|(session,generation)| sessions.iter().any(|view|
@@ -1331,6 +1338,7 @@ impl CanvasApp {
                                 }
                                 Err(error) => {
                                     let template_error=error.message.clone();
+                                    let navigation_error=error.message.clone();
                                     if focus_reply {
                                         this.focus_queue.cancel();
                                         this.focus_queue.complete(error.ui_request.expect("matching focus error"),None);
@@ -1361,6 +1369,7 @@ impl CanvasApp {
                                         this.product.provider_error.clone().unwrap_or(error.message)
                                     } else { error.message });
                                     if let Some(pending)=template_pending {this.template_request_failed(pending,template_error,cx);}
+                                    if let Some(pending)=navigation_pending {this.navigation_failed(pending,navigation_error,cx);}
                                 }
                             }
                             cx.notify();
@@ -1473,6 +1482,7 @@ impl CanvasApp {
                             this.product_action(action,window,cx);
                         }
                         this.flush_canvas_offset(cx);
+                        this.service_panel_search(cx);
                         if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
                             window.remove_window();
                             return;
@@ -1560,6 +1570,7 @@ impl CanvasApp {
             pane_drag: None,
             focus_queue: Default::default(),
             hover_position: None,
+            navigation: Default::default(),
             deferred_placement: None,
             focus,
             selected: 0,
@@ -2510,6 +2521,7 @@ impl CanvasApp {
     }
 
     fn editor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.service_panel_search(cx);
         let query = self.product.dialog.as_ref().and_then(|dialog| {
             (dialog.kind == product::DialogKind::History)
                 .then(|| dialog.fields.first().map(|field| field.text().to_owned()))
@@ -3095,6 +3107,11 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::RenamePane
+            | A::ActivatePane { .. }
+            | A::MorePanelResults
+            | A::FirstPanelResults
+            | A::ReloadPanelResults => self.navigation_action(action, cx),
             A::ChoosePreset(_)
             | A::ConfigureTemplate(_)
             | A::NewTabFromTemplate(_)
@@ -3503,7 +3520,10 @@ impl CanvasApp {
                 self.detect_providers(cx);
             }
             A::ToggleLaunchDetails => self.product.launch_details = !self.product.launch_details,
-            A::OpenPaneMenu => self.product.dialog = Some(Dialog::new(DialogKind::PaneMenu)),
+            A::OpenPaneMenu => {
+                self.product.palette_index = 0;
+                self.product.dialog = Some(Dialog::new(DialogKind::PaneMenu));
+            }
             A::CreateTab => {
                 if self
                     .product
@@ -3536,7 +3556,13 @@ impl CanvasApp {
                     self.product.notice = Some("Сначала выберите вкладку".into());
                 }
             }
-            A::OpenPalette => self.product.dialog = Some(Dialog::new(DialogKind::Palette)),
+            A::OpenPalette => {
+                self.product.notice = None;
+                self.product.palette_index = 0;
+                self.product.palette_scroll.scroll_to_item(0);
+                self.product.dialog = Some(Dialog::new(DialogKind::Palette));
+                self.service_panel_search(cx);
+            }
             A::OpenTransfer => self.product.dialog = Some(Dialog::new(DialogKind::Transfer)),
             A::TransferTo(to_tab) => {
                 if let Some(pane) = self.selected_pane() {
@@ -3950,11 +3976,10 @@ impl CanvasApp {
                             self.product_command(json!({"command":"bind_conversation","session":preview.session,"generation":preview.generation,"conversation_id":field(0).trim(),"expected_revision":preview.conversation.as_ref().map(|binding| binding.revision).unwrap_or(0)}),cx);
                         }
                     }
+                    DialogKind::RenamePane => self.submit_pane_name(cx),
                     DialogKind::Palette | DialogKind::PaneMenu => {
-                        let action = self.product.palette_action();
-                        self.product.dialog = None;
-                        if let Some(action) = action {
-                            self.product_action(action, window, cx);
+                        if let Some(action) = self.product.palette_action() {
+                            self.choose_palette(action, window, cx);
                         }
                     }
                     DialogKind::LaunchReview | DialogKind::ResumeReview => {
@@ -5490,6 +5515,40 @@ impl CanvasApp {
                 }
                 return;
             }
+            if self.product.dialog.as_ref().is_some_and(|dialog| {
+                matches!(
+                    dialog.kind,
+                    product::DialogKind::Palette | product::DialogKind::PaneMenu
+                )
+            }) && !control
+                && !k.modifiers.alt
+                && matches!(
+                    k.key.as_str(),
+                    "up" | "down" | "pageup" | "pagedown" | "tab"
+                )
+            {
+                let count = self.product.palette_entries().len();
+                if count > 0 {
+                    let backward = matches!(k.key.as_str(), "up" | "pageup")
+                        || k.key == "tab" && k.modifiers.shift;
+                    let step = if matches!(k.key.as_str(), "pageup" | "pagedown") {
+                        8
+                    } else {
+                        1
+                    };
+                    self.product.palette_index = if backward {
+                        self.product.palette_index.saturating_sub(step)
+                    } else {
+                        (self.product.palette_index + step).min(count - 1)
+                    };
+                    self.product
+                        .palette_scroll
+                        .scroll_to_item(self.product.palette_index);
+                    cx.notify();
+                }
+                cx.stop_propagation();
+                return;
+            }
             if matches!(k.key.as_str(), "up" | "down" | "pageup" | "pagedown") {
                 if let Some(dialog) = &mut self.product.dialog
                     && let Some(layout) = self
@@ -6463,6 +6522,10 @@ impl Render for CanvasApp {
         let trace = self.trace.clone();
         let paint_revision = self.state.revision;
         let views = self.state.views.clone();
+        let pane_titles = views
+            .iter()
+            .map(|view| self.product.pane_title(view).to_owned())
+            .collect::<Vec<_>>();
         let preedit = self.text_input.preedit.clone();
         let preedit_selection = self.text_input.selection_bytes();
         let selected = self.selected;
@@ -6484,7 +6547,13 @@ impl Render for CanvasApp {
         let attached = self.state.error.is_none();
         let terminal_label = self.state.views.get(selected).map_or_else(
             || "Терминал: нет выбранной сессии".to_owned(),
-            |view| format!("Терминал {} · {}", view.frame.title, view.state),
+            |view| {
+                format!(
+                    "Терминал {} · {}",
+                    self.product.pane_title(view),
+                    view.state
+                )
+            },
         );
         let status = self.error()
             .or_else(|| self.state.poll_backpressured.then(|| "Обновление терминала задержано".into()))
@@ -6660,6 +6729,10 @@ impl Render for CanvasApp {
                                                             pane,
                                                             views.get(index),
                                                             PanelState {
+                                                                title: pane_titles
+                                                                    .get(index)
+                                                                    .map(String::as_str)
+                                                                    .unwrap_or("Терминал"),
                                                                 selected: index == selected,
                                                                 attached,
                                                                 focused: index == selected
@@ -7002,7 +7075,8 @@ fn paint_preedit(
 }
 
 #[derive(Clone, Copy)]
-struct PanelState {
+struct PanelState<'a> {
+    title: &'a str,
     selected: bool,
     attached: bool,
     focused: bool,
@@ -7050,11 +7124,12 @@ fn paint_panel(
     pane: PaneGeometry,
     view: Option<&View>,
     PanelState {
+        title,
         selected,
         attached,
         focused,
         cursor_visible,
-    }: PanelState,
+    }: PanelState<'_>,
     selection: Option<&selection::CellSelection>,
     font: &Font,
     window: &mut Window,
@@ -7099,15 +7174,6 @@ fn paint_panel(
             }
         })
         .unwrap_or("Модель недоступна");
-    let title = view
-        .map(|view| {
-            if view.frame.title.is_empty() {
-                "Терминал"
-            } else {
-                &view.frame.title
-            }
-        })
-        .unwrap_or("Терминал");
     let title = format!("{title}   {status}");
     let title_bounds = Bounds::new(
         header.origin + point(px(28.), px(1.)),

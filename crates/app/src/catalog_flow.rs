@@ -155,6 +155,7 @@ mod tests {
             layout: Default::default(),
             layout_templates: Some(vec![]),
             template_launch_schema: Some(1),
+            pane_labels: Some(vec![]),
         }
     }
 

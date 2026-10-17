@@ -8,8 +8,9 @@
   archive/restore without stopping CLI, and archived checkout identity checks.
 - Saved geometry layouts with native thumbnails, keyboard navigation, CAS
   save/delete and single-step undoable application to existing stable panes.
-  SQLite schema9 adds optional per-slot launch settings and durable template-run
-  records, with a backed-up v8 migration. Four new-tab presets are available;
+  Schema9 adds optional per-slot launch settings and durable template-run
+  records; schema10 adds durable per-pane aliases. Upgrades from v8/v9 are
+  backed up before migration. Four new-tab presets are available;
   custom launch configuration remains optional. A run first freezes and reviews
   the workspace, process count, working directory and each slot's context. It
   creates no tab or process until explicitly advanced, then starts at most one
@@ -17,6 +18,15 @@
   undoable geometry operation and does not launch processes. Geometry-only
   templates remain valid; older hosts without launch-schema support report the
   feature unavailable and are not restarted automatically.
+- Pane aliases use CAS revisions and are bounded to128 Unicode characters /512
+  UTF-8 bytes; empty names reset to the CLI title and control characters or
+  surrounding whitespace are rejected. Aliases do not alter OSC titles, launch
+  context, generations, process state or placement undo. The palette searches
+  placed panes by alias/provider/frozen role/state and project/workspace/tab,
+  with64-result pages and explicit next/first actions. Mouse and arrow/Enter
+  activation atomically focuses the pane and selects its project/workspace/tab,
+  preserving generation pins without launching CLI. Older hosts without the
+  pane-label capability leave this feature unavailable and are not restarted.
 
 - Terminal listener retains only live response FIFO and the final ordered title
   update. Ignored UI/clipboard/bell and replay response events no longer build a

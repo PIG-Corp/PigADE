@@ -9,11 +9,13 @@ pub mod history;
 pub mod history_read;
 pub mod history_view;
 pub mod input;
+mod panel_directory;
 mod panel_launch;
 mod prepared;
 mod projects;
 mod template_run;
 pub use catalog::LayoutAction;
+pub use panel_directory::{PanelDirectory, PanelEntry};
 mod ipc_server;
 pub mod journal_policy;
 mod launch_gate;
@@ -174,6 +176,20 @@ pub enum Command {
     ListTemplateRuns {
         before: Option<u64>,
     },
+    RenamePane {
+        session: Uuid,
+        name: String,
+        expected_revision: Option<u64>,
+    },
+    SearchPanels {
+        query: String,
+        after: Option<Uuid>,
+    },
+    ActivatePane {
+        tab: Uuid,
+        session: Uuid,
+        expected_layout_revision: u64,
+    },
     GetSessionContext {
         session: Uuid,
         generation: Uuid,
@@ -305,6 +321,8 @@ pub struct Response {
     pub template_run: Option<TemplateRunView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_directory: Option<PanelDirectory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -662,6 +680,7 @@ fn provider_response(
         providers: Some(providers),
         template_run: None,
         template_runs: None,
+        panel_directory: None,
     }
 }
 
@@ -986,6 +1005,7 @@ impl Host {
                 providers: None,
                 template_run: None,
                 template_runs: None,
+                panel_directory: None,
             });
         }
         if matches!(
@@ -1032,6 +1052,7 @@ impl Host {
                 providers: None,
                 template_run: None,
                 template_runs: None,
+                panel_directory: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -1057,9 +1078,107 @@ impl Host {
                 providers: None,
                 template_run: None,
                 template_runs: None,
+                panel_directory: None,
             });
         }
         match &command {
+            Command::RenamePane {
+                session,
+                name,
+                expected_revision,
+            } => {
+                let saved = catalog::rename_pane(
+                    &mut self.metadata,
+                    *session,
+                    name.clone(),
+                    *expected_revision,
+                )?;
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: Vec::new(),
+                    error: None,
+                    rejected_before_admission: None,
+                    catalog: Some(saved),
+                    selection: None,
+                    context: None,
+                    launch_preview: None,
+                    launch_phase: None,
+                    catalog_notice: None,
+                    recovery: self.recovery.response(),
+                    selected: None,
+                    history_chunk: None,
+                    change_token: None,
+                    generations: None,
+                    generation_selection: None,
+                    history_view: None,
+                    providers: None,
+                    template_run: None,
+                    template_runs: None,
+                    panel_directory: None,
+                });
+            }
+            Command::SearchPanels { query, after } => {
+                self.reconcile_exits()?;
+                let directory = panel_directory::search(self, query.clone(), *after)?;
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: Vec::new(),
+                    error: None,
+                    rejected_before_admission: None,
+                    catalog: None,
+                    selection: None,
+                    context: None,
+                    launch_preview: None,
+                    launch_phase: None,
+                    catalog_notice: None,
+                    recovery: self.recovery.response(),
+                    selected: None,
+                    history_chunk: None,
+                    change_token: None,
+                    generations: None,
+                    generation_selection: None,
+                    history_view: None,
+                    providers: None,
+                    template_run: None,
+                    template_runs: None,
+                    panel_directory: Some(directory),
+                });
+            }
+            Command::ActivatePane {
+                tab,
+                session,
+                expected_layout_revision,
+            } => {
+                let saved = catalog::activate_pane(
+                    &mut self.metadata,
+                    *tab,
+                    *session,
+                    *expected_layout_revision,
+                )?;
+                return Ok(Response {
+                    protocol: PROTOCOL,
+                    views: Vec::new(),
+                    error: None,
+                    rejected_before_admission: None,
+                    catalog: Some(saved),
+                    selection: None,
+                    context: None,
+                    launch_preview: None,
+                    launch_phase: None,
+                    catalog_notice: None,
+                    recovery: self.recovery.response(),
+                    selected: None,
+                    history_chunk: None,
+                    change_token: None,
+                    generations: None,
+                    generation_selection: None,
+                    history_view: None,
+                    providers: None,
+                    template_run: None,
+                    template_runs: None,
+                    panel_directory: None,
+                });
+            }
             Command::Generations { session, before } => {
                 let generations = generations::list(self, *session, *before)?;
                 return Ok(Response {
@@ -1083,6 +1202,7 @@ impl Host {
                     providers: None,
                     template_run: None,
                     template_runs: None,
+                    panel_directory: None,
                 });
             }
             Command::SelectGeneration {
@@ -1112,6 +1232,7 @@ impl Host {
                     providers: None,
                     template_run: None,
                     template_runs: None,
+                    panel_directory: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -1236,6 +1357,7 @@ impl Host {
                     providers: None,
                     template_run: None,
                     template_runs: None,
+                    panel_directory: None,
                 });
             }
         };
@@ -1260,6 +1382,7 @@ impl Host {
             providers: None,
             template_run: None,
             template_runs: None,
+            panel_directory: None,
         })
     }
     fn launch_response(
@@ -1289,6 +1412,7 @@ impl Host {
             providers: None,
             template_run: None,
             template_runs: None,
+            panel_directory: None,
         }
     }
     fn template_run_response(
@@ -1318,6 +1442,7 @@ impl Host {
             providers: None,
             template_run,
             template_runs,
+            panel_directory: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -2504,6 +2629,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 providers: None,
                 template_run: None,
                 template_runs: None,
+                panel_directory: None,
             },
         };
         let _ = job.reply.try_send(response);

@@ -119,6 +119,112 @@ pub(crate) fn apply_metadata(
     store.apply_catalog(batch)
 }
 
+pub(crate) fn rename_pane(
+    store: &mut MetadataStore,
+    session: Uuid,
+    name: String,
+    expected_revision: Option<u64>,
+) -> Result<Catalog> {
+    ensure!(!session.is_nil(), "invalid pane identity");
+    let current = read_metadata(store)?;
+    let model = load_layout(&current)?;
+    let tab_id = model
+        .state()
+        .pane_tab(session)
+        .context("pane is no longer placed in a tab")?;
+    let tab = current
+        .tabs
+        .iter()
+        .find(|tab| tab.id == tab_id)
+        .context("pane tab is missing")?;
+    let workspace = current
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == tab.workspace_id)
+        .context("pane workspace is missing")?;
+    ensure!(
+        workspace.status == pigade_storage::WorkspaceStatus::Ready,
+        "pane workspace is unavailable"
+    );
+    let previous = current
+        .pane_labels
+        .as_ref()
+        .and_then(|labels| labels.iter().find(|label| label.session == session));
+    ensure!(
+        previous.map(|label| label.revision) == expected_revision,
+        "pane label revision conflict"
+    );
+    let revision = expected_revision.unwrap_or(0);
+    store.save_pane_label(CatalogWrite {
+        value: pigade_storage::PaneLabel {
+            session,
+            name,
+            revision,
+        },
+        expected_revision,
+    })
+}
+
+pub(crate) fn activate_pane(
+    store: &mut MetadataStore,
+    tab_id: Uuid,
+    session: Uuid,
+    expected_layout_revision: u64,
+) -> Result<Catalog> {
+    ensure!(
+        !tab_id.is_nil() && !session.is_nil(),
+        "invalid pane activation identity"
+    );
+    let current = read_metadata(store)?;
+    ensure_revision(&current.layout, expected_layout_revision)?;
+    let mut model = load_layout(&current)?;
+    ensure!(
+        model.state().pane_tab(session) == Some(tab_id),
+        "pane moved or is not in the requested tab"
+    );
+    let tab = current
+        .tabs
+        .iter()
+        .find(|tab| tab.id == tab_id)
+        .context("pane tab is missing")?;
+    let workspace = current
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == tab.workspace_id)
+        .context("pane workspace is missing")?;
+    ensure!(
+        workspace.status == pigade_storage::WorkspaceStatus::Ready,
+        "pane workspace is unavailable"
+    );
+    let project = current
+        .projects
+        .iter()
+        .find(|project| project.id == workspace.project_id)
+        .context("pane project is missing")?;
+    let focus_changed = model.apply(Command::Focus { pane: session })?;
+    let mut batch = CatalogBatch::default();
+    if focus_changed {
+        let mut focused_tab = tab.clone();
+        focused_tab.active_pane = Some(session);
+        focused_tab.layout_json = serde_json::to_string(&model.state().tabs[&tab_id])?;
+        batch.tabs.push(CatalogWrite {
+            value: focused_tab,
+            expected_revision: Some(tab.revision),
+        });
+        batch.layout = Some(history_write(&model, &current.layout)?);
+    }
+    let mut selection = current.selection.clone();
+    let selection_revision = selection.revision;
+    selection.project_id = Some(project.id);
+    selection.workspace_id = Some(workspace.id);
+    selection.tab_id = Some(tab_id);
+    batch.selection = Some(CatalogWrite {
+        value: selection,
+        expected_revision: Some(selection_revision),
+    });
+    store.apply_catalog(batch)
+}
+
 /// All changed per-tab projections and the complete undo/redo document share one
 /// SQLite transaction. A stale revision or failed write publishes nothing.
 pub(crate) fn layout_edit(
@@ -577,6 +683,43 @@ mod tests {
     }
 
     #[test]
+    fn activate_pane_updates_tab_projection_with_authoritative_focus() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        seed(&mut store)?;
+        insert(&mut store, 10, None, 100)?;
+        insert(&mut store, 11, Some(10), 101)?;
+        edit(
+            &mut store,
+            LayoutAction::Apply {
+                command: Command::Focus { pane: id(10) },
+            },
+        )?;
+        let before = store.catalog()?;
+        let committed = activate_pane(&mut store, id(4), id(11), before.layout.revision)?;
+        let validated = read_metadata(&store)?;
+        let tab = find_tab(&validated, 4);
+        let projection: pigade_layout::TabLayout = serde_json::from_str(&tab.layout_json)?;
+        let model = load_layout(&validated)?;
+        assert_eq!(tab.active_pane, Some(id(11)));
+        assert_eq!(projection, model.state().tabs[&id(4)]);
+        assert_eq!(projection.focused, Some(id(11)));
+        assert_eq!(validated, committed);
+
+        drop(store);
+        let reopened = MetadataStore::open(&path)?;
+        let restored = read_metadata(&reopened)?;
+        let tab = find_tab(&restored, 4);
+        let projection: pigade_layout::TabLayout = serde_json::from_str(&tab.layout_json)?;
+        let model = load_layout(&restored)?;
+        assert_eq!(tab.active_pane, Some(id(11)));
+        assert_eq!(projection, model.state().tabs[&id(4)]);
+        assert_eq!(projection.focused, Some(id(11)));
+        Ok(())
+    }
+
+    #[test]
     fn metadata_canonicalizes_empty_tabs_and_disallows_placement_bypass() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
@@ -864,12 +1007,14 @@ mod tests {
             DROP TRIGGER conversation_bindings_no_update;
             DROP TRIGGER conversation_bindings_no_delete;
             DROP TABLE conversation_bindings;
+            DROP INDEX prepared_launch_generation_lookup;
             DROP TABLE prepared_launches;
             DROP TABLE context_heads;
             DROP TABLE context_revisions;
             DROP TABLE layout_revisions;
             DROP TABLE template_runs;
             DROP TABLE layout_templates;
+            DROP TABLE pane_labels;
             DROP INDEX launch_session_generation_ordinal;
             ALTER TABLE launch_intents DROP COLUMN generation_ordinal;
             PRAGMA user_version=2; COMMIT;",

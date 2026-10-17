@@ -2857,3 +2857,99 @@ Integrate schema9 saved agent configurations and durable template-run UI; retain
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/template_flow.rs, crates/app/src/template_ui.rs, crates/app/src/template_commands.rs, crates/app/src/pointer_layout.rs, crates/app/README.md, crates/session-host/src/template_run.rs, crates/session-host/tests/template_run.rs, crates/storage/src/catalog.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, DESIGN.md, SPEC.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
 - Verification: Workspace298 tests passed, then selection-CAS real-PTY regression and strict host Clippy passed after native-discovered fix; app186 tests,29 harness tests, strict workspace/app Clippy, fmt/version and release builds pass. Private release pointer02 passes hover input routing/stationary-keyboard focus/off-center preview/cancel/exact sibling drop/undo with stable IDs/PIDs and no preview PTY resize; captures inspected. Private recipe05 passes explicit four-shell new-tab flow with five original process identities retained and four durable new generations; editor/review/final captures inspected.
 - Risks / next: Full MVP/platform/provider/performance gates remain open. Header-specific pointer path lacks native coverage. Retain failed native attempts: pointer01 coordinate assumption corrected; recipe01 capitalization corrected;02/03 exposed selection CAS fixed;04 failed closed before input at Xvfb displayfd handshake. Preserve unrelated edits and deferred preferences stash; live user desktop/host/CLI were not restarted.
+
+## 2026-10-17T23:05:23+00:00 — recipe_native_luna
+
+Extended the fixed catalog fixture with durable pane alias rename and keyboard-palette search/focus verification.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed; X11 helper compiled to /tmp. No native fixture run.
+- Risks / next: Parent owns the app/backend build and private native run; inspect the new renamed-header and palette-result captures there.
+
+## 2026-10-17T23:09:08+00:00 — catalog_flow_luna
+
+Add durable pane aliases, bounded panel search, and atomic pane activation.
+
+- Files: crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/prepared_launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/session-host/src/catalog.rs, crates/session-host/src/panel_directory.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo fmt --all --check; git diff --check; cargo check -p pigade-session-host; cargo test -p pigade-session-host --test template_run pane_directory_rename_search_and_cross_workspace_activation_are_durable -- --nocapture (passed); targeted storage pane-label/projection and schema v6-v9 migration tests passed. Full cargo test -p pigade-storage remains blocked by unrelated context::tests::effective_context_preserves_source_order_and_selected_memory_bound assertion; subsequent tests poison the shared mutex.
+- Risks / next: Root should integrate app API and rerun broader workspace checks; verify panel directory payload is consumed by UI.
+
+## 2026-10-17T23:10:22+00:00 — catalog_flow_luna
+
+Make the context hash tampering fixture deterministically alter its first hex digit.
+
+- Files: crates/storage/src/context.rs
+- Verification: cargo test -p pigade-storage (69 passed); cargo clippy -p pigade-storage -p pigade-session-host --all-targets -- -D warnings passed; cargo test -p pigade-session-host --test template_run pane_directory_rename_search_and_cross_workspace_activation_are_durable -- --nocapture passed; cargo fmt --all --check and git diff --check passed.
+- Risks / next: Full storage and host verification are green for this block; root should complete app integration and workspace-level checks.
+
+## 2026-10-17T23:12:44+00:00 — /root/layout_templates_luna
+
+Documented schema10 pane aliases and palette navigation: bounded resettable aliases, optional host capability, globally searchable placed-pane metadata, paged keyboard/mouse results and atomic process-free focus activation.
+
+- Files: README.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0004-durable-layout-transactions.md
+- Verification: Read app navigation/palette, host panel-directory/catalog, and storage label/migration/launch-metadata code; git diff --check -- assigned docs
+- Risks / next: Root owns current schema10 native/workspace verification; this documentation adds no independent test or native pass claim.
+
+## 2026-10-17T23:14:29+00:00 — catalog_flow_luna
+
+Bound panel-directory work to indexed lookups and pages; include localized state search and repair schema downgrade fixtures.
+
+- Files: crates/session-host/src/panel_directory.rs, crates/storage/src/prepared_launch.rs, crates/storage/src/launch.rs, crates/storage/src/catalog.rs, crates/storage/src/conversation.rs, crates/session-host/src/catalog.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo fmt --all; git diff --check passed. Cargo tests deferred while root workspace test run is active.
+- Risks / next: Root to rerun workspace verification after this backend handoff; no production lock changes made for an unconfirmed test-only lock report.
+
+## 2026-10-17T23:16:00+00:00 — catalog_flow_luna
+
+Complete panel-directory performance corrections and repair the schema-6 downgrade fixture to include its prepared-launch table.
+
+- Files: crates/session-host/src/panel_directory.rs, crates/storage/src/prepared_launch.rs, crates/storage/src/launch.rs
+- Verification: cargo test -p pigade-storage (69 passed); cargo test -p pigade-session-host --lib (118 passed); targeted pane-directory PTY integration passed; cargo clippy -p pigade-storage -p pigade-session-host --all-targets -- -D warnings passed; cargo fmt --all --check and git diff --check passed.
+- Risks / next: Root owns final workspace/app verification; no production lock behavior was changed for the previously reported unconfirmed lock failure.
+
+## 2026-10-17T23:17:10+00:00 — recipe_native_luna
+
+Added fixed 400 ms palette-readiness waits before rename action confirmation and Review result capture.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed; fixed X11 helper compiled to /tmp. No native fixture run.
+- Risks / next: Parent owns native release and isolated fixture execution.
+
+## 2026-10-17T23:21:28+00:00 — recipe_native_luna
+
+Added stage markers and short-settled captures after palette rename selection and before pane-alias save.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed; fixed helper compile passed unchanged. No native fixture run.
+- Risks / next: Parent to inspect catalog-pane-rename-dialog.ppm and catalog-pane-rename-input.ppm from the next isolated run.
+
+## 2026-10-17T23:22:39+00:00 — recipe_native_luna
+
+Aligned pane-alias and palette focus invariants with the frozen current layout after template undo.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Catalog plan-only unittest passed; Python compilation passed; git diff --check passed. No native fixture run.
+- Risks / next: Parent may continue the active private catalog run; fixed references now preserve the current mutated layout.
+
+## 2026-10-17T23:26:02+00:00 — recipe_native_luna
+
+Added bounded escaped protocol/error details to private framed-host rejections and precise palette-select/verify stage markers.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Two targeted unittest cases passed (private framed-error detail and catalog plan); Python compilation passed; git diff --check passed. No native fixture run.
+- Risks / next: Parent can use the bounded observer error to diagnose the next private catalog run.
+
+## 2026-10-17T23:26:05+00:00 — catalog_flow_luna
+
+Keep the tab projection synchronized when activating a pane changes authoritative layout focus.
+
+- Files: crates/session-host/src/catalog.rs
+- Verification: Targeted activation regression passed, verifying Catalog projection equality and reopen; strict host Clippy, formatting, and diff check passed.
+- Risks / next: Root to rebuild the host and rerun the private native activation fixture.
+
+## 2026-10-17T23:27:42+00:00 — root
+
+Integrate durable pane aliases and scoped global palette navigation; verify pointer hover and Dwindle dragging in the current release.
+
+- Files: crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, SPEC.md, DESIGN.md, crates/app/README.md, docs/AGENT_HANDOFF.md
+- Verification: Workspace301 tests passed serially before final activation fix; final host119/app191/harness30 tests pass. Strict workspace/app Clippy, formats, version alignment and release builds pass. Private pointer-current-20261018-01 and navigation-release-20261018-04 pass with unchanged process identities; held/drop/undo and alias/palette captures inspected. Native01/02 exposed alias ranking;03 exposed inconsistent activation projection; both corrected and04 passed.
+- Risks / next: Full platform/Wayland/accessibility/provider/performance/MVP acceptance remains open. Preserve unrelated research/stress edits, quarantined patches and deferred preferences; never restart user host/CLI to expose capabilities.

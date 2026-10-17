@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
+#[path = "navigation_ui.rs"]
+mod navigation_ui;
 #[path = "template_ui.rs"]
 mod template_ui;
 
@@ -27,6 +29,11 @@ pub(super) enum ProductAction {
     AddProject,
     ToggleSidebar,
     FocusPane(Uuid),
+    RenamePane,
+    ActivatePane { tab: Uuid, session: Uuid },
+    MorePanelResults,
+    FirstPanelResults,
+    ReloadPanelResults,
     OpenProjectPath,
     CreateProject,
     ChooseProjectParent,
@@ -123,6 +130,7 @@ pub(super) enum DialogKind {
     TemplateRuns,
     Manage,
     Rename,
+    RenamePane,
     Layouts,
     SaveLayout,
     DeleteLayout,
@@ -157,6 +165,7 @@ impl DialogKind {
             Self::TemplateRuns => "Незавершённые вкладки",
             Self::Manage => "Управление",
             Self::Rename => "Переименовать",
+            Self::RenamePane => "Имя панели",
             Self::Layouts => "Сохранённые раскладки",
             Self::SaveLayout => "Сохранить раскладку",
             Self::DeleteLayout => "Удалить сохранённую раскладку?",
@@ -187,8 +196,9 @@ impl DialogKind {
             Self::NewTemplateTab => &["Название вкладки"],
             Self::Recipe | Self::TemplateRun | Self::TemplateRunContext | Self::TemplateRuns => &[],
             Self::Rename | Self::SaveLayout => &["Название"],
+            Self::RenamePane => &["Имя панели · пусто — название CLI"],
             Self::Manage | Self::Layouts | Self::DeleteLayout => &[],
-            Self::Palette => &["Поиск команды"],
+            Self::Palette => &["Поиск команд, панелей и воркспейсов"],
             Self::PaneMenu => &["Поиск действия панели"],
             Self::Context => &["Инструкции", "Роль", "Память"],
             Self::ProjectContext => &["Инструкции проекта"],
@@ -220,7 +230,7 @@ impl DialogKind {
             Self::NewTemplateTab => "Проверить запуск",
             Self::TemplateRun | Self::TemplateRuns => "Закрыть",
             Self::TemplateRunContext => "Назад",
-            Self::Rename | Self::SaveLayout => "Сохранить",
+            Self::Rename | Self::RenamePane | Self::SaveLayout => "Сохранить",
             Self::Manage | Self::Layouts => "Готово",
             Self::DeleteLayout => "Удалить раскладку",
             Self::Palette => "Закрыть",
@@ -260,6 +270,12 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) panel_directory: Option<protocol::PanelDirectory>,
+    pub(super) palette_index: usize,
+    pub(super) palette_after: Option<Uuid>,
+    pub(super) palette_scroll: gpui::ScrollHandle,
+    pub(super) palette_loading: bool,
+    pub(super) palette_error: Option<String>,
     pub(super) command_modifier: crate::controls::Modifier,
     pub(super) controls_saving: bool,
     pub(super) compact: bool,
@@ -421,6 +437,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Новый воркспейс", ProductAction::CreateWorkspace),
         ("Добавить агента", ProductAction::OpenLauncher),
         ("Управление панелями", ProductAction::OpenPaneMenu),
+        ("Переименовать панель", ProductAction::RenamePane),
         ("Контекст воркспейса · E", ProductAction::EditContext),
         (
             "Контекст проекта · Shift+E",
@@ -522,6 +539,7 @@ fn panel_action(action: &ProductAction) -> bool {
     matches!(
         action,
         ProductAction::Layout(_)
+            | ProductAction::RenamePane
             | ProductAction::OpenHistory
             | ProductAction::OpenGenerations
             | ProductAction::OpenTransfer
@@ -806,15 +824,9 @@ impl ProductUi {
         if !matches!(dialog.kind, DialogKind::Palette | DialogKind::PaneMenu) {
             return None;
         }
-        let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
-        if query.trim().is_empty() {
-            return None;
-        }
-        palette_commands()
-            .into_iter()
-            .filter(|(_, action)| dialog.kind != DialogKind::PaneMenu || panel_action(action))
-            .find(|(label, _)| label.to_lowercase().contains(&query.to_lowercase()))
-            .map(|(_, action)| action)
+        self.palette_entries()
+            .get(self.palette_index)
+            .map(|entry| entry.action.clone())
     }
 
     pub(super) fn apply_context_reply(
@@ -1117,11 +1129,7 @@ impl ProductUi {
                             let Ok(id) = view.session.parse::<Uuid>() else {
                                 continue;
                             };
-                            let title = if view.frame.title.is_empty() {
-                                "Терминал"
-                            } else {
-                                view.frame.title.as_str()
-                            };
+                            let title = self.pane_title(view);
                             let live = view.state == "running";
                             tree = tree.child(
                                 div().pl(px(28.)).child(
@@ -2208,6 +2216,9 @@ impl ProductUi {
                 matches!(preview.provider.as_str(), "codex" | "claude" | "opencode")
             });
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
+        if dialog.kind == DialogKind::RenamePane {
+            fields=fields.child(div().text_size(px(12.)).text_color(colors.muted).whitespace_normal().child("Имя хранится в PigADE. Пустое поле возвращает название CLI. Процесс и его контекст сохраняются."));
+        }
         if matches!(dialog.kind, DialogKind::Manage | DialogKind::Rename)
             && let Some(target) = &self.management_target
         {
@@ -4578,7 +4589,6 @@ impl ProductUi {
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
         let colors = ProductColors::dark();
-        let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
         let mut card = div()
             .id("product-command-palette")
             .role(Role::Dialog)
@@ -4611,7 +4621,7 @@ impl ProductUi {
                     "Команды"
                 }),
         );
-        let field_label = "Поиск команды";
+        let field_label = "Команда, имя панели, роль, проект…";
         card = card.child(
             div()
                 .id("product-dialog-field-0")
@@ -4649,46 +4659,100 @@ impl ProductUi {
                 ),
         );
 
-        let commands = palette_commands();
+        let entries = self.palette_entries();
         let mut command_list = div()
             .id("product-command-list")
             .role(Role::List)
-            .aria_label("Результаты команд")
+            .aria_label("Результаты поиска")
             .flex()
             .flex_col()
             .gap_1()
             .mt(px(8.))
             .max_h(px(420.))
-            .overflow_y_scroll();
-        let mut count = 0;
-        for (index, (label, action)) in commands.iter().enumerate() {
-            if dialog.kind == DialogKind::PaneMenu && !panel_action(action) {
-                continue;
-            }
-            if !query.is_empty() && !label.to_lowercase().contains(&query.to_lowercase()) {
-                continue;
-            }
-            count += 1;
-            command_list = command_list.child(self.action_control(
-                format!("palette-command-{index}"),
-                (*label).into(),
-                action.clone(),
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: false,
-                },
-                cx,
-            ));
-        }
-        if count == 0 {
+            .overflow_y_scroll()
+            .track_scroll(&self.palette_scroll);
+        for (index, entry) in entries.iter().enumerate() {
+            let action = entry.action.clone();
             command_list = command_list.child(
                 div()
-                    .id("palette-empty")
+                    .id(format!("palette-result-{index}"))
+                    .role(Role::Button)
+                    .aria_selected(index == self.palette_index)
+                    .aria_label(format!("{} {}", entry.label, entry.detail))
                     .px(px(10.))
-                    .py(px(12.))
+                    .py(px(8.))
+                    .rounded(px(6.))
+                    .bg(if index == self.palette_index {
+                        colors.selected
+                    } else {
+                        colors.raised
+                    })
+                    .hover(|style| style.bg(colors.hover))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(colors.text)
+                            .truncate()
+                            .child(entry.label.clone()),
+                    )
+                    .children((!entry.detail.is_empty()).then(|| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .truncate()
+                            .child(entry.detail.clone())
+                    }))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.choose_palette(action.clone(), window, cx);
+                        cx.stop_propagation();
+                    })),
+            );
+        }
+        if self.palette_loading {
+            command_list = command_list.child(
+                div()
+                    .px(px(10.))
+                    .py(px(10.))
                     .text_color(colors.muted)
-                    .child("Нет подходящих команд"),
+                    .child("Поиск панелей…"),
+            );
+        } else if entries.is_empty() {
+            command_list = command_list.child(
+                div()
+                    .px(px(10.))
+                    .py(px(10.))
+                    .text_color(colors.muted)
+                    .child("Ничего не найдено. Уточните запрос."),
+            );
+        }
+        if let Some(error) = &self.palette_error {
+            command_list = command_list.child(
+                div()
+                    .px(px(10.))
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(format!("Поиск панелей: {error}")),
+            );
+        }
+        card = card.child(
+            div()
+                .px(px(8.))
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child("↑ ↓ — выбрать · Enter — открыть · Escape — закрыть"),
+        );
+        if let Some(notice) = &self.notice {
+            card = card.child(
+                div()
+                    .px(px(8.))
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(notice.clone()),
             );
         }
         card = card.child(command_list);

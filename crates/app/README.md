@@ -6,6 +6,8 @@ The native GPUI application displays cell replicas from the independent Rust ses
 
 This is the application under development, not a separate comparison stand. Project/workspace/tab navigation, saved tiling, drag/drop/resize and reviewed startup context are connected to the real host. Terminal/recovery/platform gates and the full MVP remain open.
 
+The palette searches placed panels across Ready workspaces by display name, provider, frozen role, known state and project/workspace/tab. Arrow keys and Enter select the same rows as mouse clicks; explicit next/first controls page through64 panel results. Search replies bind the dialog/query/editor revision. Activation atomically selects the destination scope and focus without changing generation pins or spawning a process. Rename panel stores a revisioned local alias (128 characters/512 UTF-8 bytes, empty resets); it does not write the CLI title or context. These additive features require the host's pane-label capability; older hosts remain running with the feature unavailable.
+
 Local queue saturation reports that the current input was not accepted and allows subsequent input once capacity returns; it never retries rejected bytes. Intermediate mouse motion leaves eight of the32 receipt slots for keys and button transitions. This local backpressure does not acknowledge host rejections or unlock unknown outcomes. Solid Unicode block elements are drawn against device-aligned cell geometry, keeping OpenCode logos and borders continuous when font and row heights differ; shade patterns retain font rendering.
 
 Idle updates use conditional polling: the host returns only selection metadata

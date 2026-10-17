@@ -172,6 +172,13 @@ pub struct LayoutTemplateDelete {
     pub id: Uuid,
     pub expected_revision: u64,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneLabel {
+    pub session: Uuid,
+    /// Empty names are revisioned tombstones that reset the visible title.
+    pub name: String,
+    pub revision: u64,
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct CanvasOffset {
     pub x: f64,
@@ -256,6 +263,8 @@ pub struct Catalog {
     pub layout_templates: Option<Vec<LayoutTemplate>>,
     #[serde(default)]
     pub template_launch_schema: Option<u16>,
+    #[serde(default)]
+    pub pane_labels: Option<Vec<PaneLabel>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -353,6 +362,21 @@ pub(crate) fn migrate_template_launches(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn migrate_pane_labels(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE pane_labels (
+        session_id TEXT PRIMARY KEY, name TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision>0)
+    ) WITHOUT ROWID;
+    CREATE INDEX prepared_launch_generation_lookup
+        ON prepared_launches(
+            json_extract(payload,'$.launch.session'),
+            json_extract(payload,'$.launch.generation')
+        );",
+    )?;
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
@@ -363,6 +387,18 @@ impl MetadataStore {
     /// bounds are checked before commit. No process lifecycle is affected.
     pub fn apply_catalog(&mut self, batch: CatalogBatch) -> Result<Catalog> {
         self.apply_catalog_internal(batch, None)
+    }
+
+    /// Compare-and-swap one durable pane alias without exposing label writes to
+    /// generic catalog batches.
+    pub fn save_pane_label(&mut self, write: CatalogWrite<PaneLabel>) -> Result<Catalog> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_pane_label(&tx, write)?;
+        let catalog = read_catalog(&tx)?;
+        tx.commit()?;
+        Ok(catalog)
     }
 
     /// Atomically save catalog/layout changes with the prepared template-run
@@ -627,6 +663,34 @@ fn write_tab(tx: &Transaction<'_>, write: CatalogWrite<Tab>) -> Result<()> {
     }
     Ok(())
 }
+fn write_pane_label(tx: &Transaction<'_>, write: CatalogWrite<PaneLabel>) -> Result<()> {
+    let label = write.value;
+    ensure!(!label.session.is_nil(), "pane label session cannot be nil");
+    ensure!(
+        label.name.len() <= 512
+            && label.name.chars().count() <= 128
+            && label.name.trim() == label.name
+            && !label.name.chars().any(char::is_control),
+        "pane label must be trimmed, bounded, and contain no control characters"
+    );
+    let next = revision(label.revision, write.expected_revision)?;
+    match write.expected_revision {
+        None => {
+            tx.execute(
+                "INSERT INTO pane_labels(session_id,name,revision) VALUES(?1,?2,1)",
+                params![label.session.to_string(), label.name],
+            )?;
+        }
+        Some(expected) => {
+            let changed = tx.execute(
+                "UPDATE pane_labels SET name=?2,revision=?3 WHERE session_id=?1 AND revision=?4",
+                params![label.session.to_string(), label.name, next, expected as i64],
+            )?;
+            conflict(changed, "pane label", label.session, expected)?;
+        }
+    }
+    Ok(())
+}
 fn write_layout_template(tx: &Transaction<'_>, write: CatalogWrite<LayoutTemplate>) -> Result<()> {
     let template = write.value;
     let next = revision(template.revision, write.expected_revision)?;
@@ -813,6 +877,35 @@ fn write_layout(tx: &Transaction<'_>, write: CatalogWrite<LayoutDocument>) -> Re
     conflict(changed, "layout history", Uuid::nil(), expected)
 }
 
+fn read_pane_labels(connection: &Connection, count: usize) -> Result<Vec<PaneLabel>> {
+    let mut labels = Vec::with_capacity(count);
+    let mut statement = connection
+        .prepare("SELECT session_id,name,revision FROM pane_labels ORDER BY session_id")?;
+    for row in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, u64>(2)?,
+        ))
+    })? {
+        let (session, name, revision) = row?;
+        let label = PaneLabel {
+            session: Uuid::parse_str(&session)?,
+            name,
+            revision,
+        };
+        ensure!(
+            label.name.len() <= 512
+                && label.name.chars().count() <= 128
+                && label.name.trim() == label.name
+                && !label.name.chars().any(char::is_control),
+            "stored pane label is outside bounds"
+        );
+        labels.push(label);
+    }
+    Ok(labels)
+}
+
 fn read_catalog(connection: &Connection) -> Result<Catalog> {
     let counts:(usize,usize,usize,usize)=connection.query_row("SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM workspaces),(SELECT COUNT(*) FROM tabs),(SELECT COUNT(*) FROM project_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))?;
     ensure!(
@@ -830,6 +923,9 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         template_count <= MAX_LAYOUT_TEMPLATES,
         "too many stored layout templates"
     );
+    let pane_label_count: usize =
+        connection.query_row("SELECT COUNT(*) FROM pane_labels", [], |row| row.get(0))?;
+    ensure!(pane_label_count <= 100_000, "too many stored pane labels");
     let bytes:usize=connection.query_row("SELECT
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(canonical_path AS BLOB))+length(CAST(git_common_dir AS BLOB))) FROM projects),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(relative_path AS BLOB))) FROM project_roots),0)+
@@ -837,7 +933,8 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(layout_json AS BLOB))) FROM tabs),0)+
       COALESCE((SELECT length(CAST(window_json AS BLOB)) FROM catalog_selection WHERE singleton=1),0)+
       COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)+
-      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))+COALESCE(length(CAST(launches_json AS BLOB)),0)) FROM layout_templates),0)",[],|row|row.get(0))?;
+      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))+COALESCE(length(CAST(launches_json AS BLOB)),0)) FROM layout_templates),0)+
+      COALESCE((SELECT SUM(length(CAST(name AS BLOB))) FROM pane_labels),0)",[],|row|row.get(0))?;
     ensure!(
         bytes <= MAX_MANIFEST_BYTES,
         "catalog exceeds bounded manifest bytes; load/archive fewer records"
@@ -1004,6 +1101,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         layout,
         layout_templates: Some(layout_templates),
         template_launch_schema: Some(1),
+        pane_labels: Some(read_pane_labels(connection, pane_label_count)?),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1226,6 +1324,73 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(store.catalog()?.layout_templates.unwrap().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn pane_labels_use_revisioned_tombstones_and_validate_names() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let session = Uuid::new_v4();
+        let saved = store.save_pane_label(CatalogWrite {
+            value: PaneLabel {
+                session,
+                name: "Reviewer".into(),
+                revision: 0,
+            },
+            expected_revision: None,
+        })?;
+        assert_eq!(
+            saved.pane_labels.as_ref().unwrap(),
+            &[PaneLabel {
+                session,
+                name: "Reviewer".into(),
+                revision: 1,
+            }]
+        );
+        let reset = store.save_pane_label(CatalogWrite {
+            value: PaneLabel {
+                session,
+                name: String::new(),
+                revision: 1,
+            },
+            expected_revision: Some(1),
+        })?;
+        assert_eq!(reset.pane_labels.as_ref().unwrap()[0].name, "");
+        assert_eq!(reset.pane_labels.as_ref().unwrap()[0].revision, 2);
+        assert!(
+            store
+                .save_pane_label(CatalogWrite {
+                    value: PaneLabel {
+                        session,
+                        name: "stale".into(),
+                        revision: 1,
+                    },
+                    expected_revision: Some(1),
+                })
+                .is_err()
+        );
+        for name in [
+            " bad".to_string(),
+            "bad ".to_string(),
+            "line\nbreak".to_string(),
+            "nul\0name".to_string(),
+            "x".repeat(513),
+        ] {
+            assert!(
+                store
+                    .save_pane_label(CatalogWrite {
+                        value: PaneLabel {
+                            session: Uuid::new_v4(),
+                            name,
+                            revision: 0,
+                        },
+                        expected_revision: None,
+                    })
+                    .is_err()
+            );
+        }
         Ok(())
     }
 
@@ -1881,7 +2046,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            9
+            10
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -1976,7 +2141,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                9
+                10
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

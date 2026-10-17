@@ -120,6 +120,7 @@ fn error_response(
         providers: None,
         template_run: None,
         template_runs: None,
+        panel_directory: None,
     }
 }
 
@@ -202,6 +203,7 @@ fn process_connection(
                 providers: None,
                 template_run: None,
                 template_runs: None,
+                panel_directory: None,
             },
             Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
         };
@@ -280,6 +282,7 @@ mod tests {
             providers: None,
             template_run: None,
             template_runs: None,
+            panel_directory: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -447,6 +450,7 @@ mod tests {
             providers: None,
             template_run: None,
             template_runs: None,
+            panel_directory: None,
         })?;
         assert!(receive::<Response>(&mut command_client)?.error.is_none());
         command_worker.join().unwrap()?;

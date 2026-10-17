@@ -51,3 +51,26 @@ visibility and selection only; restore must retain the archived cwd/mode and
 pass the host's original checkout/Git common-directory check. An older host
 without the optional launch-schema capability reports launch-template support
 unavailable; the UI does not restart it.
+
+## Pane aliases and palette activation — 2026-10-18
+
+Schema10 adds a separate revisioned `pane_labels` table. Aliases are bounded to
+128 Unicode scalar values and512 UTF-8 bytes and reject control characters or
+surrounding whitespace; an empty label is a retained tombstone that clears the
+override and returns the displayed title to the CLI/OSC title. These labels do
+not modify terminal title state, launch snapshots/context, process generations,
+placement, or layout undo. Rename is compare-and-swap and only applies while the
+logical pane remains placed in a Ready workspace. An older host omits the
+optional pane-label catalog capability, so the UI leaves rename/search disabled
+without restarting the host.
+
+Panel search is read-only and returns at most64 entries per page for currently
+placed panes in Ready workspaces. It matches alias/display title, provider,
+frozen role, launch state, project, workspace task and tab name. The palette
+provides explicit next-page and return-to-first-page actions; mouse and
+arrow/Enter use the same visible ordering. Requests are correlated to the
+palette dialog, query and editor revision so a stale response cannot replace a
+newer search. Activation rechecks the current layout revision and pane-to-tab
+membership, then atomically updates focused pane, tab projection and selected
+project/workspace/tab; a focus-only change is excluded from placement undo and
+does not start a process. Existing generation pins are preserved.
