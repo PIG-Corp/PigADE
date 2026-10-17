@@ -1,5 +1,6 @@
 //! The host is the sole ANSI parser. A Frame is a render replica, NOT a checkpoint.
 pub mod history;
+pub mod history_text;
 pub use alacritty_terminal::term::resources::{
     AllocationCensus, CensusLimits, GridAllocationCensus, ResourceCensus,
 };

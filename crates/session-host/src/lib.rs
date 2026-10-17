@@ -7,6 +7,7 @@ pub mod checkpoint;
 pub mod generations;
 pub mod history;
 pub mod history_read;
+pub mod history_view;
 pub mod input;
 mod panel_launch;
 mod prepared;
@@ -107,6 +108,9 @@ pub enum Command {
     List,
     HistoryRead {
         query: history_read::Query,
+    },
+    HistoryView {
+        query: history_view::Query,
     },
     Poll {
         known: Vec<poll::Known>,
@@ -267,6 +271,8 @@ pub struct Response {
     pub generations: Option<generations::GenerationList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_selection: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_view: Option<history_view::Reply>,
 }
 
 /// Stable machine-readable proof that no part of a command was admitted.
@@ -518,6 +524,43 @@ fn restore_model(
     path: &Path,
     fast: bool,
 ) -> Result<(View, Terminal, Option<Arc<history::History>>)> {
+    restore_model_through(path, fast, None)
+}
+
+/// Freeze only the durable prefix that was published for this exact generation.
+/// A history request never reparses an arbitrarily large raw journal on behalf
+/// of the UI. Existing recovery has a separate, unrestricted replay contract.
+pub(crate) fn restore_history_view(
+    path: &Path,
+    session: Uuid,
+    generation: Uuid,
+    sequence: u64,
+) -> Result<(Terminal, Arc<history::History>, Vec<String>)> {
+    let reader = JournalReader::open(path)?;
+    ensure!(
+        reader.header().session_id == session && reader.header().generation == generation,
+        "history snapshot source identity mismatch"
+    );
+    drop(reader);
+    let (view, terminal, history) = restore_model_through(path, true, Some(sequence))?;
+    ensure!(
+        view.session == session && view.generation == generation && view.sequence == sequence,
+        "history snapshot did not reach its published source watermark"
+    );
+    let warnings = view.storage_error.into_iter().collect();
+    Ok((
+        terminal,
+        history.context("complete normal history unavailable")?,
+        warnings,
+    ))
+}
+
+fn restore_model_through(
+    path: &Path,
+    fast: bool,
+    target: Option<u64>,
+) -> Result<(View, Terminal, Option<Arc<history::History>>)> {
+    const HISTORY_REPLAY_BYTES: u64 = 16 * 1024 * 1024;
     let mut reader = JournalReader::open(path)?;
     let header = reader.header().clone();
     let policy = journal_policy::Policy::from_profile(&header.profile)
@@ -532,10 +575,11 @@ fn restore_model(
     let parent = path.parent().context("journal parent")?;
     let mut history = Some(history::History::replay(parent, &header, None)?);
     let selection = if fast {
-        checkpoint::latest(
+        checkpoint::latest_through(
             path.parent().context("journal parent")?,
             &header,
             fs::metadata(path)?.len(),
+            target.unwrap_or(u64::MAX),
         )?
     } else {
         checkpoint::Selection {
@@ -548,9 +592,10 @@ fn restore_model(
         .loaded
         .as_ref()
         .is_some_and(|saved| saved.history.is_none())
-        && pigade_storage::scan_valid_prefix(path)?
-            .corruption
-            .is_none()
+        && (target.is_some()
+            || pigade_storage::scan_valid_prefix(path)?
+                .corruption
+                .is_none())
     {
         // Legacy hot-only checkpoints cannot stand in for a cold-history root.
         // Rebuild from valid raw events; retain the old hot checkpoint only when
@@ -588,7 +633,16 @@ fn restore_model(
         terminal.set_history_observer(Some(history.clone()));
     }
     let mut storage_error = (!recovery_warnings.is_empty()).then(|| recovery_warnings.join("; "));
+    let replay_start_bytes = reader.bytes_read();
     loop {
+        if target.is_some_and(|target| sequence == target) {
+            break;
+        }
+        ensure!(
+            target.is_none()
+                || reader.bytes_read().saturating_sub(replay_start_bytes) < HISTORY_REPLAY_BYTES,
+            "history snapshot exceeds bounded replay tail; a newer complete checkpoint is required"
+        );
         let event = match reader.next_event() {
             Ok(Some(event)) => event,
             Ok(None) => break,
@@ -600,6 +654,11 @@ fn restore_model(
                 break;
             }
         };
+        ensure!(
+            target.is_none()
+                || reader.bytes_read().saturating_sub(replay_start_bytes) <= HISTORY_REPLAY_BYTES,
+            "history snapshot exceeds bounded replay tail; a newer complete checkpoint is required"
+        );
         // A valid frame CRC does not prove its typed payload is applicable to
         // this terminal profile. Validate before history.begin or any mutation
         // so malformed tails cannot hide an otherwise recoverable generation.
@@ -635,6 +694,11 @@ fn restore_model(
         }
         sequence = event.sequence;
     }
+    ensure!(
+        target.is_none_or(|target| sequence == target),
+        "history snapshot source watermark unavailable: requested {}, recovered {sequence}",
+        target.unwrap_or_default()
+    );
     if let Some(history) = &history {
         history.finish_replay()?;
     }
@@ -655,6 +719,25 @@ fn restore_model(
     Ok((view, terminal, history))
 }
 impl Host {
+    fn history_view_source(&self, query: &history_view::Query) -> Result<Option<(PathBuf, u64)>> {
+        let history_view::Query::Open {
+            session,
+            generation,
+        } = query
+        else {
+            return Ok(None);
+        };
+        for candidate in &self.sessions {
+            let view = candidate.view.lock().expect("view lock");
+            if view.session == *session && view.generation == *generation {
+                return Ok(Some((
+                    self.root.join(format!("{generation}.journal")),
+                    view.sequence,
+                )));
+            }
+        }
+        bail!("unknown session generation")
+    }
     fn history_source(&self, query: &history_read::Query) -> Result<Arc<history::History>> {
         query.validate()?;
         for session in &self.sessions {
@@ -719,6 +802,7 @@ impl Host {
                 change_token: result.change_token,
                 generations: None,
                 generation_selection: None,
+                history_view: None,
             });
         }
         if matches!(
@@ -761,6 +845,7 @@ impl Host {
                 change_token: None,
                 generations: None,
                 generation_selection: None,
+                history_view: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -782,6 +867,7 @@ impl Host {
                 change_token: None,
                 generations: None,
                 generation_selection: None,
+                history_view: None,
             });
         }
         match &command {
@@ -804,6 +890,7 @@ impl Host {
                     change_token: None,
                     generations: Some(generations),
                     generation_selection: Some(true),
+                    history_view: None,
                 });
             }
             Command::SelectGeneration {
@@ -829,6 +916,7 @@ impl Host {
                     change_token: None,
                     generations: None,
                     generation_selection: Some(true),
+                    history_view: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -915,6 +1003,7 @@ impl Host {
                     change_token: None,
                     generations: None,
                     generation_selection: None,
+                    history_view: None,
                 });
             }
         };
@@ -935,6 +1024,7 @@ impl Host {
             change_token: None,
             generations: None,
             generation_selection: Some(true),
+            history_view: None,
         })
     }
     fn launch_response(
@@ -960,6 +1050,7 @@ impl Host {
             change_token: None,
             generations: None,
             generation_selection: None,
+            history_view: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -2082,6 +2173,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     host.endpoint_root = runtime.clone();
     let jobs = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
     let history_reader = history_read::Reader::new()?;
+    let history_view_reader = history_view::Reader::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
     // independent verifiers that do not participate in this host's state lock.
@@ -2098,6 +2190,15 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
         eprintln!("Private replay-cache cleanup unavailable: {error}");
     }
     for job in jobs {
+        if let Command::HistoryView { query } = job.request.command {
+            match host.history_view_source(&query) {
+                Ok(source) => history_view_reader.submit(query, source, job.reply),
+                Err(error) => {
+                    let _ = job.reply.try_send(history_read::response(Err(error), None));
+                }
+            }
+            continue;
+        }
         if let Command::HistoryRead { query } = job.request.command {
             match host.history_source(&query) {
                 Ok(source) => history_reader.submit(source, query, job.reply),
@@ -2126,6 +2227,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 change_token: None,
                 generations: None,
                 generation_selection: None,
+                history_view: None,
             },
         };
         let _ = job.reply.try_send(response);

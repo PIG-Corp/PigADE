@@ -49,6 +49,7 @@ CONTEXT_PASS = 'pass-private-x11-workspace-context-editor-fixture'
 MEMORY_PASS = 'pass-private-x11-startup-memory-review-fixture'
 GENERATIONS_PASS = 'pass-private-x11-generation-history-selection-fixture'
 RESUME_PASS = 'pass-private-x11-codex-resume-review-fixture'
+HISTORY_PASS = 'pass-private-x11-readonly-terminal-history-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -353,7 +354,8 @@ def deactivate_private_fcitx(config, env):
 def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
-            'generations': GENERATIONS_PASS, 'resume': RESUME_PASS}[name]
+            'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
+            'history': HISTORY_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False):
@@ -653,6 +655,46 @@ def run_memory_fixture(config, report, env, save):
         'scope': 'isolated Xvfb and host metadata; prepared launch only',
     }
     report.update({'status': MEMORY_PASS, 'stage': 'complete'})
+    save()
+
+
+def run_history_fixture(config, report, control, env, save):
+    report['stage'] = 'terminal-history-viewer'
+    save()
+    deactivate_private_fcitx(config, env)
+    session, generation = report['fixture']['session'], report['fixture']['generation']
+    baseline_models = fixture_session_models(session)
+    baseline_generations = fixture_generations()
+    baseline_layout = host_request({'command': 'catalog'})['catalog']['layout']
+    source_hashes = fixture_journal_hashes([generation])
+    helper_call(config, 'history-open')
+    time.sleep(0.8)
+    helper_call(config, 'capture', '/artifacts/history-open.ppm')
+    helper_call(config, 'history-readonly')
+    time.sleep(0.3)
+    helper_call(config, 'capture', '/artifacts/history-readonly.ppm')
+    helper_call(config, 'history-search')
+    time.sleep(0.8)
+    helper_call(config, 'capture', '/artifacts/history-search.ppm')
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'history UI sent input to the CLI')
+    models = fixture_session_models(session)
+    require(set(models) == set(baseline_models) and
+            all((models[key]['sequence'], models[key]['frame']) ==
+                (baseline_models[key]['sequence'], baseline_models[key]['frame'])
+                for key in baseline_models) and
+            fixture_generations() == baseline_generations and
+            fixture_journal_hashes([generation]) == source_hashes,
+            'history viewer changed terminal model, journal or process generations')
+    require(host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+            'history viewer changed the layout')
+    report['history'] = {'session': session, 'generation': generation,
+        'cli_input_absent': True, 'model_and_journal_unchanged': True,
+        'new_processes': False,
+        'captures': ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'],
+        'scope': 'fixed private X11 history sheet; visual search/selection need image review'}
+    report.update({'status': HISTORY_PASS, 'stage': 'complete'})
     save()
 
 
@@ -1449,7 +1491,7 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
-        if config.get('fixture') in ('context', 'memory', 'generations', 'resume'):
+        if config.get('fixture') in ('context', 'memory', 'generations', 'resume', 'history'):
             report['fixture'].update(seed_context_catalog(session, memory_fixture=config.get('fixture') == 'memory'))
         if config.get('fixture') == 'resume':
             prepare_resume_fixture(report)
@@ -1497,6 +1539,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'resume':
             run_resume_fixture(config, report, app_env, save)
+            return 0
+        if config.get('fixture') == 'history':
+            run_history_fixture(config, report, control, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1633,9 +1678,10 @@ def outer_run(args) -> dict:
                  ['generations-picker.ppm', 'generation-pinned-old.ppm',
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
                  ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
+                 ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume fixture only',
+            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1654,6 +1700,7 @@ def plan(args) -> dict:
                   'memory': 'fixed Ctrl+Shift+Space, V, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
+                  'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
@@ -1668,6 +1715,8 @@ def plan(args) -> dict:
                        if args.fixture == 'generations' else
                        'private fake Codex only; resume review is captured before explicit confirmation'
                        if args.fixture == 'resume' else
+                       'history view opens, selects/copies without mutation, and searches READY; no PTY input is allowed'
+                       if args.fixture == 'history' else
                        'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
@@ -1680,6 +1729,8 @@ def plan(args) -> dict:
                     if args.fixture == 'generations' else
                     'resume review and new-generation captures are retained for human review'
                     if args.fixture == 'resume' else
+                    'history open/search/readonly captures are retained for human review'
+                    if args.fixture == 'history' else
                     'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
@@ -1689,8 +1740,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, generation history, or Codex resume fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, generations, Codex resume, or text history fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

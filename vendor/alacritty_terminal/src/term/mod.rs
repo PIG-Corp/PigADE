@@ -653,6 +653,16 @@ impl<T> Term<T> {
         &self.grid
     }
 
+    /// Access the normal-screen grid, including its hot scrollback, even while
+    /// the alternate screen is active.
+    pub fn normal_grid(&self) -> &Grid<Cell> {
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            &self.inactive_grid
+        } else {
+            &self.grid
+        }
+    }
+
     /// Mutable access to the raw grid data structure.
     pub fn grid_mut(&mut self) -> &mut Grid<Cell> {
         &mut self.grid

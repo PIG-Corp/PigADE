@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn history_snapshot_stops_at_exact_published_watermark_with_newer_checkpoint() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let header = JournalHeader {
+        session_id: Uuid::new_v4(),
+        generation: Uuid::new_v4(),
+        profile: CORE_PROFILE.into(),
+        initial_rows: 3,
+        initial_cols: 16,
+    };
+    let path = directory
+        .path()
+        .join(format!("{}.journal", header.generation));
+    let mut journal = Journal::create(&path, header.clone())?;
+    let history = history::History::live(directory.path(), &header)?;
+    let mut terminal = Terminal::new(Geometry::new(3, 16)?, false);
+    terminal.set_history_observer(Some(history.clone()));
+    let mut expected = Vec::new();
+    for bytes in [
+        b"old normal\r\n".as_slice(),
+        b"\x1b[?1049hnew alt".as_slice(),
+    ] {
+        let receipt = journal.append(EventKind::Output, bytes)?;
+        history.begin(receipt.sequence)?;
+        terminal.output(bytes);
+        history.commit()?;
+        expected.push(terminal.checkpoint()?);
+        checkpoint::publish_with_history(
+            directory.path(),
+            &header,
+            receipt,
+            &terminal,
+            Some(history.checkpoint()?),
+        )?;
+    }
+    let raw_before = fs::read(&path)?;
+    for sequence in 0..=2 {
+        let (restored, archive, _) =
+            restore_history_view(&path, header.session_id, header.generation, sequence)?;
+        if sequence > 0 {
+            ensure!(restored.checkpoint()? == expected[sequence as usize - 1]);
+        } else {
+            ensure!(
+                restored.checkpoint()?
+                    == Terminal::new(Geometry::new(3, 16)?, false).checkpoint()?
+            );
+        }
+        ensure!(archive.state().applied_sequence == sequence);
+    }
+    ensure!(restore_history_view(&path, header.session_id, header.generation, 3).is_err());
+    ensure!(restore_history_view(&path, Uuid::new_v4(), header.generation, 1).is_err());
+    ensure!(
+        fs::read(&path)? == raw_before,
+        "history viewer changed raw source"
+    );
+    Ok(())
+}
+
+#[test]
 fn rejected_tail_preserves_complete_hidden_state_and_continuation() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let header = JournalHeader {

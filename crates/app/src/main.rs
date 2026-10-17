@@ -4,6 +4,7 @@ mod command_worker;
 mod cursor;
 mod edit_field;
 mod font;
+mod history_view;
 mod input;
 mod memory_choice;
 mod mouse;
@@ -971,6 +972,9 @@ impl CanvasApp {
                             this.product.busy = false;
                             match reply {
                                 Ok(reply) => {
+                                    if reply.history_view_request {
+                                        this.apply_history_reply(reply.history_view.clone(), cx);
+                                    }
                                     if let Some(selection) = reply.selection {
                                         let generation_changed = this.product.catalog.as_ref().is_some_and(|catalog| catalog.selection.window.panel_generations != selection.window.panel_generations);
                                         if let Some(catalog) = &mut this.product.catalog
@@ -1051,6 +1055,9 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if this.product.history_sheet.as_ref().is_some_and(|history| history.pending.is_some()) {
+                                        this.apply_history_error(error.message.clone(), cx);
+                                    }
                                     if let Some((tab, _)) = this.canvas_saving.take() {
                                         this.canvas_dirty.insert(tab);
                                         this.canvas_save_at = None;
@@ -1280,6 +1287,657 @@ impl CanvasApp {
         cx.notify();
     }
 
+    fn issue_history_query(
+        &mut self,
+        query: protocol::HistoryViewQuery,
+        pending: history_view::Pending,
+        cx: &mut Context<Self>,
+    ) {
+        if self.product.busy {
+            self.product.notice = Some("Подождите завершения запроса истории".into());
+            cx.notify();
+            return;
+        }
+        let Some(history) = &mut self.product.history_sheet else {
+            return;
+        };
+        history.pending = Some(pending);
+        history.error = None;
+        let command = serde_json::to_value(query)
+            .map(|query| json!({"command":"history_view","query":query}));
+        match command {
+            Ok(command) => self.product_command(command, cx),
+            Err(error) => {
+                if let Some(history) = &mut self.product.history_sheet {
+                    history.pending = None;
+                    history.error = Some(format!("Запрос истории не собран: {error}"));
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn open_history(&mut self, cx: &mut Context<Self>) {
+        if self.product.busy {
+            self.product.notice =
+                Some("Дождитесь завершения операции перед открытием истории".into());
+            return;
+        }
+        let Some(view) = self.state.views.get(self.selected) else {
+            self.product.notice = Some("Сначала выберите терминальную панель".into());
+            cx.notify();
+            return;
+        };
+        let (Ok(session), Ok(generation)) = (
+            view.session.parse::<uuid::Uuid>(),
+            view.generation.parse::<uuid::Uuid>(),
+        ) else {
+            self.product.notice = Some("У выбранной панели нет точной идентичности".into());
+            cx.notify();
+            return;
+        };
+        let dialog = product::Dialog::new(product::DialogKind::History);
+        let dialog_id = dialog.id;
+        self.product.dialog = Some(dialog);
+        self.product.history_sheet = Some(history_view::HistorySheet::new(
+            dialog_id, session, generation,
+        ));
+        self.issue_history_query(
+            protocol::HistoryViewQuery::Open {
+                session,
+                generation,
+            },
+            history_view::Pending::Open,
+            cx,
+        );
+    }
+
+    fn history_open_snapshot(&mut self, cx: &mut Context<Self>) {
+        let Some(history) = &mut self.product.history_sheet else {
+            return;
+        };
+        history.closed = false;
+        history.status = "Обновление снимка истории…".into();
+        history.page = None;
+        history.back.clear();
+        let session = history.session;
+        let generation = history.generation;
+        self.issue_history_query(
+            protocol::HistoryViewQuery::Open {
+                session,
+                generation,
+            },
+            history_view::Pending::Open,
+            cx,
+        );
+    }
+
+    fn history_page(
+        &mut self,
+        cursor: protocol::HistoryCursor,
+        remember: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.product.busy {
+            return;
+        }
+        let Some(history) = &mut self.product.history_sheet else {
+            return;
+        };
+        let Some(snapshot) = history.snapshot else {
+            return;
+        };
+        if remember && let Some(page) = &history.page {
+            history.remember_page(page.start);
+        }
+        self.issue_history_query(
+            protocol::HistoryViewQuery::Page {
+                snapshot,
+                start: cursor,
+            },
+            history_view::Pending::Page { start: cursor },
+            cx,
+        );
+    }
+
+    fn history_search(
+        &mut self,
+        continuation: Option<protocol::HistoryCursor>,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == product::DialogKind::History)
+            .and_then(|dialog| dialog.fields.first())
+            .map(|field| field.text().to_owned())
+            .unwrap_or_default();
+        if text.is_empty() || text.len() > history_view::SEARCH_TEXT_LIMIT {
+            if let Some(history) = &mut self.product.history_sheet {
+                history.error = Some(if text.is_empty() {
+                    "Введите текст для поиска".into()
+                } else {
+                    "Запрос поиска не может превышать 512 байт UTF-8".into()
+                });
+            }
+            cx.notify();
+            return;
+        }
+        let Some(snapshot) = self
+            .product
+            .history_sheet
+            .as_ref()
+            .and_then(|history| history.snapshot)
+        else {
+            return;
+        };
+        if let Some(history) = &mut self.product.history_sheet {
+            history.status = "Поиск…".into();
+            history.error = None;
+            if let Some(dialog) = &mut self.product.dialog {
+                dialog.active_field = 0;
+            }
+            history.match_at = None;
+            if continuation.is_none() {
+                history.search_next = None;
+            }
+        }
+        self.issue_history_query(
+            protocol::HistoryViewQuery::Search {
+                snapshot,
+                text: text.clone(),
+                cursor: continuation,
+            },
+            history_view::Pending::Search {
+                text,
+                cursor: continuation,
+            },
+            cx,
+        );
+    }
+
+    fn close_history(&mut self, refresh: bool, cx: &mut Context<Self>) {
+        let Some(history) = &mut self.product.history_sheet else {
+            self.product.dialog = None;
+            return;
+        };
+        history.closed = !refresh;
+        if !refresh {
+            self.product.dialog = None;
+        }
+        if self.product.busy {
+            if let Some(history) = &mut self.product.history_sheet {
+                history.status = "Закрывается после текущего запроса…".into();
+            }
+            cx.notify();
+            return;
+        }
+        let Some(snapshot) = history.snapshot else {
+            if refresh {
+                self.history_open_snapshot(cx);
+            } else {
+                self.product.history_sheet = None;
+            }
+            return;
+        };
+        self.issue_history_query(
+            protocol::HistoryViewQuery::Close { snapshot },
+            history_view::Pending::Close { refresh },
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn close_history_snapshot(&mut self, snapshot: uuid::Uuid, cx: &mut Context<Self>) {
+        if let Some(history) = &mut self.product.history_sheet {
+            history.pending = Some(history_view::Pending::Close { refresh: false });
+        }
+        self.product_command(
+            json!({"command":"history_view","query":{"action":"close","snapshot":snapshot}}),
+            cx,
+        );
+    }
+
+    fn history_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        let control = key.modifiers.control || key.modifiers.platform;
+        let shift = key.modifiers.shift;
+        let Some(history) = self.product.history_sheet.as_ref() else {
+            return;
+        };
+        let current = history.page.as_ref();
+        let previous = history
+            .back
+            .last()
+            .copied()
+            .or_else(|| current.and_then(|page| page.previous));
+        let next = current.and_then(|page| page.next);
+        let start = current.map(|_| protocol::HistoryCursor { row: 0, offset: 0 });
+        let end = current.map(|page| protocol::HistoryCursor {
+            row: page.total_rows.saturating_sub(128),
+            offset: 0,
+        });
+        match key.key.as_str() {
+            "escape" => self.close_history(false, cx),
+            "tab" => {
+                if let Some(dialog) = &mut self.product.dialog {
+                    dialog.fields[dialog.active_field].cancel_mark();
+                    dialog.active_field = 0;
+                }
+            }
+            "left" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(
+                        if control {
+                            text_edit::Movement::WordLeft
+                        } else {
+                            text_edit::Movement::Left
+                        },
+                        shift,
+                    );
+                }
+            }
+            "right" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(
+                        if control {
+                            text_edit::Movement::WordRight
+                        } else {
+                            text_edit::Movement::Right
+                        },
+                        shift,
+                    );
+                }
+            }
+            "home" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(
+                        if control {
+                            text_edit::Movement::DocumentStart
+                        } else {
+                            text_edit::Movement::LineStart
+                        },
+                        shift,
+                    );
+                }
+            }
+            "end" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(
+                        if control {
+                            text_edit::Movement::DocumentEnd
+                        } else {
+                            text_edit::Movement::LineEnd
+                        },
+                        shift,
+                    );
+                }
+            }
+            "up" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(text_edit::Movement::Up, shift);
+                }
+            }
+            "down" => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.navigate(text_edit::Movement::Down, shift);
+                }
+            }
+            "a" if control => {
+                if let Some(buffer) = self.product.selection_editor_mut() {
+                    buffer.select_all();
+                }
+            }
+            "c" if control => {
+                let text = self
+                    .product
+                    .selection_editor_mut()
+                    .map(|buffer| {
+                        if buffer.selected_text().is_empty() {
+                            buffer.text().to_owned()
+                        } else {
+                            buffer.selected_text().to_owned()
+                        }
+                    })
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            "pageup" if control => {
+                if let Some(cursor) = start {
+                    self.history_page(cursor, true, cx);
+                }
+            }
+            "pagedown" if control => {
+                if let Some(cursor) = end {
+                    self.history_page(cursor, true, cx);
+                }
+            }
+            "pageup" if !self.product.busy => {
+                if let Some(cursor) = previous {
+                    if let Some(history) = &mut self.product.history_sheet {
+                        history.back.pop();
+                    }
+                    self.history_page(cursor, false, cx);
+                }
+            }
+            "pagedown" => {
+                if let Some(cursor) = next {
+                    self.history_page(cursor, true, cx);
+                }
+            }
+            "v" | "x" | "z" | "y" if control => (),
+            _ => (),
+        }
+        self.editor_changed(window, cx);
+        cx.stop_propagation();
+    }
+
+    fn apply_history_reply(
+        &mut self,
+        reply: Option<protocol::HistoryViewReply>,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = self
+            .product
+            .history_sheet
+            .as_mut()
+            .and_then(|history| history.pending.take());
+        let Some(pending) = pending else {
+            if let Some(protocol::HistoryViewReply::Page { page }) = reply {
+                if let Some(history) = &mut self.product.history_sheet {
+                    history.status = "Пришёл устаревший ответ; снимок закрывается".into();
+                }
+                self.close_history_snapshot(page.snapshot, cx);
+            }
+            return;
+        };
+        let is_current = self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == product::DialogKind::History
+                && self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .is_some_and(|history| dialog.id == history.dialog_id && !history.closed)
+        });
+        match reply {
+            Some(protocol::HistoryViewReply::Page { page }) => {
+                if !matches!(
+                    &pending,
+                    history_view::Pending::Open | history_view::Pending::Page { .. }
+                ) {
+                    if let Some(history) = &mut self.product.history_sheet {
+                        history.error = Some("Неожиданный ответ страницы истории".into());
+                    }
+                    cx.notify();
+                    return;
+                }
+                if let Err(error) = history_view::validate_page(&page) {
+                    if let Some(history) = &mut self.product.history_sheet {
+                        history.error = Some(error);
+                    }
+                    cx.notify();
+                    return;
+                }
+                let Some(current_history) = self.product.history_sheet.as_ref() else {
+                    return;
+                };
+                let (session, generation) = (current_history.session, current_history.generation);
+                let expected_snapshot = current_history.snapshot;
+                let expected_sequence = current_history.sequence;
+                let valid_identity = page.session == session && page.generation == generation;
+                let valid_snapshot = match &pending {
+                    history_view::Pending::Open => expected_snapshot.is_none(),
+                    _ => expected_snapshot == Some(page.snapshot),
+                };
+                let valid_cursor = match &pending {
+                    history_view::Pending::Page { start } => page.start == *start,
+                    _ => true,
+                };
+                let valid_sequence = matches!(&pending, history_view::Pending::Open)
+                    || expected_sequence == Some(page.sequence);
+                if !valid_identity || !valid_snapshot || !valid_cursor || !valid_sequence {
+                    if let Some(history) = &mut self.product.history_sheet {
+                        history.error =
+                            Some("Ответ истории не совпадает с ожидаемым снимком".into());
+                    }
+                    self.close_history_snapshot(page.snapshot, cx);
+                    cx.notify();
+                    return;
+                }
+                if !is_current
+                    || self
+                        .product
+                        .history_sheet
+                        .as_ref()
+                        .is_some_and(|h| h.closed)
+                {
+                    self.close_history_snapshot(page.snapshot, cx);
+                    return;
+                }
+                let text = history_view::page_plain_text(&page);
+                let query_len = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.fields.first())
+                    .map(|field| field.text().len())
+                    .unwrap_or(0);
+                let should_select_match = self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .is_some_and(|history| history.match_at == Some(page.start));
+                // A new page installs a fresh buffer, whose local revision may
+                // equal the previous buffer's. Do not reuse shaped text from
+                // another page or preserve its scroll/drag coordinates.
+                self.editor_layouts.remove(&1);
+                self.editor_scroll.remove(&1);
+                self.editor_drag = None;
+                self.editor_preferred_x = None;
+                if let Some(dialog) = self
+                    .product
+                    .dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.id == current_history.dialog_id)
+                {
+                    dialog.fields[1] = text.into();
+                    dialog.active_field = 0;
+                    if should_select_match {
+                        let end = query_len.min(dialog.fields[1].text().len());
+                        dialog.fields[1].select_bytes(0..end, false);
+                        dialog.active_field = 1;
+                    }
+                }
+                if let Some(history) = &mut self.product.history_sheet {
+                    history.snapshot = Some(page.snapshot);
+                    history.sequence = Some(page.sequence);
+                    history.page = Some(page.clone());
+                    let match_at = history.match_at;
+                    history.status = if match_at == Some(page.start) {
+                        format!("Совпадение показано · sequence {}", page.sequence)
+                    } else if page.warnings.is_empty() {
+                        format!("Снимок заморожен на sequence {}", page.sequence)
+                    } else {
+                        format!(
+                            "Снимок sequence {} · предупреждений восстановления: {}",
+                            page.sequence,
+                            page.warnings.len()
+                        )
+                    };
+                    history.error = None;
+                }
+                cx.notify();
+            }
+            Some(protocol::HistoryViewReply::Search { result }) => {
+                let Some(history) = &mut self.product.history_sheet else {
+                    return;
+                };
+                let text = match &pending {
+                    history_view::Pending::Search { text, .. } => text,
+                    _ => {
+                        history.error = Some("Неожиданный ответ поиска истории".into());
+                        cx.notify();
+                        return;
+                    }
+                };
+                let query_now = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.fields.first())
+                    .map(|field| field.text());
+                let valid = history.snapshot == Some(result.snapshot)
+                    && history.session == result.session
+                    && history.generation == result.generation
+                    && history.sequence == Some(result.sequence)
+                    && result.scanned_bytes <= 256 * 1024
+                    && result.found.is_none_or(|cursor| {
+                        cursor.row
+                            < history
+                                .page
+                                .as_ref()
+                                .map_or(u64::MAX, |page| page.total_rows)
+                            && cursor.offset <= 16 * 1024 * 1024
+                    })
+                    && result.next.is_none_or(|cursor| {
+                        cursor.row
+                            < history
+                                .page
+                                .as_ref()
+                                .map_or(u64::MAX, |page| page.total_rows)
+                            && cursor.offset <= 16 * 1024 * 1024
+                    })
+                    && match &pending {
+                        history_view::Pending::Search { cursor, .. } => {
+                            history.search_next == *cursor
+                        }
+                        _ => false,
+                    }
+                    && query_now == Some(text.as_str());
+                if history.closed || !is_current {
+                    let snapshot = result.snapshot;
+                    self.close_history_snapshot(snapshot, cx);
+                    return;
+                }
+                if !valid {
+                    history.status = "Поиск отменён: запрос или снимок изменился".into();
+                    cx.notify();
+                    return;
+                }
+                history.search_next = result.next;
+                if let Some(found) = result.found {
+                    history.match_at = Some(found);
+                    history.status = format!("Совпадение найдено: строка {}", found.row + 1);
+                    self.history_page(found, true, cx);
+                } else if let Some(next) = result.next {
+                    history.status = format!(
+                        "Поиск продолжается · проверено {} байт",
+                        result.scanned_bytes
+                    );
+                    let query = text.clone();
+                    let snapshot = result.snapshot;
+                    self.issue_history_query(
+                        protocol::HistoryViewQuery::Search {
+                            snapshot,
+                            text: query.clone(),
+                            cursor: Some(next),
+                        },
+                        history_view::Pending::Search {
+                            text: query,
+                            cursor: Some(next),
+                        },
+                        cx,
+                    );
+                } else {
+                    history.status =
+                        format!("Совпадений нет · проверено {} байт", result.scanned_bytes);
+                }
+            }
+            Some(protocol::HistoryViewReply::Closed { snapshot }) => {
+                if !matches!(&pending, history_view::Pending::Close { .. }) {
+                    if let Some(history) = &mut self.product.history_sheet {
+                        history.error = Some("Неожиданный ответ закрытия снимка истории".into());
+                    }
+                    cx.notify();
+                    return;
+                }
+                let refresh = matches!(pending, history_view::Pending::Close { refresh: true });
+                if let Some(history) = &mut self.product.history_sheet
+                    && history.snapshot == Some(snapshot)
+                {
+                    history.snapshot = None;
+                    history.page = None;
+                    history.back.clear();
+                }
+                if refresh {
+                    self.history_open_snapshot(cx);
+                } else {
+                    self.product.history_sheet = None;
+                }
+            }
+            None => {
+                if let Some(history) = &mut self.product.history_sheet {
+                    history.error = Some("Host returned no history response".into());
+                    history.status = "История недоступна; можно обновить снимок".into();
+                    history.pending = None;
+                }
+            }
+        }
+    }
+
+    fn apply_history_error(&mut self, message: String, cx: &mut Context<Self>) {
+        let message = history_view::display_error(&message);
+        let pending = self
+            .product
+            .history_sheet
+            .as_mut()
+            .and_then(|history| history.pending.take());
+        if matches!(
+            pending,
+            Some(history_view::Pending::Close { refresh: true })
+        ) {
+            if let Some(history) = &mut self.product.history_sheet {
+                history.snapshot = None;
+                history.page = None;
+                history.error = Some(message);
+            }
+            self.history_open_snapshot(cx);
+            return;
+        }
+        if matches!(
+            pending,
+            Some(history_view::Pending::Close { refresh: false })
+        ) {
+            self.product.history_sheet = None;
+            cx.notify();
+            return;
+        }
+        let closed = self
+            .product
+            .history_sheet
+            .as_ref()
+            .is_some_and(|history| history.closed);
+        if closed {
+            if let Some(snapshot) = self
+                .product
+                .history_sheet
+                .as_ref()
+                .and_then(|history| history.snapshot)
+            {
+                self.close_history_snapshot(snapshot, cx);
+            } else {
+                self.product.history_sheet = None;
+            }
+        } else if let Some(history) = &mut self.product.history_sheet {
+            history.error = Some(message);
+            history.status = "История недоступна; проверьте снимок или обновите его".into();
+        }
+        cx.notify();
+    }
+
     fn canvas_offset(&self) -> pigade_storage::CanvasOffset {
         if self.canvas_focus_mode {
             return self.canvas_focus_offset;
@@ -1377,6 +2035,17 @@ impl CanvasApp {
     }
 
     fn editor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.product.dialog.as_ref().and_then(|dialog| {
+            (dialog.kind == product::DialogKind::History)
+                .then(|| dialog.fields.first().map(|field| field.text().to_owned()))
+                .flatten()
+        });
+        if let (Some(query), Some(history)) = (query, self.product.history_sheet.as_mut())
+            && history.query_text != query
+        {
+            history.query_text = query;
+            history.query_changed();
+        }
         window.notify_text_input_changed(&self.focus);
         cx.notify();
     }
@@ -1799,6 +2468,90 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenHistory => self.open_history(cx),
+            A::HistoryStart => {
+                if self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .and_then(|h| h.page.as_ref())
+                    .is_some()
+                {
+                    self.history_page(protocol::HistoryCursor { row: 0, offset: 0 }, true, cx);
+                }
+            }
+            A::HistoryPrevious => {
+                let cursor = self.product.history_sheet.as_mut().and_then(|history| {
+                    history
+                        .back
+                        .pop()
+                        .or_else(|| history.page.as_ref().and_then(|page| page.previous))
+                });
+                if let Some(cursor) = cursor {
+                    self.history_page(cursor, false, cx);
+                }
+            }
+            A::HistoryNext => {
+                if let Some(cursor) = self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .and_then(|history| history.page.as_ref())
+                    .and_then(|page| page.next)
+                {
+                    self.history_page(cursor, true, cx);
+                }
+            }
+            A::HistoryEnd => {
+                if let Some(total) = self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .and_then(|history| history.page.as_ref())
+                    .map(|page| page.total_rows)
+                {
+                    self.history_page(
+                        protocol::HistoryCursor {
+                            row: total.saturating_sub(128),
+                            offset: 0,
+                        },
+                        true,
+                        cx,
+                    );
+                }
+            }
+            A::HistoryRefresh => self.close_history(true, cx),
+            A::HistorySearch => self.history_search(None, cx),
+            A::HistoryNextMatch => {
+                let cursor = self
+                    .product
+                    .history_sheet
+                    .as_ref()
+                    .and_then(|history| history.search_next);
+                if let Some(cursor) = cursor {
+                    self.history_search(Some(cursor), cx);
+                } else if let Some(history) = &mut self.product.history_sheet {
+                    history.error = Some("Больше совпадений нет".into());
+                    cx.notify();
+                }
+            }
+            A::HistoryCopyPage => {
+                if let Some(dialog) = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == product::DialogKind::History)
+                {
+                    let text = dialog
+                        .fields
+                        .get(1)
+                        .map(|field| field.text().to_owned())
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
+            }
             A::OpenGenerations | A::LoadGenerations(_) => {
                 if self.product.busy {
                     return;
@@ -1886,8 +2639,17 @@ impl CanvasApp {
                 }
             }
             A::CloseDialog => {
-                self.product.dialog = None;
-                self.text_input.cancel();
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::History)
+                {
+                    self.close_history(false, cx);
+                } else {
+                    self.product.dialog = None;
+                    self.text_input.cancel();
+                }
             }
             A::EditProjectContext => {
                 if let Some(scope) = self
@@ -2209,6 +2971,7 @@ impl CanvasApp {
                     DialogKind::LaunchReview | DialogKind::ResumeReview => {
                         self.confirm_prepared_launch(cx)
                     }
+                    DialogKind::History => self.history_search(None, cx),
                     DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
@@ -3253,6 +4016,54 @@ impl CanvasApp {
             cx.stop_propagation();
             return;
         }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::History)
+        {
+            let control = k.modifiers.control || k.modifiers.platform;
+            let action = match k.key.as_str() {
+                "f3" => Some(if k.modifiers.shift {
+                    product::ProductAction::HistorySearch
+                } else {
+                    product::ProductAction::HistoryNextMatch
+                }),
+                "r" if control => Some(product::ProductAction::HistoryRefresh),
+                "c" if control && k.modifiers.shift => {
+                    Some(product::ProductAction::HistoryCopyPage)
+                }
+                "pageup" if control => Some(product::ProductAction::HistoryStart),
+                "pagedown" if control => Some(product::ProductAction::HistoryEnd),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if control && k.key == "f" {
+                if let Some(dialog) = &mut self.product.dialog {
+                    dialog.fields[dialog.active_field].cancel_mark();
+                    dialog.active_field = 0;
+                    dialog.fields[0].select_all();
+                }
+                self.editor_changed(window, cx);
+                cx.stop_propagation();
+                return;
+            }
+        }
+        if self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == product::DialogKind::History
+                && self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.active_field == 1)
+        }) {
+            self.history_key(event, window, cx);
+            return;
+        }
         if self.product.dialog.is_some() {
             if k.modifiers.control
                 && self
@@ -3280,6 +4091,12 @@ impl CanvasApp {
             use text_edit::Movement as M;
             let control = k.modifiers.control || k.modifiers.platform;
             if control && k.key == "v" {
+                if self.product.dialog.as_ref().is_some_and(|dialog| {
+                    dialog.kind == product::DialogKind::History && dialog.active_field == 1
+                }) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let scope = self.product.dialog.as_ref().and_then(|dialog| {
                     dialog.fields.get(dialog.active_field).map(|buffer| {
                         (
@@ -3556,6 +4373,7 @@ impl CanvasApp {
                     product::ProductAction::EditContext
                 }),
                 "o" => Some(product::ProductAction::OpenGenerations),
+                "i" => Some(product::ProductAction::OpenHistory),
                 "b" => Some(product::ProductAction::InspectConversation),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
@@ -3967,7 +4785,9 @@ fn project_panels(bounds: Bounds<Pixels>, count: usize, scale: f32) -> Vec<Bound
 impl EntityInputHandler for CanvasApp {
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
         if self.product.dialog.is_some() {
-            return self.product.active_editor().is_some();
+            return !self.product.dialog.as_ref().is_some_and(|dialog| {
+                dialog.kind == product::DialogKind::History && dialog.active_field == 1
+            }) && self.product.active_editor().is_some();
         }
         (!self.prefix && self.layout_mode.is_none())
             && self.state.views.get(self.selected).is_some_and(|view| {
@@ -4015,7 +4835,7 @@ impl EntityInputHandler for CanvasApp {
         cx: &mut Context<Self>,
     ) {
         if self.product.dialog.is_some() {
-            if let Some(buffer) = self.product.active_editor_mut() {
+            if let Some(buffer) = self.product.selection_editor_mut() {
                 buffer.select_utf16(range);
             }
         } else {
@@ -4066,6 +4886,14 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == product::DialogKind::History && dialog.active_field == 1
+        }) {
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+            cx.notify();
+            return;
+        }
         if self.product.dialog.is_some() {
             let multiline = self.product.active_multiline();
             if let Some(buffer) = self.product.active_editor_mut()
@@ -4074,8 +4902,7 @@ impl EntityInputHandler for CanvasApp {
                 self.product.notice = Some(format!("Текст не изменён: {error}"));
             }
             self.text_input.cancel();
-            window.notify_text_input_changed(&self.focus);
-            cx.notify();
+            self.editor_changed(window, cx);
             return;
         }
         self.reset_cursor_blink(cx);
@@ -4099,6 +4926,12 @@ impl EntityInputHandler for CanvasApp {
         }
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        if self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == product::DialogKind::History && dialog.active_field == 1
+        }) {
+            cx.notify();
+            return;
+        }
         if let Some(text) = item.text() {
             if self.product.dialog.is_some() {
                 self.product.insert_text(&text);
@@ -4116,6 +4949,14 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == product::DialogKind::History && dialog.active_field == 1
+        }) {
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+            cx.notify();
+            return;
+        }
         if self.product.dialog.is_some() {
             let multiline = self.product.active_multiline();
             if let Some(buffer) = self.product.active_editor_mut() {

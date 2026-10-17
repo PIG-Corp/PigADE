@@ -475,17 +475,29 @@ pub struct Selection {
     pub warnings: Vec<String>,
 }
 pub fn latest(root: &Path, header: &JournalHeader, max_offset: u64) -> Result<Selection> {
+    latest_through(root, header, max_offset, u64::MAX)
+}
+
+/// A read-only historical view cannot use a newer checkpoint than its
+/// published source watermark, even while the journal continues to grow.
+pub(crate) fn latest_through(
+    root: &Path,
+    header: &JournalHeader,
+    max_offset: u64,
+    max_sequence: u64,
+) -> Result<Selection> {
     let mut warnings = Vec::new();
     let mut paths = candidates(root, header.generation)?;
     paths.sort();
     for path in paths.into_iter().rev() {
         match load(&path, header) {
-            Ok(snapshot) if snapshot.offset <= max_offset => {
+            Ok(snapshot) if snapshot.offset <= max_offset && snapshot.sequence <= max_sequence => {
                 return Ok(Selection {
                     loaded: Some(snapshot),
                     warnings,
                 });
             }
+            Ok(snapshot) if snapshot.sequence > max_sequence => (),
             Ok(_) => warnings.push(format!(
                 "checkpoint watermark exceeds journal; preserved {}",
                 path.display()

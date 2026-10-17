@@ -113,5 +113,6 @@ pub(crate) fn response(
         change_token: None,
         generations: None,
         generation_selection: None,
+        history_view: None,
     }
 }

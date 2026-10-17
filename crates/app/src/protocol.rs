@@ -197,6 +197,84 @@ struct Response {
     generations: Option<GenerationList>,
     #[serde(default)]
     generation_selection: Option<bool>,
+    #[serde(default)]
+    history_view: Option<HistoryViewReply>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HistoryCursor {
+    pub row: u64,
+    pub offset: u64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum HistoryViewQuery {
+    Open {
+        session: uuid::Uuid,
+        generation: uuid::Uuid,
+    },
+    Page {
+        snapshot: uuid::Uuid,
+        start: HistoryCursor,
+    },
+    Search {
+        snapshot: uuid::Uuid,
+        text: String,
+        cursor: Option<HistoryCursor>,
+    },
+    Close {
+        snapshot: uuid::Uuid,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct HistoryTextChunk {
+    pub text: String,
+    pub total_bytes: u64,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
+    pub wrap: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct HistoryTextRow {
+    pub row: u64,
+    pub chunk: HistoryTextChunk,
+    pub boundary: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct HistoryPage {
+    pub snapshot: uuid::Uuid,
+    pub session: uuid::Uuid,
+    pub generation: uuid::Uuid,
+    pub sequence: u64,
+    pub total_rows: u64,
+    pub start: HistoryCursor,
+    pub rows: Vec<HistoryTextRow>,
+    pub next: Option<HistoryCursor>,
+    pub previous: Option<HistoryCursor>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct HistorySearchResult {
+    pub snapshot: uuid::Uuid,
+    pub session: uuid::Uuid,
+    pub generation: uuid::Uuid,
+    pub sequence: u64,
+    pub found: Option<HistoryCursor>,
+    pub next: Option<HistoryCursor>,
+    pub scanned_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HistoryViewReply {
+    Page { page: HistoryPage },
+    Search { result: HistorySearchResult },
+    Closed { snapshot: uuid::Uuid },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -281,6 +359,8 @@ pub struct ProductReply {
     pub catalog: Option<pigade_storage::Catalog>,
     pub selection: Option<pigade_storage::Selection>,
     pub context: Option<pigade_storage::ContextDocument>,
+    pub history_view: Option<HistoryViewReply>,
+    pub history_view_request: bool,
 }
 
 pub struct ProductError {
@@ -294,6 +374,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
     let list_sessions = command_name == Some("list");
     let context_saved = command_name == Some("save_context");
     let generation_selected = command_name == Some("select_generation");
+    let history_view_request = command_name == Some("history_view");
     let generation_owner = (command_name == Some("generations"))
         .then(|| {
             command
@@ -341,6 +422,8 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         catalog: response.catalog,
         selection: response.selection,
         context: response.context,
+        history_view: response.history_view,
+        history_view_request,
     })
 }
 
@@ -711,6 +794,7 @@ mod tests {
             launch_phase: None,
             generations: None,
             generation_selection: None,
+            history_view: None,
             views: Vec::new(),
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),

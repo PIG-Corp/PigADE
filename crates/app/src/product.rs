@@ -37,6 +37,15 @@ pub(super) enum ProductAction {
     OpenGenerations,
     LoadGenerations(Option<u64>),
     SelectGeneration(Option<Uuid>),
+    OpenHistory,
+    HistoryStart,
+    HistoryPrevious,
+    HistoryNext,
+    HistoryEnd,
+    HistoryRefresh,
+    HistorySearch,
+    HistoryNextMatch,
+    HistoryCopyPage,
     PanCanvas,
     RevealFocusedPane,
     SelectProject(Uuid),
@@ -66,6 +75,7 @@ pub(super) enum DialogKind {
     Generations,
     Transfer,
     Sessions,
+    History,
 }
 
 impl DialogKind {
@@ -84,6 +94,7 @@ impl DialogKind {
             Self::Generations => "Поколения панели",
             Self::Transfer => "Перенести панель",
             Self::Sessions => "Неразмещённые сессии",
+            Self::History => "История сессии",
         }
     }
 
@@ -106,6 +117,7 @@ impl DialogKind {
             Self::Generations => &["Номер строки или «текущее»"],
             Self::Transfer => &[],
             Self::Sessions => &[],
+            Self::History => &["Найти текст", "История"],
         }
     }
 
@@ -124,6 +136,7 @@ impl DialogKind {
             Self::Generations => "Показать поколение",
             Self::Transfer => "Закрыть",
             Self::Sessions => "Закрыть",
+            Self::History => "Закрыть",
         }
     }
 }
@@ -161,6 +174,7 @@ pub(super) struct ProductUi {
     pub(super) notice: Option<String>,
     pub(super) busy: bool,
     pub(super) dialog: Option<Dialog>,
+    pub(super) history_sheet: Option<crate::history_view::HistorySheet>,
 }
 
 pub(super) struct SessionSummary {
@@ -310,6 +324,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
             ProductAction::OpenGenerations,
         ),
         ("Сессии", ProductAction::OpenSessions),
+        ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
         ("Запустить Claude", ProductAction::Launch("claude".into())),
@@ -455,6 +470,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Context => index != 1,
         DialogKind::ProjectContext => true,
         DialogKind::LaunchReview => index == 1,
+        DialogKind::History => index == 1,
         _ => false,
     }
 }
@@ -542,6 +558,18 @@ impl ProductUi {
     }
 
     pub(super) fn active_editor_mut(&mut self) -> Option<&mut EditBuffer> {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == DialogKind::History && dialog.active_field == 1)
+        {
+            return None;
+        }
+        let dialog = self.dialog.as_mut()?;
+        dialog.fields.get_mut(dialog.active_field)
+    }
+
+    pub(super) fn selection_editor_mut(&mut self) -> Option<&mut EditBuffer> {
         let dialog = self.dialog.as_mut()?;
         dialog.fields.get_mut(dialog.active_field)
     }
@@ -860,6 +888,19 @@ impl ProductUi {
             cx,
         ));
 
+        toolbar = toolbar.child(self.action_control_with_accessible_name(
+            "open-history".into(),
+            "История".into(),
+            "Просмотреть историю терминальной панели".into(),
+            ProductAction::OpenHistory,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        ));
+
         toolbar = toolbar.child(div().w(px(1.)).h(px(20.)).mx(px(4.)).bg(colors.border));
         for (key, label, accessible) in [
             ("split_right", "Справа", "Разделить вправо"),
@@ -1122,6 +1163,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Sessions {
             return self.sessions_overlay(cx);
+        }
+        if dialog.kind == DialogKind::History {
+            return self.history_overlay(dialog, layouts, cx);
         }
 
         let can_bind = dialog.kind != DialogKind::Conversation
@@ -2678,6 +2722,307 @@ impl ProductUi {
             .into_any_element()
     }
 
+    fn history_overlay(
+        &self,
+        dialog: &Dialog,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = ProductColors::dark();
+        let Some(history) = &self.history_sheet else {
+            return div()
+                .id("history-sheet-missing")
+                .child("История недоступна")
+                .into_any_element();
+        };
+        let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
+        let page = history.page.as_ref();
+        let header = page.map(|page| {
+            format!(
+                "Сессия {} · поколение {} · sequence {} · {} строк · начало страницы: строка {}, байт {}",
+                history.session, history.generation, page.sequence, page.total_rows,
+                page.start.row.saturating_add(1), page.start.offset
+            )
+        }).unwrap_or_else(|| format!("Сессия {} · поколение {}", history.session, history.generation));
+        let status = history.error.as_deref().unwrap_or(&history.status);
+        let boundary_notices = page
+            .map(|page| crate::history_view::boundary_messages(&page.rows))
+            .unwrap_or_default();
+        let mut notices = div().flex().flex_col().gap_1();
+        for (index, message) in boundary_notices.into_iter().take(32).enumerate() {
+            notices = notices.child(
+                div()
+                    .id(format!("history-boundary-{index}"))
+                    .role(Role::Status)
+                    .text_color(colors.accent)
+                    .text_size(px(11.))
+                    .child(message),
+            );
+        }
+        if let Some(page) = page {
+            for (index, warning) in page.warnings.iter().take(8).enumerate() {
+                let shown: String = warning.chars().take(240).collect();
+                notices = notices.child(
+                    div()
+                        .id(format!("history-warning-{index}"))
+                        .role(Role::Status)
+                        .text_color(colors.muted)
+                        .text_size(px(11.))
+                        .child(format!("Восстановление: {shown}")),
+                );
+            }
+            if page.warnings.len() > 8 {
+                notices = notices.child(
+                    div()
+                        .id("history-warnings-more")
+                        .role(Role::Status)
+                        .text_color(colors.muted)
+                        .text_size(px(11.))
+                        .child(format!("Ещё предупреждений: {}", page.warnings.len() - 8)),
+                );
+            }
+        }
+        let body = dialog.fields.get(1).map(EditBuffer::text).unwrap_or("");
+        let mut controls = div().flex().flex_wrap().gap_1();
+        for (id, label, action, enabled) in [
+            (
+                "history-start",
+                "Начало",
+                ProductAction::HistoryStart,
+                page.is_some() && !self.busy,
+            ),
+            (
+                "history-previous",
+                "Предыдущая",
+                ProductAction::HistoryPrevious,
+                !self.busy
+                    && (page.is_some_and(|p| p.previous.is_some()) || !history.back.is_empty()),
+            ),
+            (
+                "history-next",
+                "Следующая",
+                ProductAction::HistoryNext,
+                !self.busy && page.is_some_and(|p| p.next.is_some()),
+            ),
+            (
+                "history-end",
+                "Конец",
+                ProductAction::HistoryEnd,
+                page.is_some() && !self.busy,
+            ),
+            (
+                "history-refresh",
+                "Обновить",
+                ProductAction::HistoryRefresh,
+                !self.busy,
+            ),
+            (
+                "history-search",
+                "Найти",
+                ProductAction::HistorySearch,
+                !self.busy && !query.is_empty(),
+            ),
+            (
+                "history-next-match",
+                "Следующее совпадение",
+                ProductAction::HistoryNextMatch,
+                history.search_next.is_some() && !self.busy,
+            ),
+            (
+                "history-copy",
+                "Копировать страницу",
+                ProductAction::HistoryCopyPage,
+                !body.is_empty(),
+            ),
+        ] {
+            controls = controls.child(if enabled {
+                self.action_control(
+                    id.into(),
+                    label.into(),
+                    action,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                )
+            } else {
+                div()
+                    .id(format!("{id}-disabled"))
+                    .role(Role::Status)
+                    .h(px(28.))
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(label)
+                    .into_any_element()
+            });
+        }
+        let query_field = div()
+            .id("history-query-field")
+            .role(Role::TextInput)
+            .aria_label("Найти текст в снимке истории")
+            .w_full()
+            .h(px(40.))
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if dialog.active_field == 0 {
+                colors.accent
+            } else {
+                colors.border
+            })
+            .bg(colors.base)
+            .text_color(colors.text)
+            .overflow_hidden()
+            .child(crate::edit_field::content(
+                &dialog.fields[0],
+                crate::edit_field::FieldOptions {
+                    cache: layouts.get(&0),
+                    dialog_id: dialog.id,
+                    index: 0,
+                    active: dialog.active_field == 0,
+                    multiline: false,
+                    placeholder: "Найти текст",
+                    accent: colors.accent,
+                    muted: colors.muted,
+                },
+                cx,
+            ))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.editor_pointer_down(0, event, window, cx);
+                }),
+            );
+        let body_content = div()
+            .id("history-page-text")
+            .accessibility_id("history-page-text")
+            .role(Role::Document)
+            .aria_label("Прочитанная страница истории")
+            .w_full()
+            .min_h(px(180.))
+            .max_h(px(440.))
+            .overflow_y_scroll()
+            .bg(colors.base)
+            .border_1()
+            .border_color(if dialog.active_field == 1 {
+                colors.accent
+            } else {
+                colors.border
+            })
+            .rounded(px(6.))
+            .p(px(10.))
+            .text_size(px(12.))
+            .text_color(colors.text)
+            .child(crate::edit_field::content(
+                &dialog.fields[1],
+                crate::edit_field::FieldOptions {
+                    cache: layouts.get(&1),
+                    dialog_id: dialog.id,
+                    index: 1,
+                    active: dialog.active_field == 1,
+                    multiline: true,
+                    placeholder: "История",
+                    accent: colors.accent,
+                    muted: colors.muted,
+                },
+                cx,
+            ))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.editor_pointer_down(1, event, window, cx);
+                }),
+            )
+            .on_scroll_wheel(
+                cx.listener(|this, event, window, cx| this.editor_wheel(1, event, window, cx)),
+            );
+        let close = self.action_control(
+            "history-close".into(),
+            "Закрыть".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("history-view-overlay")
+            .accessibility_id("history-view-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(18.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx)
+            }))
+            .child(
+                div()
+                    .id("history-view-sheet")
+                    .role(Role::Dialog)
+                    .aria_label("История сессии")
+                    .w_full()
+                    .max_w(px(1050.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(16.))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("history-heading")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("История сессии"),
+                    )
+                    .child(
+                        div()
+                            .id("history-header")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child(header),
+                    )
+                    .child(query_field)
+                    .child(controls)
+                    .child(
+                        div()
+                            .id("history-status")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(if history.error.is_some() {
+                                colors.accent
+                            } else {
+                                colors.muted
+                            })
+                            .child(status.to_owned()),
+                    )
+                    .child(notices)
+                    .child(body_content)
+                    .child(div().id("history-keyboard-hint").role(Role::Status).text_size(px(11.)).text_color(colors.muted).child("Tab: поиск / текст · Ctrl+F: поиск · F3: дальше · Shift+F3: сначала · PageUp/Down: страницы · Ctrl+R: обновить · Ctrl+Shift+C: вся страница"))
+                    .child(div().flex().justify_end().child(close)),
+            )
+            .into_any_element()
+    }
+
     fn palette_overlay(
         &self,
         dialog: &Dialog,
@@ -2826,6 +3171,28 @@ mod context_edit_tests {
             saved_at_unix_ms: None,
             author: "user".into(),
         }
+    }
+
+    #[test]
+    fn history_text_allows_selection_but_not_editing_and_query_stays_editable() {
+        let mut ui = ProductUi {
+            dialog: Some(Dialog::new(DialogKind::History)),
+            ..Default::default()
+        };
+        let dialog = ui.dialog.as_mut().unwrap();
+        dialog.fields[1] = "界e\u{301}\nreadonly".into();
+        dialog.active_field = 1;
+        ui.selection_editor_mut().unwrap().select_all();
+        assert_eq!(
+            ui.active_editor().unwrap().selected_text(),
+            "界e\u{301}\nreadonly"
+        );
+        ui.insert_text("overwritten");
+        assert!(ui.active_editor_mut().is_none());
+        assert_eq!(ui.active_editor().unwrap().text(), "界e\u{301}\nreadonly");
+        ui.dialog.as_mut().unwrap().active_field = 0;
+        ui.insert_text("界");
+        assert_eq!(ui.active_editor().unwrap().text(), "界");
     }
 
     #[test]

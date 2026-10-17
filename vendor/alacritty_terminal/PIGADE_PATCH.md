@@ -16,6 +16,11 @@ identity. No migration or raw-history deletion is implied.
 
 ## Semantic API
 
+`Term::normal_grid()` borrows the normal screen independently of the active
+alternate-screen mode. The host uses it for read-only text history projection;
+it neither changes screen selection nor adds a second parser. The checkpoint
+schema and core profile are unchanged.
+
 `Term::export_checkpoint()` exports every semantic Term field to a versioned DTO.
 The caller MUST call `validate()` before encoding/publication, then enforce an
 encoded-byte budget while writing. `Term::from_checkpoint(dto,event_proxy)`

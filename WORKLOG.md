@@ -2441,3 +2441,75 @@ Ship reviewed manual Codex exact-ID resume in the same logical pane, preserving 
 - Files: crates/session-host/src/prepared.rs, crates/session-host/src/adapters.rs, crates/session-host/src/lib.rs, crates/session-host/tests/context_launch.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
 - Verification: App150 tests, strict Clippy/debug build pass after retaining optional generation capability across launch replies. Host real-PTY context_launch3 tests pass including exact argv/cwd/frozen CRC/layout preservation/old frame/duplicate and stale binding/binary refusal/live ID reservation. Host108 lib tests pass serial; one parallel replay-cache cleanup test failed at607 (0 collected vs1), exact isolated target passes: unresolved concurrent lease/test gap retained in handoff, no false full-green claim. Strict workspace Clippy/release bins/examples build pass. Actual native Codex0.162.1 private-config PTY06 displays prior synthetic conversation with no prompt and rejects missing UUID; failed setup attempts retained. Private native fake-CLI resume fixture03 passes; review and actual NEW_RESUME_FRAME capture inspected after fixing omitted capability downgrade (fixture02 showed blank/error). Python22/C syntax/version/fmt/diff checks pass.
 - Risks / next: Native resume is manual for Codex0.162.1 only; auto-ID/auto-resume, other providers/two-version/reboot/full platform acceptance remain open. Investigate parallel cache cleanup before release. User explicitly requested nightlight off: queried hyprsunset4000K and set runtime6500K, verified enabled:false and still6500K after isolated fixture; no cause attributed and no user config overwritten.
+
+## 2026-10-17T16:00:41+00:00 — history_path_luna
+
+Added bounded typed text projection for cold rows and read-only normal-grid hot scrollback access, including alt-screen access.
+
+- Files: crates/terminal/src/history_text.rs, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/term/mod.rs, WORKLOG.md
+- Verification: cargo test -p pigade-terminal: 36 passed; focused history_text tests: 3 passed; rustfmt --check for terminal Rust files passed before restoring vendor formatting; git diff --check for owned code passed.
+- Risks / next: Host can consume TextChunk for normal hot rows and decoded cold rows. Root owns host snapshot/session integration and vendor patch note.
+
+## 2026-10-17T16:03:16+00:00 — /root/history_view_backend_luna
+
+Added bounded immutable history-view paging and literal-search worker with a two-snapshot LRU
+
+- Files: crates/session-host/src/history_view.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/history_view.rs passed; git diff --check -- crates/session-host/src/history_view.rs passed; Cargo verification deferred to root integration as instructed
+- Risks / next: Root must register the module, add Response.history_view and serde support for terminal TextChunk, and run focused session-host tests after restore_history_view wiring.
+
+## 2026-10-17T16:05:08+00:00 — /root/history_view_backend_luna
+
+Hardened history-view UTF-8 budgeting and borrowed cold-row caching
+
+- Files: crates/session-host/src/history_view.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/history_view.rs passed; git diff --check -- crates/session-host/src/history_view.rs WORKLOG.md passed; Cargo verification remains with root integration
+- Risks / next: Root to run focused paging/search tests after registering restore and response wiring.
+
+## 2026-10-17T16:08:52+00:00 — /root/history_view_backend_luna
+
+Added real-PTY history snapshot paging/search integration coverage and idle snapshot expiry cleanup
+
+- Files: crates/session-host/tests/history_view.rs, crates/session-host/src/history_view.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host --lib history_view::tests::page_projects_cold_rows_boundary_and_hot_rows_without_materializing_history -- --nocapture (1 passed); cargo test -p pigade-session-host --test history_view -- --nocapture (1 passed); rustfmt --edition 2024 on owned Rust files passed; git diff --check on owned files passed
+- Risks / next: Root owns broader host verification and integration review; test verifies old/new generations, cold+hot snapshots, UTF-8 soft-wrap search, exact-cursor paging, invalid identities/cursor, live mutation immutability, and close expiry.
+
+## 2026-10-17T16:09:09+00:00 — /root/history_view_backend_luna
+
+Resolved strict Clippy findings in history-view worker
+
+- Files: crates/session-host/src/history_view.rs, WORKLOG.md
+- Verification: cargo clippy -p pigade-session-host --lib -- -D warnings passed; rustfmt --edition 2024 crates/session-host/src/history_view.rs passed; git diff --check passed
+- Risks / next: Root may continue full workspace verification.
+
+## 2026-10-17T16:12:19+00:00 — history_path_luna
+
+Added native read-only history viewer UI with snapshot paging, bounded search, copy/selection, and input guards
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/history_view.rs
+- Verification: rustfmt --edition 2024 --config skip_children=true on owned app files; git diff --check passed; app Cargo checks intentionally left to root for serialized bootstrap verification
+- Risks / next: Root to run app bootstrap compile/tests and integrate host API; no app Cargo run by this agent
+
+## 2026-10-17T16:13:09+00:00 — history_path_luna
+
+Fixed app bootstrap compile issues in history viewer and query state tracking
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/history_view.rs
+- Verification: rustfmt --edition 2024 --config skip_children=true on owned app files; git diff --check passed; no app Cargo run per root serialization instruction
+- Risks / next: Root to rerun bootstrap clippy/test/build; app compile remains unverified by this agent
+
+## 2026-10-17T16:13:22+00:00 — history_path_luna
+
+Preserved editor mark cancellation when switching history dialog fields by removing duplicate focus assignment
+
+- Files: crates/app/src/main.rs
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs; git diff --check passed
+- Risks / next: Handed app ownership to root for serialized integration verification
+
+## 2026-10-17T16:20:52+00:00 — /root
+
+Integrated native immutable terminal-history viewer with paging, Unicode search, readonly selection/copy and exact published-sequence recovery
+
+- Files: crates/terminal/src/history_text.rs, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/term/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, crates/session-host/src/history_view.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/recovery_tests.rs, crates/session-host/tests/history_view.rs, crates/app/src/history_view.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Fresh strict workspace and app Clippy pass; host114 lib tests serial, terminal36, real-PTY history1 pass. App154 full tests and latest history-filter6 pass; fmt/version/diff and Python22 harness tests pass. Host release bins/examples and app debug/release builds pass. Private native X11 history fixture02 passes immutable sources/no CLI input/no new generation/layout mutation; search capture visibly highlights READY at byte11 after fixing stale shaping cache found in fixture01. Explicit user-requested desktop app launch verified mapped PID2429684; initial own app-state directory0755 refused, ownership/type verified and only that directory restricted0700 before successful retry.
+- Risks / next: History has two snapshots/120s idle expiry/16MiB replay tail and explicit failure; whole-process heap/quota, rich terminal scrolling, full native accessibility/platform and MVP gates remain open. Keep prior parallel replay-cache test gap; no false full-green claim. User app is running for manual review; do not automate its input or replace it.
