@@ -128,6 +128,13 @@ pub struct Frame {
     pub cursor_style: String,
     pub modes: u32,
     pub colors: String,
+    /// Explicitly configured palette entries, sorted by terminal color index.
+    /// Indices 0..=255 are the ANSI/xterm indexed palette; higher indices are
+    /// special terminal colors such as foreground (256), background (257),
+    /// cursor, and the pinned terminal's other named color slots. The vector
+    /// contains only colors explicitly set by the terminal model.
+    #[serde(default)]
+    pub palette_overrides: Vec<(u16, [u8; 3])>,
     pub history_lines: usize,
     pub sync_pending_bytes: usize,
     pub title: String,
@@ -425,6 +432,12 @@ impl Terminal {
                     .map(|i| self.term.colors()[i])
                     .collect::<Vec<_>>()
             ),
+            palette_overrides: (0..alacritty_terminal::term::color::COUNT)
+                .filter_map(|index| {
+                    self.term.colors()[index]
+                        .map(|color| (index as u16, [color.r, color.g, color.b]))
+                })
+                .collect(),
             history_lines: grid.history_size(),
             sync_pending_bytes: self.parser.sync_bytes_count(),
             title: self.title.clone(),
@@ -574,6 +587,58 @@ mod tests {
         assert_eq!(frame.cells[0].hyperlink, Some(0));
         assert_eq!(frame.cells[1].hyperlink, Some(0));
         assert_eq!(terminal.checkpoint().unwrap(), before);
+    }
+
+    #[test]
+    fn dynamic_palette_overrides_follow_set_reset_and_checkpoint_replay() {
+        let mut live = term();
+        live.output(
+            b"\x1b]4;1;rgb:11/22/33;16;rgb:aa/bb/cc\x07\x1b]10;rgb:01/02/03\x07\x1b]11;rgb:04/05/06\x07",
+        );
+        let expected = vec![
+            (1, [0x11, 0x22, 0x33]),
+            (16, [0xaa, 0xbb, 0xcc]),
+            (256, [0x01, 0x02, 0x03]),
+            (257, [0x04, 0x05, 0x06]),
+        ];
+        assert_eq!(live.frame().palette_overrides, expected);
+        assert!(
+            live.frame()
+                .palette_overrides
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+
+        let saved = live.checkpoint().unwrap();
+        let mut replay = Terminal::from_checkpoint(&saved, false).unwrap();
+        assert_eq!(replay.frame().palette_overrides, expected);
+        let reset_tail = b"\x1b]104;1\x07\x1b]110\x07\x1b]111\x07";
+        live.output(reset_tail);
+        replay.output(reset_tail);
+        assert_eq!(
+            live.frame().palette_overrides,
+            vec![(16, [0xaa, 0xbb, 0xcc])]
+        );
+        assert_eq!(live.frame(), replay.frame());
+        assert_eq!(live.checkpoint().unwrap(), replay.checkpoint().unwrap());
+
+        live.output(b"\x1b]104\x07");
+        replay.output(b"\x1b]104\x07");
+        assert!(live.frame().palette_overrides.is_empty());
+        assert_eq!(live.frame(), replay.frame());
+        assert_eq!(live.checkpoint().unwrap(), replay.checkpoint().unwrap());
+    }
+
+    #[test]
+    fn frame_without_typed_palette_field_deserializes_as_no_overrides() {
+        let frame = term().frame();
+        let mut value = serde_json::to_value(&frame).unwrap();
+        value.as_object_mut().unwrap().remove("palette_overrides");
+        let decoded: Frame = serde_json::from_value(value).unwrap();
+        assert!(decoded.palette_overrides.is_empty());
+        assert_eq!(decoded.geometry, frame.geometry);
+        assert_eq!(decoded.cells, frame.cells);
+        assert_eq!(decoded.colors, frame.colors);
     }
 
     #[test]

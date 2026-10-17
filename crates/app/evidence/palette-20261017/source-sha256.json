@@ -1,0 +1,8 @@
+{
+  "crates/app/src/main.rs": "f07e11ddb57a7be07b5af0009611009655693a95ab9ef304a5e42578573c162b",
+  "crates/app/src/protocol.rs": "83c6df4fd06b434c7ba1475e7bc5ad4df54c4c29a54f8286996791b1e31b2362",
+  "crates/app/src/palette.rs": "3d2a483110ac78357b1aeacfe90df9bc903c219313cd49c375209914bf2f519b",
+  "crates/app/src/selection.rs": "f39bafe481f93f08af8fcdbf771458835a481e9e994d90427b9599f6a214ee55",
+  "crates/terminal/src/lib.rs": "0a26f4f5419fca89054ff77023024c8a432cf8cb558ee641363765d23141bccb",
+  "scripts/isolated-render.py": "9b7ab224066619c8f532da5e347ee45456d707f50955efc463f11018079a5cbc"
+}

@@ -24,6 +24,11 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 NAMESPACES = ('mnt', 'pid', 'user', 'ipc', 'net')
 IME_PREEDIT = '日本😀'
+PALETTE_FIXTURE_EXPECTED = [
+    [1, [0x12, 0x34, 0x56]],
+    [256, [0xAB, 0xCD, 0xEF]],
+    [257, [0x09, 0x18, 0x27]],
+]
 
 
 def app_command(ime_preedit, selection_fixture=False):
@@ -33,6 +38,23 @@ def app_command(ime_preedit, selection_fixture=False):
     if selection_fixture:
         command.append('--diagnostic-selection')
     return command
+
+
+def palette_fixture_command():
+    """Set, reset, then set known colors using only the owned shell PTY."""
+    return (r"printf '\033]4;1;rgb:01/02/03\007\033]10;rgb:01/02/03\007"
+            r"\033]11;rgb:01/02/03\007\033]104;1\007\033]110\007\033]111\007"
+            r"\033]4;1;rgb:12/34/56\007\033]10;rgb:ab/cd/ef\007"
+            r"\033]11;rgb:09/18/27\007'; ")
+
+
+def shell_fixture(index, recovery_warning=False, palette_fixture=False):
+    prefix = palette_fixture_command() if palette_fixture else ''
+    palette_sample = (r"\033[31mNAMED-INDEX-1\033[0m/\033[38;5;1mINDEXED-1\033[0m\r\n"
+                      if palette_fixture else '')
+    return (prefix +
+            f"printf '\033]2;Bash {index+1}\007\033[38;2;89;180;255mPigADE · Bash {index+1}\033[0m\r\nРусский · é · 界\r\nA漢B xあ中한y · fi != ->\r\n{palette_sample}\033[1mA漢B xあ中한y · bold\033[0m\r\n\033[3mA漢B xあ中한y · italic\033[0m\r\n\033[1;3mA漢B xあ中한y · bold italic\033[0m\r\n'; "
+            + shell_read_loop(recovery_warning))
 
 
 def require(condition, message):
@@ -495,9 +517,11 @@ def inside():
         require(host.poll() is None, 'private host failed')
         specs = []
         for index in range(4):
-            shell_script = (
-                f"printf '\\033]2;Bash {index+1}\\007\\033[38;2;89;180;255mPigADE · Bash {index+1}\\033[0m\\r\\nРусский · é · 界\\r\\nA漢B xあ中한y · fi != ->\\r\\n\\033[1mA漢B xあ中한y · bold\\033[0m\\r\\n\\033[3mA漢B xあ中한y · italic\\033[0m\\r\\n\\033[1;3mA漢B xあ中한y · bold italic\\033[0m\\r\\n'; "
-                + shell_read_loop(config.get('recovery_warning', False)))
+            shell_script = shell_fixture(
+                index,
+                config.get('recovery_warning', False),
+                config.get('palette_fixture', False),
+            )
             spec = {'session': str(uuid.uuid4()), 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
                     'executable': '/usr/bin/bash', 'args': ['--noprofile', '--norc', '-c', shell_script],
                     'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
@@ -528,6 +552,39 @@ def inside():
         # Wait for host acknowledgement of app-computed viewport dimensions.
         wait_for(lambda: all(v['frame']['geometry'] != {'rows': 24, 'cols': 80} for v in request({'command': 'list'})))
         require(first.poll() is None, 'application exited before capture')
+        if config.get('palette_fixture'):
+            def palette_ready():
+                views = request({'command': 'list'})
+                if len(views) == 4 and all(
+                    view['frame'].get('palette_overrides') == PALETTE_FIXTURE_EXPECTED
+                    and 'NAMED-INDEX-1/INDEXED-1' in ''.join(
+                        cell['text'] for cell in view['frame']['cells'])
+                    for view in views
+                ):
+                    return views
+                return None
+
+            palette_first = wait_for(palette_ready, timeout=10)
+            palette_second = request({'command': 'list'})
+            require(len(palette_second) == 4 and all(
+                view['frame'].get('geometry') != {'rows': 24, 'cols': 80}
+                and view['frame'].get('palette_overrides') == PALETTE_FIXTURE_EXPECTED
+                and 'NAMED-INDEX-1/INDEXED-1' in ''.join(
+                    cell['text'] for cell in view['frame']['cells'])
+                for view in palette_second
+            ), 'palette fixture did not remain exact after stable UI resize')
+            require([view['frame']['palette_overrides'] for view in palette_first]
+                    == [view['frame']['palette_overrides'] for view in palette_second],
+                    'palette fixture changed between stable host polls')
+            report['paletteFixture'] = {
+                'expectedOverrides': PALETTE_FIXTURE_EXPECTED,
+                'observedOverrides': [view['frame']['palette_overrides'] for view in palette_second],
+                'fourSessionsMatched': True,
+                'namedAndIndexedSampleVisible': True,
+                'afterUiResize': True,
+                'stableAcrossPolls': True,
+                'scope': 'owned shell PTYs emitted OSC set/reset/set; typed host palette metadata only',
+            }
         if config.get('accessibility_probe'):
             # Setting ScreenReaderEnabled true makes the private launcher also
             # enable IsEnabled and emit its status change after AccessKit has
@@ -653,6 +710,7 @@ def outside(args):
         'accessibility_probe': args.accessibility, 'recovery_warning': args.recovery_warning,
         'ime_preedit': args.ime_preedit,
         'selection_fixture': args.selection_fixture,
+        'palette_fixture': args.palette_fixture,
         'output_scale': args.scale,
         'font_preflight': embedded_fonts}, indent=2) + '\n')
     (output / 'passwd').write_text(f'pigade:x:{os.getuid()}:{os.getgid()}:Isolated test:/home/test:/usr/bin/bash\n')
@@ -694,6 +752,8 @@ if __name__ == '__main__':
                         help='opt in to malformed-journal recovery, healthy PTY input and Alert coverage')
     parser.add_argument('--selection-fixture', action='store_true',
                         help='stage local cell selection in the same app, without input injection')
+    parser.add_argument('--palette-fixture', action='store_true',
+                        help='set/reset/set synthetic OSC palette values in owned shell PTYs and verify host metadata')
     parser.add_argument('--ime-preedit', action='store_true',
                         help='show a local same-app composition fixture without desktop input or PTY commit')
     sys.exit(outside(parser.parse_args()))

@@ -55,6 +55,7 @@ injection, `--last`, automatic repeated task or silent new conversation.
   imported Zed GPL terminal integration. Bundled OFL font aliases, fixed JP CJK
   fallback and cell-span clipping are documented in ADR0008. Unsupported glyph
   fallback is not deterministic across platforms.
+- Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and remaining cursor/decorations are still open.
 - Native local IME has UTF16 range/selection handling and a clipped overlay;
   actual Linux IME reset ordering is unverified. Do not reintroduce the removed
   cancelled-until-KeyDown latch: IMEs may consume physical keys themselves.
@@ -69,10 +70,10 @@ injection, `--last`, automatic repeated task or silent new conversation.
 
 ## Latest verification
 
-- Root workspace fmt, strict all-target Clippy and174 tests passed (including
+- Root workspace fmt, strict all-target Clippy and176 tests passed (including
   the25-test input target:23 shared pure codec tests and2 real raw-PTY tests).
-  Release workspace bins/examples build passed. Native app61 tests, strict
-  all-target Clippy, fmt and debug/release builds passed. Python59 tests passed.
+  Release workspace bins/examples build passed. Native app70 tests, strict
+  all-target Clippy, fmt and debug/release builds passed. Python79 tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
   identities. Root inspected selection/Unicode/child ACKs/footer controls in

@@ -1137,3 +1137,19 @@ Verify actual native Codex exact-ID conversation continuity with redacted source
 - Files: scripts/codex-conversation.py, scripts/test_codex_conversation.py, docs/research/codex-conversation-plan.md, docs/reports/codex-conversation-20261017.md, benchmarks/results/codex-conversation-20261017/result.json, docs/compatibility/CLI.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Reviewed and fixed via Luna unread-pipe truncation, allowlisted environment, exact global no-daemon placement, reasoning-vs-tool handling and durable phase intent;17 harness tests passed. Root executed2real provider turns once: codex-cli0.162.1 exactthreadID resumed acrossprocesses, syntheticcontextnonce matched, samethread.started event true; rawoutput/auth/history nevercopied. Harness SHAe06c9727...0406 matches result.
 - Risks / next: No interactive TUI/PigADE adapter/host or reboot auto-resume certification. Integrate durable product conversation binding and explicit capability gates; do not rerununknown.
+
+## 2026-10-17T01:19:13+00:00 — recovery_slice_review
+
+Add opt-in isolated renderer OSC palette fixture with typed host metadata assertions after UI resize
+
+- Files: scripts/isolated-render.py, scripts/test_isolated_render.py
+- Verification: python3 -m unittest scripts.test_isolated_render.PaletteFixtureTests -v (3 passed); python3 -m unittest scripts.test_isolated_render -q (9 passed); python3 -m py_compile scripts/isolated-render.py scripts/test_isolated_render.py; git diff --check; no app/host or UI launch performed
+- Risks / next: Root should run the opt-in isolated render only after rebuilding host/app and visually review the resulting screenshot
+
+## 2026-10-17T01:21:28+00:00 — /root
+
+Render host-owned dynamic palette with bounded typed replica validation
+
+- Files: crates/terminal/src/lib.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/palette.rs, crates/app/src/selection.rs, crates/app/README.md, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/palette-20261017, docs/reports/dynamic-palette.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Root26 terminal/176workspace/70app/79Python tests passed; workspace+app fmt/strictClippy and releasebuilds passed. All4realownedPTYs set/reset/set OSC palette, typedoverrides stableafterresize, privateUIrender/reopen passed. Root visuallyinspected PNG and verified exactRGBpixel counts BG779693 FG1666 named/indexed340; binary/source hashes retained. Profile/checkpoint semantics unchanged, legacywirecompatible.
+- Risks / next: Default-theme terminal query replies, cursor/decorations and fullnativeplatform gates remain open. Samefrozen1h resize reproducer continues; not24h/MVP completion.

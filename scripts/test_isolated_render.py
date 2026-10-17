@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -84,6 +85,47 @@ class RecoveryWarningTests(unittest.TestCase):
         self.assertIn(child_ack, acknowledged.stdout)
         self.assertNotIn(child_ack, echoed_only.stdout)
         self.assertIn(probe.rstrip(), echoed_only.stdout)
+
+
+class PaletteFixtureTests(unittest.TestCase):
+    def test_palette_fixture_command_sets_resets_then_sets_final_values(self):
+        command = RENDER.palette_fixture_command()
+        steps = [
+            '4;1;rgb:01/02/03', '10;rgb:01/02/03', '11;rgb:01/02/03',
+            '104;1', '110', '111',
+            '4;1;rgb:12/34/56', '10;rgb:ab/cd/ef', '11;rgb:09/18/27',
+        ]
+        offsets = [command.index(step) for step in steps]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertEqual(RENDER.PALETTE_FIXTURE_EXPECTED, [
+            [1, [0x12, 0x34, 0x56]],
+            [256, [0xAB, 0xCD, 0xEF]],
+            [257, [0x09, 0x18, 0x27]],
+        ])
+        result = subprocess.run(
+            ['/bin/bash', '--noprofile', '--norc', '-c', command + "printf 'DONE\\n'"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=False, timeout=2, check=True)
+        self.assertTrue(result.stdout.startswith(b'\x1b]4;1;rgb:01/02/03\x07'))
+        self.assertTrue(result.stdout.endswith(b'DONE\n'))
+
+    def test_fixture_is_opt_in_and_targets_named_and_indexed_samples(self):
+        plain = RENDER.shell_fixture(0)
+        palette = RENDER.shell_fixture(0, palette_fixture=True)
+        self.assertNotIn(']4;1;', plain)
+        self.assertNotIn('NAMED-INDEX-1', plain)
+        self.assertLess(palette.index('4;1;rgb:01/02/03'), palette.index(']2;Bash 1'))
+        self.assertIn(r'\033[31mNAMED-INDEX-1\033[0m', palette)
+        self.assertIn(r'\033[38;5;1mINDEXED-1\033[0m', palette)
+        self.assertTrue(palette.endswith(RENDER.shell_read_loop(False)))
+        self.assertEqual(RENDER.app_command(False), ['/pigade/app', '/artifacts/state/host.sock'])
+
+    def test_cli_flag_is_explicit_and_opt_in(self):
+        help_text = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('isolated-render.py')), '--help'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=2, check=True).stdout
+        self.assertIn('--palette-fixture', help_text)
 
 if __name__ == '__main__':
     unittest.main()

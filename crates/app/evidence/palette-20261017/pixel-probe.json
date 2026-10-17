@@ -1,0 +1,27 @@
+{
+  "terminal_background": {
+    "rgb": [
+      9,
+      24,
+      39
+    ],
+    "exact_pixel_count": 779693
+  },
+  "terminal_foreground": {
+    "rgb": [
+      171,
+      205,
+      239
+    ],
+    "exact_pixel_count": 1666
+  },
+  "named_and_indexed_1": {
+    "rgb": [
+      18,
+      52,
+      86
+    ],
+    "exact_pixel_count": 340
+  },
+  "scope": "Exact pixel colors inside this private software-render/font profile; no cross-platform/GPU claim"
+}

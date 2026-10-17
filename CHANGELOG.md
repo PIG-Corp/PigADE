@@ -34,6 +34,7 @@
 - Full four-session1GiB/100k-resize corpus matches the live model, full replay, checkpoint+tail and all54.36M cold records. Thirty host kill/reopens and a real full-data two-boot VM preserve exact historical frames/canonical tails and sources; UI-present/provider-resume and complete MVP gates remain open.
 - A third24h soak attempt failed after3079s on sustained resize QueueFull. Post-failure hot/frame/cold recovery equality passes; bounded rejection diagnostics and pidfd cleanup prepare the retained same-binary reproducer. The24h gate remains open.
 - Installed Codex0.162.1 completed a real two-process exec/exact-ID resume continuity check with retained synthetic context. Redacted hashes and a bounded reproduction harness are retained; product/interactive automatic resume remains disabled.
+- Dynamic terminal palette/foreground/background overrides now reach the native painter through bounded typed metadata. Set/reset/checkpoint tests and a source-bound private pixel capture verify colors without a second ANSI parser.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

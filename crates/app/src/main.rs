@@ -2,10 +2,12 @@
 mod font;
 mod input;
 mod mouse;
+mod palette;
 mod protocol;
 mod selection;
 use gpui::{prelude::*, *};
 use gpui_platform::application;
+use palette::color;
 use protocol::{
     Cell, CommandFailure, Poll, PollChanges, RecoveryDiagnostics, View, command, request,
 };
@@ -1590,141 +1592,89 @@ fn paint_panel(
         return;
     };
     let frame = &view.frame;
-    window.with_content_mask(
-        Some(ContentMask {
-            bounds: Bounds::new(
-                bounds.origin + point(px(1.), px(HEADER)),
-                size(
-                    bounds.size.width - px(2.),
-                    bounds.size.height - px(HEADER + 1.),
-                ),
-            ),
-        }),
-        |window| {
-            // Backgrounds must be complete before any cluster is painted. A
-            // following spacer/row must never erase wide glyphs or descenders.
-            for operation in cell_paint_order(&frame.cells) {
-                let (i, c) = match operation {
-                    CellPaint::Background(i, c) | CellPaint::Glyph(i, c) => (i, c),
-                };
-                let x = i % frame.geometry.cols as usize;
-                let y = i / frame.geometry.cols as usize;
-                let origin = pane.origin + point(cell.width * x as f32, cell.height * y as f32);
-                let mut fg = color(&c.fg, true);
-                let mut bg = color(&c.bg, false);
-                if c.flags & 1 != 0 {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
-                if selection.is_some_and(|selection| {
-                    selection.contains(view, selection::CellPosition { row: y, column: x })
-                }) {
-                    bg = 0x354c70;
-                    fg = 0xf2f4f7;
-                }
-                match operation {
-                    CellPaint::Background(..) => {
-                        window.paint_quad(fill(Bounds::new(origin, cell), rgb(bg)))
-                    }
-                    CellPaint::Glyph(..) => {
-                        let mut glyphfont = font.clone();
-                        if c.flags & 2 != 0 {
-                            glyphfont.weight = FontWeight::BOLD;
-                        }
-                        if c.flags & 4 != 0 {
-                            glyphfont.style = FontStyle::Italic;
-                        }
-                        // Shape the host-owned cluster, including combining
-                        // marks. Clip ink to its host-assigned one/two-cell span
-                        // so fallback overhang cannot paint into the next cell.
-                        window.with_content_mask(
-                            Some(ContentMask {
-                                bounds: glyph_span_bounds(origin, cell, c.flags),
-                            }),
-                            |window| {
-                                text(
-                                    c.text.clone(),
-                                    origin,
-                                    &glyphfont,
-                                    rgb(fg).into(),
-                                    cell.height,
-                                    window,
-                                    cx,
-                                );
-                            },
-                        );
-                    }
-                }
-            }
-            if frame.modes & input::SHOW_CURSOR != 0 && frame.cursor.0 >= 0 {
-                let origin = pane.origin
-                    + point(
-                        cell.width * frame.cursor.1 as f32,
-                        cell.height * frame.cursor.0 as f32,
-                    );
-                window.paint_quad(fill(
-                    Bounds::new(
-                        origin + point(px(0.), cell.height - px(2.)),
-                        size(cell.width, px(2.)),
-                    ),
-                    rgb(if selected { 0x7dafff } else { 0x606875 }),
-                ));
-            }
-        },
+    let viewport = Bounds::new(
+        bounds.origin + point(px(1.), px(HEADER)),
+        size(
+            bounds.size.width - px(2.),
+            bounds.size.height - px(HEADER + 1.),
+        ),
     );
+    window.with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
+        window.paint_quad(fill(
+            viewport,
+            rgb(color("Named(Background)", false, &frame.palette_overrides)),
+        ));
+        // Backgrounds must be complete before any cluster is painted. A
+        // following spacer/row must never erase wide glyphs or descenders.
+        for operation in cell_paint_order(&frame.cells) {
+            let (i, c) = match operation {
+                CellPaint::Background(i, c) | CellPaint::Glyph(i, c) => (i, c),
+            };
+            let x = i % frame.geometry.cols as usize;
+            let y = i / frame.geometry.cols as usize;
+            let origin = pane.origin + point(cell.width * x as f32, cell.height * y as f32);
+            let mut fg = color(&c.fg, true, &frame.palette_overrides);
+            let mut bg = color(&c.bg, false, &frame.palette_overrides);
+            if c.flags & 1 != 0 {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            if selection.is_some_and(|selection| {
+                selection.contains(view, selection::CellPosition { row: y, column: x })
+            }) {
+                bg = 0x354c70;
+                fg = 0xf2f4f7;
+            }
+            match operation {
+                CellPaint::Background(..) => {
+                    window.paint_quad(fill(Bounds::new(origin, cell), rgb(bg)))
+                }
+                CellPaint::Glyph(..) => {
+                    let mut glyphfont = font.clone();
+                    if c.flags & 2 != 0 {
+                        glyphfont.weight = FontWeight::BOLD;
+                    }
+                    if c.flags & 4 != 0 {
+                        glyphfont.style = FontStyle::Italic;
+                    }
+                    // Shape the host-owned cluster, including combining
+                    // marks. Clip ink to its host-assigned one/two-cell span
+                    // so fallback overhang cannot paint into the next cell.
+                    window.with_content_mask(
+                        Some(ContentMask {
+                            bounds: glyph_span_bounds(origin, cell, c.flags),
+                        }),
+                        |window| {
+                            text(
+                                c.text.clone(),
+                                origin,
+                                &glyphfont,
+                                rgb(fg).into(),
+                                cell.height,
+                                window,
+                                cx,
+                            );
+                        },
+                    );
+                }
+            }
+        }
+        if frame.modes & input::SHOW_CURSOR != 0 && frame.cursor.0 >= 0 {
+            let origin = pane.origin
+                + point(
+                    cell.width * frame.cursor.1 as f32,
+                    cell.height * frame.cursor.0 as f32,
+                );
+            window.paint_quad(fill(
+                Bounds::new(
+                    origin + point(px(0.), cell.height - px(2.)),
+                    size(cell.width, px(2.)),
+                ),
+                rgb(if selected { 0x7dafff } else { 0x606875 }),
+            ));
+        }
+    });
 }
-fn color(value: &str, foreground: bool) -> u32 {
-    const ANSI: [u32; 16] = [
-        0x111317, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xdcdfe4, 0x5c6370,
-        0xff808b, 0xb4e88c, 0xffd68a, 0x88c0ff, 0xdf9fff, 0x7bdde4, 0xffffff,
-    ];
-    if value.starts_with("Spec(") {
-        let numbers: Vec<u32> = value
-            .split(|c: char| !c.is_ascii_digit())
-            .filter_map(|n| n.parse().ok())
-            .collect();
-        if numbers.len() == 3 {
-            return (numbers[0] << 16) | (numbers[1] << 8) | numbers[2];
-        }
-    }
-    if let Some(index) = value
-        .strip_prefix("Indexed(")
-        .and_then(|s| s.strip_suffix(')'))
-        .and_then(|s| s.parse::<u32>().ok())
-    {
-        if index < 16 {
-            return ANSI[index as usize];
-        }
-        if index < 232 {
-            let i = index - 16;
-            let channel = |v: u32| if v == 0 { 0 } else { 55 + v * 40 };
-            return channel(i / 36) << 16 | channel(i / 6 % 6) << 8 | channel(i % 6);
-        }
-        let v = 8 + (index.min(255) - 232) * 10;
-        return v << 16 | v << 8 | v;
-    }
-    let names = [
-        "Black",
-        "Red",
-        "Green",
-        "Yellow",
-        "Blue",
-        "Magenta",
-        "Cyan",
-        "White",
-        "BrightBlack",
-        "BrightRed",
-        "BrightGreen",
-        "BrightYellow",
-        "BrightBlue",
-        "BrightMagenta",
-        "BrightCyan",
-        "BrightWhite",
-    ];
-    if let Some(index) = names.iter().position(|n| value == format!("Named({n})")) {
-        return ANSI[index];
-    }
-    if foreground { 0xf2f4f7 } else { 0x111317 }
-}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!(
@@ -2188,8 +2138,8 @@ mod tests {
     }
     #[test]
     fn ansi_color_fields_are_display_only() {
-        assert_eq!(color("Spec(Rgb { r: 1, g: 2, b: 3 })", true), 0x010203);
-        assert_eq!(color("Indexed(196)", true), 0xff0000);
-        assert_eq!(color("Named(BrightBlue)", true), 0x88c0ff);
+        assert_eq!(color("Spec(Rgb { r: 1, g: 2, b: 3 })", true, &[]), 0x010203);
+        assert_eq!(color("Indexed(196)", true, &[]), 0xff0000);
+        assert_eq!(color("Named(BrightBlue)", true, &[]), 0x88c0ff);
     }
 }

@@ -287,6 +287,7 @@ mod tests {
                 cursor_style: String::new(),
                 modes: 0,
                 colors: String::new(),
+                palette_overrides: Vec::new(),
                 history_lines: 0,
                 sync_pending_bytes: 0,
                 title: String::new(),

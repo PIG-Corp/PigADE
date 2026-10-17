@@ -25,6 +25,54 @@ pub struct Cell {
     pub underline: Option<String>,
     pub hyperlink: Option<u32>,
 }
+const PALETTE_COLORS: usize = 269;
+
+fn validate_palette(overrides: &[(u16, [u8; 3])]) -> Result<(), String> {
+    if overrides.len() > PALETTE_COLORS
+        || overrides
+            .iter()
+            .any(|(index, _)| usize::from(*index) >= PALETTE_COLORS)
+        || overrides.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err("invalid terminal palette overrides".into());
+    }
+    Ok(())
+}
+
+fn deserialize_palette_overrides<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<(u16, [u8; 3])>, D::Error> {
+    struct PaletteVisitor;
+    impl<'de> serde::de::Visitor<'de> for PaletteVisitor {
+        type Value = Vec<(u16, [u8; 3])>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("at most269 sorted unique terminal RGB overrides")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            if seq.size_hint().is_some_and(|n| n > PALETTE_COLORS) {
+                return Err(serde::de::Error::custom("too many terminal colors"));
+            }
+            let mut entries: Vec<(u16, [u8; 3])> = Vec::new();
+            while let Some(entry) = seq.next_element::<(u16, [u8; 3])>()? {
+                if entries.len() == PALETTE_COLORS
+                    || usize::from(entry.0) >= PALETTE_COLORS
+                    || entries.last().is_some_and(|last| last.0 >= entry.0)
+                {
+                    return Err(serde::de::Error::custom(
+                        "invalid terminal palette overrides",
+                    ));
+                }
+                entries.push(entry);
+            }
+            Ok(entries)
+        }
+    }
+    deserializer.deserialize_seq(PaletteVisitor)
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Frame {
     pub geometry: Geometry,
@@ -34,6 +82,8 @@ pub struct Frame {
     pub cursor_style: String,
     pub modes: u32,
     pub colors: String,
+    #[serde(default, deserialize_with = "deserialize_palette_overrides")]
+    pub palette_overrides: Vec<(u16, [u8; 3])>,
     pub history_lines: usize,
     pub sync_pending_bytes: usize,
     pub title: String,
@@ -197,6 +247,7 @@ fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
         return Ok(response);
     }
     for view in &response.views {
+        validate_palette(&view.frame.palette_overrides)?;
         let geometry = &view.frame.geometry;
         if geometry.rows == 0
             || geometry.cols == 0
@@ -257,6 +308,9 @@ pub fn merge_poll(
         return Err("Too many selected terminal frames".into());
     }
     validate_recovery(reply.recovery.as_ref())?;
+    for view in &reply.views {
+        validate_palette(&view.frame.palette_overrides)?;
+    }
     let key = |known: &Known| (known.session.clone(), known.generation.clone());
     let mut selected = std::collections::HashSet::new();
     for info in &reply.selected {
@@ -350,6 +404,36 @@ mod tests {
             }],
             omitted: 0,
         }
+    }
+
+    #[test]
+    fn palette_wire_is_backward_compatible_and_bounded_before_replica_merge() {
+        #[derive(serde::Deserialize)]
+        struct Palette {
+            #[serde(default, deserialize_with = "super::deserialize_palette_overrides")]
+            values: Vec<(u16, [u8; 3])>,
+        }
+        assert!(
+            serde_json::from_str::<Palette>("{}")
+                .unwrap()
+                .values
+                .is_empty()
+        );
+        let palette =
+            serde_json::from_str::<Palette>(r#"{"values":[[0,[1,2,3]],[268,[253,254,255]]]}"#)
+                .unwrap();
+        assert_eq!(palette.values, vec![(0, [1, 2, 3]), (268, [253, 254, 255])]);
+        for invalid in [
+            r#"{"values":[[269,[1,2,3]]]}"#,
+            r#"{"values":[[0,[256,0,0]]]}"#,
+            r#"{"values":[[3,[1,2,3]],[2,[4,5,6]]]}"#,
+            r#"{"values":[[3,[1,2,3]],[3,[4,5,6]]]}"#,
+        ] {
+            assert!(serde_json::from_str::<Palette>(invalid).is_err());
+        }
+        let too_many =
+            serde_json::json!({"values": (0..270).map(|i| (i,[0,0,0])).collect::<Vec<_>>()});
+        assert!(serde_json::from_value::<Palette>(too_many).is_err());
     }
 
     #[test]
@@ -517,6 +601,37 @@ mod tests {
         assert_eq!(cached, expected);
         assert_eq!(recovery, previous_recovery);
     }
+    #[test]
+    fn invalid_palette_cannot_replace_cached_frame_or_diagnostics() {
+        let original = vec![fixture()];
+        let previous_recovery = Some(diagnostics("old.journal", "old warning"));
+        for overrides in [
+            vec![(269, [0, 0, 0])],
+            vec![(2, [1, 2, 3]), (2, [4, 5, 6])],
+            vec![(3, [1, 2, 3]), (0, [4, 5, 6])],
+        ] {
+            let mut next = fixture();
+            next.sequence += 1;
+            next.frame.palette_overrides = overrides;
+            let mut cached = original.clone();
+            let mut recovery = previous_recovery.clone();
+            assert!(
+                merge_poll(
+                    &mut cached,
+                    &mut recovery,
+                    Poll {
+                        selected: vec![next.known()],
+                        views: vec![next],
+                        recovery: None
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(cached, original);
+            assert_eq!(recovery, previous_recovery);
+        }
+    }
+
     #[test]
     fn lifecycle_changes_without_output_replace_the_replica() {
         let mut cached = vec![fixture()];
