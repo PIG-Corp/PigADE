@@ -70,3 +70,5 @@ This section describes development work; it is not a release announcement.
 - Dedicated bounded host change waits wake cell polling independently of input. Tokens close publication races and survive host restart through fresh epochs; failed service falls back without changing committed launch results. Real host/PTy and app UDS regressions pass. Retained private latency runs still miss formal budgets; finite numeric traces prepare the next redraw fix.
 
 - Redraws now track visible preedit/ACK changes instead of every accepted input receipt.127 app tests and both private native Pinyin regressions pass; one50-key software trace reduces p95 from97.208to66.165ms, still outside formal budgets. Full samples and initial failed run remain retained.
+
+- Added versioned durable raw resource-refusal records and exact-prefix replay, with sealed journal writers and refusal-safe checkpoint receipts.217 workspace tests plus extended process-level suffix checks pass; production launch policy stays legacy until whole-event memory admission is implemented.

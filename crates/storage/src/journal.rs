@@ -46,6 +46,9 @@ pub enum EventKind {
     Resize = 2,
     SyncTimeout = 3,
     Exit = 4,
+    /// Raw output durably retained but refused before terminal-model mutation.
+    /// The rejection decision is covered by the event frame CRC via this kind.
+    OutputRejectedResource = 5,
 }
 
 impl EventKind {
@@ -55,6 +58,7 @@ impl EventKind {
             2 => Some(Self::Resize),
             3 => Some(Self::SyncTimeout),
             4 => Some(Self::Exit),
+            5 => Some(Self::OutputRejectedResource),
             _ => None,
         }
     }
@@ -72,6 +76,7 @@ pub struct Receipt {
     pub sequence: u64,
     pub end_offset: u64,
     pub checksum: u32,
+    pub kind: EventKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +168,7 @@ pub struct JournalReader {
     sequence: u64,
     valid_bytes: u64,
     poisoned: bool,
+    resource_refusal_seen: bool,
 }
 
 /// Counts bytes returned by `Read`; seeks and metadata lookups do not count.
@@ -209,6 +215,7 @@ impl JournalReader {
             sequence: 0,
             valid_bytes,
             poisoned: false,
+            resource_refusal_seen: false,
         })
     }
     pub fn header(&self) -> &JournalHeader {
@@ -275,14 +282,16 @@ impl JournalReader {
         }
         self.sequence = sequence;
         self.valid_bytes = self.file.stream_position()?;
+        self.resource_refusal_seen |= kind == EventKind::OutputRejectedResource;
         Ok(Some(JournalEvent {
             sequence,
             kind,
             payload,
         }))
     }
-    /// Resume only from an authenticated checkpoint watermark. This intentionally
-    /// does not scan the prefix; the snapshot checksum/profile binds that prefix.
+    /// Resume only from a caller-validated checkpoint watermark produced under
+    /// the generation's writer contract. This does not scan the prefix or prove
+    /// semantic model equality; checksums are corruption checks, not authentication.
     pub fn resume_after_checkpoint(mut self, sequence: u64, offset: u64) -> Result<Self> {
         ensure!(
             offset >= self.valid_bytes && offset <= self.file.inner.metadata()?.len(),
@@ -338,6 +347,7 @@ pub struct Journal {
     header: JournalHeader,
     sequence: u64,
     poisoned: bool,
+    sealed_after_resource_refusal: bool,
 }
 impl Journal {
     pub fn create(path: impl AsRef<Path>, header: JournalHeader) -> Result<Self> {
@@ -373,6 +383,7 @@ impl Journal {
             header,
             sequence: 0,
             poisoned: false,
+            sealed_after_resource_refusal: false,
         })
     }
     pub fn open(path: impl AsRef<Path>, expected_header: &JournalHeader) -> Result<Self> {
@@ -392,6 +403,7 @@ impl Journal {
             header: reader.header,
             sequence: report.valid_events,
             poisoned: false,
+            sealed_after_resource_refusal: reader.resource_refusal_seen,
         })
     }
     pub fn header(&self) -> &JournalHeader {
@@ -412,6 +424,10 @@ impl Journal {
         ensure!(
             !self.poisoned,
             "journal writer poisoned by uncertain write; reopen and recover"
+        );
+        ensure!(
+            !self.sealed_after_resource_refusal,
+            "journal sealed after resource-refused output; explicit recovery required"
         );
         ensure!(
             payload.len() <= MAX_EVENT_BYTES,
@@ -447,10 +463,14 @@ impl Journal {
         let end_offset = self.file.stream_position()?;
         self.sequence = sequence;
         self.poisoned = false;
+        if kind == EventKind::OutputRejectedResource {
+            self.sealed_after_resource_refusal = true;
+        }
         Ok(Receipt {
             sequence,
             end_offset,
             checksum,
+            kind,
         })
     }
 }
@@ -498,6 +518,185 @@ mod tests {
         assert_eq!(reader.next_event()?.unwrap().kind, EventKind::Resize);
         assert_eq!(reader.next_event()?.unwrap().kind, EventKind::SyncTimeout);
         assert!(reader.next_event()?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn rejected_resource_event_roundtrips_exact_maximum_raw_payload() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let h = header();
+        let mut journal = Journal::create(&path, h)?;
+        let payload = (0..MAX_EVENT_BYTES)
+            .map(|index| index as u8)
+            .collect::<Vec<_>>();
+        let receipt = journal.append(EventKind::OutputRejectedResource, &payload)?;
+        assert_eq!(receipt.sequence, 1);
+        assert_eq!(receipt.kind, EventKind::OutputRejectedResource);
+        assert_eq!(journal.durable_sequence(), 1);
+        drop(journal);
+
+        let report = scan_valid_prefix(&path)?;
+        assert_eq!(report.valid_events, 1);
+        assert!(report.corruption.is_none(), "rejected record CRC invalid");
+        let mut reader = JournalReader::open(path)?;
+        let event = reader.next_event()?.context("rejected event missing")?;
+        assert_eq!(event.kind, EventKind::OutputRejectedResource);
+        assert_eq!(event.payload, payload);
+        assert!(reader.next_event()?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn every_partial_rejected_resource_write_preserves_prior_prefix() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        for cut in 1..FRAME_HEADER_BYTES + 20 {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("events");
+            let h = header();
+            let mut journal = Journal::create(&path, h.clone())?;
+            let committed = journal.append(EventKind::Output, b"durable")?;
+            assert!(
+                journal
+                    .append_impl(
+                        EventKind::OutputRejectedResource,
+                        &[42; 20],
+                        Some(WriteFault::AfterBytes(cut))
+                    )
+                    .is_err()
+            );
+            assert_eq!(journal.durable_sequence(), 1);
+            assert!(journal.append(EventKind::Output, b"later").is_err());
+            drop(journal);
+            let original = std::fs::read(&path)?;
+            let report = scan_valid_prefix(&path)?;
+            assert_eq!(report.valid_events, 1);
+            assert_eq!(report.valid_bytes, committed.end_offset);
+            assert_eq!(
+                report.corruption.unwrap().kind,
+                CorruptionKind::TruncatedFrame
+            );
+            let mut reader = JournalReader::open(&path)?;
+            assert_eq!(reader.next_event()?.unwrap().payload, b"durable");
+            assert!(reader.next_event().is_err());
+            assert_eq!(std::fs::read(path)?, original);
+        }
+        Ok(())
+    }
+    #[test]
+    fn rejected_resource_decision_is_crc_covered() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let mut journal = Journal::create(&path, header())?;
+        journal.append(EventKind::OutputRejectedResource, b"raw bytes")?;
+        drop(journal);
+
+        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+        read_header(&mut file)?;
+        let kind_offset = file.stream_position()? + 24;
+        file.seek(SeekFrom::Start(kind_offset))?;
+        file.write_all(&[EventKind::Output as u8])?;
+        file.sync_all()?;
+
+        let report = scan_valid_prefix(&path)?;
+        assert_eq!(report.valid_events, 0);
+        assert_eq!(report.corruption.unwrap().kind, CorruptionKind::Checksum);
+        Ok(())
+    }
+    #[test]
+    fn uncertain_rejected_resource_sync_has_no_receipt_or_retry() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let h = header();
+        let mut journal = Journal::create(&path, h.clone())?;
+        assert!(
+            journal
+                .append_impl(
+                    EventKind::OutputRejectedResource,
+                    b"raw rejected bytes",
+                    Some(WriteFault::BeforeSync)
+                )
+                .is_err()
+        );
+        assert_eq!(journal.durable_sequence(), 0);
+        assert!(
+            journal
+                .append(EventKind::OutputRejectedResource, b"retry")
+                .is_err()
+        );
+        drop(journal);
+
+        let mut reader = JournalReader::open(path)?;
+        let event = reader
+            .next_event()?
+            .context("complete uncertain write missing")?;
+        assert_eq!(event.sequence, 1);
+        assert_eq!(event.kind, EventKind::OutputRejectedResource);
+        assert_eq!(event.payload, b"raw rejected bytes");
+        Ok(())
+    }
+    #[test]
+    fn refusal_receipt_seals_writer_and_reopen_detects_valid_suffix() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("events");
+        let h = header();
+        let mut journal = Journal::create(&path, h.clone())?;
+        let receipt = journal.append(EventKind::OutputRejectedResource, b"refused raw")?;
+        assert_eq!(receipt.kind, EventKind::OutputRejectedResource);
+        assert_eq!(receipt.sequence, 1);
+        assert_eq!(journal.durable_sequence(), 1);
+        let after_refusal = std::fs::read(&path)?;
+        assert!(
+            journal
+                .append(EventKind::Output, b"must not follow")
+                .is_err()
+        );
+        assert_eq!(journal.durable_sequence(), 1);
+        assert_eq!(std::fs::read(&path)?, after_refusal);
+        drop(journal);
+
+        // Model a valid-CRC suffix written by a different/older writer. Open
+        // still scans the complete valid file, but the next append must remain
+        // sealed because a resource refusal is a terminal tail transition.
+        append_test_frame(&path, h.generation, 2, EventKind::Output, b"suffix")?;
+        let mut reopened = Journal::open(&path, &h)?;
+        assert_eq!(reopened.durable_sequence(), 2);
+        let before_attempt = std::fs::read(&path)?;
+        assert!(reopened.append(EventKind::Output, b"later").is_err());
+        assert_eq!(reopened.durable_sequence(), 2);
+        assert_eq!(std::fs::read(&path)?, before_attempt);
+
+        let mut reader = JournalReader::open(&path)?;
+        assert_eq!(
+            reader.next_event()?.unwrap().kind,
+            EventKind::OutputRejectedResource
+        );
+        assert_eq!(reader.next_event()?.unwrap().payload, b"suffix");
+        assert!(reader.next_event()?.is_none());
+        Ok(())
+    }
+    fn append_test_frame(
+        path: &Path,
+        generation: Uuid,
+        sequence: u64,
+        kind: EventKind,
+        payload: &[u8],
+    ) -> Result<()> {
+        let mut frame = Vec::with_capacity(FRAME_HEADER_BYTES + payload.len());
+        frame.extend_from_slice(&sequence.to_le_bytes());
+        frame.extend_from_slice(generation.as_bytes());
+        frame.push(kind as u8);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(&frame);
+        hasher.update(payload);
+        frame.extend_from_slice(&hasher.finalize().to_le_bytes());
+        frame.extend_from_slice(payload);
+        let mut file = OpenOptions::new().append(true).open(path)?;
+        file.write_all(&frame)?;
+        file.sync_all()?;
         Ok(())
     }
     #[test]

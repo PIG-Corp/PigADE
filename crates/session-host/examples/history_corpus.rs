@@ -360,6 +360,7 @@ fn event_name(kind: EventKind) -> &'static str {
         EventKind::Resize => "resize",
         EventKind::SyncTimeout => "sync_timeout",
         EventKind::Exit => "exit",
+        EventKind::OutputRejectedResource => "output_rejected_resource",
     }
 }
 
@@ -453,6 +454,10 @@ impl SessionBuilder {
         // This ordering intentionally mirrors the durable generation actor:
         // journal fsync, observer-wrapped model mutation, archive/index fsync,
         // then optional atomic checkpoint publication.
+        ensure!(
+            kind != EventKind::OutputRejectedResource,
+            "corpus cannot apply refused raw output"
+        );
         let receipt = self.journal.append(kind, payload)?;
         self.last_receipt = Some(receipt);
         self.history.begin(receipt.sequence)?;
@@ -473,6 +478,7 @@ impl SessionBuilder {
             }
             EventKind::SyncTimeout => self.terminal.sync_timeout(),
             EventKind::Exit => (),
+            EventKind::OutputRejectedResource => unreachable!("corpus guard rejects refusals"),
         }
         self.history.commit()?;
         self.timeline.record(receipt.sequence, kind)?;
@@ -547,6 +553,10 @@ impl SessionBuilder {
             if kind == EventKind::Output {
                 self.tail_output_bytes += payload.len() as u64;
             }
+            ensure!(
+                kind != EventKind::OutputRejectedResource,
+                "ending recipe cannot apply refused raw output"
+            );
             last = self.journal.append(kind, &payload)?;
             self.history.begin(last.sequence)?;
             match kind {
@@ -554,6 +564,9 @@ impl SessionBuilder {
                 EventKind::Resize => anyhow::bail!("ending recipe cannot resize"),
                 EventKind::SyncTimeout => self.terminal.sync_timeout(),
                 EventKind::Exit => anyhow::bail!("ending recipe cannot exit"),
+                EventKind::OutputRejectedResource => {
+                    unreachable!("ending recipe guard rejects refusals")
+                }
             }
             self.history.commit()?;
             self.timeline.record(last.sequence, kind)?;

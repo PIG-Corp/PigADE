@@ -1849,3 +1849,35 @@ Remove unchanged commit/receipt redraws after locking ACK presentation regressio
 - Files: crates/app/src/main.rs, docs/research/publication-redraw-plan.md, docs/reports/host-notification-20261017.md, docs/AGENT_HANDOFF.md, CHANGELOG.md, benchmarks/results/notification-20261017/redraw-source.json, benchmarks/results/notification-20261017/latency-redraw-pass.json, benchmarks/results/notification-20261017/latency-redraw-pass.png, benchmarks/results/notification-20261017/redraw-publication-trace.tsv, crates/app/evidence/redraw-ime-20261017
 - Verification: Plan+realreceipt domain2regressions first; root app127 tests and strictClippy/fmt/release pass. Source-bound50key privateX11 p95=66.165ms vs97.208prior; Poll→UI p95=0.466ms vs41.455prior. Bothprivate X11/Wayland Pinyin 0early/exact6B/noextra/ACKpass; root visually reviewed all4IMEcaptures, X11popupbottomleft explicitlylimited. Independentread-onlyreviewnoactionablefindings.
 - Risks / next: Formal50/80ms gate and initial1soutlier unresolved; nativeIMEgenerationbarriers and globalmemory/refusal remain nextstage0 work. Active24h82653/old7200s55262 untouched.
+
+## 2026-10-17T03:36:28+00:00 — terminal_memory_budget
+
+Added the versionable rejected-resource output event kind and storage-level durability/CRC coverage
+
+- Files: crates/storage/src/journal.rs
+- Verification: rustfmt --edition 2024 --check crates/storage/src/journal.rs; cargo test --offline -p pigade-storage (39 passed); cargo clippy --offline -p pigade-storage --all-targets -- -D warnings; git diff --check
+- Risks / next: Host profile gate and replay handling remain root-owned; runtime must not emit this kind until reservation/admission policy is integrated
+
+## 2026-10-17T03:37:32+00:00 — terminal_memory_budget
+
+Corrected resource-refusal design to SPEC-aligned single-record Output/OutputRejectedResource protocol; documented journal profile and rollout gate
+
+- Files: docs/research/durable-resource-refusal-next.md, docs/research/terminal-admission-plan.md
+- Verification: Checked all five source/document references; git diff --check
+- Risks / next: Host journal-profile gate, replay branch, estimator, ledger and resize outcome remain unimplemented; keep production launches on legacy profile until tested
+
+## 2026-10-17T03:41:15+00:00 — terminal_memory_budget
+
+Added append receipt event kind and sealed journal writers after durable resource refusal, including reopen detection
+
+- Files: crates/storage/src/journal.rs
+- Verification: cargo test --offline -p pigade-storage (40 passed); cargo clippy --offline -p pigade-storage --all-targets -- -D warnings; rustfmt check; git diff --check
+- Risks / next: Host-owned receipt literals/profile gating/checkpoint guard need integration; writer seal deliberately does not stop reader from inspecting CRC-valid suffixes
+
+## 2026-10-17T03:46:11+00:00 — root
+
+Implement exact-policy durable resource-refusal recovery and protect checkpoint boundary
+
+- Files: crates/storage/src/journal.rs, crates/session-host/src/journal_policy.rs, crates/session-host/src/resource_refusal_tests.rs, crates/session-host/src/lib.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/replay_cache.rs, crates/session-host/src/history/tests.rs, crates/session-host/src/history/crash_tests.rs, crates/session-host/examples/benchmark.rs, crates/session-host/examples/history_corpus.rs, crates/session-host/tests/recovery.rs, docs/adr/0013-durable-resource-refusal-event.md, docs/reports/resource-refusal-20261017.md, docs/research/terminal-admission-plan.md, docs/research/durable-resource-refusal-next.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root217-workspace tests/strictClippy/fmt/release pass; extended real-host six-case suffix recovery/readallcoldrecords passes. Newunit compares liveprefix/full/CPtail hiddenstate and every nonzero coldrecord plus continuation. Fixed cacheprofile gate and preserved unsupportedprofile diagnostic after failures. Independentreview checkpointseam fixedviaReceiptkind guards beforecapture/busypermit + sealedJournal/reopen; coldtest assertsno CP/append atrefusal.
+- Risks / next: Only storage/recovery policy enabled, productionlaunches unchangedlegacy. Complete readonly resource driver census and defensible global/persistent/transient admission before any live refusal; nativeIMEgeneration/perf/MVP remainopen.

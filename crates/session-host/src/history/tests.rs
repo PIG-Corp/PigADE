@@ -19,6 +19,10 @@ fn apply(
     kind: EventKind,
     bytes: &[u8],
 ) -> Result<Receipt> {
+    anyhow::ensure!(
+        kind != EventKind::OutputRejectedResource,
+        "fixture cannot apply refused raw output"
+    );
     let receipt = journal.append(kind, bytes)?;
     history.begin(receipt.sequence)?;
     match kind {
@@ -26,6 +30,7 @@ fn apply(
         EventKind::Resize => terminal.resize(serde_json::from_slice(bytes)?),
         EventKind::SyncTimeout => terminal.sync_timeout(),
         EventKind::Exit => (),
+        EventKind::OutputRejectedResource => unreachable!("fixture guard rejects refusals"),
     }
     history.commit()?;
     Ok(receipt)

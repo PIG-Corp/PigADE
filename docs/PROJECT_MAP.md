@@ -99,3 +99,9 @@ WaitForChange bypasses serialized command dispatch within bounded peer-auth IPC.
 The app command and Poll threads are independent; optional `publication_trace.rs`
 records finite numeric milestones. See ADR0012 and
 [notification measurements](reports/host-notification-20261017.md).
+
+`session-host/src/journal_policy.rs` separates exact legacy/resource-refusal journal
+policies from unchanged terminal checkpoint schema2. `resource_refusal_tests.rs`
+proves complete-prefix and every-cold-record behavior; storage kind5 seals writes
+and typed receipts protect checkpoint watermarks. This is reader/storage support,
+not live memory admission; see ADR0013 and the resource-refusal report.

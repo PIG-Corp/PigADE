@@ -275,29 +275,47 @@ fn conditional_poll_keeps_idle_cells_private_and_reports_exit_and_reopen() -> Re
 
 #[test]
 fn semantically_invalid_crc_valid_tail_preserves_and_serves_last_good_prefix() -> Result<()> {
-    let cases: &[(&str, EventKind, &[u8])] = &[
+    let cases: &[(&str, EventKind, &[u8], bool)] = &[
         (
             "invalid resize geometry",
             EventKind::Resize,
             br#"{"rows":0,"cols":80}"#,
+            false,
         ),
-        ("invalid resize JSON", EventKind::Resize, b"{"),
+        ("invalid resize JSON", EventKind::Resize, b"{", false),
         (
             "nonempty SyncTimeout",
             EventKind::SyncTimeout,
             b"unexpected",
+            false,
         ),
-        ("nonempty Exit", EventKind::Exit, b"unexpected"),
+        ("nonempty Exit", EventKind::Exit, b"unexpected", false),
+        (
+            "legacy profile refuses new event kind",
+            EventKind::OutputRejectedResource,
+            b"REFUSED_RAW_MUST_NOT_APPLY",
+            false,
+        ),
+        (
+            "resource profile keeps refused raw tail",
+            EventKind::OutputRejectedResource,
+            b"REFUSED_RAW_MUST_NOT_APPLY",
+            true,
+        ),
     ];
 
-    for (name, invalid_kind, invalid_payload) in cases {
+    for (name, invalid_kind, invalid_payload, resource_policy) in cases {
         let directory = tempfile::tempdir()?;
         let session = Uuid::new_v4();
         let generation = Uuid::new_v4();
         let header = JournalHeader {
             session_id: session,
             generation,
-            profile: CORE_PROFILE.into(),
+            profile: if *resource_policy {
+                pigade_session_host::journal_policy::resource_refusal_profile()
+            } else {
+                CORE_PROFILE.into()
+            },
             initial_rows: 8,
             initial_cols: 40,
         };

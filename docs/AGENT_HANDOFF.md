@@ -282,3 +282,17 @@ tests/strictClippy/release pass; native Pinyin exactcommit+clear passes on both
 private X11 and SwayWayland.50-key observed p95=66.165ms, Poll→UI p95=0.466ms
 (previous41.455ms); formal50/80ms gate stillopen and initial1soutlier retained.
 Evidence/report includes full samples/sourcebinding and both IME captures.
+
+## Durable resource refusal reader/storage slice
+
+ADR0013 implemented EventKind5 raw refusal + exact journal-policy suffix, preserving
+legacy launches and terminal schema2. Successful refusal seals further writes
+including after reopen; Receipt.kind blocks sync/async checkpoint capture/persist
+at refusal. Full/tail recovery preserves exact complete prefix and nonzero cold
+records; process-level service/read/no-respawn cases pass.217 workspace tests,
+strictClippy/fmt/release pass; new extended six-case suffix test passes separately.
+No liveadmission/globalledger/estimator or memorybudget is implemented. Next
+complete preflight resource drivers and aggregate ownership before enablingnew
+launchprofile. See reports/resource-refusal-20261017.md and corrected research
+notes (single durable record, not pending/two-sync). Existing82653/55262 frozen
+soaks continue unchanged.

@@ -19,25 +19,40 @@ The next implementation follows actual allocation ownership:
    REP, partial OSC and synchronized-buffer flushes. Query callback counts do
    not alone bound response bytes: Term modes, cursor, known colors and closure
    payloads matter. Census must never execute external terminal effects.
-4. Reserve before `history.begin`, model mutation and any PTY resize. For output
-   already received from the PTY, retain raw durability before admission. A
-   resize additionally has an OS side effect: audit its failure/outcome contract
-   before changing the existing successful-kernel-resize → journal order. A
-   failed kernel operation must not become an apparently applied replay event.
-   Account for grid/cache/reflow backing, combining
-   COW, metadata, event/response queues, parser clones, the prior/new frame and
-   checkpoint/import/export workspaces. Release or replace reservations as
-   retained allocations shrink; a lifetime-output counter is unsuitable.
-5. Integrate a shared host ledger, durable rejection identity and retry policy.
-   A refusal retains the already durable raw event, previous frame/sequence and
-   history root. Replay must return that same valid prefix with an explicit
-   rejected-event reason. It must not crop or skip individual ANSI operations.
+4. Run read-only preflight and acquire a shared reservation before
+   `history.begin`, model mutation, or any PTY resize. SPEC 7.4 requires the
+   durable journal before terminal-core mutation/publication; it does not
+   require raw-output fsync before pure preflight or reservation. For either
+   output decision, write the exact bytes once in a CRC-protected journal
+   record and sync before model mutation: `Output` means accepted, while the
+   versioned `OutputRejectedResource` event retains refused raw bytes without
+   applying them. A resize reservation must precede its OS side effect. Audit
+   the existing successful-kernel-resize → journal order separately; a failed
+   kernel operation must not become an apparently applied replay event.
+   Account for grid/cache/reflow backing, combining COW, metadata,
+   event/response queues, parser clones, the prior/new frame and
+   checkpoint/import/export workspaces. Include bounded journal-write scratch
+   for rejected payloads. Release or reconcile reservations as retained
+   allocations shrink; a lifetime-output counter is unsuitable.
+5. Integrate a shared host ledger and profile-gated durable rejection
+   semantics. A refusal retains exact raw bytes but leaves the previous
+   model/frame/sequence/history root unchanged. Replay stops before applying
+   the rejected event and reports its reason. Historical accepted events also
+   need replay-time reservations under aggregate host limits. Start with
+   stop/degrade on refusal and no automatic retry; define any future retry as
+   an explicit retained-event transition. Never crop or skip individual ANSI
+   operations.
 
 Two limits need distinct treatment. Fixed semantic acceptance limits must be
 versioned in generation policy/profile so replay applies the same contract.
 Contention-dependent admission is an operational refusal, dependent on the
-other live sessions; it needs an explicit retained-suffix/retry transition.
-Neither may silently change core behavior under the old profile.
+other live sessions; its durable decision must be retained with the raw event.
+Do not silently change event interpretation under an old journal profile. The
+storage primitive `OutputRejectedResource` exists, but the new journal policy
+suffix/profile gate, host replay and admission ledger are not integrated; live
+launches remain on the legacy profile until the complete estimator/reservation
+path is implemented and tested. Neither these census values nor the selected
+event format establish a global memory bound.
 
 The imported shared-extra regression demonstrates why input-byte limits are
 insufficient: four cells share 4,096 combining marks; two VTE combining inputs

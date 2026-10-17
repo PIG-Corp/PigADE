@@ -1,150 +1,137 @@
 # Durable terminal resource refusal — proposed next slice
 
-**Status: proposed, not implemented.** This note captures the boundary needed
-before adding whole-event terminal memory admission. It does not define a
-budget, claim an aggregate heap bound, or authorize a profile change by itself.
+**Status: protocol chosen for implementation, admission not implemented.** The
+storage crate now defines `EventKind::OutputRejectedResource = 5`, which stores
+the exact output payload in one ordinary CRC-protected journal record. The
+host profile gate, replay handling, resource estimator and shared reservation
+ledger remain future work. No production event uses this kind yet; no memory
+budget or heap bound is claimed here.
 
-## Current output ordering and replay gap
+## Ordering and decision record
 
-The session actor receives an output action, maps it to `EventKind::Output`,
-and synchronously appends/fsyncs it before calling `history.begin` or mutating
-the terminal (`crates/session-host/src/lib.rs`, `actor_loop`, around lines
-1513–1538). It then commits derived history, publishes a checkpoint and frame.
-If an error occurs after the append, the actor keeps the previous published
-frame and sequence, marks the view degraded, and stops processing (`lib.rs`,
-around lines 1618–1629). This is a useful live failure posture, but it does
-not define replay refusal.
+SPEC 7.4 requires one ordered stream from PTY events through
+`Durable journal → authoritative terminal core → snapshots` and says queues
+must backpressure rather than drop raw output (`SPEC.md:225–243`). It does not
+require a durable raw-output write before a pure, read-only preflight or a
+temporary resource reservation. The stronger order in the earlier draft of
+`docs/research/terminal-admission-plan.md` was a self-imposed constraint, not a
+SPEC requirement, and is superseded below.
 
-`restore_model` validates event payloads before history mutation, then applies
-every valid `Output` unconditionally (`lib.rs`, `validate_replay_payload` and
-`restore_model`, around lines 393–405 and 503–533). Therefore a durable output
-that failed admission in the live process is replayed as accepted. A hostile
-output may grow the model again during recovery. Existing rejected-tail
-handling retains a prefix only for an event that can be rejected before
-application, such as invalid resize JSON; `Output` has no equivalent
-applicability check. The separate query-response byte check currently occurs
-after output has already been parsed and mutated (`lib.rs`, around lines
-1540–1555), so its rejection also cannot be reused as a pre-mutation memory
-gate.
+The selected format uses one CRC-covered record per output. In the new journal
+policy, existing `EventKind::Output` means accepted/applied output, as it does
+today. `EventKind::OutputRejectedResource` means resource-refused output. Both
+carry the exact unchanged raw payload; the record kind, sequence and payload
+are CRC-covered by the current journal framing (`crates/storage/src/journal.rs`,
+`EventKind` and `Journal::append_impl`, around lines 42–61 and 403–450). There
+is no decision wrapper copy and no second decision fsync. The rejected kind
+shares the existing `MAX_EVENT_BYTES` payload cap.
 
-Appending a `ResourceRejected` record after the ordinary `Output` is not
-sufficient. Replay has already encountered a syntactically valid output and
-would need to buffer/look behind one event to undo its application when it
-later sees the marker. More seriously, a crash after the output fsync and
-before the rejection marker leaves no durable evidence that the output was
-refused; restart would apply it. A no-op sentinel without an event reference
-or sequence rule is ambiguous and could make other valid events disappear.
+For either decision, the host first performs a strictly read-only
+VTE/terminal census and obtains a shared-host reservation (or determines that
+it cannot reserve). It then appends the exact bytes once and waits for the
+record sync. Only after an accepted `Output` record is durable may it call
+`history.begin`, mutate the authoritative terminal, commit history/checkpoint,
+or publish a frame. If reservation refuses the event, the host writes one
+`OutputRejectedResource` record with the exact bytes and bounded refusal
+category supplied by the event kind itself, syncs it, then exposes a generic
+resource-refusal diagnostic while retaining the prior
+terminal/history/checkpoint prefix. If that journal append fails, the outcome
+is a storage failure: the model still must not mutate or publish. Reserving
+bounded journal write scratch is part of the resource work; refusal must not
+depend on allocating an unbounded extra copy to preserve its bytes.
 
-## Proposed journal decision boundary
+The preflight is not admission by itself and must not mutate parser/core
+state, execute terminal effects, resize a PTY or consume a response sink. Its
+reservation must remain held across append and model mutation, then reconcile
+with measured retained allocations or release on failure. Counting callback
+or input bytes alone is not a conservative allocation proof: COW mark vectors,
+cursor/template sharing, CSI-only grid work, metadata, responses, history,
+frames and checkpoint transients all matter. The existing resource censuses
+are measurement inputs, not an aggregate heap or RSS upper bound.
 
-The smallest crash-safe *shape* is a versioned pending-output record plus a
-durable decision record. The pending record stores the exact raw bytes. A
-following bounded decision identifies that pending record and says either
-`Apply` or `Reject` with a bounded, typed refusal reason. The actor writes and
-syncs the decision before it mutates the model or commits derived history.
-`Apply` means replay may deterministically apply the pending bytes. `Reject`
-means recovery stops at the model prefix before those bytes, exposes an
-explicit resource-refusal diagnostic, and retains both raw records unchanged.
+This is smaller and safer than the previously proposed two-record
+`Pending`/`Apply`/`Reject` protocol for the stated SPEC ordering. A complete
+CRC-protected record already makes the raw event and its apply/refuse decision
+durable together. The two-record option would add another sync and a crash
+state without satisfying an additional SPEC requirement, so it is superseded
+and not the selected protocol. It would be necessary only if a separate
+requirement demanded raw durability before even a pure preflight/reservation.
 
-If recovery reaches an undecided pending record at EOF, it must fail closed at
-the prior model prefix and report an unresolved admission decision. It must
-not guess that the bytes were accepted and retry a potentially dangerous
-allocation. Such an output remains available in the raw journal for later
-operator/client retry policy; automatic retries are out of scope. This makes
-the crash window explicit instead of silently treating an unfinished event
-as successful.
+## Replay, profile and checkpoint compatibility
 
-This requires separating journal-record sequence/offset from the last
-model-applied sequence used by the frame, history root, and checkpoint. A
-checkpoint may cover only a fully decided prefix. Recovery starting from a
-checkpoint must resume at its exact journal offset, process pending/decision
-pairs identically to full replay, and never publish a checkpoint that includes
-an undecided or rejected model event. The pending bytes and decision payloads
-need existing event-size bounds; the recovery lookahead must be bounded to one
-pending output, not an event queue.
+The current host appends `EventKind::Output`, fsyncs it, then calls
+`history.begin` and applies the bytes (`crates/session-host/src/lib.rs`,
+`actor_loop`, around lines 1513–1538). On later failure the actor retains the
+previous published frame/sequence and degrades (`lib.rs`, around lines
+1618–1629). Recovery currently applies every valid `Output` (`lib.rs`,
+`restore_model`, around lines 503–533), so it needs an explicit branch for
+`OutputRejectedResource` before `history.begin` or parser invocation. That
+branch must set an explicit refusal diagnostic, stop at the previous
+model-applied prefix, and leave raw bytes untouched. As with the existing
+invalid-resize-tail behavior, the journal record sequence may include the
+rejected record while the view/history/checkpoint sequence remains at the last
+applied event; no later events may follow the initial refusal until retry
+semantics are designed. Initial policy is stop/degrade with no automatic
+retry.
 
-This is a recovery protocol change, not an innocuous new enum value. The
-journal event decoder currently knows only `Output`, `Resize`, `SyncTimeout`,
-and `Exit` (`crates/storage/src/journal.rs`, `EventKind` around lines 42–60).
-The terminal profile is exact-gated by `restore_model` (`lib.rs` around lines
-419–424); checkpoint decode also requires the current profile/schema
-(`crates/terminal/src/lib.rs`, `CORE_PROFILE` and checkpoint validation around
-lines 68 and 317–333). A new event meaning must use an explicitly versioned
-profile/policy. The new reader should retain support for existing
-`CORE_PROFILE` journals and schema-2 checkpoints with their old event
-semantics, while only the new profile requires pending/decision records. If
-the old checkpoint profile cannot be loaded by the new terminal decoder, fall
-back to full replay of the old journal rather than rejecting or rewriting its
-source. Older binaries must reject the new profile before attempting to decode
-its new event types. Do not rewrite existing journals or checkpoint bytes.
+The journal header needs a new policy suffix, planned as
+`;journal=resource-refusal-v1`. New host code must accept legacy headers with
+their old event meanings, but reject kind 5 under those headers; old binaries
+must reject the new header before interpreting its new event semantics. This
+journal-policy suffix is separate from the terminal core profile embedded in
+schema-2 checkpoint bytes, which can remain unchanged. New checkpoint wrapper
+metadata must preserve the exact journal header profile. Existing legacy
+journals/checkpoints remain byte-for-byte untouched and recover under legacy
+semantics. Runtime launches remain on the legacy journal profile until the
+whole-event estimator and reservation ledger are integrated and verified.
 
-## Reservation and deterministic preflight
-
-The decision protocol does not supply a resource estimator. A conservative
-reservation still needs to cover persistent model growth, COW copies,
-frame/checkpoint transients, parser and response workspaces, and aggregate
-host contention. The pinned-VTE clone census and allocation census are
-inputs, not proofs of an upper bound. In particular, counting output bytes or
-combining callbacks alone misses CSI-only grid work, cursor/template sharing,
-and COW amplification from shared mark vectors.
-
-A deterministic preflight can reduce avoidable refusals only if it reserves
-against a defensible worst case before mutation. The output’s raw durability
-must still precede terminal mutation. Computing a census before the append
-does not itself admit the event; a reservation could be acquired first, the
-raw pending bytes synced, then an `Apply` decision synced before mutation. If
-the reservation cannot be acquired, the raw pending event still needs a
-durable `Reject` decision without mutating the model. A post-append decision
-marker with no pending/decision protocol leaves the crash ambiguity described
-above. Any estimate not covering persistent COW and commit/frame/checkpoint
-workspaces must be described as partial admission guidance, not a memory
-limit.
+For accepted historical `Output` records, recovery must also reserve before
+applying them, so reopening multiple sessions cannot bypass aggregate host
+limits or replay an event into an OOM. If replay cannot reserve an accepted
+event, it must stop at the last consistent prefix with an explicit recovery
+resource error; it cannot relabel a previously accepted record as rejected.
+Full replay and checkpoint-tail recovery must produce identical prefix,
+diagnostic, history and unchanged source bytes for both applied and rejected
+tails. Rejected output must never enter `history.begin`; no checkpoint may
+include it.
 
 ## Resize is a separate transaction boundary
 
-The host enqueues resize actions after validating geometry (`lib.rs`,
-`Host::handle`, around lines 786–809). The actor currently calls
-`master.resize` before journal append, then resizes the terminal model
-(`actor_loop`, around lines 1517–1538). A resource refusal must be decided
-before `master.resize`; it must emit no `Resize` event and leave the published
-model/history/checkpoint sequence untouched. Do not record a failed request as
-an applied resize, because replay would call `terminal.resize` for it.
+SPEC 7.3 distinguishes `ResizeRequested` from `ResizeApplied` and says the UI
+waits for confirmation. The host enqueues resize after geometry validation
+(`lib.rs`, `Host::handle`, around lines 786–809), while the actor currently
+calls `master.resize` before journaling and applying terminal resize
+(`actor_loop`, around lines 1517–1538). Acquire a resource reservation before
+the kernel call. If reservation refuses, perform no PTY resize, append no
+applied `Resize`, and leave model/frame/history/checkpoint sequence unchanged.
+Report an explicit bounded operation result: today the IPC response confirms
+queue admission only, and the actor has no per-operation resize reply channel.
+Release reservations on queue rejection, kernel failure or completed apply.
 
-Today the resize IPC result only confirms queue admission and returns a
-snapshot; the actor has no per-operation result channel to report a later
-resource or kernel failure. A scoped resize slice therefore needs an
-explicit bounded outcome (for example, a per-action reply sender completed
-after reservation and kernel/model result) or an operation status the client
-can query. A refused resize is an operation result, not a terminal event, so
-it need not advance the model sequence. Release any reservation on command
-queue rejection, kernel resize failure, or completed application.
+A kernel resize failure must not be recorded as an applied resize. A separate
+pre-existing gap remains if the kernel resize succeeds and the later journal
+append fails: OS geometry can then differ from the retained model. Resource
+admission must not claim to fix that ordering failure; define its outcome and
+recovery behavior separately before changing resize ordering.
 
-There is also a pre-existing durability gap distinct from resource refusal:
-if `master.resize` succeeds but journal append fails, the OS PTY geometry may
-have changed while the last published model remains at the old geometry.
-The actor degrades and stops, while replay sees only the previous durable
-prefix. Admission must not claim to repair this. Changing resize ordering
-requires its own contract for the kernel side effect and durable record; a
-failed kernel resize must never be journaled as an applied event.
+## Required implementation and tests
 
-## Smallest reviewable implementation/test sequence
-
-1. Specify the new profile/event protocol and separate applied-model
-   watermarks from journal record offsets. Keep old-profile replay behavior
-   byte-for-byte compatible.
-2. Add storage/replay tests without enabling admission: paired pending/apply
-   reproduces ordinary terminal state; pending/reject and EOF-pending retain
-   the exact previous frame, hidden checkpoint state, history root and
-   continuation; full replay and checkpoint-tail replay agree; source journal
-   bytes are unchanged. Test malformed/out-of-order decision references as a
-   rejected suffix before `history.begin`.
-3. Add a resize outcome path with tests proving refusal occurs before the
-   PTY resize call, appends no `Resize`, preserves frame/sequence/history, and
-   reports refusal; separately test kernel failure is not recorded as
-   applied. Keep the existing successful-resize append-failure limitation
-   explicit until handled.
-4. Only then integrate the shared host reservation ledger and a measured,
-   defensible reservation rule. Test deterministic replay and concurrent
-   session reservations, plus raw-tail retention on refusal. No lifetime
-   counter, skipped ANSI operations, or arbitrary fixed threshold substitutes
-   for the resource model.
+1. Add a new journal header profile suffix and a profile-aware replay gate.
+   Legacy headers retain old `Output` semantics and reject kind 5; new headers
+   permit kind 5. Keep terminal schema-2 core checkpoint bytes unchanged and
+   preserve old wrapper/journal data.
+2. Add full-replay and checkpoint-tail tests proving that `Output` applies,
+   `OutputRejectedResource` stops before `history.begin`, and both paths retain
+   exact previous hidden terminal state, frame, sequence and history root. The
+   raw rejected payload and journal bytes must remain unchanged. Include a
+   refusal diagnostic and prove no ANSI parser call occurs for rejected data.
+3. Add resize tests proving reservation refusal precedes kernel resize and
+   returns a failed operation without a `Resize` journal record or model
+   change. Test kernel failure is not recorded as applied. Track the
+   successful-kernel-resize/journal-failure gap separately.
+4. Only then enable whole-event preflight/reservations. Test COW/template,
+   title, CSI-only, query-response and resize-cache amplifiers; concurrent
+   session reservations; reservation release; replay-time aggregate
+   reservation; and refusal-prefix equivalence. Keep all limits measured and
+   versioned as applicable. Do not crop/skip ANSI operations, auto-retry, or
+   claim a memory bound from counters alone.

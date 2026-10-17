@@ -40,7 +40,7 @@ impl ReplayCache {
     pub(crate) fn create(parent: &Path, source: &JournalHeader) -> Result<Self> {
         validate_parent(parent)?;
         ensure!(
-            source.profile == pigade_terminal::CORE_PROFILE,
+            crate::journal_policy::Policy::from_profile(&source.profile).is_some(),
             "replay source profile is unsupported"
         );
         let profile = format!("{};cold={}", source.profile, crate::history::ARCHIVE_FORMAT);
@@ -396,12 +396,11 @@ fn valid_marker(bytes: &[u8], device: u64, inode: u64) -> bool {
     let Ok(profile) = std::str::from_utf8(&bytes[46..tail]) else {
         return false;
     };
-    let expected_profile = format!(
-        "{};cold={}",
-        pigade_terminal::CORE_PROFILE,
-        crate::history::ARCHIVE_FORMAT
-    );
-    if profile != expected_profile {
+    let suffix = format!(";cold={}", crate::history::ARCHIVE_FORMAT);
+    if !profile
+        .strip_suffix(&suffix)
+        .is_some_and(|source| crate::journal_policy::Policy::from_profile(source).is_some())
+    {
         return false;
     }
     if Uuid::from_slice(&bytes[12..28]).is_err() || Uuid::from_slice(&bytes[28..44]).is_err() {
@@ -585,6 +584,31 @@ mod tests {
             )
             .as_bytes()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn resource_refusal_policy_marker_is_exact_and_orphan_cleanup_stays_leased() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let mut source = source();
+        source.profile = crate::journal_policy::resource_refusal_profile();
+        let cache = ReplayCache::create(parent.path(), &source)?;
+        let metadata = fs::metadata(cache.path())?;
+        let marker = fs::read(cache.path().join(LEASE_NAME))?;
+        assert!(valid_marker(&marker, metadata.dev(), metadata.ino()));
+        assert_eq!(
+            cleanup(parent.path()).collected,
+            0,
+            "live lease must protect cache"
+        );
+        let ReplayCache { _lease, temporary } = cache;
+        let retained = temporary.keep();
+        drop(_lease);
+        assert_eq!(cleanup(parent.path()).collected, 1);
+        assert!(!retained.exists());
+        source.profile.push_str(";unknown");
+        assert!(ReplayCache::create(parent.path(), &source).is_err());
+        assert_eq!(fs::read_dir(parent.path())?.count(), 0);
         Ok(())
     }
 

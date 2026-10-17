@@ -8,6 +8,7 @@ pub mod history_read;
 pub mod input;
 pub use catalog::LayoutAction;
 mod ipc_server;
+pub mod journal_policy;
 mod launch_gate;
 pub mod metrics;
 pub mod poll;
@@ -391,10 +392,19 @@ fn restore(path: &Path, fast: bool) -> Result<View> {
 }
 
 fn validate_replay_payload(
+    policy: journal_policy::Policy,
     kind: EventKind,
     payload: &[u8],
 ) -> std::result::Result<Option<Geometry>, &'static str> {
     match kind {
+        EventKind::OutputRejectedResource => Err(match policy {
+            journal_policy::Policy::Legacy => {
+                "resource refusal event is not permitted by legacy journal profile"
+            }
+            journal_policy::Policy::ResourceRefusalV1 => {
+                "terminal resource budget refused this output; raw bytes retained"
+            }
+        }),
         EventKind::Resize => serde_json::from_slice(payload)
             .map(Some)
             .map_err(|_| "invalid resize geometry"),
@@ -418,10 +428,8 @@ fn restore_model(
 ) -> Result<(View, Terminal, Option<Arc<history::History>>)> {
     let mut reader = JournalReader::open(path)?;
     let header = reader.header().clone();
-    ensure!(
-        header.profile == CORE_PROFILE,
-        "incompatible terminal profile; source preserved"
-    );
+    let policy = journal_policy::Policy::from_profile(&header.profile)
+        .context("incompatible terminal profile or journal policy; source preserved")?;
     let mut terminal = Terminal::new(
         Geometry::new(header.initial_rows, header.initial_cols)?,
         false,
@@ -503,7 +511,7 @@ fn restore_model(
         // A valid frame CRC does not prove its typed payload is applicable to
         // this terminal profile. Validate before history.begin or any mutation
         // so malformed tails cannot hide an otherwise recoverable generation.
-        let resize = match validate_replay_payload(event.kind, &event.payload) {
+        let resize = match validate_replay_payload(policy, event.kind, &event.payload) {
             Ok(geometry) => geometry,
             Err(reason) => {
                 append_recovery_error(
@@ -526,6 +534,9 @@ fn restore_model(
             EventKind::Resize => terminal.resize(resize.expect("validated resize geometry")),
             EventKind::SyncTimeout => terminal.sync_timeout(),
             EventKind::Exit => (),
+            EventKind::OutputRejectedResource => {
+                unreachable!("refusal is rejected before history/model mutation")
+            }
         }
         if let Some(history) = &history {
             history.replay_event()?;
@@ -1284,6 +1295,7 @@ mod checkpoint_progress_tests {
             ..Default::default()
         };
         let receipt = pigade_storage::Receipt {
+            kind: EventKind::Output,
             sequence: 1,
             end_offset: 100,
             checksum: 0,
@@ -1311,6 +1323,7 @@ mod checkpoint_progress_tests {
             initial_cols: 20,
         };
         let receipt = pigade_storage::Receipt {
+            kind: EventKind::Output,
             sequence: 0,
             end_offset: 0,
             checksum: 0,
@@ -1535,6 +1548,9 @@ fn actor(
                     terminal.resize(g);
                 }
                 EventKind::Exit => (),
+                EventKind::OutputRejectedResource => unreachable!(
+                    "live action cannot create resource refusal before admission integration"
+                ),
             }
             let model_work = model_start.elapsed();
             // Check the combined pending-response bound before committing
@@ -1982,3 +1998,6 @@ mod actor_diagnostic_tests {
         assert!(decoded.actor_diagnostic.is_none());
     }
 }
+
+#[cfg(test)]
+mod resource_refusal_tests;

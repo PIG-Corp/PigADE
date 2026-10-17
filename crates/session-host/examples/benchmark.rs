@@ -79,6 +79,9 @@ fn main() -> Result<()> {
                     EventKind::Resize => recovered.resize(serde_json::from_slice(&event.payload)?),
                     EventKind::SyncTimeout => recovered.sync_timeout(),
                     EventKind::Exit => (),
+                    EventKind::OutputRejectedResource => {
+                        anyhow::bail!("benchmark cannot apply a resource-refused suffix")
+                    }
                 }
             }
             let same = frame == recovered.frame() && grid == recovered.checkpoint()?;

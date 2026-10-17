@@ -311,6 +311,7 @@ fn schedule_with_capture<F>(
 where
     F: FnOnce() -> Result<Vec<u8>>,
 {
+    validate_receipt(receipt)?;
     let Some(permit) = try_permit()? else {
         return Ok(None);
     };
@@ -350,12 +351,22 @@ pub fn publish_with_history(
     terminal: &Terminal,
     history: Option<crate::history::Checkpoint>,
 ) -> Result<()> {
+    validate_receipt(receipt)?;
     let _permit = wait_permit()?;
     let bytes = terminal.checkpoint()?;
     persist_snapshot(root, header, receipt, &bytes, history)
 }
 
+fn validate_receipt(receipt: Receipt) -> Result<()> {
+    ensure!(
+        receipt.kind != pigade_storage::EventKind::OutputRejectedResource,
+        "resource-refused output cannot be a checkpoint watermark"
+    );
+    Ok(())
+}
+
 fn validate_history(history: &Option<crate::history::Checkpoint>, receipt: Receipt) -> Result<()> {
+    validate_receipt(receipt)?;
     if let Some(history) = history {
         ensure!(
             history.state.applied_sequence == receipt.sequence,
@@ -612,6 +623,29 @@ mod tests {
     }
 
     #[test]
+    fn refused_receipt_is_rejected_before_busy_permit_or_capture() -> Result<()> {
+        let _serial = ASYNC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let header = header();
+        let receipt = Receipt {
+            kind: pigade_storage::EventKind::OutputRejectedResource,
+            sequence: 1,
+            end_offset: 100,
+            checksum: 0,
+        };
+        let _permit = wait_permit()?;
+        assert!(
+            schedule_with_capture(root.path(), &header, receipt, None, || panic!(
+                "refused event must not capture model"
+            ))
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn async_capture_is_immutable_and_busy_does_not_capture() -> Result<()> {
         let _serial = ASYNC_TEST_LOCK
             .lock()
@@ -624,6 +658,7 @@ mod tests {
         terminal.output(b"captured");
         let expected = terminal.checkpoint()?;
         let receipt = Receipt {
+            kind: pigade_storage::EventKind::Output,
             sequence: 0,
             end_offset: 0,
             checksum: 0,
@@ -769,6 +804,7 @@ mod tests {
         let missing = root.path().join("missing-directory");
         let header = header();
         let receipt = Receipt {
+            kind: pigade_storage::EventKind::Output,
             sequence: 0,
             end_offset: 0,
             checksum: 0,
