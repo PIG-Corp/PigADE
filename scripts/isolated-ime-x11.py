@@ -48,6 +48,7 @@ LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
 CONTEXT_PASS = 'pass-private-x11-workspace-context-editor-fixture'
 MEMORY_PASS = 'pass-private-x11-startup-memory-review-fixture'
 GENERATIONS_PASS = 'pass-private-x11-generation-history-selection-fixture'
+RESUME_PASS = 'pass-private-x11-codex-resume-review-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -352,7 +353,7 @@ def deactivate_private_fcitx(config, env):
 def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
-            'generations': GENERATIONS_PASS}[name]
+            'generations': GENERATIONS_PASS, 'resume': RESUME_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False):
@@ -382,6 +383,40 @@ def seed_context_catalog(session, memory_fixture=False):
             'scope_id': workspace, 'revision': 0, 'instructions': '', 'role': '',
             'memory': memory, 'content_hash': '', 'saved_at_unix_ms': None, 'author': ''}})
     return {'project': project, 'workspace': workspace, 'tab': tab}
+
+
+def prepare_resume_fixture(report):
+    fixture = report['fixture']
+    raw_session, raw_generation = fixture['session'], fixture['generation']
+    require(host_request({'command': 'stop', 'session': raw_session,
+                         'generation': raw_generation}).get('error') is None,
+            'could not stop the owned bootstrap PTY')
+    wait_until(lambda: (model if (model := fixture_session_models(raw_session)).get(
+        raw_generation, {}).get('state') == 'exited' else None), time.monotonic() + 8)
+    workspace, tab = fixture['workspace'], fixture['tab']
+    context = 'FIXTURE_FROZEN_RESUME_CONTEXT'
+    host_request({'command': 'save_context', 'expected_revision': 0, 'document': {
+        'scope_id': workspace, 'revision': 0, 'instructions': context, 'role': '',
+        'memory': '', 'content_hash': '', 'saved_at_unix_ms': None, 'author': ''}})
+    preview = host_request({'command': 'prepare_launch', 'request': {
+        'tab': tab, 'provider': 'codex', 'side': 'Right', 'target': raw_session,
+        'role_override': '', 'agent_instructions': '', 'include_memory': False,
+        'memory_selection': None, 'deliver_context': True}})['launch_preview']
+    require(preview.get('provider') == 'codex' and preview.get('can_launch'),
+            'private Codex initial preview is unavailable')
+    host_request({'command': 'start_prepared', 'plan_id': preview['plan_id']})
+    session, generation = preview['session'], preview['generation']
+    def codex_exited():
+        views = host_request({'command': 'list'}).get('views', [])
+        return views if any(v.get('session') == session and v.get('generation') == generation
+                            and v.get('state') == 'exited' for v in views) else None
+    wait_until(codex_exited, time.monotonic() + 8)
+    conversation_id = '01234567-89ab-cdef-0123-456789abcdef'
+    host_request({'command': 'bind_conversation', 'session': session,
+                  'generation': generation, 'conversation_id': conversation_id,
+                  'expected_revision': 0})
+    fixture.update({'codex_session': session, 'codex_generation': generation,
+                    'conversation_id': conversation_id, 'frozen_context': context})
 
 
 def prepared_launches_read_only():
@@ -618,6 +653,68 @@ def run_memory_fixture(config, report, env, save):
         'scope': 'isolated Xvfb and host metadata; prepared launch only',
     }
     report.update({'status': MEMORY_PASS, 'stage': 'complete'})
+    save()
+
+
+def run_resume_fixture(config, report, env, save):
+    report['stage'] = 'codex-resume-review'
+    save()
+    deactivate_private_fcitx(config, env)
+    session = report['fixture']['codex_session']
+    generation = report['fixture']['codex_generation']
+    baseline_models = fixture_session_models(session)
+    require(set(baseline_models) == {generation} and
+            'OLD_RESUME_FRAME' in view_text(baseline_models[generation]),
+            'private Codex bootstrap generation is missing')
+    old_frame = baseline_models[generation].get('frame')
+    old_layout = host_request({'command': 'catalog'})['catalog']['layout']
+    old_generations = fixture_generations()
+    old_plans = prepared_launches_read_only()
+    helper_call(config, 'resume-open')
+    plans = wait_until(lambda: (value if len(value := prepared_launches_read_only()) > len(old_plans)
+        and any((plan['payload'].get('preview', {}).get('resume') or {}).get('binding', {}).get(
+            'conversation_id') == report['fixture']['conversation_id']
+            for plan in value.values()) else None), time.monotonic() + 8)
+    fresh = [(plan_id, plan) for plan_id, plan in plans.items() if plan_id not in old_plans and
+             (plan['payload'].get('preview', {}).get('resume') or {}).get('binding', {}).get(
+                 'conversation_id') == report['fixture']['conversation_id']]
+    require(len(fresh) == 1 and fresh[0][1]['phase'] == 'prepared',
+            'resume review did not create one unstarted frozen plan')
+    preview = fresh[0][1]['payload']['preview']
+    new_generation = preview.get('generation')
+    require(preview.get('session') == session and new_generation != generation and
+            preview.get('context', {}).get('text', '').find(report['fixture']['frozen_context']) >= 0,
+            'resume preview differs from the bound session or frozen context')
+    require(fixture_generations() == old_generations,
+            'opening resume review created a terminal generation')
+    time.sleep(0.2)
+    helper_call(config, 'capture', '/artifacts/resume-review.ppm')
+    helper_call(config, 'resume-confirm')
+    def resumed():
+        models = fixture_session_models(session)
+        view = models.get(new_generation)
+        return models if view and view.get('state') == 'exited' and \
+            'NEW_RESUME_FRAME' in view_text(view) else None
+    models = wait_until(resumed, time.monotonic() + 10)
+    require(set(models) == {generation, new_generation} and
+            models[generation].get('frame') == old_frame,
+            'resume changed the old frame or created an extra generation')
+    require(fixture_generations() == sorted(old_generations + [(session, new_generation)]),
+            'resume changed another session or created an extra process')
+    require(host_request({'command': 'catalog'})['catalog']['layout'] == old_layout,
+            'resume changed layout placement or undo history')
+    generation_list = fixture_generation_list(session)
+    require(generation_list.get('head') == new_generation and
+            {entry.get('generation') for entry in generation_list['entries']} ==
+            {generation, new_generation}, 'resume did not preserve old head history')
+    time.sleep(0.2)
+    helper_call(config, 'capture', '/artifacts/resume-new-generation.ppm')
+    report['resume'] = {'session': session, 'previous_generation': generation,
+        'new_generation': new_generation, 'frozen_context_reviewed': True,
+        'old_frame_unchanged': True, 'layout_undo_history_unchanged': True,
+        'extra_generation': False, 'captures': ['resume-review.ppm', 'resume-new-generation.ppm'],
+        'scope': 'private fake Codex and isolated host metadata'}
+    report.update({'status': RESUME_PASS, 'stage': 'complete'})
     save()
 
 
@@ -1317,8 +1414,17 @@ def inside_run() -> int:
         control_path = runtime / 'ime-fixture.sock'
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(control_path)); os.chmod(control_path, 0o600); listener.listen(1); listener.settimeout(8)
+        host_path = '/usr/bin'
+        if config.get('fixture') == 'resume':
+            private_bin = Path('/artifacts/bin'); private_bin.mkdir(mode=0o700)
+            fake_codex = private_bin / 'codex'
+            fake_codex.write_text("#!/usr/bin/python3\nimport sys\n"
+                "if sys.argv[1:] == ['--version']:\n print('codex-cli 0.162.1'); raise SystemExit(0)\n"
+                "print('NEW_RESUME_FRAME' if sys.argv[1:2] == ['resume'] else 'OLD_RESUME_FRAME')\n")
+            fake_codex.chmod(0o700)
+            host_path = '/artifacts/bin:/usr/bin'
         host = start_process(['/pigade/host', 'serve', '/artifacts/state'], env={
-            'PATH': '/usr/bin', 'HOME': str(home), 'XDG_RUNTIME_DIR': str(runtime),
+            'PATH': host_path, 'HOME': str(home), 'XDG_RUNTIME_DIR': str(runtime),
             'TMPDIR': '/tmp', 'LC_ALL': 'C.utf8'})
         children.append(host)
         wait_until(lambda: Path('/artifacts/state/host.sock').is_socket() or host.poll() is not None,
@@ -1343,8 +1449,10 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
-        if config.get('fixture') in ('context', 'memory', 'generations'):
+        if config.get('fixture') in ('context', 'memory', 'generations', 'resume'):
             report['fixture'].update(seed_context_catalog(session, memory_fixture=config.get('fixture') == 'memory'))
+        if config.get('fixture') == 'resume':
+            prepare_resume_fixture(report)
         report['stage'] = 'pigade-app'
         save()
         app_env = dict(fcitx_env)
@@ -1386,6 +1494,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'generations':
             run_generations_fixture(config, report, app_env, save)
+            return 0
+        if config.get('fixture') == 'resume':
+            run_resume_fixture(config, report, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1521,9 +1632,10 @@ def outer_run(args) -> dict:
                  ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else
                  ['generations-picker.ppm', 'generation-pinned-old.ppm',
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
+                 ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history fixture only',
+            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1541,6 +1653,7 @@ def plan(args) -> dict:
                   'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
                   'memory': 'fixed Ctrl+Shift+Space, V, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
+                  'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
@@ -1553,6 +1666,8 @@ def plan(args) -> dict:
                        if args.fixture == 'memory' else
                        'generation history changes only a per-panel pin; private fixture journals and models are checked unchanged'
                        if args.fixture == 'generations' else
+                       'private fake Codex only; resume review is captured before explicit confirmation'
+                       if args.fixture == 'resume' else
                        'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
@@ -1563,6 +1678,8 @@ def plan(args) -> dict:
                     if args.fixture == 'memory' else
                     'picker, pinned-old, and followed-head generation captures are retained for human review'
                     if args.fixture == 'generations' else
+                    'resume review and new-generation captures are retained for human review'
+                    if args.fixture == 'resume' else
                     'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
@@ -1572,8 +1689,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, or generation history fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, generation history, or Codex resume fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

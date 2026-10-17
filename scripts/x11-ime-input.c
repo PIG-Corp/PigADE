@@ -74,7 +74,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
         strcmp(a.stage, "context-save") && strcmp(a.stage, "memory-open") &&
         strcmp(a.stage, "memory-select") && strcmp(a.stage, "generations-open") &&
-        strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow"))
+        strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
+        strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -311,6 +312,20 @@ static void generations_follow_sequence(Display *dpy) {
     key(dpy, XK_Return);
 }
 
+static void resume_open_sequence(Display *dpy) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime)) fail("resume palette shortcut press failed");
+    key(dpy, XK_space);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("resume palette shortcut release failed");
+    key(dpy, XK_p);
+    const KeySym query[] = { XK_r, XK_e, XK_s, XK_u, XK_m, XK_e };
+    for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+    key(dpy, XK_Return);
+}
+
 static void context_edit_sequence(Display *dpy) {
     key(dpy, XK_a); key(dpy, XK_b); key(dpy, XK_Left);
     modified_key(dpy, XK_Shift_L, XK_Left); key(dpy, XK_x);
@@ -535,6 +550,10 @@ int main(int argc, char **argv) {
             generations_select_old_sequence(dpy);
         } else if (!strcmp(a.stage, "generations-follow")) {
             generations_follow_sequence(dpy);
+        } else if (!strcmp(a.stage, "resume-open")) {
+            resume_open_sequence(dpy);
+        } else if (!strcmp(a.stage, "resume-confirm")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -545,6 +564,8 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "generations-open") ? "2" :
                             !strcmp(a.stage, "generations-select-old") ? "2" :
                             !strcmp(a.stage, "generations-follow") ? "8" :
+                            !strcmp(a.stage, "resume-open") ? "9" :
+                            !strcmp(a.stage, "resume-confirm") ? "1" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 pub use adapters::Capabilities as AdapterCapabilities;
-pub use prepared::{LaunchPreview, PrepareRequest};
+pub use prepared::{LaunchPreview, PrepareRequest, ResumeSource};
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
@@ -144,6 +144,9 @@ pub enum Command {
     },
     StartPrepared {
         plan_id: Uuid,
+    },
+    PrepareResume {
+        session: Uuid,
     },
     GetSessionContext {
         session: Uuid,
@@ -830,6 +833,10 @@ impl Host {
             }
             Command::PrepareLaunch { request } => {
                 let preview = prepared::prepare(self, request.clone())?;
+                return Ok(self.launch_response(None, preview, None));
+            }
+            Command::PrepareResume { session } => {
+                let preview = prepared::prepare_resume(self, *session)?;
                 return Ok(self.launch_response(None, preview, None));
             }
             Command::StartPrepared { plan_id } => {

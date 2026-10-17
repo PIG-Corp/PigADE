@@ -90,11 +90,13 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
         Ok(AdapterInfo {
             provider: provider.to_owned(),
             cli_version,
-            adapter_version: 1,
+            adapter_version: if provider == "codex" { 2 } else { 1 },
             capabilities: Capabilities {
                 startup_context: true,
                 context_receipt: false,
-                native_resume: false,
+                // Exact-ID TUI resume and missing-ID failure were executed
+                // for 0.162.1. Automatic ID discovery remains unsupported.
+                native_resume: provider == "codex",
                 conversation_id: false,
             },
             delivery_method: method.to_owned(),
@@ -320,6 +322,67 @@ pub(crate) fn context_arguments(
     Ok((args, env))
 }
 
+/// Build a resume invocation for the one Codex CLI version whose resume
+/// contract has been checked. The ID is always explicit; startup context is
+/// delivered as developer instructions and never as a new prompt.
+pub(crate) fn resume_arguments(
+    info: &AdapterInfo,
+    conversation_id: &str,
+    cwd: &Path,
+    context: Option<&str>,
+) -> Result<(Vec<String>, BTreeMap<String, String>)> {
+    ensure!(
+        info.provider == "codex" && info.cli_version == "0.162.1",
+        "native resume is unsupported for {} {}",
+        info.provider,
+        info.cli_version
+    );
+    ensure!(
+        is_canonical_nonnil_uuid(conversation_id),
+        "invalid conversation UUID"
+    );
+    ensure!(cwd.is_absolute(), "resume cwd must be absolute");
+    let cwd_text = cwd.to_str().context("resume cwd must be valid UTF-8")?;
+    ensure!(!cwd_text.contains('\0'), "resume cwd must not contain NUL");
+
+    let mut args = vec![
+        "resume".to_owned(),
+        "--no-daemon".to_owned(),
+        "--cd".to_owned(),
+        cwd_text.to_owned(),
+    ];
+    let mut env = BTreeMap::new();
+    if let Some(context) = context {
+        let (context_args, context_env) = context_arguments(info, context)?;
+        args.extend(context_args);
+        env = context_env;
+    }
+    args.push(conversation_id.to_owned());
+    Ok((args, env))
+}
+
+fn is_canonical_nonnil_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36
+        || ![8, 13, 18, 23]
+            .into_iter()
+            .all(|index| bytes[index] == b'-')
+    {
+        return false;
+    }
+    let mut nonzero = false;
+    for (index, byte) in bytes.iter().enumerate() {
+        if [8, 13, 18, 23].contains(&index) {
+            continue;
+        }
+        if !byte.is_ascii_hexdigit() {
+            return false;
+        }
+        nonzero |= *byte != b'0';
+    }
+    nonzero
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +416,67 @@ mod tests {
         assert!(!adapter.capabilities.context_receipt);
         assert!(!adapter.capabilities.native_resume);
         assert!(!adapter.capabilities.conversation_id);
+    }
+
+    #[test]
+    fn codex_resume_selects_exact_id_directory_and_context_without_prompt() {
+        let adapter = info("codex", "0.162.1");
+        let cwd = std::env::current_dir().unwrap();
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        let (args, env) = resume_arguments(&adapter, id, &cwd, Some("line1\n\"quoted\"")).unwrap();
+        assert!(env.is_empty());
+        assert_eq!(
+            args,
+            vec![
+                "resume",
+                "--no-daemon",
+                "--cd",
+                cwd.to_string_lossy().as_ref(),
+                "-c",
+                r####"developer_instructions="line1\n\"quoted\"""####,
+                id,
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--last"));
+    }
+
+    #[test]
+    fn codex_resume_validates_saved_metadata_and_path_representation_only() {
+        let cwd = std::env::current_dir().unwrap();
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        assert!(resume_arguments(&info("claude", "2.1.259"), id, &cwd, None).is_err());
+        assert!(resume_arguments(&info("codex", "0.162.2"), id, &cwd, None).is_err());
+        for invalid in [
+            "abc",
+            "00000000-0000-0000-0000-000000000000",
+            "01234567-89ab-cdef-0123-456789abcdeZ",
+        ] {
+            assert!(resume_arguments(&info("codex", "0.162.1"), invalid, &cwd, None).is_err());
+        }
+        assert!(
+            resume_arguments(&info("codex", "0.162.1"), id, Path::new("relative"), None).is_err()
+        );
+        let missing = Path::new("/definitely/missing/pigade");
+        let (args, _) = resume_arguments(&info("codex", "0.162.1"), id, missing, None).unwrap();
+        assert_eq!(args[3], missing.to_str().unwrap());
+        assert!(
+            resume_arguments(
+                &info("codex", "0.162.1"),
+                id,
+                Path::new("/tmp/with\0nul"),
+                None
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let non_utf8 = std::ffi::OsString::from_vec(b"/tmp/invalid-\xff".to_vec());
+            assert!(
+                resume_arguments(&info("codex", "0.162.1"), id, Path::new(&non_utf8), None)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

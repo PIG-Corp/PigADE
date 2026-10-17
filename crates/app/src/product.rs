@@ -27,6 +27,7 @@ pub(super) enum ProductAction {
     AttachSession(Uuid),
     RefreshLaunchPreview,
     ConfirmPreparedLaunch,
+    PrepareResume,
     ToggleMemory,
     ToggleMemorySection(usize),
     ReloadMemory,
@@ -59,6 +60,7 @@ pub(super) enum DialogKind {
     Context,
     ProjectContext,
     LaunchReview,
+    ResumeReview,
     SessionContext,
     Conversation,
     Generations,
@@ -76,6 +78,7 @@ impl DialogKind {
             Self::Context => "Контекст воркспейса",
             Self::ProjectContext => "Контекст проекта",
             Self::LaunchReview => "Проверка запуска",
+            Self::ResumeReview => "Продолжить диалог CLI",
             Self::SessionContext => "Контекст выбранной сессии",
             Self::Conversation => "Диалог CLI",
             Self::Generations => "Поколения панели",
@@ -97,6 +100,7 @@ impl DialogKind {
                 "Дополнительные инструкции агенту",
                 "Разделы памяти: номера через запятую; пусто — без памяти",
             ],
+            Self::ResumeReview => &[],
             Self::SessionContext => &[],
             Self::Conversation => &["Точный ID диалога CLI"],
             Self::Generations => &["Номер строки или «текущее»"],
@@ -114,6 +118,7 @@ impl DialogKind {
             Self::Context => "Сохранить ревизию",
             Self::ProjectContext => "Сохранить ревизию",
             Self::LaunchReview => "Подтвердить и запустить",
+            Self::ResumeReview => "Продолжить диалог",
             Self::SessionContext => "Закрыть",
             Self::Conversation => "Сохранить привязку",
             Self::Generations => "Показать поколение",
@@ -294,6 +299,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Диалог CLI · привязать ID · B",
             ProductAction::InspectConversation,
+        ),
+        (
+            "Продолжить привязанный диалог CLI · resume",
+            ProductAction::PrepareResume,
         ),
         ("Перенести панель", ProductAction::OpenTransfer),
         (
@@ -1099,6 +1108,9 @@ impl ProductUi {
         if dialog.kind == DialogKind::LaunchReview {
             return self.launch_review_overlay(dialog, layouts, cx);
         }
+        if dialog.kind == DialogKind::ResumeReview {
+            return self.resume_review_overlay(dialog, cx);
+        }
         if dialog.kind == DialogKind::SessionContext {
             return self.session_context_overlay(cx);
         }
@@ -1331,7 +1343,7 @@ impl ProductUi {
                 .child("Скопируйте точный ID средствами CLI. Для Codex и Claude нужен UUID; для OpenCode — ses_…. Привязка сохраняет ваш выбор, но не проверяет существование беседы и не запускает процесс. Содержимое и авторизация CLI не копируются."))
                 .child(div().id("conversation-resume-status").role(Role::Status)
                     .text_size(px(12.)).text_color(colors.accent)
-                    .child("Нативное продолжение для этой версии CLI пока недоступно. История доступна через «Поколения панели»."));
+                    .child(format!("Нативное продолжение по текущему предпросмотру: {}. Подготовка заново проверит установленный CLI.", capability_label(self.launch_preview.as_ref().is_some_and(|preview| preview.capabilities.native_resume)))));
             fields = fields.child(self.action_control(
                 "conversation-reload".into(),
                 "Обновить сохранённую привязку".into(),
@@ -1343,6 +1355,23 @@ impl ProductUi {
                 },
                 cx,
             ));
+            if self
+                .launch_preview
+                .as_ref()
+                .is_some_and(|preview| preview.conversation.is_some())
+            {
+                fields = fields.child(self.action_control(
+                    "conversation-prepare-resume".into(),
+                    "Продолжить привязанный диалог CLI".into(),
+                    ProductAction::PrepareResume,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
         } else if dialog.kind == DialogKind::Conversation {
             fields = fields.child(div().id("conversation-unsupported").role(Role::Status).text_size(px(12.)).text_color(colors.muted).child("У обычного shell нет диалога провайдера. Его история хранится как терминальное поколение."));
         }
@@ -1477,6 +1506,200 @@ impl ProductUi {
                             .mt(px(18.))
                             .child(close)
                             .child(submit),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn resume_review_overlay(&self, _dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let preview = self.launch_preview.as_ref();
+        let can_confirm = preview
+            .is_some_and(|preview| preview.can_launch && preview.resume.is_some())
+            && self.launch_phase.is_none()
+            && !self.busy;
+        let mut details = div()
+            .id("resume-review-details")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .text_size(px(12.))
+            .text_color(colors.muted);
+        let mut context_blocks = div()
+            .id("resume-review-context-empty")
+            .flex()
+            .flex_col()
+            .gap_2();
+        let mut warnings = div().id("resume-review-warnings").flex().flex_col().gap_1();
+        if let Some(preview) = preview {
+            if let Some(source) = &preview.resume {
+                let binding = &source.binding;
+                details = details
+                    .child(format!("Диалог: {}", binding.conversation_id))
+                    .child(format!(
+                        "Провайдер и CLI: {} {}",
+                        preview.provider, preview.cli_version
+                    ))
+                    .child(format!(
+                        "Рабочая папка: {}",
+                        preview
+                            .cwd
+                            .as_deref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "неизвестна".into())
+                    ))
+                    .child(format!(
+                        "Программа: {}",
+                        preview
+                            .executable
+                            .as_deref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "неизвестна".into())
+                    ))
+                    .child(format!(
+                        "Привязка: ревизия {} · исходное поколение {}",
+                        binding.revision, binding.source_generation
+                    ))
+                    .child(format!("Предыдущее поколение: {}", source.previous_head))
+                    .child(format!(
+                        "Контекст: {} · hash {}",
+                        preview.context.id, preview.context.content_hash
+                    ))
+                    .child(format!("Новое поколение: {}", preview.generation));
+                context_blocks = effective_context_blocks(
+                    &preview.context,
+                    "resume-review-context-blocks",
+                    "Замороженные блоки контекста продолжения",
+                    250.,
+                    self.catalog.as_ref(),
+                );
+            } else {
+                details = details.child("Предпросмотр продолжения недоступен.");
+                context_blocks = context_blocks.child("Замороженный контекст недоступен.");
+            }
+            if let Some(reason) = &preview.unavailable_reason {
+                warnings = warnings.child(
+                    div()
+                        .id("resume-review-unavailable-reason")
+                        .role(Role::Status)
+                        .text_size(px(12.))
+                        .text_color(colors.accent)
+                        .child(reason.clone()),
+                );
+            }
+            for (index, warning) in preview.warnings.iter().enumerate() {
+                warnings = warnings.child(
+                    div()
+                        .id(format!("resume-review-warning-{index}"))
+                        .role(Role::Status)
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(warning.clone()),
+                );
+            }
+            if !preview.can_launch && preview.unavailable_reason.is_none() {
+                warnings = warnings.child(
+                    div()
+                        .id("resume-review-unavailable")
+                        .role(Role::Status)
+                        .text_size(px(12.))
+                        .text_color(colors.accent)
+                        .child("Продолжение сейчас недоступно."),
+                );
+            }
+        } else {
+            details = details.child("Подготовка продолжения ещё не загружена.");
+            context_blocks = context_blocks
+                .child("Обновите подготовку, чтобы проверить привязку и замороженный контекст.");
+            warnings = warnings.child("Продолжение недоступно без актуальной подготовки.");
+        }
+
+        let confirm = if can_confirm {
+            self.action_control(
+                "resume-review-confirm".into(),
+                DialogKind::ResumeReview.submit_label().into(),
+                ProductAction::SubmitDialog,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: true,
+                    compact: true,
+                },
+                cx,
+            )
+        } else {
+            div()
+                .id("resume-review-confirm-unavailable")
+                .role(Role::Status)
+                .aria_label("Продолжение недоступно")
+                .px(px(9.))
+                .py(px(6.))
+                .rounded(px(6.))
+                .bg(colors.base)
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child(DialogKind::ResumeReview.submit_label())
+                .into_any_element()
+        };
+        let close = self.action_control(
+            "resume-review-close".into(),
+            "Отмена".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("resume-review-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(18.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx);
+            }))
+            .child(
+                div()
+                    .id("resume-review-sheet")
+                    .role(Role::Dialog)
+                    .aria_label(DialogKind::ResumeReview.title())
+                    .w_full()
+                    .max_w(px(760.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(18.))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("resume-review-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(DialogKind::ResumeReview.title()),
+                    )
+                    .child(details)
+                    .child(context_blocks)
+                    .child(warnings)
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(close)
+                            .child(confirm),
                     ),
             )
             .into_any_element()

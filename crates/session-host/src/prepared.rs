@@ -55,6 +55,14 @@ pub struct LaunchPreview {
     pub cwd: Option<std::path::PathBuf>,
     #[serde(default)]
     pub conversation: Option<pigade_storage::ConversationBinding>,
+    #[serde(default)]
+    pub resume: Option<ResumeSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeSource {
+    pub binding: pigade_storage::ConversationBinding,
+    pub previous_head: Uuid,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -88,7 +96,7 @@ struct StoredPlan {
     launch: Launch,
     workspace: Uuid,
     executable_identity: BinaryIdentity,
-    placement: LayoutCommand,
+    placement: Option<LayoutCommand>,
     requested_revision: Uuid,
     applied_revision: Option<Uuid>,
 }
@@ -191,6 +199,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             executable: Some(executable.clone()),
             cwd: Some(workspace.cwd.clone()),
             conversation: None,
+            resume: None,
         };
         let plan = StoredPlan {
             requested_revision: preview.context.id,
@@ -208,7 +217,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             },
             workspace: workspace.id,
             executable_identity: identity,
-            placement,
+            placement: Some(placement),
         };
         host.metadata
             .save_prepared_launch(plan_id, &serde_json::to_string(&plan)?)?;
@@ -217,6 +226,7 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
 }
 
 pub(crate) fn start(host: &mut Host, plan_id: Uuid) -> Result<(Catalog, LaunchPreview)> {
+    host.reconcile_exits()?;
     let (payload, phase) = host
         .metadata
         .prepared_launch(plan_id)?
@@ -247,30 +257,49 @@ pub(crate) fn start(host: &mut Host, plan_id: Uuid) -> Result<(Catalog, LaunchPr
             "CLI executable changed since review"
         );
         let catalog = catalog::read_metadata(&host.metadata)?;
-        let workspace = catalog
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == plan.workspace)
-            .context("workspace was removed")?;
-        ensure!(
-            workspace.status == WorkspaceStatus::Ready
-                && workspace.cwd == plan.launch.cwd
-                && workspace.cwd.is_dir(),
-            "workspace changed since review"
-        );
-        let tab = catalog
-            .tabs
-            .iter()
-            .find(|tab| tab.id == plan.preview.tab_id)
-            .context("target tab was removed")?;
-        ensure!(
-            tab.workspace_id == plan.workspace,
-            "target tab moved since review"
-        );
-        let model = LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(
-            &catalog.layout.json,
-        )?)?;
-        model.preview(plan.placement.clone())?;
+        if let Some(resume) = &plan.preview.resume {
+            validate_resume_source(host, &plan, resume)?;
+            ensure!(
+                plan.launch.cwd.is_dir(),
+                "Исходная рабочая папка недоступна; resume не будет запущен в другой папке"
+            );
+            let model = LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(
+                &catalog.layout.json,
+            )?)?;
+            ensure!(
+                model.state().pane_tab(plan.launch.session) == Some(plan.preview.tab_id),
+                "Панель перемещена; заново откройте просмотр продолжения"
+            );
+        } else {
+            let workspace = catalog
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == plan.workspace)
+                .context("workspace was removed")?;
+            ensure!(
+                workspace.status == WorkspaceStatus::Ready
+                    && workspace.cwd == plan.launch.cwd
+                    && workspace.cwd.is_dir(),
+                "workspace changed since review"
+            );
+            let tab = catalog
+                .tabs
+                .iter()
+                .find(|tab| tab.id == plan.preview.tab_id)
+                .context("target tab was removed")?;
+            ensure!(
+                tab.workspace_id == plan.workspace,
+                "target tab moved since review"
+            );
+            let model = LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(
+                &catalog.layout.json,
+            )?)?;
+            model.preview(
+                plan.placement
+                    .clone()
+                    .context("startup placement missing")?,
+            )?;
+        }
         Ok((catalog, ()))
     })())?;
     host.metadata.begin_prepared_launch(plan_id)?;
@@ -299,17 +328,165 @@ pub(crate) fn start(host: &mut Host, plan_id: Uuid) -> Result<(Catalog, LaunchPr
             "not_requested"
         },
     )?;
-    let catalog = catalog::layout_edit(
-        &mut host.metadata,
-        catalog.layout.revision,
-        crate::LayoutAction::Apply {
-            command: plan.placement,
-        },
-    )
-    .context(
-        "process started but placement failed; return the existing session through Sessions",
-    )?;
+    let catalog = if let Some(placement) = plan.placement {
+        catalog::layout_edit(
+            &mut host.metadata,
+            catalog.layout.revision,
+            crate::LayoutAction::Apply { command: placement },
+        )
+        .context(
+            "process started but placement failed; return the existing session through Sessions",
+        )?
+    } else {
+        // Confirming resume explicitly follows the new generation. This does
+        // not touch the layout tree or its undo history.
+        crate::generations::select(host, plan.launch.session, None).context(
+            "resume started but generation selection was not saved; inspect Generations",
+        )?;
+        catalog::read_metadata(&host.metadata)?
+    };
     Ok((catalog, plan.preview))
+}
+
+fn exited_head(host: &Host, session: Uuid) -> Result<Uuid> {
+    let records = host.metadata.generation_records(session, None, 1)?;
+    let head = records
+        .first()
+        .context("У сессии нет подтверждённого запуска")?;
+    ensure!(
+        head.state == pigade_storage::LaunchState::Exited,
+        "Предыдущий процесс работает или исход запуска неизвестен; продолжение заблокировано"
+    );
+    Ok(head.generation)
+}
+
+fn validate_resume_source(host: &Host, plan: &StoredPlan, resume: &ResumeSource) -> Result<()> {
+    ensure!(
+        host.metadata
+            .conversation_binding(plan.launch.session)?
+            .as_ref()
+            == Some(&resume.binding),
+        "Привязка диалога изменилась после просмотра; проверьте продолжение заново"
+    );
+    ensure!(
+        exited_head(host, plan.launch.session)? == resume.previous_head,
+        "После просмотра появилось другое поколение; проверьте продолжение заново"
+    );
+    let (payload, phase) = host
+        .metadata
+        .prepared_launch(resume.binding.plan_id)?
+        .context("Исходный снимок контекста недоступен")?;
+    let source: StoredPlan = serde_json::from_str(&payload)?;
+    validate_plan(&source)?;
+    ensure!(
+        phase != "prepared" && host.metadata.get_launch(resume.binding.plan_id)?.is_some(),
+        "Исходный запуск не подтверждён"
+    );
+    ensure!(
+        source.launch.session == plan.launch.session
+            && source.launch.generation == resume.binding.source_generation
+            && source.preview.context == plan.preview.context
+            && source.launch.executable == plan.launch.executable
+            && source.launch.cwd == plan.launch.cwd
+            && source.preview.provider == plan.preview.provider
+            && source.preview.cli_version == plan.preview.cli_version
+            && source.preview.deliver_context == plan.preview.deliver_context,
+        "Продолжение отличается от исходной беседы, папки или ревизии контекста"
+    );
+    ensure!(
+        plan.preview.capabilities.native_resume,
+        "Нативное продолжение не подтверждено для этой версии CLI"
+    );
+    Ok(())
+}
+
+pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPreview> {
+    host.reconcile_exits()?;
+    panel_launch::mark_preflight((|| {
+        let head = exited_head(host, session)?;
+        let binding = host
+            .metadata
+            .conversation_binding(session)?
+            .context("Сначала сохраните точный ID в «Диалог CLI»")?;
+        let (payload, _) = host
+            .metadata
+            .prepared_launch(binding.plan_id)?
+            .context("Исходный снимок контекста недоступен")?;
+        let mut plan: StoredPlan = serde_json::from_str(&payload)?;
+        validate_plan(&plan)?;
+        ensure!(
+            plan.launch.session == session
+                && plan.launch.generation == binding.source_generation
+                && plan.preview.context.id == binding.context_revision
+                && plan.preview.provider == binding.provider,
+            "Привязка не соответствует исходной сессии"
+        );
+        ensure!(
+            plan.launch.cwd.is_dir(),
+            "Исходная рабочая папка недоступна"
+        );
+        let identity = binary_identity(&plan.launch.executable)?;
+        let info = adapters::inspect(&plan.preview.provider, &plan.launch.executable)?;
+        ensure!(
+            identity == binary_identity(&plan.launch.executable)?,
+            "CLI изменился во время проверки"
+        );
+        ensure!(
+            info.cli_version == plan.preview.cli_version,
+            "Версия CLI изменилась; продолжение с этим адаптером не подтверждено"
+        );
+        let catalog = catalog::read_metadata(&host.metadata)?;
+        let model = LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(
+            &catalog.layout.json,
+        )?)?;
+        let tab_id = model
+            .state()
+            .pane_tab(session)
+            .context("Сначала разместите сессию во вкладке")?;
+        plan.workspace = catalog
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .context("Вкладка недоступна")?
+            .workspace_id;
+        let args = adapters::resume_arguments(
+            &info,
+            &binding.conversation_id,
+            &plan.launch.cwd,
+            (plan.preview.deliver_context && !plan.preview.context.text.is_empty())
+                .then_some(plan.preview.context.text.as_str()),
+        )?;
+        plan.preview.plan_id = Uuid::new_v4();
+        plan.preview.generation = Uuid::new_v4();
+        plan.preview.tab_id = tab_id;
+        plan.preview.target = Some(session);
+        plan.preview.capabilities = info.capabilities;
+        plan.preview.adapter_version = info.adapter_version;
+        plan.preview.can_launch = plan.preview.capabilities.native_resume;
+        plan.preview.unavailable_reason = (!plan.preview.can_launch)
+            .then(|| "Нативное продолжение ещё не подтверждено для этой версии CLI".into());
+        plan.preview.delivery_method = "native resume по точному ID; сохранённый контекст".into();
+        plan.preview.conversation = Some(binding.clone());
+        plan.preview.resume = Some(ResumeSource {
+            binding,
+            previous_head: head,
+        });
+        plan.preview.warnings = vec![
+            "Будет запущен новый процесс в той же панели. Предыдущее поколение останется доступно в истории.".into(),
+            "Последнее задание не отправляется повторно. Продолжение подтверждается самим CLI; новая беседа при ошибке не создаётся.".into(),
+            "Используется сохранённая ревизия контекста; текущие правки проекта и воркспейса не подставляются.".into(),
+        ];
+        plan.launch.generation = plan.preview.generation;
+        plan.launch.operation = plan.preview.plan_id;
+        plan.launch.args = args.0;
+        plan.launch.env = args.1;
+        plan.executable_identity = identity;
+        plan.placement = None;
+        validate_plan(&plan)?;
+        host.metadata
+            .save_prepared_launch(plan.preview.plan_id, &serde_json::to_string(&plan)?)?;
+        Ok(plan.preview)
+    })())
 }
 
 pub(crate) fn session_context(
@@ -349,7 +526,18 @@ pub(crate) fn bind_conversation(
     conversation_id: &str,
     expected_revision: u64,
 ) -> Result<(LaunchPreview, String)> {
+    host.reconcile_exits()?;
     let (mut preview, phase) = session_context(host, session, generation)?;
+    if preview
+        .conversation
+        .as_ref()
+        .is_some_and(|binding| binding.conversation_id != conversation_id)
+    {
+        // Do not release a provider-ID reservation while a live/uncertain
+        // generation may still control that dialogue under its frozen plan.
+        exited_head(host, session)
+            .context("Остановите текущий процесс перед сменой привязанного диалога")?;
+    }
     let record = host
         .metadata
         .get_launch(preview.plan_id)?
@@ -464,13 +652,36 @@ fn validate_plan(plan: &StoredPlan) -> Result<()> {
         "saved context identity mismatch"
     );
     ensure!(
-        matches!(&plan.placement,
-        LayoutCommand::Insert {tab,pane,target,side,..}
+        (plan.preview.resume.is_some() && plan.placement.is_none())
+            || matches!(&plan.placement,
+        Some(LayoutCommand::Insert {tab,pane,target,side,..})
             if *tab == plan.preview.tab_id && *pane == plan.preview.session
                 && *target == plan.preview.target && *side == plan.preview.side),
         "saved placement differs from reviewed destination"
     );
-    let expected = if plan.preview.deliver_context && !plan.preview.context.text.is_empty() {
+    let expected = if let Some(resume) = &plan.preview.resume {
+        ensure!(
+            resume.binding.session_id == plan.launch.session
+                && resume.binding.provider == plan.preview.provider
+                && resume.binding.context_revision == plan.preview.context.id,
+            "saved resume binding differs from its frozen context"
+        );
+        let info = adapters::AdapterInfo {
+            provider: plan.preview.provider.clone(),
+            cli_version: plan.preview.cli_version.clone(),
+            adapter_version: plan.preview.adapter_version,
+            capabilities: plan.preview.capabilities.clone(),
+            delivery_method: plan.preview.delivery_method.clone(),
+            unsupported_reason: None,
+        };
+        adapters::resume_arguments(
+            &info,
+            &resume.binding.conversation_id,
+            &plan.launch.cwd,
+            (plan.preview.deliver_context && !plan.preview.context.text.is_empty())
+                .then_some(plan.preview.context.text.as_str()),
+        )?
+    } else if plan.preview.deliver_context && !plan.preview.context.text.is_empty() {
         let info = adapters::AdapterInfo {
             provider: plan.preview.provider.clone(),
             cli_version: plan.preview.cli_version.clone(),

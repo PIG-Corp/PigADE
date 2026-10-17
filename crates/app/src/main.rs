@@ -408,12 +408,14 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
                     && let Some(catalog) = &routing_catalog
                 {
                     let panels = catalog_panel_targets(catalog);
-                    let supports = reply.generation_selection;
-                    {
+                    let supports = {
                         let mut state = product_shared.lock().unwrap();
-                        state.supports_generation_selection = supports;
+                        if let Some(supports) = reply.generation_selection {
+                            state.supports_generation_selection = supports;
+                        }
                         state.set_visible_panels(panels.clone());
-                    }
+                        state.supports_generation_selection
+                    };
                     let result = if supports {
                         protocol::poll_panels(&product_socket, &[], &panels)
                     } else {
@@ -1017,12 +1019,14 @@ impl CanvasApp {
                                             if this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview) {
                                                 this.product.dialog = None;
                                             }
-                                            this.product.notice = Some(if this.product.launch_phase.as_deref() == Some("delivered_unconfirmed") {
+                                            this.product.notice = Some(if preview.resume.is_some() {
+                                                "Запрошено продолжение конкретного диалога. Результат виден в CLI; прежняя история сохранена."
+                                            } else if this.product.launch_phase.as_deref() == Some("delivered_unconfirmed") {
                                                 "CLI запущен с контекстом. Применение моделью не подтверждено."
                                             } else { "CLI запущен без передачи контекста." }.into());
                                         } else if (this.product.launch_phase.is_some() && this.pending_context_inspection)
                                             || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
-                                            let kind = if this.product.launch_phase.is_some() { if this.pending_conversation_inspection { product::DialogKind::Conversation } else { product::DialogKind::SessionContext } } else {product::DialogKind::LaunchReview};
+                                            let kind = if this.product.launch_phase.is_some() { if this.pending_conversation_inspection { product::DialogKind::Conversation } else { product::DialogKind::SessionContext } } else if preview.resume.is_some() { product::DialogKind::ResumeReview } else {product::DialogKind::LaunchReview};
                                             let mut dialog = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).cloned().unwrap_or_else(|| product::Dialog::new(kind));
                                             if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into(),preview.memory.as_ref().map(|memory| memory_choice::format_sections(&memory.selected)).unwrap_or_default().into()]; }
                                             if kind == product::DialogKind::Conversation && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.conversation.as_ref().map(|binding| binding.conversation_id.clone()).unwrap_or_default().into()]; }
@@ -1897,6 +1901,20 @@ impl CanvasApp {
                     self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
                 }
             }
+            A::PrepareResume => {
+                if self.product.busy || self.product_launch_unknown {
+                    self.product.notice = Some(
+                        "Сначала завершите текущую операцию или сверьте неизвестный запуск".into(),
+                    );
+                } else if let Some(session) = self.selected_pane() {
+                    self.product.dialog = None;
+                    self.pending_launch_review = true;
+                    self.product_command(json!({"command":"prepare_resume","session":session}), cx);
+                } else {
+                    self.product.notice =
+                        Some("Сначала выберите панель с привязанным диалогом".into());
+                }
+            }
             A::InspectSessionContext | A::InspectConversation => {
                 if self.product.busy {
                     return;
@@ -2188,7 +2206,9 @@ impl CanvasApp {
                             self.product_action(action, window, cx);
                         }
                     }
-                    DialogKind::LaunchReview => self.confirm_prepared_launch(cx),
+                    DialogKind::LaunchReview | DialogKind::ResumeReview => {
+                        self.confirm_prepared_launch(cx)
+                    }
                     DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
@@ -2265,29 +2285,31 @@ impl CanvasApp {
         let Some(preview) = &self.product.launch_preview else {
             return;
         };
-        let Some(dialog) = self
-            .product
-            .dialog
-            .as_ref()
-            .filter(|dialog| dialog.kind == product::DialogKind::LaunchReview)
-        else {
+        let Some(dialog) = self.product.dialog.as_ref().filter(|dialog| {
+            matches!(
+                dialog.kind,
+                product::DialogKind::LaunchReview | product::DialogKind::ResumeReview
+            )
+        }) else {
             return;
         };
         if !preview.can_launch
             || self.product.launch_phase.is_some()
-            || dialog.fields.first().map(text_edit::EditBuffer::text)
-                != Some(preview.role_override.as_str())
-            || dialog.fields.get(1).map(text_edit::EditBuffer::text)
-                != Some(preview.agent_instructions.as_str())
-            || !memory_choice::matches_preview(
-                dialog
-                    .fields
-                    .get(2)
-                    .map(text_edit::EditBuffer::text)
-                    .unwrap_or(""),
-                preview.memory.as_ref(),
-                preview.include_memory,
-            )
+            || (preview.resume.is_none()
+                && (dialog.fields.first().map(text_edit::EditBuffer::text)
+                    != Some(preview.role_override.as_str())
+                    || dialog.fields.get(1).map(text_edit::EditBuffer::text)
+                        != Some(preview.agent_instructions.as_str())
+                    || !memory_choice::matches_preview(
+                        dialog
+                            .fields
+                            .get(2)
+                            .map(text_edit::EditBuffer::text)
+                            .unwrap_or(""),
+                        preview.memory.as_ref(),
+                        preview.include_memory,
+                    )))
+            || (preview.resume.is_some() && dialog.kind != product::DialogKind::ResumeReview)
         {
             self.product.notice =
                 Some("Обновите просмотр после изменения параметров запуска".into());

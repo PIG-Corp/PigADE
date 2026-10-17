@@ -61,9 +61,22 @@ impl TestHost {
             &codex,
             concat!(
                 "#!/usr/bin/python3\n",
-                "import json,os,sys,zlib\n",
+                "import json,os,sys,zlib,time\n",
                 "if sys.argv[1:] == ['--version']:\n",
                 " print('codex-cli 0.162.1'); raise SystemExit(0)\n",
+                "if sys.argv[1:2] == ['resume']:\n",
+                " safe_env={k:os.environ[k] for k in ('TERM','COLORTERM') if k in os.environ}\n",
+                " reported=['<developer_instructions>' if arg.startswith('developer_instructions=') else arg for arg in sys.argv[1:]]\n",
+                " print('FIXTURE_RESUME_ARGS='+json.dumps(reported,ensure_ascii=False))\n",
+                " print('FIXTURE_RESUME_CWD='+os.getcwd())\n",
+                " config=next((arg.split('=',1)[1] for arg in sys.argv[1:] if arg.startswith('developer_instructions=')),None)\n",
+                " if config is not None:\n",
+                "  text=json.loads(config)\n",
+                "  print('FIXTURE_CONTEXT_CRC32='+str(zlib.crc32(text.encode('utf-8'))))\n",
+                " print('FIXTURE_ENV='+json.dumps(safe_env,ensure_ascii=False))\n",
+                " deadline=time.monotonic()+8\n",
+                " while os.path.exists('hold-resume') and time.monotonic()<deadline: time.sleep(0.01)\n",
+                " raise SystemExit(0)\n",
                 "safe_env={k:os.environ[k] for k in ('TERM','COLORTERM') if k in os.environ}\n",
                 "print('FIXTURE_ARGS='+json.dumps(sys.argv[1:],ensure_ascii=False))\n",
                 "text=json.loads(sys.argv[2].split('=',1)[1])\n",
@@ -567,6 +580,369 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         history[0].pid.is_none(),
         "reopen respawned the historical PTY"
     );
+    Ok(())
+}
+
+#[test]
+fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_binding() -> Result<()>
+{
+    let mut host = TestHost::new()?;
+    let root = host.root().canonicalize()?;
+    let project = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let tab = Uuid::new_v4();
+    success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                projects: vec![CatalogWrite {
+                    value: Project {
+                        id: project,
+                        canonical_path: root.clone(),
+                        git_common_dir: root.clone(),
+                        name: "Resume fixture".into(),
+                        roots: vec![],
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                workspaces: vec![CatalogWrite {
+                    value: Workspace {
+                        id: workspace,
+                        project_id: project,
+                        task: "initial task must not be repeated".into(),
+                        cwd: root.clone(),
+                        mode: WorkspaceMode::SharedCheckout,
+                        status: WorkspaceStatus::Ready,
+                        error: None,
+                        context_revision: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                tabs: vec![CatalogWrite {
+                    value: Tab {
+                        id: tab,
+                        workspace_id: workspace,
+                        name: "Resume".into(),
+                        layout_json: serde_json::to_string(&TabLayout::default())?,
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            },
+        },
+    )?;
+    let old_project_text = "FROZEN_PROJECT_CONTEXT";
+    let old_workspace_text = "FROZEN_WORKSPACE_CONTEXT";
+    for document in [
+        context(project, 0, old_project_text, "", ""),
+        context(workspace, 0, old_workspace_text, "", ""),
+    ] {
+        success(
+            &host.socket(),
+            Command::SaveContext {
+                document,
+                expected_revision: 0,
+            },
+        )?;
+    }
+
+    let initial = success(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: PrepareRequest {
+                tab,
+                provider: "codex".into(),
+                side: Direction::Right,
+                target: None,
+                role_override: "".into(),
+                agent_instructions: "FROZEN_AGENT_INSTRUCTIONS".into(),
+                include_memory: false,
+                memory_selection: None,
+                deliver_context: true,
+            },
+        },
+    )?
+    .launch_preview
+    .context("initial launch preview missing")?;
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: initial.plan_id,
+        },
+    )?;
+    let initial_views = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == initial.session
+                && view.generation == initial.generation
+                && view.state == "exited"
+        })
+    })?;
+    ensure!(initial_views.len() == 1);
+    let old_frame = initial_views[0].frame.text();
+    let old_context_hash = initial.context.content_hash.clone();
+    ensure!(old_frame.contains("FIXTURE_CONTEXT_CRC32="));
+
+    let conversation_id = "01234567-89ab-cdef-0123-456789abcdef";
+    let binding = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: initial.session,
+            generation: initial.generation,
+            conversation_id: conversation_id.into(),
+            expected_revision: 0,
+        },
+    )?
+    .launch_preview
+    .context("conversation binding preview missing")?
+    .conversation
+    .context("saved conversation binding missing")?;
+    ensure!(binding.revision == 1);
+
+    for document in [
+        context(project, 1, "EDITED_PROJECT_CONTEXT", "", ""),
+        context(workspace, 1, "EDITED_WORKSPACE_CONTEXT", "", ""),
+    ] {
+        success(
+            &host.socket(),
+            Command::SaveContext {
+                document,
+                expected_revision: 1,
+            },
+        )?;
+    }
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session: initial.session,
+            generation: Some(initial.generation),
+        },
+    )?;
+    let before = success(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing before resume")?;
+    let prepared = success(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?
+    .launch_preview
+    .context("resume preparation omitted preview")?;
+    let resume_source = prepared
+        .resume
+        .as_ref()
+        .context("resume preparation omitted source binding")?;
+    ensure!(resume_source.binding == binding);
+    ensure!(resume_source.previous_head == initial.generation);
+    ensure!(prepared.session == initial.session && prepared.generation != initial.generation);
+    ensure!(prepared.context.content_hash == old_context_hash);
+    ensure!(prepared.context.text.contains(old_project_text));
+    ensure!(prepared.context.text.contains(old_workspace_text));
+    ensure!(prepared.context.text.contains("FROZEN_AGENT_INSTRUCTIONS"));
+    ensure!(!prepared.context.text.contains("EDITED_PROJECT_CONTEXT"));
+    ensure!(!prepared.context.text.contains("EDITED_WORKSPACE_CONTEXT"));
+    ensure!(prepared.cwd.as_ref() == Some(&root));
+    let pinned = success(
+        &host.socket(),
+        Command::Generations {
+            session: initial.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation history missing while resume is prepared")?;
+    ensure!(pinned.head == Some(initial.generation));
+    ensure!(pinned.pinned == Some(initial.generation));
+    let before_start = success(&host.socket(), Command::List)?.views;
+    ensure!(before_start.len() == 1 && before_start[0].frame.text() == old_frame);
+
+    fs::write(root.join("hold-resume"), b"hold")?;
+    host.active = Some((prepared.session, prepared.generation));
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: prepared.plan_id,
+        },
+    )?;
+    host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.generation == prepared.generation
+                && view.state == "running"
+                && view.frame.text().contains("FIXTURE_RESUME_ARGS=")
+        })
+    })?;
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::BindConversation {
+                session: initial.session,
+                generation: prepared.generation,
+                conversation_id: "89abcdef-0123-4567-89ab-cdef01234567".into(),
+                expected_revision: 1,
+            }
+        )?
+        .error
+        .is_some(),
+        "live resumed dialogue released its provider-ID reservation"
+    );
+    fs::remove_file(root.join("hold-resume"))?;
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: prepared.plan_id,
+            }
+        )?
+        .error
+        .is_some(),
+        "resume plan was admitted more than once"
+    );
+    let resumed_views = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == prepared.session
+                && view.generation == prepared.generation
+                && view.state == "exited"
+                && view.frame.text().contains("FIXTURE_RESUME_ARGS=")
+        })
+    })?;
+    ensure!(
+        resumed_views.len() == 2,
+        "resume should add exactly one generation"
+    );
+    let old_view = resumed_views
+        .iter()
+        .find(|view| view.generation == initial.generation)
+        .context("original generation disappeared")?;
+    ensure!(old_view.frame.text() == old_frame);
+    let resumed_view = resumed_views
+        .iter()
+        .find(|view| view.generation == prepared.generation)
+        .context("resumed generation missing")?;
+    // The CLI's JSON may wrap across physical rows. Join the displayed cells
+    // before decoding its first value; the following markers are separate data.
+    let resume_frame: String = resumed_view
+        .frame
+        .cells
+        .iter()
+        .map(|cell| cell.text.as_str())
+        .collect();
+    let resume_args_json = resume_frame
+        .split_once("FIXTURE_RESUME_ARGS=")
+        .map(|(_, value)| value)
+        .context("fixture did not print resume argv")?;
+    let resume_args = serde_json::Deserializer::from_str(resume_args_json)
+        .into_iter::<Vec<String>>()
+        .next()
+        .context("resume args JSON missing")??;
+    ensure!(
+        resume_args
+            == vec![
+                "resume".to_owned(),
+                "--no-daemon".to_owned(),
+                "--cd".to_owned(),
+                root.to_str()
+                    .context("fixture cwd is not UTF-8")?
+                    .to_owned(),
+                "-c".to_owned(),
+                "<developer_instructions>".to_owned(),
+                conversation_id.to_owned(),
+            ],
+        "resume did not receive the reviewed exact argv"
+    );
+    let resumed_text = resumed_view.frame.text();
+    ensure!(
+        resumed_text.contains(&format!("FIXTURE_RESUME_CWD={}", root.display())),
+        "resume CLI ran in a different working directory"
+    );
+    ensure!(
+        resumed_text.contains(&format!(
+            "FIXTURE_CONTEXT_CRC32={}",
+            crc32fast::hash(prepared.context.text.as_bytes())
+        )),
+        "resumed CLI received different frozen context bytes"
+    );
+    ensure!(!resumed_text.contains("initial task must not be repeated"));
+    let after = success(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing after resume")?;
+    ensure!(after.layout.revision == before.layout.revision);
+    ensure!(after.layout.json == before.layout.json);
+    let generations = success(
+        &host.socket(),
+        Command::Generations {
+            session: initial.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation history missing after resume")?;
+    ensure!(generations.head == Some(prepared.generation));
+    ensure!(
+        generations.pinned.is_none(),
+        "resume did not clear the historical pin"
+    );
+
+    let stale_prepared = success(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?
+    .launch_preview
+    .context("second resume preview missing")?;
+    success(
+        &host.socket(),
+        Command::BindConversation {
+            session: initial.session,
+            generation: prepared.generation,
+            conversation_id: "89abcdef-0123-4567-89ab-cdef01234567".into(),
+            expected_revision: 1,
+        },
+    )?;
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: stale_prepared.plan_id,
+            }
+        )?
+        .error
+        .is_some(),
+        "resume accepted a binding that changed after review"
+    );
+    ensure!(success(&host.socket(), Command::List)?.views.len() == 2);
+
+    let changed_binary_plan = success(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?
+    .launch_preview
+    .context("resume review for binary guard missing")?;
+    let executable = host.bin.path().join("codex");
+    let mut changed_binary = fs::read(&executable)?;
+    changed_binary.push(b'\n');
+    fs::write(&executable, changed_binary)?;
+    let refused = exchange(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: changed_binary_plan.plan_id,
+        },
+    )?;
+    ensure!(
+        refused.error.is_some()
+            && matches!(
+                refused.rejected_before_admission,
+                Some(pigade_session_host::CommandRejection::LaunchPreflight)
+            ),
+        "changed executable was not refused before resume admission"
+    );
+    ensure!(success(&host.socket(), Command::List)?.views.len() == 2);
     Ok(())
 }
 

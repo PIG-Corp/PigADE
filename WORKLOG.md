@@ -2393,3 +2393,51 @@ Ship per-pane generation history selection and durable follow-head routing
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/generations.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/catalog.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/launch.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, crates/storage/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
 - Verification: App150 tests, fmt, strict Clippy and debug build pass. Real-PTY generation pin/head/reopen regression passes. Prior integrated workspace tests/Clippy/release build passed. Existing private X11 generations fixture01 passes with unchanged journal hashes/models/no spawn; picker and old/new captures inspected. Fixed fixture asynchronous open sequencing and key count; generation labels now include ID suffix. Python22 harness tests, C syntax, version and diff checks pass.
 - Risks / next: Native conversation resume, indexed history viewer/search, complete platform/accessibility/performance acceptance remain open; no active desktop access.
+
+## 2026-10-17T15:28:44+00:00 — /root/resume_adapter_luna
+
+Added exact Codex 0.162.1 native resume argv builder with UUID/cwd validation and optional frozen developer-instructions context.
+
+- Files: crates/session-host/src/adapters.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/adapters.rs; cargo test -p pigade-session-host --lib adapters::tests (8 passed); git diff --check passed; codex resume --help confirms positional UUID, --cd and --no-daemon.
+- Risks / next: Root should connect durable reviewed plans and verify actual CLI resume before enabling native-resume capability.
+
+## 2026-10-17T15:31:49+00:00 — /root/resume_adapter_luna
+
+Added read-only native resume review UI, prepare-resume action, conversation-sheet entry point, and capability-aware status.
+
+- Files: crates/app/src/product.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/product.rs; git diff --check passed. App build/tests deferred because root is running the app Cargo verification.
+- Risks / next: Root should wire PrepareResume and ResumeReview confirmation to protocol host commands, then compile and verify the integrated flow.
+
+## 2026-10-17T15:32:35+00:00 — /root/resume_adapter_luna
+
+Made resume argument building filesystem-pure: validate absolute UTF-8 NUL-free cwd and preserve exact path text without checking directory existence.
+
+- Files: crates/session-host/src/adapters.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/adapters.rs; cargo test -p pigade-session-host --lib adapters::tests (8 passed); git diff --check passed.
+- Risks / next: Host preparation/start must independently reject unavailable resume working directories; historical saved plans remain readable.
+
+## 2026-10-17T15:34:34+00:00 — /root/resume_adapter_luna
+
+Added real-PTY fake Codex resume integration covering frozen context and exact resume argv, history pin/head/layout invariants, duplicate admission, and stale-binding rejection.
+
+- Files: crates/session-host/tests/context_launch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/tests/context_launch.rs; git diff --check passed. Cargo tests intentionally not run because root owns concurrent host/release verification.
+- Risks / next: Root should run the new integration test after native resume capability certification is enabled.
+
+## 2026-10-17T15:47:38+00:00 — /root/resume_adapter_luna
+
+Added opt-in isolated X11 fake-Codex resume review fixture with fixed palette input, private provider PATH, captures, and generation/layout invariants.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, WORKLOG.md
+- Verification: Python AST parse passed; cc -fsyntax-only scripts/x11-ime-input.c passed; python3 scripts/test_isolated_ime_x11.py (22 passed); git diff --check passed. Fixture was not run.
+- Risks / next: Root should run the opt-in fixture only in its verified isolated environment after rebuilding the app and host.
+
+## 2026-10-17T15:53:56+00:00 — /root
+
+Ship reviewed manual Codex exact-ID resume in the same logical pane, preserving frozen context and historical generations
+
+- Files: crates/session-host/src/prepared.rs, crates/session-host/src/adapters.rs, crates/session-host/src/lib.rs, crates/session-host/tests/context_launch.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
+- Verification: App150 tests, strict Clippy/debug build pass after retaining optional generation capability across launch replies. Host real-PTY context_launch3 tests pass including exact argv/cwd/frozen CRC/layout preservation/old frame/duplicate and stale binding/binary refusal/live ID reservation. Host108 lib tests pass serial; one parallel replay-cache cleanup test failed at607 (0 collected vs1), exact isolated target passes: unresolved concurrent lease/test gap retained in handoff, no false full-green claim. Strict workspace Clippy/release bins/examples build pass. Actual native Codex0.162.1 private-config PTY06 displays prior synthetic conversation with no prompt and rejects missing UUID; failed setup attempts retained. Private native fake-CLI resume fixture03 passes; review and actual NEW_RESUME_FRAME capture inspected after fixing omitted capability downgrade (fixture02 showed blank/error). Python22/C syntax/version/fmt/diff checks pass.
+- Risks / next: Native resume is manual for Codex0.162.1 only; auto-ID/auto-resume, other providers/two-version/reboot/full platform acceptance remain open. Investigate parallel cache cleanup before release. User explicitly requested nightlight off: queried hyprsunset4000K and set runtime6500K, verified enabled:false and still6500K after isolated fixture; no cause attributed and no user config overwritten.

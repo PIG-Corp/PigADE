@@ -259,10 +259,18 @@ pub struct LaunchPreview {
     pub cwd: Option<std::path::PathBuf>,
     #[serde(default)]
     pub conversation: Option<pigade_storage::ConversationBinding>,
+    #[serde(default)]
+    pub resume: Option<ResumeSource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ResumeSource {
+    pub binding: pigade_storage::ConversationBinding,
+    pub previous_head: uuid::Uuid,
 }
 
 pub struct ProductReply {
-    pub generation_selection: bool,
+    pub generation_selection: Option<bool>,
     pub generation_selected: bool,
     pub generations: Option<GenerationList>,
     pub context_saved: bool,
@@ -322,7 +330,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         }
     }
     Ok(ProductReply {
-        generation_selection: response.generation_selection.unwrap_or(false),
+        generation_selection: response.generation_selection,
         generation_selected,
         generations: response.generations,
         context_saved,

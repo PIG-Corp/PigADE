@@ -30,8 +30,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/conversation.rs | Immutable user conversation bindings, per-session CAS, current provider/ID uniqueness and schema6 migration with durable backup |
 | crates/storage/src/launch.rs, catalog.rs | Schema7 launch-order ordinals allocated with intent/lock, indexed exclusive-cursor pages, durable pre-v7 backups and per-pane generation pins in WindowState |
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
-| crates/session-host/src/prepared.rs | Review/start/session-context routes; frozen snapshots and exact generation identity; no retries after admission |
-| crates/session-host/src/adapters.rs | Bounded version detection and versioned Claude/Codex startup arguments; OpenCode generic-only pending transport verification |
+| crates/session-host/src/prepared.rs | Review/start/session-context and explicit PrepareResume routes; frozen binding/context/cwd, unchanged exited-head checks and one durable attempt; resumed generations preserve layout |
+| crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1 resume argv; other resume versions remain unsupported |
 | crates/session-host/src/projects.rs, panel_launch.rs | Git repository identity, durable workspace preparation/worktree creation and prevalidated tab-scoped CLI launch |
 | crates/app/src/product.rs | Project/workspace sidebar, tab strip, CLI controls, palette, transfer picker, revisioned context editor and onboarding |
 | crates/app/src/text_edit.rs | Unicode grapheme/UTF-16 editing, grouped composition, bounded100-entry/2MiB undo, plain-string wire serialization |
