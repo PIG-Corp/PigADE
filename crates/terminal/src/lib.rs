@@ -176,14 +176,38 @@ impl Frame {
 
 #[derive(Default)]
 struct Effects {
+    // Title updates have no per-update external effect. Only their last value
+    // is published at the end of this ordered terminal event.
+    title: Option<Option<String>>,
     events: Vec<Event>,
 }
-#[derive(Clone, Default)]
-struct Listener(Arc<Mutex<Effects>>);
+#[derive(Clone)]
+struct Listener(Arc<Mutex<Effects>>, bool);
+impl Listener {
+    fn new(live: bool) -> Self {
+        Self(Arc::default(), live)
+    }
+}
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
-        // The parser handles a bounded output chunk before this queue is drained.
-        self.0.lock().expect("event lock").events.push(event);
+        match event {
+            Event::Title(title) => {
+                self.0.lock().expect("event lock").title = Some(Some(title));
+            }
+            Event::ResetTitle => {
+                self.0.lock().expect("event lock").title = Some(None);
+            }
+            Event::PtyWrite(_) | Event::ColorRequest(_, _) | Event::TextAreaSizeRequest(_)
+                if self.1 =>
+            {
+                // Retain every live response in order; admission must account
+                // for this queue rather than discard responses at a size cap.
+                self.0.lock().expect("event lock").events.push(event);
+            }
+            // These effects were already ignored on drain. Historical response
+            // closures and ignored UI/clipboard/bell events need no retention.
+            _ => (),
+        }
     }
 }
 
@@ -271,7 +295,7 @@ impl Terminal {
     }
 
     pub fn new(geometry: Geometry, live: bool) -> Self {
-        let listener = Listener::default();
+        let listener = Listener::new(live);
         let config = Config {
             osc52: Osc52::Disabled,
             ..Config::default()
@@ -346,7 +370,7 @@ impl Terminal {
                 && !snapshot.term.config.kitty_keyboard,
             "checkpoint changed terminal profile"
         );
-        let listener = Listener::default();
+        let listener = Listener::new(live);
         let term = Term::from_checkpoint(snapshot.term, listener.clone())?;
         let parser = Processor::from_checkpoint(snapshot.processor).map_err(anyhow::Error::msg)?;
         Ok(Self {
@@ -385,11 +409,13 @@ impl Terminal {
         std::mem::take(&mut self.responses)
     }
     fn drain_effects(&mut self) {
-        let events = std::mem::take(&mut self.listener.0.lock().expect("event lock").events);
+        let Effects { title, events } =
+            std::mem::take(&mut *self.listener.0.lock().expect("event lock"));
+        if let Some(title) = title {
+            self.title = title.unwrap_or_default();
+        }
         for event in events {
             match event {
-                Event::Title(title) => self.title = title,
-                Event::ResetTitle => self.title.clear(),
                 Event::PtyWrite(text) if self.live => self.responses.extend(text.bytes()),
                 Event::TextAreaSizeRequest(format) if self.live => self.responses.extend(
                     format(WindowSize {
@@ -985,6 +1011,130 @@ mod tests {
             );
         }
         assert!(*sink.boundaries.lock().unwrap() >= 2);
+    }
+}
+
+#[cfg(test)]
+mod listener_retention_tests {
+    use super::*;
+
+    fn mixed_effects() -> &'static [u8] {
+        b"\x1b]0;alpha\x07\x1b[5nAB\x1b[6n\x1b[22;0t\x1b]0;beta\x07\x1b[18t\x1b]4;1;rgb:12/34/56\x07\x1b]4;1;?\x07\x1b[14t\x1b[23;0t\x1b[2 q\x1b[?1000h\x07\x1b[?1000l\x1b[6n"
+    }
+
+    #[test]
+    fn mixed_listener_effects_keep_exact_live_response_fifo_and_historical_title() -> Result<()> {
+        let geometry = Geometry::new(8, 40)?;
+        let mut live = Terminal::new(geometry, true);
+        live.output(mixed_effects());
+        assert_eq!(
+            live.take_responses(),
+            b"\x1b[0n\x1b[1;3R\x1b[8;8;40t\x1b]4;1;rgb:1212/3434/5656\x07\x1b[4;0;0t\x1b[1;3R"
+        );
+        assert_eq!(live.frame().title, "alpha");
+        let mut historical = Terminal::new(geometry, false);
+        historical.output(mixed_effects());
+        assert!(historical.take_responses().is_empty());
+        assert_eq!(historical.checkpoint()?, live.checkpoint()?);
+        assert_eq!(historical.frame(), live.frame());
+        Ok(())
+    }
+
+    #[test]
+    fn listener_title_and_response_semantics_survive_event_cuts_and_sync_checkpoint() -> Result<()>
+    {
+        let geometry = Geometry::new(8, 40)?;
+        let mut whole = Terminal::new(geometry, true);
+        whole.output(mixed_effects());
+        let expected_responses = whole.take_responses();
+        for cut in 0..=mixed_effects().len() {
+            let mut split = Terminal::new(geometry, true);
+            split.output(&mixed_effects()[..cut]);
+            split.output(&mixed_effects()[cut..]);
+            assert_eq!(split.take_responses(), expected_responses, "cut={cut}");
+            assert_eq!(split.checkpoint()?, whole.checkpoint()?, "cut={cut}");
+        }
+
+        let mut pending = Terminal::new(geometry, true);
+        pending.output(b"\x1b[?2026h");
+        pending.output(mixed_effects());
+        assert!(pending.take_responses().is_empty());
+        let mut restored = Terminal::from_checkpoint(&pending.checkpoint()?, false)?;
+        pending.sync_timeout();
+        restored.sync_timeout();
+        assert_eq!(pending.take_responses(), expected_responses);
+        assert!(restored.take_responses().is_empty());
+        assert_eq!(pending.checkpoint()?, restored.checkpoint()?);
+        assert_eq!(pending.frame(), whole.frame());
+        Ok(())
+    }
+
+    #[test]
+    fn parser_listener_does_not_retain_ignored_storms_or_historical_responses() -> Result<()> {
+        let geometry = Geometry::new(8, 40)?;
+        let ignored = b"\x07\x1b[2 q\x1b[?1000h\x1b[?1000l".repeat(4096);
+        let queries = b"\x1b[6n\x1b[18t\x1b[14t".repeat(128);
+        let mut historical = Terminal::new(geometry, false);
+        historical.parser.advance(&mut historical.term, &ignored);
+        historical.parser.advance(&mut historical.term, &queries);
+        {
+            let effects = historical.listener.0.lock().unwrap();
+            assert_eq!(effects.events.len(), 0);
+            assert_eq!(effects.events.capacity(), 0);
+            assert!(effects.title.is_none());
+        }
+        historical.drain_effects();
+        assert!(historical.take_responses().is_empty());
+
+        let mut live = Terminal::new(geometry, true);
+        live.parser.advance(&mut live.term, &ignored);
+        assert!(live.listener.0.lock().unwrap().events.is_empty());
+        live.parser.advance(&mut live.term, &queries);
+        assert_eq!(live.listener.0.lock().unwrap().events.len(), 384);
+        live.drain_effects();
+        assert_eq!(
+            live.take_responses(),
+            b"\x1b[1;1R\x1b[8;8;40t\x1b[4;0;0t".repeat(128),
+        );
+        assert_eq!(live.checkpoint()?, historical.checkpoint()?);
+        Ok(())
+    }
+
+    #[test]
+    fn parser_listener_retains_one_last_title_and_preserves_reset_pop_order() -> Result<()> {
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        let titles = b"\x1b]0;first\x07\x1b]0;second\x07".repeat(4096);
+        terminal.parser.advance(&mut terminal.term, &titles);
+        {
+            let effects = terminal.listener.0.lock().unwrap();
+            assert!(effects.events.is_empty());
+            assert_eq!(effects.events.capacity(), 0);
+            assert_eq!(effects.title.as_ref().unwrap().as_deref(), Some("second"));
+        }
+        assert!(
+            terminal.title.is_empty(),
+            "title publishes only on ordered drain"
+        );
+        terminal.drain_effects();
+        assert_eq!(terminal.frame().title, "second");
+
+        // Pop of the initial empty title emits ResetTitle. A following set must
+        // replace it, while the reverse order must retain the reset instead.
+        for (body, expected) in [
+            (
+                b"\x1b[22;0t\x1b]0;temporary\x07\x1b[23;0t\x1b]0;final\x07".as_slice(),
+                "final",
+            ),
+            (b"\x1b[22;0t\x1b]0;temporary\x07\x1b[23;0t".as_slice(), ""),
+        ] {
+            let mut fresh = Terminal::new(Geometry::new(8, 40)?, false);
+            fresh.output(body);
+            assert_eq!(fresh.frame().title, expected);
+            let restored = Terminal::from_checkpoint(&fresh.checkpoint()?, false)?;
+            assert_eq!(restored.checkpoint()?, fresh.checkpoint()?);
+            assert_eq!(restored.frame(), fresh.frame());
+        }
+        Ok(())
     }
 }
 

@@ -177,3 +177,26 @@ closing the global memory gate.
 cargo run --offline --locked --release -p pigade-terminal --example resource_preflight
 cargo run --offline --locked --release -p pigade-terminal --example wide_clear_allocations
 ```
+
+## Listener retention repair
+
+The [listener plan](../research/terminal-listener-retention-plan.md) and two
+behavior regressions preceded the change. The wrapper now discards effects it
+already ignored at drain, including historical response events, at the listener
+boundary instead. One last title update/reset is retained for publication at
+the existing ordered drain. The actual Term still processes every callback and
+mutates its semantic title/stack normally. All live response events retain FIFO;
+dynamic-color closures still resolve after the event, matching prior behavior.
+
+Four regressions verify exact mixed live response bytes, historical/live
+checkpoint equality, every byte cut of the fixture, synchronized timeout and
+checkpoint continuation, title reset/pop ordering, and pre-drain retention.
+The actual-parser storm of4096 BEL/cursor/mouse-mode groups retains zero event
+slots;8192 title updates retain one final title;384 historical query effects
+retain no queue while the live queries retain all384 and exact response bytes.
+These are observed retained-container counts, not RSS measurements. A focused
+independent review found no behavior regression. All223 workspace tests,
+strict Clippy, formatting and release build pass, including both real-PTY query
+backpressure tests. The live response queue, core string creation, parser and
+global ownership still need whole-event reservation; this local deletion does
+not complete the memory gate. Earlier frozen sources/results above are unchanged.

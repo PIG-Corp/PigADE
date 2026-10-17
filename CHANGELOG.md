@@ -2,6 +2,9 @@
 
 ## 0.0.1-dev — in development
 
+- Terminal listener retains only live response FIFO and the final ordered title
+  update. Ignored UI/clipboard/bell and replay response events no longer build a
+  transient queue; response bytes and checkpoint continuation are preserved.
 - Added nonmutating parser resource preflight for grid and listener callbacks,
   with actual-model continuation checks and source-bound release diagnostics.
   Removed discarded shared combining-vector copies during wide-cell clearing;

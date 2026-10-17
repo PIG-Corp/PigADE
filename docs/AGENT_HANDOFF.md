@@ -323,3 +323,12 @@ Next remove unnecessary retention of ignored listener events with behavior
 regressions, then complete grid/frame/checkpoint/parser/IPC allocation ownership
 and shared pre-mutation reservation. Existing82653/55262 frozen soaks remain
 independent and active; no24h/PERF/global-memory gate has passed.
+
+Listener follow-up integrated: only live response events retain FIFO; already
+ignored effects and historical response events are dropped on entry, and only
+the last title/reset waits for the same ordered drain. No raw bytes or live
+responses are dropped.4 regressions (2 locked before repair) pass exact query
+FIFO/everycut/synccheckpoint/titlepop and actual-parser pre-drain counts;
+independent review found no regression.223 workspace tests/strictClippy/fmt/
+release pass, including real-PTY backpressure. Live response memory and all
+remaining allocation owners are still open, not solved by this filter.
