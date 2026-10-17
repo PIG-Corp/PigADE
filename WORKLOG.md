@@ -1689,3 +1689,35 @@ Integrate single-flight background checkpoint persistence without deferring jour
 - Files: crates/session-host/src/checkpoint.rs, crates/session-host/src/lib.rs, crates/session-host/src/metrics.rs, docs/adr/0011-bounded-background-checkpoint-persistence.md, docs/reports/async-checkpoint-20261017.md, benchmarks/results/async-checkpoint-20261017, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Fresh root191 workspace tests, strict all-target Clippy, fmt and release bins/examples pass. Repeated realPTY pausedworker test passes. Frozen4e4a0fcb30.043s all4 producerCRC/complete recovery pass, cold0/vacuous; sourcehashes revalidated equal beforecommit. New1200s tool89343 pending, old55262 independent.
 - Risks / next: Nonvacuous cold-root growth async capture and write/crash boundaries; observe new1200s result before24h; wholeheap/PERF/platform remainopen.
+
+## 2026-10-17T03:05:37+00:00 — recovery_slice_review
+
+Added non-vacuous async cold-history growth regression across a paused checkpoint, and fixed segmented UTF-8 truncation to honor the completion-error byte cap.
+
+- Files: crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/session-host/Cargo.toml; targeted cold-history and bounded-error tests passed; cargo test --offline -p pigade-session-host --lib (68 passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; git diff --check passed.
+- Risks / next: Root owns final workspace verification/build; async checkpoint payload retains its captured immutable cold-history prefix.
+
+## 2026-10-17T03:07:27+00:00 — /root/font_render_profile
+
+Replace per-stage wtype exits with one private persistent Wayland virtual keyboard helper for the IME fixture
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py, scripts/wayland-ime-input/ime_input.c, scripts/wayland-ime-input/virtual-keyboard-unstable-v1.xml, scripts/wayland-ime-input/WTYPE-LICENSE.txt, scripts/wayland-ime-input/README.md
+- Verification: python3 -m unittest scripts.test_isolated_ime_wayland -v (19 passed; includes strict C compile and no-display control selftest); python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; plan-only CLI output validated; two independent builds produced identical helper SHA-256 e3b05af0332b470a042498bc1d7549533bca73770f462a3f0edda7bfd63e7bd6; git diff --check clean
+- Risks / next: Root review required before any isolated Wayland --run; helper creates one fixed-US virtual keyboard before app startup and only accepts COMPOSE/COMMIT/QUIT over verified private control socket.
+
+## 2026-10-17T03:07:31+00:00 — terminal_memory_budget
+
+Add bounded coalescing ChangeHub epoch primitive with host-incarnation tokens and waiter reservations
+
+- Files: crates/session-host/src/changes.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/session-host/src/changes.rs; standalone offline Cargo harness: 7 changes-module tests passed; git diff --check passed
+- Risks / next: Root must register module and integrate publication notifications plus dedicated IPC/app wait path; run host crate tests and clippy after integration
+
+## 2026-10-17T03:09:25+00:00 — root
+
+Verify async checkpoint against growing nonzero cold history and repair segmented UTF8 error budget
+
+- Files: crates/session-host/src/checkpoint.rs, docs/reports/async-checkpoint-20261017.md, docs/AGENT_HANDOFF.md
+- Verification: Root checkpoint-focused12 tests and hostlib68 tests pass; strictworkspaceClippy/fmt and release bins/examples pass. Exact live/full/checkpoint-tail comparisons include every nonzero cold record after further appends; source raw bytes unchanged. Root found segmentedwriter overflow and reviewed regressionfix.
+- Risks / next: Active frozen4e4a20min result pending; its lineage predates formatterfix only. Integrate bounded change notification for UI latency.

@@ -38,3 +38,22 @@ not certified. Full long-history, checkpoint-age,24h, whole-event/global heap,
 physical UI/GPU and release gates remain open. `checkpoint_ns` now measures
 actor scheduling/export/forced-sync work, not background persistence duration;
 `checkpoints` counts observed successful durable completions.
+
+## Nonzero cold-root continuation follow-up
+
+A new focused fixture retires actual rows past the10,000-row hot limit, freezes
+its committed terminal/history/receipt, pauses persistence and appends more cold
+rows plus Exit. It validates the old committed root after that growth and checks
+persisted sequence/offset/semantic bytes/history against the captured snapshot.
+The complete oracle compares both recovery paths with the still-live terminal
+and every cold record; cold record count is nonzero and increases after capture.
+Raw journal bytes are identical before/after recovery. Root checkpoint-focused
+12 tests and strict all-target Clippy pass. This complements the smoke's
+zero-cold scope; it is not the full4GiB long-history performance gate.
+
+Review also caught a segmented error-formatting corner case: an already-full
+prefix plus a truncation marker could exceed1024 bytes by up to3 bytes. The
+writer now trims the prior prefix on a UTF-8 boundary before adding that marker;
+ASCII and multibyte segmented-write regressions pass. Active frozen4e4a0fcb…
+diagnostics predate this tiny error-format fix; their source binding remains
+unchanged and must not be relabeled as the later executable.

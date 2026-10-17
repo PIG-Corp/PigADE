@@ -75,7 +75,14 @@ impl fmt::Write for BoundedError {
         }
         let marker = "…";
         let budget = COMPLETION_ERROR_LIMIT.saturating_sub(marker.len());
-        let room = budget.saturating_sub(self.0.len());
+        if self.0.len() > budget {
+            let mut end = budget;
+            while !self.0.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.0.truncate(end);
+        }
+        let room = budget - self.0.len();
         let mut end = room.min(value.len());
         while !value.is_char_boundary(end) {
             end -= 1;
@@ -659,6 +666,101 @@ mod tests {
     }
 
     #[test]
+    fn async_checkpoint_keeps_cold_history_prefix_immutable_during_growth() -> Result<()> {
+        let _serial = ASYNC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let header = header();
+        let journal_path = root.path().join(format!("{}.journal", header.generation));
+        let mut journal = Journal::create(&journal_path, header.clone())?;
+        let history = crate::history::History::live(root.path(), journal.header())?;
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        terminal.set_history_observer(Some(history.clone()));
+
+        // Cross the cold-retirement boundary with enough real rows to make the
+        // snapshot non-vacuous, while keeping each journal event below limits.
+        let first_output = (0..10_020)
+            .map(|row| format!("{row:05} history growth\r\n"))
+            .collect::<String>();
+        let mut first_receipt = None;
+        for payload in first_output.as_bytes().chunks(16 * 1024) {
+            let receipt = journal.append(EventKind::Output, payload)?;
+            history.begin(receipt.sequence)?;
+            terminal.output(payload);
+            history.commit()?;
+            first_receipt = Some(receipt);
+        }
+        let first_receipt = first_receipt.context("no initial output receipt")?;
+        let captured_terminal = terminal.checkpoint()?;
+        let captured_history = history.checkpoint()?;
+        let captured_records = captured_history.state.next_entry;
+        let captured_retired = captured_history.state.retired_rows;
+        assert!(
+            captured_retired > 0,
+            "fixture must retire rows into cold history"
+        );
+        assert!(captured_records > 0, "fixture must contain cold records");
+
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        *TEST_PAUSE.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+            Some((header.generation, started_tx, resume_rx));
+        let pending = loop {
+            if let Some(pending) = schedule(
+                root.path(),
+                &header,
+                first_receipt,
+                &terminal,
+                Some(captured_history.clone()),
+            )? {
+                break pending;
+            }
+            std::thread::yield_now();
+        };
+        started_rx.recv_timeout(std::time::Duration::from_secs(8))?;
+
+        let later = (0..64)
+            .map(|row| format!("later {row:03} cold rows\r\n"))
+            .collect::<String>();
+        let later_receipt = journal.append(EventKind::Output, later.as_bytes())?;
+        history.begin(later_receipt.sequence)?;
+        terminal.output(later.as_bytes());
+        history.commit()?;
+        assert!(history.summary().retired_rows > captured_retired);
+        assert!(history.summary().records > captured_records);
+
+        let exit = journal.append(EventKind::Exit, b"")?;
+        history.begin(exit.sequence)?;
+        history.commit()?;
+        resume_tx.send(()).unwrap();
+        pending.wait()?;
+
+        crate::history::validate_checkpoint(root.path(), &header, &captured_history)?;
+        let saved = latest(root.path(), &header, exit.end_offset)?
+            .loaded
+            .context("missing asynchronous checkpoint")?;
+        assert_eq!(saved.sequence, first_receipt.sequence);
+        assert_eq!(saved.offset, first_receipt.end_offset);
+        assert_eq!(saved.terminal.checkpoint()?, captured_terminal);
+        assert_eq!(saved.history.as_ref(), Some(&captured_history));
+
+        let raw_before_recovery = fs::read(&journal_path)?;
+        let verification = crate::verify_recovery_against_live(&journal_path, &terminal, &history)?;
+        assert_eq!(verification.sequence, exit.sequence);
+        assert_eq!(verification.recovery_path, "checkpoint-tail");
+        assert!(verification.complete_state_equal);
+        assert!(verification.frame_equal);
+        assert!(verification.cold_history_equal);
+        assert_eq!(verification.live_state_equal, Some(true));
+        assert_eq!(verification.live_cold_history_equal, Some(true));
+        assert_eq!(verification.cold_history_records, history.summary().records);
+        assert!(verification.cold_history_records > captured_records);
+        assert_eq!(fs::read(&journal_path)?, raw_before_recovery);
+        Ok(())
+    }
+
+    #[test]
     fn async_failure_is_reported_and_releases_global_permit() -> Result<()> {
         let _serial = ASYNC_TEST_LOCK
             .lock()
@@ -707,6 +809,19 @@ mod tests {
         assert!(message.len() <= COMPLETION_ERROR_LIMIT);
         assert!(message.ends_with('…'));
         assert!(std::str::from_utf8(message.as_bytes()).is_ok());
+
+        let mut segmented = BoundedError(String::new());
+        fmt::Write::write_str(&mut segmented, &"a".repeat(COMPLETION_ERROR_LIMIT)).unwrap();
+        assert!(fmt::Write::write_str(&mut segmented, "next").is_err());
+        assert!(segmented.0.len() <= COMPLETION_ERROR_LIMIT);
+        assert!(segmented.0.ends_with('…'));
+
+        let mut multibyte = BoundedError(String::new());
+        fmt::Write::write_str(&mut multibyte, &"界".repeat(340)).unwrap();
+        assert!(fmt::Write::write_str(&mut multibyte, "界界").is_err());
+        assert!(multibyte.0.len() <= COMPLETION_ERROR_LIMIT);
+        assert!(std::str::from_utf8(multibyte.0.as_bytes()).is_ok());
+        assert!(multibyte.0.ends_with('…'));
     }
 
     #[test]

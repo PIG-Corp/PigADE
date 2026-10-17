@@ -239,3 +239,9 @@ active on610efac4…; do not conflate binaries/results.
 Capture remains synchronous, persistence single-flight async, final Exit waits;
 late errors degrade on bounded idle observation. See reports/async-checkpoint-20261017.md.
 No24h, global-memory or PERF acceptance is implied.
+
+Async follow-up: a nonzero cold-history growth fixture now proves the immutable
+old root survives further commits and full/checkpoint-tail/live equality holds
+for every record. Segmented completion error formatting now stays1024B even
+after an already-full fragment. Active frozen4e4a run predates only that formatter
+fix/new tests; retain its original source/binary identity.
