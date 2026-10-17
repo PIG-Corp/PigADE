@@ -124,6 +124,7 @@ impl TestHost {
     }
     fn launch(&mut self, executable: &str, args: Vec<String>) -> Result<Launch> {
         let spec = Launch {
+            env: Default::default(),
             session: Uuid::new_v4(),
             generation: Uuid::new_v4(),
             operation: Uuid::new_v4(),

@@ -4,8 +4,8 @@
 
 | CLI / exact installed version | Version/help in this environment | Generic PTY | Context delivery + receipt | Exact native resume | Automatic conversation binding | Auto-resume certified |
 |---|---|---|---|---|---|---|
-| Claude Code 2.1.259 | executed, exit 0 | offline startup + 2 resizes observed; final running check failed (API connectivity) | unknown | documented `--resume ID`; not executed | unknown | no |
-| Codex 0.162.1 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | fixed exec prompt receipt + retained nonce executed; product revision/role context pending | exact-ID `exec resume` executed across2 CLI processes; interactive TUI pending | structured `thread.started` ID observed in exec; product binding pending | no |
+| Claude Code 2.1.259 | executed, exit 0 | offline startup + 2 resizes observed; final running check failed (API connectivity) | product startup `--append-system-prompt` implemented; receipt unconfirmed | documented `--resume ID`; not executed | unknown | no |
+| Codex 0.162.1 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | product `-c developer_instructions=…` frozen revision/role transport implemented; fake-CLI real-PTY snapshot/reopen test passes; model receipt unconfirmed; earlier exec nonce receipt separate | exact-ID `exec resume` executed across2 CLI processes; interactive TUI pending | structured `thread.started` ID observed in exec; product binding pending | no |
 | OpenCode 1.18.22 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | unknown | documented `--session ID`; not executed | unknown | no |
 | Previous supported version of each CLI | not selected/installed | unknown | unknown | unknown | unknown | no |
 | Bash 5.3.3, Python 3.14 | actual PTY input/output, alternate TUI, resize and reconnect tested | supported in prototype tests | unsupported (explicit input only) | unsupported | unsupported | no |
@@ -14,7 +14,7 @@ The [isolated provider PTY report](../reports/provider-pty-20261017.md) and [red
 
 The [real Codex continuity result](../reports/codex-conversation-20261017.md) executes two harmless provider turns with direct native authentication and exact-ID exec resume. It does not certify product adapters, interactive resume or reboot restoration. No provider credentials/history were copied.
 
-These are detection and bounded PTY/CLI-component results, not the final §9.2 two-version certification matrix. Unknown AI versions must stay generic; no provider-specific adapter or automatic resume is enabled yet. A future adapter must bind a concrete conversation through documented structured events or explicit user binding, preserve cwd/revision, never use `--last`, and never fall back to a new conversation after resume failure.
+These are detection and bounded PTY/CLI-component results, not the final §9.2 two-version certification matrix. Unknown AI versions stay generic. Product startup-context adapters are enabled only for the exact Claude/Codex versions above; automatic resume remains disabled. OpenCode context is disabled until exact-version instruction merge behavior is verified; the current installed executable changed to1.19.3, while the bounded PTY evidence above is for1.18.22. A resume adapter must bind a concrete conversation through documented structured events or explicit user binding, preserve cwd/revision, never use `--last`, and never fall back to a new conversation after resume failure.
 
 Official sources inspected:
 

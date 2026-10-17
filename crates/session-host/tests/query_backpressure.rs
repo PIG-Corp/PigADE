@@ -79,6 +79,7 @@ impl TestHost {
 
     fn launch(&self, executable: &str, source: &str) -> Result<Launch> {
         let spec = Launch {
+            env: Default::default(),
             session: Uuid::new_v4(),
             generation: Uuid::new_v4(),
             operation: Uuid::new_v4(),

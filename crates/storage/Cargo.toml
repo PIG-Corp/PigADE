@@ -12,6 +12,8 @@ uuid.workspace = true
 crc32fast.workspace = true
 rusqlite.workspace = true
 libc.workspace = true
+# Stable content identities for immutable context snapshots.
+sha2 = "=0.10.9"
 
 [dev-dependencies]
 tempfile.workspace = true

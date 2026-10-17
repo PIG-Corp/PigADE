@@ -59,6 +59,7 @@ fn main() -> Result<()> {
                 &args,
                 Command::Launch {
                     spec: Launch {
+                        env: Default::default(),
                         session: Uuid::new_v4(),
                         generation: Uuid::new_v4(),
                         operation: Uuid::new_v4(),

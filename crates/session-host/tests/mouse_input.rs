@@ -213,6 +213,7 @@ fn acknowledged_mouse_modes_encode_bytes_received_by_the_generation_pty() -> Res
         "while True: os.read(0,1)\n",
     );
     let spec = Launch {
+        env: Default::default(),
         session: Uuid::new_v4(),
         generation: Uuid::new_v4(),
         operation: Uuid::new_v4(),
@@ -362,6 +363,7 @@ fn explicit_paste_bracketing_reaches_raw_pty_and_follows_acknowledged_mode() -> 
         ordinary.len()
     );
     let spec = Launch {
+        env: Default::default(),
         session: Uuid::new_v4(),
         generation: Uuid::new_v4(),
         operation: Uuid::new_v4(),

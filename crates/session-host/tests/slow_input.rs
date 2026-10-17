@@ -142,6 +142,7 @@ fn unread_slave_input_does_not_block_resize_or_stop() -> Result<()> {
     // Raw mode disables canonical input's overflow handling. This single process
     // never reads stdin and has no descendants holding the slave open after Stop.
     let spec = Launch {
+        env: Default::default(),
         session: Uuid::new_v4(),
         generation: Uuid::new_v4(),
         operation: Uuid::new_v4(),

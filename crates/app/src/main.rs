@@ -758,6 +758,8 @@ struct CanvasApp {
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
     product_launch_unknown: bool,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
+    pending_launch_review: bool,
+    pending_context_inspection: bool,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
     layout_mode: Option<LayoutMode>,
     layout_preview: Option<(uuid::Uuid, pigade_layout::TabLayout)>,
@@ -872,14 +874,31 @@ impl CanvasApp {
                                             product::DialogKind::Sessions,
                                         ));
                                     }
+                                    if let Some(preview) = reply.launch_preview {
+                                        this.product.launch_phase = reply.launch_phase;
+                                        if reply.launch_confirmed {
+                                            if this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview) {
+                                                this.product.dialog = None;
+                                            }
+                                            this.product.notice = Some(if this.product.launch_phase.as_deref() == Some("delivered_unconfirmed") {
+                                                "CLI запущен с контекстом. Применение моделью не подтверждено."
+                                            } else { "CLI запущен без передачи контекста." }.into());
+                                        } else if (this.product.launch_phase.is_some() && this.pending_context_inspection)
+                                            || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
+                                            let kind = if this.product.launch_phase.is_some() {product::DialogKind::SessionContext} else {product::DialogKind::LaunchReview};
+                                            let mut dialog = product::Dialog::new(kind);
+                                            if kind == product::DialogKind::LaunchReview { dialog.fields = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).map(|dialog| dialog.fields.clone()).unwrap_or_else(|| vec![preview.role_override.clone(),preview.agent_instructions.clone()]); }
+                                            this.product.dialog = Some(dialog);
+                                        }
+                                        this.pending_launch_review = false;
+                                        this.pending_context_inspection = false;
+                                        this.product.launch_preview = Some(preview);
+                                    }
                                     if let Some(context) = reply.context {
-                                        let mut dialog =
-                                            product::Dialog::new(product::DialogKind::Context);
-                                        dialog.fields = vec![
-                                            context.instructions.clone(),
-                                            context.role.clone(),
-                                            context.memory.clone(),
-                                        ];
+                                        let project_context = this.product.catalog.as_ref().is_some_and(|catalog| catalog.projects.iter().any(|project| project.id == context.scope_id));
+                                        let kind = if project_context {product::DialogKind::ProjectContext} else {product::DialogKind::Context};
+                                        let mut dialog = product::Dialog::new(kind);
+                                        dialog.fields = if project_context {vec![context.instructions.clone()]} else {vec![context.instructions.clone(),context.role.clone(),context.memory.clone()]};
                                         this.product.context = Some(context);
                                         this.product.dialog = Some(dialog);
                                         this.product.notice = Some(
@@ -889,6 +908,8 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    this.pending_launch_review = false;
+                                    this.pending_context_inspection = false;
                                     if error.rejected_before_launch {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
@@ -1033,6 +1054,8 @@ impl CanvasApp {
             product_rx,
             product_launch_unknown: false,
             pending_launch: None,
+            pending_launch_review: false,
+            pending_context_inspection: false,
             layout_geometry: None,
             layout_mode: None,
             layout_preview: None,
@@ -1384,6 +1407,19 @@ impl CanvasApp {
     ) {
         use product::{Dialog, DialogKind, ProductAction as A};
         self.focus.focus(window, cx);
+        if matches!(
+            action,
+            A::CloseDialog
+                | A::OpenPalette
+                | A::AddProject
+                | A::CreateWorkspace
+                | A::CreateTab
+                | A::OpenTransfer
+                | A::OpenSessions
+        ) {
+            self.pending_launch_review = false;
+            self.pending_context_inspection = false;
+        }
         match action {
             A::AddProject => self.product.dialog = Some(Dialog::new(DialogKind::AddProject)),
             A::CreateWorkspace => {
@@ -1436,6 +1472,49 @@ impl CanvasApp {
                     dialog.active_field = field.min(dialog.fields.len().saturating_sub(1));
                 }
             }
+            A::EditProjectContext => {
+                if let Some(scope) = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.selection.project_id)
+                {
+                    self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
+                }
+            }
+            A::InspectSessionContext => {
+                self.pending_context_inspection = true;
+                if let Some(view) = self.state.views.get(self.selected) {
+                    self.product_command(json!({"command":"get_session_context","session":view.session,"generation":view.generation}),cx);
+                }
+            }
+            A::RefreshLaunchPreview | A::ToggleMemory | A::ToggleContextDelivery => {
+                if self.product_launch_unknown {
+                    self.product.notice =
+                        Some("Сначала сверьте исход предыдущего запуска через «Сессии»".into());
+                } else if let Some(preview) = &self.product.launch_preview {
+                    let fields = self
+                        .product
+                        .dialog
+                        .as_ref()
+                        .filter(|dialog| dialog.kind == DialogKind::LaunchReview)
+                        .map(|dialog| dialog.fields.clone())
+                        .unwrap_or_default();
+                    let include_memory = if action == A::ToggleMemory {
+                        !preview.include_memory
+                    } else {
+                        preview.include_memory
+                    };
+                    let deliver_context = if action == A::ToggleContextDelivery {
+                        !preview.deliver_context
+                    } else {
+                        preview.deliver_context
+                    };
+                    self.product_command(json!({"command":"prepare_launch","request":{"tab":preview.tab_id,"provider":preview.provider,"side":preview.side,"target":preview.target,
+                        "role_override":fields.first().cloned().unwrap_or_default(),"agent_instructions":fields.get(1).cloned().unwrap_or_default(),"include_memory":include_memory,"deliver_context":deliver_context}}),cx);
+                }
+            }
+            A::ConfirmPreparedLaunch => self.confirm_prepared_launch(cx),
             A::EditContext => {
                 if let Some(scope) = self
                     .product
@@ -1532,6 +1611,11 @@ impl CanvasApp {
                             self.product_command(json!({"command":"catalog_apply","batch":{"projects":[],"workspaces":[],"tabs":[{"value":{"id":id,"workspace_id":workspace,"name":if field(0).trim().is_empty(){"Development"}else{field(0)},"layout_json":"null","active_pane":null,"revision":0},"expected_revision":null}],"selection":{"expected_revision":selection.revision,"value":selection},"layout":null}}),cx);
                         }
                     }
+                    DialogKind::ProjectContext => {
+                        if let Some(context) = &self.product.context {
+                            self.product_command(json!({"command":"save_context","expected_revision":context.revision,"document":{"scope_id":context.scope_id,"revision":context.revision,"instructions":field(0),"role":context.role,"memory":context.memory}}),cx);
+                        }
+                    }
                     DialogKind::Context => {
                         if let Some(context) = &self.product.context {
                             self.product_command(json!({"command":"save_context","expected_revision":context.revision,"document":{"scope_id":context.scope_id,"revision":context.revision,"instructions":field(0),"role":field(1),"memory":field(2)}}),cx);
@@ -1544,7 +1628,8 @@ impl CanvasApp {
                             self.product_action(action, window, cx);
                         }
                     }
-                    DialogKind::Transfer | DialogKind::Sessions => (),
+                    DialogKind::LaunchReview => self.confirm_prepared_launch(cx),
+                    DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
             A::Launch(provider) => self.launch_panel(provider, pigade_layout::Direction::Right, cx),
@@ -1606,15 +1691,44 @@ impl CanvasApp {
         if self.product.busy {
             return;
         }
-        let session = uuid::Uuid::new_v4();
-        let generation = uuid::Uuid::new_v4();
-        let command = json!({"command":"launch_in_tab","tab":tab,"provider":provider,
-            "session":session,"generation":generation,"operation":uuid::Uuid::new_v4(),
-            "side":side,"target":self.selected_pane().or(layout.focused)});
-        match self.product_tx.try_send(command) {
+        self.pending_launch_review = true;
+        self.product_command(json!({"command":"prepare_launch","request":{"tab":tab,"provider":provider,"side":side,
+            "target":self.selected_pane().or(layout.focused),"role_override":"","agent_instructions":"","include_memory":false,"deliver_context":provider != "shell"}}),cx);
+        cx.notify();
+    }
+
+    fn confirm_prepared_launch(&mut self, cx: &mut Context<Self>) {
+        if self.product.busy || self.product_launch_unknown {
+            return;
+        }
+        let Some(preview) = &self.product.launch_preview else {
+            return;
+        };
+        let Some(dialog) = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == product::DialogKind::LaunchReview)
+        else {
+            return;
+        };
+        if !preview.can_launch
+            || self.product.launch_phase.is_some()
+            || dialog.fields.first() != Some(&preview.role_override)
+            || dialog.fields.get(1) != Some(&preview.agent_instructions)
+        {
+            self.product.notice =
+                Some("Обновите просмотр после изменения параметров запуска".into());
+            cx.notify();
+            return;
+        }
+        match self
+            .product_tx
+            .try_send(json!({"command":"start_prepared","plan_id":preview.plan_id}))
+        {
             Ok(()) => {
                 self.product_launch_unknown = true;
-                self.pending_launch = Some((session, generation));
+                self.pending_launch = Some((preview.session, preview.generation));
                 self.product.busy = true;
                 self.product.notice = None;
             }
@@ -2393,6 +2507,25 @@ impl CanvasApp {
             return;
         }
         if self.product.dialog.is_some() {
+            if k.modifiers.control
+                && self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview)
+            {
+                let action = match k.key.as_str() {
+                    "r" => Some(product::ProductAction::RefreshLaunchPreview),
+                    "m" => Some(product::ProductAction::ToggleMemory),
+                    "d" => Some(product::ProductAction::ToggleContextDelivery),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    self.product_action(action, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+            }
             if k.modifiers.control && k.key == "v" {
                 let clipboard = cx.read_from_clipboard_async();
                 cx.spawn(async move |weak, cx| {

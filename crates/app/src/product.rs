@@ -3,7 +3,7 @@
 
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, div, prelude::InteractiveElement, px, rgb,
+    Stateful, StatefulInteractiveElement, Styled, div, prelude::InteractiveElement, px, rgb,
 };
 use pigade_storage::{Catalog, ContextDocument, Tab, Workspace, WorkspaceStatus};
 use std::collections::HashSet;
@@ -24,12 +24,18 @@ pub(super) enum ProductAction {
     OpenSessions,
     RefreshSessions,
     AttachSession(Uuid),
+    RefreshLaunchPreview,
+    ConfirmPreparedLaunch,
+    ToggleMemory,
+    ToggleContextDelivery,
+    InspectSessionContext,
     SelectProject(Uuid),
     SelectWorkspace(Uuid),
     SelectTab(Uuid),
     Launch(String),
     Layout(String),
     EditContext,
+    EditProjectContext,
     OpenPalette,
     CloseDialog,
     SubmitDialog,
@@ -43,6 +49,9 @@ pub(super) enum DialogKind {
     NewTab,
     Palette,
     Context,
+    ProjectContext,
+    LaunchReview,
+    SessionContext,
     Transfer,
     Sessions,
 }
@@ -55,6 +64,9 @@ impl DialogKind {
             Self::NewTab => "Новая вкладка",
             Self::Palette => "Команды PigADE",
             Self::Context => "Контекст воркспейса",
+            Self::ProjectContext => "Контекст проекта",
+            Self::LaunchReview => "Проверка запуска",
+            Self::SessionContext => "Контекст выбранной сессии",
             Self::Transfer => "Перенести панель",
             Self::Sessions => "Неразмещённые сессии",
         }
@@ -67,6 +79,9 @@ impl DialogKind {
             Self::NewTab => &["Название вкладки"],
             Self::Palette => &["Поиск команды"],
             Self::Context => &["Инструкции", "Роль", "Память"],
+            Self::ProjectContext => &["Инструкции проекта"],
+            Self::LaunchReview => &["Роль для запуска", "Дополнительные инструкции агенту"],
+            Self::SessionContext => &[],
             Self::Transfer => &[],
             Self::Sessions => &[],
         }
@@ -79,6 +94,9 @@ impl DialogKind {
             Self::NewTab => "Создать вкладку",
             Self::Palette => "Закрыть",
             Self::Context => "Сохранить ревизию",
+            Self::ProjectContext => "Сохранить ревизию",
+            Self::LaunchReview => "Подтвердить и запустить",
+            Self::SessionContext => "Закрыть",
             Self::Transfer => "Закрыть",
             Self::Sessions => "Закрыть",
         }
@@ -110,6 +128,8 @@ pub(super) struct ProductUi {
     pub(super) catalog: Option<Catalog>,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) launch_preview: Option<protocol::LaunchPreview>,
+    pub(super) launch_phase: Option<String>,
     pub(super) notice: Option<String>,
     pub(super) busy: bool,
     pub(super) dialog: Option<Dialog>,
@@ -222,11 +242,24 @@ fn session_state_label(state: &str) -> &'static str {
     }
 }
 
+fn capability_label(available: bool) -> &'static str {
+    if available {
+        "доступно"
+    } else {
+        "недоступно"
+    }
+}
+
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
         ("Добавить проект", ProductAction::AddProject),
         ("Новый воркспейс", ProductAction::CreateWorkspace),
         ("Контекст воркспейса", ProductAction::EditContext),
+        ("Контекст проекта", ProductAction::EditProjectContext),
+        (
+            "Контекст выбранной сессии",
+            ProductAction::InspectSessionContext,
+        ),
         ("Перенести панель", ProductAction::OpenTransfer),
         ("Сессии", ProductAction::OpenSessions),
         ("Новая вкладка", ProductAction::CreateTab),
@@ -267,6 +300,134 @@ fn multiline_lines(value: &str) -> Div {
         })
 }
 
+fn context_lines(value: &str) -> Div {
+    value.split('\n').fold(
+        div().w_full().flex().flex_col().items_start(),
+        |lines, line| {
+            lines.child(
+                div()
+                    .w_full()
+                    .whitespace_normal()
+                    .child(if line.is_empty() {
+                        " ".to_owned()
+                    } else {
+                        line.to_owned()
+                    }),
+            )
+        },
+    )
+}
+
+fn effective_context_blocks(
+    context: &pigade_storage::EffectiveContext,
+    id: &str,
+    accessible_name: &str,
+    max_height: f32,
+    catalog: Option<&Catalog>,
+) -> Stateful<Div> {
+    let colors = ProductColors::dark();
+    let mut blocks = div()
+        .id(id.to_owned())
+        .role(Role::List)
+        .aria_label(accessible_name)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .max_h(px(max_height))
+        .overflow_y_scroll();
+    if context.blocks.is_empty() {
+        return blocks.child(
+            div()
+                .id(format!("{id}-empty"))
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("Эффективный контекст пуст."),
+        );
+    }
+
+    for (index, block) in context.blocks.iter().enumerate() {
+        let source = match block.source.as_str() {
+            "project_instructions" => "Инструкции проекта",
+            "workspace_instructions" => "Инструкции воркспейса",
+            "task" => "Задача",
+            "workspace_default_role" | "role" => "Роль воркспейса",
+            "agent_role_override" => "Роль этой сессии",
+            "workspace_memory" => "Выбранная память",
+            "agent_instructions" => "Инструкции этой сессии",
+            other => other,
+        };
+        let scope = if block.scope_id == context.id {
+            "Эта сессия".to_owned()
+        } else {
+            catalog
+                .and_then(|catalog| {
+                    catalog
+                        .projects
+                        .iter()
+                        .find(|project| project.id == block.scope_id)
+                        .map(|project| project.name.clone())
+                        .or_else(|| {
+                            catalog
+                                .workspaces
+                                .iter()
+                                .find(|workspace| workspace.id == block.scope_id)
+                                .map(workspace_name)
+                        })
+                })
+                .unwrap_or_else(|| "Сохранённый источник".into())
+        };
+        let heading = format!("{source} · {scope} · ревизия {}", block.revision);
+        blocks = blocks.child(
+            div()
+                .id(format!("{id}-block-{index}"))
+                .role(Role::Group)
+                .aria_label(heading.clone())
+                .flex()
+                .flex_col()
+                .gap_1()
+                .rounded(px(7.))
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.base)
+                .p(px(10.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(colors.accent)
+                        .child(heading),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(colors.text)
+                        .child(context_lines(&block.text)),
+                ),
+        );
+    }
+    blocks
+}
+
+fn launch_phase_label(phase: Option<&str>) -> &'static str {
+    match phase {
+        Some("prepared") => "Подготовлен, запуск ещё не подтверждён",
+        Some("attempting") => "Попытка начата; подтверждения нет",
+        Some("unknown") => "Исход запуска неизвестен",
+        Some("delivered_unconfirmed") => "Параметры запуска переданы; применение не подтверждено",
+        Some("not_requested") => "Контекст не запрашивался",
+        _ => "Фаза запуска неизвестна",
+    }
+}
+
+fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
+    match kind {
+        DialogKind::Context => index != 1,
+        DialogKind::ProjectContext => true,
+        DialogKind::LaunchReview => index == 1,
+        _ => false,
+    }
+}
+
 impl ProductUi {
     pub(super) fn palette_action(&self) -> Option<ProductAction> {
         let dialog = self.dialog.as_ref()?;
@@ -294,10 +455,10 @@ impl ProductUi {
             return;
         };
         const MAX_FIELD_BYTES: usize = 16 * 1024;
-        let multiline_context = dialog.kind == DialogKind::Context;
+        let accepts_newlines = dialog_field_multiline(dialog.kind, dialog.active_field);
         if text
             .chars()
-            .any(|character| character.is_control() && !(multiline_context && character == '\n'))
+            .any(|character| character.is_control() && !(accepts_newlines && character == '\n'))
             || field.len().saturating_add(text.len()) > MAX_FIELD_BYTES
         {
             return;
@@ -408,6 +569,24 @@ impl ProductUi {
             },
             cx,
         ));
+        if self
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.selection.project_id.is_some())
+        {
+            controls = controls.child(self.action_control_with_accessible_name(
+                "edit-project-context".into(),
+                "Контекст проекта".into(),
+                "Просмотреть контекст выбранного проекта".into(),
+                ProductAction::EditProjectContext,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            ));
+        }
         controls = controls.child(self.action_control(
             "new-workspace".into(),
             "+  Новый воркспейс".into(),
@@ -835,6 +1014,12 @@ impl ProductUi {
 
     fn dialog_overlay(&self, dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
+        if dialog.kind == DialogKind::LaunchReview {
+            return self.launch_review_overlay(dialog, cx);
+        }
+        if dialog.kind == DialogKind::SessionContext {
+            return self.session_context_overlay(cx);
+        }
         if dialog.kind == DialogKind::Palette {
             return self.palette_overlay(dialog, cx);
         }
@@ -849,7 +1034,7 @@ impl ProductUi {
         for (index, label) in dialog.kind.fields().iter().enumerate() {
             let value = dialog.fields.get(index).map(String::as_str).unwrap_or("");
             let active = index == dialog.active_field;
-            let multiline = dialog.kind == DialogKind::Context && index != 1;
+            let multiline = dialog_field_multiline(dialog.kind, index);
             let shown = if value.is_empty() {
                 if active {
                     format!("{label}…▏")
@@ -890,7 +1075,10 @@ impl ProductUi {
             fields = fields.child(field);
         }
 
-        if dialog.kind == DialogKind::Context {
+        if matches!(
+            dialog.kind,
+            DialogKind::Context | DialogKind::ProjectContext
+        ) {
             fields = fields.child(
                 div()
                     .id("context-revision-note")
@@ -979,6 +1167,484 @@ impl ProductUi {
                             .child(close)
                             .child(submit),
                     ),
+            )
+            .into_any_element()
+    }
+
+    fn launch_review_overlay(&self, dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let preview = self.launch_preview.as_ref();
+        let role_override = dialog.fields.first().map(String::as_str).unwrap_or("");
+        let agent_instructions = dialog.fields.get(1).map(String::as_str).unwrap_or("");
+        let fields_match = preview.is_some_and(|preview| {
+            preview.role_override == role_override
+                && preview.agent_instructions == agent_instructions
+        });
+        let can_confirm = preview.is_some_and(|preview| preview.can_launch)
+            && fields_match
+            && self.launch_phase.is_none()
+            && !self.busy;
+
+        let mut metadata = div()
+            .id("launch-review-metadata")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .text_size(px(12.))
+            .text_color(colors.muted);
+        let mut context_blocks = div()
+            .id("launch-review-context-blocks")
+            .role(Role::List)
+            .aria_label("Блоки эффективного контекста")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .max_h(px(240.))
+            .overflow_y_scroll();
+        let mut warnings = div().id("launch-review-warnings").flex().flex_col().gap_1();
+        let mut status = None;
+        let mut preview_controls = div()
+            .id("launch-review-controls")
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .mt(px(12.));
+
+        if let Some(preview) = preview {
+            let target = self
+                .catalog
+                .as_ref()
+                .and_then(|catalog| {
+                    let tab = catalog.tabs.iter().find(|tab| tab.id == preview.tab_id)?;
+                    let workspace = catalog
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.id == tab.workspace_id)?;
+                    Some(format!("{} · {}", workspace_name(workspace), tab.name))
+                })
+                .unwrap_or_else(|| preview.tab_id.to_string());
+            metadata = metadata
+                .child(format!(
+                    "{} · CLI {} · адаптер v{}",
+                    preview.provider, preview.cli_version, preview.adapter_version
+                ))
+                .child(format!("Цель: {target} · план {}", preview.plan_id))
+                .child(match preview.target {
+                    Some(pane) => format!(
+                        "Размещение: {} от панели {}",
+                        match preview.side {
+                            pigade_layout::Direction::Left => "слева",
+                            pigade_layout::Direction::Right => "справа",
+                            pigade_layout::Direction::Up => "сверху",
+                            pigade_layout::Direction::Down => "снизу",
+                        },
+                        &pane.to_string()[..8]
+                    ),
+                    None => "Размещение: первая панель во вкладке".into(),
+                })
+                .child(format!("Способ доставки: {}", preview.delivery_method))
+                .child(format!(
+                    "Эффективный контекст · сборка {} · {}",
+                    preview.context.id, preview.context.content_hash
+                ))
+                .child(format!(
+                    "Нативное продолжение: {} · ID беседы: {}",
+                    capability_label(preview.capabilities.native_resume),
+                    capability_label(preview.capabilities.conversation_id)
+                ));
+            context_blocks = effective_context_blocks(
+                &preview.context,
+                "launch-review-context-blocks",
+                "Блоки эффективного контекста",
+                240.,
+                self.catalog.as_ref(),
+            );
+
+            let memory_label = if preview.include_memory {
+                "Память включена"
+            } else {
+                "Память выключена"
+            };
+            preview_controls = preview_controls.child(self.action_control(
+                "launch-review-memory".into(),
+                memory_label.into(),
+                ProductAction::ToggleMemory,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: preview.include_memory,
+                    compact: true,
+                },
+                cx,
+            ));
+
+            if preview.capabilities.startup_context || preview.deliver_context {
+                let delivery_label = if preview.deliver_context {
+                    "Запуск без контекста"
+                } else {
+                    "Передать контекст"
+                };
+                preview_controls = preview_controls.child(self.action_control(
+                    "launch-review-delivery".into(),
+                    delivery_label.into(),
+                    ProductAction::ToggleContextDelivery,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: preview.deliver_context,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            } else {
+                let reason = preview
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("Этот адаптер не поддерживает передачу контекста при запуске.");
+                status = Some(format!("Контекст не будет передан: {reason}"));
+            }
+
+            warnings = warnings.child(
+                div()
+                    .id("launch-review-unconfirmed")
+                    .role(Role::Status)
+                    .text_size(px(12.))
+                    .text_color(colors.accent)
+                    .child("Предпросмотр не подтверждает, что CLI применил контекст."),
+            );
+            if preview.capabilities.context_receipt {
+                warnings = warnings.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child("Для этого адаптера доступно подтверждение доставки; применение всё равно не считается подтверждённым этим экраном."),
+                );
+            }
+            if let Some(reason) = &preview.unavailable_reason {
+                status = Some(reason.clone());
+            }
+            for (index, warning) in preview.warnings.iter().enumerate() {
+                warnings = warnings.child(
+                    div()
+                        .id(format!("launch-review-warning-{index}"))
+                        .role(Role::Status)
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(warning.clone()),
+                );
+            }
+            if !fields_match {
+                status = Some("Поля изменены. Обновите предпросмотр перед запуском.".into());
+            } else if !preview.can_launch {
+                status = Some(
+                    preview
+                        .unavailable_reason
+                        .clone()
+                        .unwrap_or_else(|| "Запуск сейчас недоступен.".into()),
+                );
+            }
+        } else {
+            metadata = metadata.child("Предпросмотр запуска ещё не загружен.");
+            context_blocks = context_blocks.child(
+                div()
+                    .id("launch-context-not-loaded")
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child("Обновите предпросмотр, чтобы проверить эффективный контекст и параметры запуска."),
+            );
+            status = Some("Запуск недоступен без актуального предпросмотра.".into());
+        }
+
+        let role = role_override.to_owned();
+        let instructions = agent_instructions.to_owned();
+        let fields = [
+            (0usize, "Роль для запуска", role),
+            (1usize, "Дополнительные инструкции агенту", instructions),
+        ]
+        .into_iter()
+        .fold(
+            div().flex().flex_col().gap_2().mt(px(12.)),
+            |container, (index, label, value)| {
+                let active = index == dialog.active_field;
+                let shown = if value.is_empty() {
+                    if active {
+                        format!("{label}…▏")
+                    } else {
+                        format!("{label}…")
+                    }
+                } else if active {
+                    format!("{value}▏")
+                } else {
+                    value
+                };
+                container.child(
+                    div()
+                        .id(format!("launch-review-field-{index}"))
+                        .role(Role::TextInput)
+                        .aria_label(label)
+                        .w_full()
+                        .h(px(if index == 1 { 76. } else { 40. }))
+                        .overflow_y_scroll()
+                        .px(px(10.))
+                        .flex()
+                        .items_start()
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(if active { colors.accent } else { colors.border })
+                        .bg(colors.base)
+                        .text_color(if shown.is_empty() {
+                            colors.muted
+                        } else {
+                            colors.text
+                        })
+                        .child(context_lines(&shown))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.product_action(ProductAction::EditField(index), window, cx);
+                            cx.stop_propagation();
+                        })),
+                )
+            },
+        );
+
+        if let Some(message) = status {
+            warnings = warnings.child(
+                div()
+                    .id("launch-review-status")
+                    .role(Role::Status)
+                    .mt(px(8.))
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(message),
+            );
+        }
+
+        warnings = warnings.child(
+            div()
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child("Ctrl+R — обновить · Ctrl+M — память · Ctrl+D — контекст · Enter — запуск"),
+        );
+        let refresh = self.action_control(
+            "launch-review-refresh".into(),
+            "Обновить предпросмотр".into(),
+            ProductAction::RefreshLaunchPreview,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let confirm = if can_confirm {
+            self.action_control(
+                "launch-review-confirm".into(),
+                "Подтвердить и запустить".into(),
+                ProductAction::ConfirmPreparedLaunch,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: true,
+                    compact: true,
+                },
+                cx,
+            )
+        } else {
+            div()
+                .id("launch-review-confirm-unavailable")
+                .role(Role::Status)
+                .aria_label("Запуск недоступен")
+                .h(px(28.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .bg(colors.base)
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("Подтвердить и запустить")
+                .into_any_element()
+        };
+        let close = self.action_control(
+            "launch-review-close".into(),
+            "Отмена".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+
+        div()
+            .id("launch-review-overlay")
+            .accessibility_id("launch-review-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(18.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx);
+            }))
+            .child(
+                div()
+                    .id("launch-review-sheet")
+                    .role(Role::Dialog)
+                    .aria_label(DialogKind::LaunchReview.title())
+                    .w_full()
+                    .max_w(px(760.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(18.))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("launch-review-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Проверьте запуск до старта"),
+                    )
+                    .child(metadata)
+                    .child(preview_controls)
+                    .child(fields)
+                    .child(
+                        div()
+                            .id("launch-review-context-heading")
+                            .role(Role::Heading)
+                            .aria_level(3)
+                            .mt(px(14.))
+                            .mb(px(6.))
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(colors.text)
+                            .child("Эффективный контекст · блоки по порядку"),
+                    )
+                    .child(context_blocks)
+                    .child(warnings)
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .mt(px(16.))
+                            .child(close)
+                            .child(refresh)
+                            .child(confirm),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn session_context_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let mut content = div().flex().flex_col().gap_2();
+        if let Some(preview) = &self.launch_preview {
+            content = content
+                .child(format!(
+                    "{} · CLI {} · адаптер v{}",
+                    preview.provider, preview.cli_version, preview.adapter_version
+                ))
+                .child(format!("Фаза: {}", launch_phase_label(self.launch_phase.as_deref())))
+                .child(format!("Способ доставки: {}", preview.delivery_method))
+                .child(format!(
+                    "Сохранённый контекст · сборка {} · {}",
+                    preview.context.id, preview.context.content_hash
+                ))
+                .child(format!(
+                    "Сессия {} · поколение {}",
+                    preview.session, preview.generation
+                ))
+                .child(
+                    div()
+                        .id("session-context-readonly-note")
+                        .role(Role::Status)
+                        .text_size(px(11.))
+                        .text_color(colors.accent)
+                        .child("Это сохранённый контекст запуска; редактирование не меняет активную сессию."),
+                )
+                .child(effective_context_blocks(
+                    &preview.context,
+                    "session-context-blocks",
+                    "Сохранённые блоки контекста сессии",
+                    420.,
+                    self.catalog.as_ref(),
+                ));
+        } else {
+            content = content.child(
+                div()
+                    .id("session-context-unavailable")
+                    .role(Role::Status)
+                    .text_color(colors.muted)
+                    .child("Для выбранной сессии сохранённый контекст недоступен."),
+            );
+        }
+
+        let close = self.action_control(
+            "session-context-close".into(),
+            "Закрыть".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("session-context-overlay")
+            .accessibility_id("session-context-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(18.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx);
+            }))
+            .child(
+                div()
+                    .id("session-context-sheet")
+                    .role(Role::Dialog)
+                    .aria_label(DialogKind::SessionContext.title())
+                    .w_full()
+                    .max_w(px(760.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(18.))
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("session-context-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Сохранённый контекст сессии"),
+                    )
+                    .child(content)
+                    .child(div().flex().justify_end().mt(px(8.)).child(close)),
             )
             .into_any_element()
     }

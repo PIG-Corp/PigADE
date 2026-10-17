@@ -7,6 +7,7 @@ mod catalog;
 mod context;
 mod journal;
 mod launch;
+mod prepared_launch;
 
 pub use catalog::*;
 pub use context::*;

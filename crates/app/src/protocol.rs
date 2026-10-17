@@ -178,9 +178,46 @@ struct Response {
     catalog: Option<pigade_storage::Catalog>,
     #[serde(default)]
     context: Option<pigade_storage::ContextDocument>,
+    #[serde(default)]
+    launch_preview: Option<LaunchPreview>,
+    #[serde(default)]
+    launch_phase: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AdapterCapabilities {
+    pub startup_context: bool,
+    pub context_receipt: bool,
+    pub native_resume: bool,
+    pub conversation_id: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LaunchPreview {
+    pub plan_id: uuid::Uuid,
+    pub tab_id: uuid::Uuid,
+    pub side: pigade_layout::Direction,
+    pub target: Option<uuid::Uuid>,
+    pub session: uuid::Uuid,
+    pub generation: uuid::Uuid,
+    pub provider: String,
+    pub cli_version: String,
+    pub adapter_version: u32,
+    pub delivery_method: String,
+    pub context: pigade_storage::EffectiveContext,
+    pub capabilities: AdapterCapabilities,
+    pub include_memory: bool,
+    pub role_override: String,
+    pub agent_instructions: String,
+    pub deliver_context: bool,
+    pub can_launch: bool,
+    pub unavailable_reason: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 pub struct ProductReply {
+    pub launch_preview: Option<LaunchPreview>,
+    pub launch_phase: Option<String>,
     pub sessions: Option<Vec<View>>,
     pub launch_confirmed: bool,
     pub catalog: Option<pigade_storage::Catalog>,
@@ -194,7 +231,7 @@ pub struct ProductError {
 
 pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
     let command_name = command.get("command").and_then(Value::as_str);
-    let launch_confirmed = command_name == Some("launch_in_tab");
+    let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
     let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
         .map_err(|message| ProductError {
@@ -204,11 +241,13 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
     if let Some(message) = response.error {
         return Err(ProductError {
             message,
-            rejected_before_launch: response.rejected_before_admission.as_deref()
-                == Some("launch_preflight"),
+            rejected_before_launch: launch_confirmed
+                && response.rejected_before_admission.as_deref() == Some("launch_preflight"),
         });
     }
     Ok(ProductReply {
+        launch_preview: response.launch_preview,
+        launch_phase: response.launch_phase,
         sessions: list_sessions.then_some(response.views),
         launch_confirmed,
         catalog: response.catalog,
@@ -533,6 +572,8 @@ mod tests {
             protocol: 2,
             catalog: None,
             context: None,
+            launch_preview: None,
+            launch_phase: None,
             views: Vec::new(),
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),

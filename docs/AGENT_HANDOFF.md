@@ -2,7 +2,7 @@
 
 ## Current product priority — 2026-10-17
 
-The user prioritizes usable product implementation over additional diagnostics, benchmarks and reports. Follow AGENTS.md; existing terminal/platform limits remain open, but do not postpone UI work behind them. Native product chrome is now connected to catalog/storage/real PTYs: projects, shared/worktree workspaces, tabs, context revision editing, CLI launch, palette, layout controls and cross-workspace transfer. `product.rs` owns chrome, `tiling.rs` the pure resize helpers; main.rs connects the existing cell canvas. Default app startup now starts/reuses an independent private host; explicit socket mode stays available. The Sessions picker restores unplaced sessions without launching a process, and exact-generation reconciliation clears a pending launch only for confirmed running/exited/history states. Context delivery/adapters, complete editing/accessibility/theme support and packaging are still pending. Layout operations never spawn a process; uncertain launch remains locked. Do not infer completed MVP from these features.
+The user prioritizes usable product implementation over additional diagnostics, benchmarks and reports. Follow AGENTS.md; existing terminal/platform limits remain open, but do not postpone UI work behind them. Native product chrome is now connected to catalog/storage/real PTYs: projects, shared/worktree workspaces, tabs, context revision editing, CLI launch, palette, layout controls and cross-workspace transfer. `product.rs` owns chrome, `tiling.rs` the pure resize helpers; main.rs connects the existing cell canvas. Default app startup now starts/reuses an independent private host; explicit socket mode stays available. The Sessions picker restores unplaced sessions without launching a process, and exact-generation reconciliation clears a pending launch only for confirmed running/exited/history states. Reviewed startup context now freezes project/workspace instructions, task, role override, explicitly selected memory and agent instructions, with SHA-256/source revisions. LaunchReview supports editing, refresh, explicit context/memory toggles and confirm; the palette opens project instructions and saved session context. Claude2.1.259 uses --append-system-prompt, Codex0.162.1 uses a session developer_instructions override (shown in review); both report delivered_unconfirmed, never applied. OpenCode/unknown versions require explicit launch without context. Exact OpenCode1.18.22 instruction merging remains unverified and the installed binary has changed to1.19.3. Storage schema5 adds hash/time/author (legacy timestamps stay unknown) and create-only reviewed launch plans with a durable attempt lock. Provider receipts, native resume/conversation binding, updates to running sessions, memory section selection, complete editing/accessibility/theme support and packaging remain pending. Layout operations never spawn a process; uncertain launch remains locked. Do not infer completed MVP from these features.
 
 
 ## Current task and boundaries
@@ -57,9 +57,9 @@ injection, `--last`, automatic repeated task or silent new conversation.
 - Two asynchronous history workers, queue4 and64KiB response chunks expose exact
   canonical ranges without blocking the host command thread. Product history
   paging/search/scrolling and storage quotas/compression remain unfinished.
-- SQLite catalog schema3, migration backups/CAS and the pure layout model support
+- SQLite catalog schema5, migration backups/CAS and the pure layout model support
   stable pane IDs, split/move/swap/transfer/resize/equalize/rotate/focus and100
-  persistent undo/redo. Full hierarchy and tiling UI are still pending.
+  persistent undo/redo. Hierarchy and tiling are connected to the native UI; full editing/accessibility/theme support remains pending.
 - GPUI commit322cd509dcccaee1f6bc44725d270598ae8171ad is pinned/hashed; Linux
   Wayland+X11 builds use a separate compatible Cargo workspace. Bootstrap now
   applies the exact `pigade-x11-ime-focus-v1` X11 lifecycle profile with guarded

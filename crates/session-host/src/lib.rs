@@ -1,4 +1,5 @@
 //! Linux prototype: authenticated local IPC and durable, per-generation terminal actors.
+mod adapters;
 mod catalog;
 pub mod changes;
 #[doc(hidden)]
@@ -7,6 +8,7 @@ pub mod history;
 pub mod history_read;
 pub mod input;
 mod panel_launch;
+mod prepared;
 mod projects;
 pub use catalog::LayoutAction;
 mod ipc_server;
@@ -40,6 +42,8 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
+pub use adapters::Capabilities as AdapterCapabilities;
+pub use prepared::{LaunchPreview, PrepareRequest};
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
@@ -91,6 +95,8 @@ pub struct Launch {
     pub operation: Uuid,
     pub executable: PathBuf,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
     pub cwd: PathBuf,
     pub geometry: Geometry,
 }
@@ -119,6 +125,16 @@ pub enum Command {
     SaveContext {
         document: pigade_storage::ContextDocument,
         expected_revision: u64,
+    },
+    PrepareLaunch {
+        request: prepared::PrepareRequest,
+    },
+    StartPrepared {
+        plan_id: Uuid,
+    },
+    GetSessionContext {
+        session: Uuid,
+        generation: Uuid,
     },
     LaunchInTab {
         tab: Uuid,
@@ -204,6 +220,10 @@ pub struct Response {
     pub catalog: Option<pigade_storage::Catalog>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<pigade_storage::ContextDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_preview: Option<prepared::LaunchPreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_notice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -646,6 +666,8 @@ impl Host {
                 rejected_before_admission: None,
                 catalog: None,
                 context: None,
+                launch_preview: None,
+                launch_phase: None,
                 catalog_notice: self.catalog_notice.clone(),
                 recovery: self.recovery.response(),
                 selected: Some(result.selected),
@@ -683,12 +705,36 @@ impl Host {
                 rejected_before_admission: None,
                 catalog: None,
                 context: Some(context),
+                launch_preview: None,
+                launch_phase: None,
                 catalog_notice: None,
                 recovery: None,
                 selected: None,
                 history_chunk: None,
                 change_token: None,
             });
+        }
+        match &command {
+            Command::PrepareLaunch { request } => {
+                let preview = prepared::prepare(self, request.clone())?;
+                return Ok(self.launch_response(None, preview, None));
+            }
+            Command::StartPrepared { plan_id } => {
+                let (catalog, preview) = prepared::start(self, *plan_id)?;
+                let phase = self
+                    .metadata
+                    .prepared_launch(*plan_id)?
+                    .map(|(_, phase)| phase);
+                return Ok(self.launch_response(Some(catalog), preview, phase));
+            }
+            Command::GetSessionContext {
+                session,
+                generation,
+            } => {
+                let (preview, phase) = prepared::session_context(self, *session, *generation)?;
+                return Ok(self.launch_response(None, preview, Some(phase)));
+            }
+            _ => (),
         }
         let catalog = match command {
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
@@ -724,6 +770,8 @@ impl Host {
                     rejected_before_admission: None,
                     catalog: None,
                     context: None,
+                    launch_preview: None,
+                    launch_phase: None,
                     catalog_notice: None,
                     recovery: self.recovery.response(),
                     selected: None,
@@ -739,12 +787,36 @@ impl Host {
             rejected_before_admission: None,
             catalog: Some(catalog),
             context: None,
+            launch_preview: None,
+            launch_phase: None,
             catalog_notice: self.catalog_notice.clone(),
             recovery: self.recovery.response(),
             selected: None,
             history_chunk: None,
             change_token: None,
         })
+    }
+    fn launch_response(
+        &self,
+        catalog: Option<pigade_storage::Catalog>,
+        preview: prepared::LaunchPreview,
+        phase: Option<String>,
+    ) -> Response {
+        Response {
+            protocol: PROTOCOL,
+            views: Vec::new(),
+            error: None,
+            rejected_before_admission: None,
+            catalog,
+            context: None,
+            launch_preview: Some(preview),
+            launch_phase: phase,
+            catalog_notice: None,
+            recovery: self.recovery.response(),
+            selected: None,
+            history_chunk: None,
+            change_token: None,
+        }
     }
     fn open(root: PathBuf) -> Result<Self> {
         private_directory(&root)?;
@@ -938,8 +1010,23 @@ impl Host {
             "cwd unavailable"
         );
         ensure!(
-            spec.args.len() <= 128 && spec.args.iter().map(String::len).sum::<usize>() <= 16384,
+            spec.args.len() <= 128
+                && spec
+                    .args
+                    .iter()
+                    .all(|arg| !arg.contains('\0') && arg.len() <= 96 * 1024)
+                && spec.args.iter().map(String::len).sum::<usize>() <= 128 * 1024,
             "argv exceeds bounds"
+        );
+        ensure!(
+            spec.env.len() <= 1
+                && spec
+                    .env
+                    .iter()
+                    .all(|(name, value)| name == "OPENCODE_CONFIG_CONTENT"
+                        && !value.contains('\0')
+                        && value.len() <= 64 * 1024),
+            "unsupported or oversized session environment"
         );
         if let Some(existing) = self.metadata.get_launch(spec.operation)? {
             ensure!(
@@ -985,6 +1072,9 @@ impl Host {
         builder.cwd(&spec.cwd);
         builder.env("TERM", "xterm-256color");
         builder.env("COLORTERM", "truecolor");
+        for (name, value) in &spec.env {
+            builder.env(name, value);
+        }
         let mut child = pair.slave.spawn_command(builder)?;
         drop(pair.slave);
         let child_pid = child.process_id().context("helper pid unavailable")?;
@@ -1866,6 +1956,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 rejected_before_admission: rejected_before_admission(&error),
                 catalog: None,
                 context: None,
+                launch_preview: None,
+                launch_phase: None,
                 catalog_notice: host.catalog_notice.clone(),
                 recovery: host.recovery.response(),
                 selected: None,

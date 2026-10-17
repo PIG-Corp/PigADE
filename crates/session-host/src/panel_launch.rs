@@ -30,7 +30,7 @@ pub(crate) fn rejected_before_spawn(error: &anyhow::Error) -> bool {
     error.downcast_ref::<LaunchPreflightRejected>().is_some()
 }
 
-fn mark_preflight<T>(result: Result<T>) -> Result<T> {
+pub(crate) fn mark_preflight<T>(result: Result<T>) -> Result<T> {
     result.map_err(|error| error.context(LaunchPreflightRejected))
 }
 
@@ -93,6 +93,7 @@ pub(crate) fn launch_in_tab(
 
     let views = host
         .launch(Launch {
+            env: Default::default(),
             session,
             generation,
             operation,
@@ -119,7 +120,7 @@ pub(crate) fn launch_in_tab(
     )
 }
 
-fn resolve_provider(provider: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_provider(provider: &str) -> Result<PathBuf> {
     match provider {
         "shell" => {
             if let Some(shell) = env::var_os("SHELL")

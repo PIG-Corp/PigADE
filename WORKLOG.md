@@ -2089,3 +2089,107 @@ Add standalone app startup and restore unplaced sessions without relaunching CLI
 - Files: AGENTS.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, crates/app/src/startup.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs
 - Verification: Bootstrap app strict clippy and build passed. Focused real-host startup test passed: owned stale private endpoint recovered under host locks, second resolution reused host, no CLI sessions created, exact Child cleaned up. Earlier 130 app tests and native render/reopen passed at f785093. Version check and diff check passed.
 - Risks / next: Continue context preview/delivery through capability-checked adapters, full text editing/themes, scrollable minimum-size canvas and native interaction verification. Git worktree creation still executes on the host dispatcher; move it to bounded background preparation before claiming responsive concurrent-worktree acceptance. Remaining MVP release gates remain open. Use bootstrap only to avoid rebuilding the GPUI graph under alternate Cargo homes.
+
+## 2026-10-17T13:35:26+00:00 — terminal_memory_budget
+
+Added bounded version-gated startup-context adapter transports for the pinned Claude, Codex, and OpenCode CLIs.
+
+- Files: crates/session-host/src/adapters.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/adapters.rs; git diff --check -- crates/session-host/src/adapters.rs; CARGO_HOME=$HOME/.cache/pigade/cargo cargo test -p pigade-session-host --lib adapters::tests --no-fail-fast (crate compiled, 0 tests matched because lib.rs adapter module registration remains with root)
+- Risks / next: Root should register mod adapters and rerun the focused module tests; no CLI/provider was launched.
+
+## 2026-10-17T13:36:08+00:00 — terminal_memory_budget
+
+Clarified that startup_context means a documented version-specific transport only, not confirmed model application.
+
+- Files: crates/session-host/src/adapters.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/adapters.rs; git diff --check -- crates/session-host/src/adapters.rs; official docs and installed help fixtures reviewed read-only; no CLI was launched
+- Risks / next: Transport delivery remains unacknowledged; full startup-context behavior needs product-level receipt verification.
+
+## 2026-10-17T13:36:13+00:00 — recovery_slice_review
+
+Add context provenance/effective snapshots and prepared launch persistence
+
+- Files: crates/storage/src/context.rs, crates/storage/src/prepared_launch.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage --offline --locked context::tests (4 passed); cargo test -p pigade-storage --offline --locked prepared_launch::tests (1 passed); rustfmt --edition 2024 --check on owned Rust files and git diff --check on owned files passed. Full storage suite: unrelated stale catalog v4 assertion failed first and poisoned shared test lock. Workspace fmt check also reports concurrent session-host formatting outside owned files.
+- Risks / next: Root to update remaining schema version assertions; rerun full storage suite after that. Root integrates exports/migration wiring.
+
+## 2026-10-17T13:37:14+00:00 — recovery_slice_review
+
+Add prepared launch lookup by exact session generation
+
+- Files: crates/storage/src/prepared_launch.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage --offline --locked prepared_launch::tests (1 passed); rustfmt --edition 2024 --check on prepared_launch.rs and git diff --check passed
+- Risks / next: Root can use the lookup to recover persisted context snapshots by session and generation.
+
+## 2026-10-17T13:37:55+00:00 — /root/font_render_profile
+
+Added launch review sheet with effective context provenance, ordered scrollable blocks, explicit delivery/memory controls, and gated confirmation; added project-context entry point in sidebar and palette.
+
+- Files: crates/app/src/product.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs; git diff --check -- crates/app/src/product.rs (pass). App build deferred: main.rs has not yet wired new launch actions/preview dialog.
+- Risks / next: Root to wire Launch preview/confirmation actions and initialize review fields from preview; then run pinned app build/clippy/tests and visually inspect sheet.
+
+## 2026-10-17T13:38:01+00:00 — terminal_memory_budget
+
+Made CLI version probing nonblocking and deadline-bounded even when descendants inherit output descriptors.
+
+- Files: crates/session-host/src/adapters.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/adapters.rs; git diff --check -- crates/session-host/src/adapters.rs; focused Cargo tests pending module registration by root
+- Risks / next: Root should register the module and run the focused adapter tests; probe now returns without pipe EOF and signals only the exact direct child on timeout.
+
+## 2026-10-17T13:39:21+00:00 — /root/font_render_profile
+
+Added a read-only saved session-context dialog with launch phase, delivery method, context ID/hash, and ordered scrollable blocks; exposed it in the command palette.
+
+- Files: crates/app/src/product.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs; git diff --check -- crates/app/src/product.rs (pass). Cargo not run per task instruction.
+- Risks / next: Root to wire InspectSessionContext host query and populate launch_preview/launch_phase; verify in the integrated app.
+
+## 2026-10-17T13:42:31+00:00 — /root/font_render_profile
+
+Fixed launch/session context element typing and heading accessibility; added project-scoped context editor with a single multiline instructions field.
+
+- Files: crates/app/src/product.rs, WORKLOG.md
+- Verification: PIGADE_GPUI_CACHE=/tmp/pigade-gpui-source-check PIGADE_GPUI_CARGO_HOME=/tmp/pigade-gpui-cargo PIGADE_GPUI_TARGET_DIR=/tmp/pigade-gpui-source-check/target crates/app/bootstrap.sh check --locked --offline (pass); rustfmt --edition 2024 --check crates/app/src/product.rs (pass); git diff --check -- crates/app/src/product.rs (pass).
+- Risks / next: Root owns host and main action integration; run app clippy/tests and review project-context save semantics after full integration.
+
+## 2026-10-17T13:44:18+00:00 — recovery_slice_review
+
+Add real-host integration test for immutable prepared context launch and reopen
+
+- Files: crates/session-host/tests/context_launch.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host --offline --locked --test context_launch (1 passed); rustfmt --edition 2024 and git diff --check on owned test file passed
+- Risks / next: Root can run the broader session-host suite and integrate the test.
+
+## 2026-10-17T13:52:19+00:00 — terminal_memory_budget
+
+Changed OpenCode startup context to an instruction-file reference that leaves the native agent intact and preserves any existing inline configuration.
+
+- Files: crates/session-host/src/adapters.rs
+- Verification: Official OpenCode docs reviewed (instructions path array; config inline precedence; current instructions docs specify config documents combine); installed help fixture reviewed; rustfmt --edition 2024 crates/session-host/src/adapters.rs; git diff --check -- crates/session-host/src/adapters.rs; no Cargo command per root instruction
+- Risks / next: Root must update Launch adapter call site to provide a generation-owned absolute context file and rerun focused tests; exact OpenCode 1.18.22 instructions-option behavior is not separately demonstrated by the captured help fixture.
+
+## 2026-10-17T13:55:41+00:00 — recovery_slice_review
+
+Validate canonical effective-context snapshots before use
+
+- Files: crates/storage/src/context.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage --offline --locked context::tests (4 passed); rustfmt --edition 2024 and git diff --check on owned file passed
+- Risks / next: Root can use EffectiveContext::validate at provider/UI boundaries as needed.
+
+## 2026-10-17T13:58:28+00:00 — /root
+
+Integrate reviewed startup context, immutable session snapshots and durable launch attempt locking
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/adapters.rs, crates/session-host/src/prepared.rs, crates/session-host/src/lib.rs, crates/storage/src/context.rs, crates/storage/src/prepared_launch.rs, crates/storage/src/launch.rs, Cargo.lock, crates/app/Cargo.lock, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
+- Verification: Workspace and app strict Clippy pass; storage context tests 4/4; adapter tests 6/6 including actual timeout; real-host PTY context launch/reopen test 1/1; prior integrated app tests 132/132; release host and bootstrap app builds pass; fmt, diff check and version alignment pass; binaries report 0.0.1-dev
+- Risks / next: OpenCode startup context disabled: exact frozen version unavailable for instruction-merge verification. No model receipt/native resume claimed. New context dialogs lack isolated visual acceptance; memory section selection and complete text editing remain open.
+
+## 2026-10-17T13:59:50+00:00 — /root
+
+Fix launch-review no-context fallback and expose keyboard controls and split destination
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs
+- Verification: After bounded Luna review: app strict Clippy passes and 132 tests pass; host context integration test passes after saved placement validation; diff/fmt checked
+- Risks / next: Context review remains pending isolated visual acceptance; no active-desktop automation performed.
