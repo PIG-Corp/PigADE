@@ -41,3 +41,5 @@
 This section describes development work; it is not a release announcement.
 
 - Typed host cursor state now drives block/underline/beam/hidden rendering, inactive hollow outlines and reduced-motion-aware blinking. Four private same-app steady captures verify pixels and process-preserving reopen; actual blink timing and other platform gates remain open.
+
+- Soak ACK failures now retain bounded producer-side milestones, input admission/snapshot timings and identity-checked process wait metadata. The prior17-minute failure has exact frozen-host replay verification; sustained operation remains an open gate.

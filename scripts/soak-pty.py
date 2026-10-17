@@ -32,15 +32,39 @@ ROWS, COLS = 36, 120
 MAX_RESIZE_ADMISSION_DIAGNOSTIC_RECORDS = 1024
 RESIZE_ADMISSION_DIAGNOSTIC_INTERVAL = 1.0
 RESIZE_DIAGNOSTIC_SNAPSHOT_TIMEOUT = 0.020
+ACK_TIMEOUT_SECONDS = 5
+MAX_ACK_SIDECAR_RECORDS = 16_384
+ACK_SIDECAR_DRAIN_LIMIT = 512
+ACK_SIDECAR_PACKET = struct.Struct("!BBQQQ")
+ACK_SIDECAR_EVENTS = {1: "ping_received", 2: "ack_write_completed", 3: "release_observed"}
+ACK_SIDECAR_SOCKET_PREFIX = "pigade-soak-ack-"
 
 # The producer splits UTF-8, CSI/OSC, and synchronized-output sequences across
 # separate PTY writes. Every byte, including ACKs, is covered by its CRC.
 PRODUCER = r'''
-import errno,os,select,sys,termios,time,tty,zlib
+import errno,os,select,socket,struct,sys,termios,time,tty,zlib
 from collections import deque
 stream=int(sys.argv[1]); duration=int(sys.argv[2]); rate=int(sys.argv[3])
+sidecar=None; sidecar_address=None; sidecar_sequence=0
+if len(sys.argv)>4:
+ sidecar=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); sidecar.setblocking(False)
+ sidecar_address='\0'+sys.argv[4][1:] if sys.argv[4].startswith('@') else sys.argv[4]
 tty.setraw(0,termios.TCSANOW)
 crc=count=0; pending=b''; stop=False; commands=deque()
+def milestone(kind,token):
+ global sidecar_sequence
+ if sidecar is None: return
+ try:
+  parts=token.split(b'-')
+  if len(parts)!=3 or parts[0]!=b'SOAK' or int(parts[1])!=stream: return
+  packet=struct.pack('!BBQQQ',kind,stream,int(parts[2]),time.monotonic_ns(),sidecar_sequence)
+ except (ValueError,OverflowError):
+  return
+ sidecar_sequence+=1
+ try:
+  sidecar.sendto(packet,sidecar_address)
+ except OSError:
+  pass
 def emit(data):
  global crc,count
  view=memoryview(data)
@@ -65,11 +89,11 @@ def read_commands():
  while commands and not stop:
   line=commands.popleft()
   if line.startswith(b'PING:'):
-   token=line[5:]; emit(b'\r\nACK:'+token+b'\r\n')
+   token=line[5:]; milestone(1,token); emit(b'\r\nACK:'+token+b'\r\n'); milestone(2,token)
    while True:
     release=b'RELEASE:'+token
     if release in commands:
-     commands.remove(release)
+     commands.remove(release); milestone(3,token)
      break
     if b'FINISH' in commands:
      commands.remove(b'FINISH')
@@ -113,6 +137,166 @@ finished=time.monotonic_ns()
 emit(('\r\nPIGADE_ENDCRC:%d:%08x:%d:%d:%d:%d:%d\r\n'%
       (stream,crc,count,start,finished-start,0,count)).encode())
 '''
+
+
+class AckSidechannel:
+    """Bounded producer milestones; datagrams contain IDs and clocks only."""
+
+    def __init__(self, path, max_records=MAX_ACK_SIDECAR_RECORDS):
+        self.path = path
+        self.max_records = max_records
+        self.address = "@" + ACK_SIDECAR_SOCKET_PREFIX + uuid.uuid4().hex
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.socket.bind("\0" + self.address[1:])
+        self.socket.setblocking(False)
+        self.file = open(path, "a", buffering=65536)
+        self.records = 0
+        self.omitted = 0
+        self.counts = {}
+        self.last_by_stream = {}
+        self.last_token_events = {}
+        self.sequence_gaps = 0
+
+    def drain(self, limit=ACK_SIDECAR_DRAIN_LIMIT):
+        for _ in range(limit):
+            try:
+                packet = self.socket.recv(ACK_SIDECAR_PACKET.size + 1)
+            except BlockingIOError:
+                break
+            if len(packet) != ACK_SIDECAR_PACKET.size:
+                self.omitted += 1
+                continue
+            kind, stream, token_index, timestamp, sequence = ACK_SIDECAR_PACKET.unpack(packet)
+            name = ACK_SIDECAR_EVENTS.get(kind)
+            if name is None or stream > 3:
+                self.omitted += 1
+                continue
+            key = str(stream)
+            previous = self.last_by_stream.get(key)
+            if previous is not None and sequence != previous["event_sequence"] + 1:
+                self.sequence_gaps += max(1, sequence - previous["event_sequence"] - 1)
+            event = {"event": name, "stream": stream, "token_index": token_index,
+                     "producer_monotonic_ns": timestamp, "event_sequence": sequence}
+            self.counts[f"{key}:{name}"] = self.counts.get(f"{key}:{name}", 0) + 1
+            self.last_by_stream[key] = event
+            previous_token = self.last_token_events.get(key)
+            if previous_token is None or previous_token["token_index"] != token_index:
+                self.last_token_events[key] = {"token_index": token_index, "events": {}}
+            self.last_token_events[key]["events"][name] = event
+            if self.records < self.max_records:
+                write_diagnostic_line(self.file, event)
+                self.records += 1
+            else:
+                self.omitted += 1
+
+    def current_token(self, stream, token_index):
+        self.drain()
+        latest = self.last_token_events.get(str(stream))
+        if latest is None or latest["token_index"] != token_index:
+            return {}
+        return latest["events"]
+
+    def summary(self):
+        self.drain()
+        return {"records_written": self.records, "records_omitted": self.omitted,
+                "sequence_gaps": self.sequence_gaps, "counts": self.counts,
+                "last_by_stream": self.last_by_stream}
+
+    def close(self):
+        self.drain()
+        self.file.flush()
+        os.fsync(self.file.fileno())
+        self.file.close()
+        self.socket.close()
+
+
+def process_wait_diagnostics(host_identity, child_identities, max_threads=32):
+    """Read bounded /proc wait-channel metadata only after identity revalidation."""
+    result = {"host": None, "children": [], "diagnostic_errors": []}
+    def read_proc(identity, include_threads=False):
+        boot, pid, start_ticks = identity
+        if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != boot:
+            raise RuntimeError("boot_id_mismatch")
+        before = STRESS.identity(pid)
+        if before != identity:
+            raise RuntimeError("process_identity_mismatch")
+        def one(tid):
+            proc = Path(f"/proc/{pid}/task/{tid}" if tid != pid else f"/proc/{pid}")
+            stat_fields = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            return {"tid": tid, "state": stat_fields[0], "start_ticks": int(stat_fields[19]),
+                    "comm": (proc / "comm").read_text().strip()[:64],
+                    "wchan": (proc / "wchan").read_text().strip()[:128]}
+        proc = Path(f"/proc/{pid}")
+        base = one(pid)
+        threads = []
+        if include_threads:
+            with os.scandir(proc / "task") as entries:
+                selected_tids = []
+                for entry in entries:
+                    if len(selected_tids) >= max_threads:
+                        break
+                    if entry.name.isdecimal():
+                        selected_tids.append(int(entry.name))
+            for tid in selected_tids:
+                try:
+                    threads.append(one(tid))
+                except (OSError, ValueError, IndexError):
+                    continue
+        after = STRESS.identity(pid)
+        if after != identity:
+            raise RuntimeError("process_identity_changed_during_read")
+        if include_threads:
+            for thread in threads:
+                try:
+                    current = one(thread["tid"])
+                    if current["start_ticks"] != thread["start_ticks"]:
+                        raise RuntimeError("thread_identity_changed_during_read")
+                except (OSError, ValueError, IndexError) as error:
+                    raise RuntimeError("thread_disappeared_during_read") from error
+        return {"pid": pid, **base, "threads": threads,
+                "thread_count_captured": len(threads), "thread_limit": max_threads}
+
+    try:
+        result["host"] = read_proc(host_identity, include_threads=True)
+    except (OSError, RuntimeError, ValueError, IndexError) as error:
+        result["diagnostic_errors"].append({"target": "host", "error": type(error).__name__})
+    for stream, identity in enumerate(child_identities):
+        if identity is None:
+            continue
+        try:
+            result["children"].append({"stream": stream, **read_proc(identity)})
+        except (OSError, RuntimeError, ValueError, IndexError) as error:
+            result["diagnostic_errors"].append({"target": f"child:{stream}",
+                                                "error": type(error).__name__})
+    return result
+
+
+def ack_timeout_record(*, elapsed, stream, token_index, views, view_durations_ns,
+                       view_completed_monotonic_ns,
+                       ping_started_ns, ping_completed_ns, ping_status, ping_views_count, sidechannel,
+                       process_diagnostics):
+    sessions = []
+    captured_at_ns = time.monotonic_ns()
+    for index, view in enumerate(views):
+        sessions.append({"stream": index, "state": None if view is None else view.get("state"),
+                         "sequence": None if view is None else view.get("sequence"),
+                         "storage_error": None if view is None else view.get("storage_error"),
+                         "target_token_visible": (None if view is None or index != stream else
+                                                   f"ACK:SOAK-{stream}-{token_index}" in STRESS.text(view)),
+                         "snapshot_duration_ns": view_durations_ns[index],
+                         "snapshot_completed_monotonic_ns": view_completed_monotonic_ns[index],
+                         "snapshot_age_at_diagnostic_ns": (None if view_completed_monotonic_ns[index] is None else
+                                                            max(0, captured_at_ns - view_completed_monotonic_ns[index]))})
+    return {"schema": 1, "elapsed_seconds": elapsed, "stream": stream,
+            "token_index": token_index, "timeout_seconds": ACK_TIMEOUT_SECONDS,
+            "ping": {"started_monotonic_ns": ping_started_ns,
+                     "completed_monotonic_ns": ping_completed_ns,
+                     "request_duration_ns": ping_completed_ns - ping_started_ns,
+                     "status": ping_status, "returned_views": ping_views_count},
+            "last_sessions": sessions,
+            "producer_milestones": sidechannel.current_token(stream, token_index),
+            "producer_sidechannel": sidechannel.summary(),
+            "process_wait_diagnostics": process_diagnostics}
 
 
 def check(condition, message):
@@ -366,6 +550,8 @@ def run(args):
     progress_path = run_dir / "progress.jsonl"
     samples_path = run_dir / "samples.jsonl"
     resize_diagnostics_path = run_dir / "resize-admission-diagnostics.jsonl"
+    ack_sidechannel_path = run_dir / "ack-producer-sidechannel.jsonl"
+    ack_timeout_path = run_dir / "ack-timeout.json"
     result = {"status": "running", "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "requested_seconds": args.seconds, "rate_bytes_per_second_per_session": args.rate,
               "sessions": [], "errors": [], "filesystem": filesystem, "run_directory": str(run_dir),
@@ -385,6 +571,8 @@ def run(args):
         host = None
         owned = []
         specs = []
+        child_identities = []
+        ack_sidechannel = AckSidechannel(ack_sidechannel_path)
         interrupted = threading.Event()
         previous_handlers = {}
         def on_signal(signum, frame):
@@ -412,10 +600,12 @@ def run(args):
             for index in range(4):
                 spec = {"session": str(uuid.uuid4()), "generation": str(uuid.uuid4()),
                         "operation": str(uuid.uuid4()), "executable": sys.executable,
-                        "args": ["-I", "-u", "-c", PRODUCER, str(index), str(args.seconds + 30), str(args.rate)],
+                        "args": ["-I", "-u", "-c", PRODUCER, str(index), str(args.seconds + 30),
+                                 str(args.rate), ack_sidechannel.address],
                         "cwd": str(state), "geometry": {"rows": ROWS, "cols": COLS}}
                 view = STRESS.request(endpoint, {"command": "launch", "spec": spec})[0]
                 owned.append(STRESS.identity(view["pid"]))
+                child_identities.append(owned[-1])
                 specs.append(spec)
                 result["sessions"].append({"stream": index, "session": spec["session"], "generation": spec["generation"],
                                            "pid": view["pid"], "journal": f"{spec['generation']}.journal"})
@@ -442,20 +632,55 @@ def run(args):
                                     for _ in specs]
             ack_pause_totals = [0.0] * len(specs)
             ack_pause_max = [0.0] * len(specs)
+            last_views = [None] * len(specs)
+            last_view_durations_ns = [None] * len(specs)
+            last_view_completed_ns = [None] * len(specs)
             while time.monotonic() - actual_start < args.seconds and not interrupted.is_set():
                 now = time.monotonic()
                 check(host.poll() is None, "host exited during soak")
                 if now >= next_ack:
                     for index, spec in enumerate(specs):
                         token = f"SOAK-{index}-{ack_counts[index]}"
-                        STRESS.request(endpoint, {"command": "input", "session": spec["session"],
-                                                  "generation": spec["generation"], "bytes": list(f"PING:{token}\n".encode())})
-                        by = time.monotonic() + 5
+                        ping_started_ns = time.monotonic_ns()
+                        ping_status = "writer_queue_admitted"
+                        ping_views_count = None
+                        try:
+                            ping_views = STRESS.request(endpoint, {"command": "input", "session": spec["session"],
+                                                                   "generation": spec["generation"],
+                                                                   "bytes": list(f"PING:{token}\n".encode())})
+                            ping_views_count = len(ping_views)
+                        except Exception as error:
+                            ping_status = "input_request_error:" + type(error).__name__
+                            raise
+                        ping_completed_ns = time.monotonic_ns()
+                        by = time.monotonic() + ACK_TIMEOUT_SECONDS
                         while True:
+                            ack_sidechannel.drain()
+                            snapshot_started_ns = time.monotonic_ns()
                             view = STRESS.snapshot(endpoint, spec)
+                            last_view_completed_ns[index] = time.monotonic_ns()
+                            last_view_durations_ns[index] = last_view_completed_ns[index] - snapshot_started_ns
+                            last_views[index] = view
                             if f"ACK:{token}" in STRESS.text(view):
                                 break
-                            check(time.monotonic() < by, f"input ACK timeout: {token}")
+                            if time.monotonic() >= by:
+                                record = ack_timeout_record(
+                                    elapsed=time.monotonic() - actual_start, stream=index,
+                                    token_index=ack_counts[index], views=last_views,
+                                    view_durations_ns=last_view_durations_ns,
+                                    view_completed_monotonic_ns=last_view_completed_ns,
+                                    ping_started_ns=ping_started_ns,
+                                    ping_completed_ns=ping_completed_ns, ping_status=ping_status,
+                                    ping_views_count=ping_views_count,
+                                    sidechannel=ack_sidechannel,
+                                    process_diagnostics=process_wait_diagnostics(
+                                        host_identity, child_identities))
+                                save_json(ack_timeout_path, record)
+                                result["ack_timeout_diagnostic"] = {
+                                    "path": str(ack_timeout_path), "stream": index,
+                                    "token_index": ack_counts[index],
+                                    "timeout_seconds": ACK_TIMEOUT_SECONDS}
+                                raise RuntimeError(f"input ACK timeout: {token}")
                             time.sleep(.025)
                         ack_seen = time.monotonic()
                         STRESS.request(endpoint, {"command": "input", "session": spec["session"],
@@ -489,7 +714,12 @@ def run(args):
                     host_sample = resource_sample(host.pid, ticks, page)
                     session_rows = []
                     for index, spec in enumerate(specs):
+                        ack_sidechannel.drain()
+                        snapshot_started_ns = time.monotonic_ns()
                         view = STRESS.snapshot(endpoint, spec)
+                        last_view_completed_ns[index] = time.monotonic_ns()
+                        last_view_durations_ns[index] = last_view_completed_ns[index] - snapshot_started_ns
+                        last_views[index] = view
                         check(view["storage_error"] is None, f"storage error in {spec['generation']}: {view['storage_error']}")
                         check(view["generation"] == spec["generation"], "session generation changed")
                         cp = checkpoint_state(state, spec["generation"])
@@ -614,6 +844,13 @@ def run(args):
                 if diagnostic_flush_error is not None:
                     diagnostic_summary["flush_error"] = diagnostic_flush_error
                 result["resize_admission_diagnostic_summary"] = diagnostic_summary
+            if "ack_sidechannel" in locals():
+                try:
+                    result["ack_producer_sidechannel"] = ack_sidechannel.summary()
+                    result["ack_producer_sidechannel_path"] = str(ack_sidechannel_path)
+                    ack_sidechannel.close()
+                except OSError as error:
+                    result["ack_producer_sidechannel_flush_error"] = type(error).__name__
             save_json(manifest_path, result)
     print(json.dumps({key: result.get(key) for key in
                       ("status", "actual_elapsed_seconds", "real_time_elapsed", "elapsed_24h_completed",

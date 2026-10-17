@@ -1,0 +1,94 @@
+{
+  "scope": "Post-failure immutable journals, same exact frozen host. Full/checkpoint-tail complete hot/parser/frame/cold comparison; not clean producer CRC, live model or completed soak. Concurrent diagnostic workload; timings are not PERF acceptance.",
+  "binary_sha256": "67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58",
+  "results": [
+    {
+      "stream": 0,
+      "returncode": 0,
+      "elapsed_seconds": 0.700599443000101,
+      "verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 18065,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 517.084676,
+        "checkpoint_tail_ms": 57.260449,
+        "semantic_checkpoint_bytes": 6846103,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.000441,
+        "full_journal_bytes_read": 4751163,
+        "checkpoint_tail_journal_bytes_read": 12438,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "stderr": ""
+    },
+    {
+      "stream": 1,
+      "returncode": 0,
+      "elapsed_seconds": 0.7017595050019736,
+      "verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 18038,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 521.370724,
+        "checkpoint_tail_ms": 55.169559,
+        "semantic_checkpoint_bytes": 6823508,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.00019999999999999998,
+        "full_journal_bytes_read": 4733778,
+        "checkpoint_tail_journal_bytes_read": 13993,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "stderr": ""
+    },
+    {
+      "stream": 2,
+      "returncode": 0,
+      "elapsed_seconds": 0.6849364500012598,
+      "verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 17863,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 507.18850299999997,
+        "checkpoint_tail_ms": 54.654651,
+        "semantic_checkpoint_bytes": 6794714,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.00025,
+        "full_journal_bytes_read": 4711995,
+        "checkpoint_tail_journal_bytes_read": 16077,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "stderr": ""
+    },
+    {
+      "stream": 3,
+      "returncode": 0,
+      "elapsed_seconds": 0.7124731760013674,
+      "verification": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 18072,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 537.379311,
+        "checkpoint_tail_ms": 52.203907,
+        "semantic_checkpoint_bytes": 6751605,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.000561,
+        "full_journal_bytes_read": 4702662,
+        "checkpoint_tail_journal_bytes_read": 16454,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "stderr": ""
+    }
+  ]
+}

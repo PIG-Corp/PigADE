@@ -1225,3 +1225,75 @@ Integrate typed terminal cursor presentation, native shape/blink/reduced-motion 
 - Files: crates/terminal/src/lib.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/cursor.rs, crates/app/src/selection.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/cursor-20261017, crates/app/README.md, docs/reports/terminal-cursor.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: 177 workspace tests;79 app tests;92 Python tests; fmt and strict all-target Clippy; workspace release bins/examples and app debug/release builds passed. Four isolated steady cursor render/reopen runs passed and all PNGs visually inspected; pixel counts block207/underline18/beam23/hollow60/hidden0. One-hour frozen-host reproducer failed1013.162s input ACK timeout, not a24h pass.
 - Risks / next: Diagnose ACK timeout; finish reviewed private X11 IME harness. Actual compositor blink timing, wide/nonblank cursor pixel fixtures, GPU/platform/native clipboard and complete MVP remain open.
+
+## 2026-10-17T01:37:03+00:00 — recovery_slice_review
+
+Included required Fcitx Pinyin punctuation addon closure and versioned SDK extraction profile
+
+- Files: scripts/prepare-x11-ime-sdk.py, scripts/test_prepare_x11_ime_sdk.py, docs/research/isolated-x11-ime-plan.md
+- Verification: python3 -m unittest scripts/test_prepare_x11_ime_sdk.py -v: 11 passed; py_compile passed; scoped git diff --check passed; python3 scripts/prepare-x11-ime-sdk.py: ready-for-isolated-review, 13 signed pinned archives, no unresolved runtime dependencies; no GUI/input runtime launched.
+- Risks / next: Root may proceed to separately reviewed private X11 harness; actual addon loading and Unicode XIM commit remain unverified.
+
+## 2026-10-17T01:39:57+00:00 — recovery_slice_review
+
+Added bounded pure cell style and device-pixel stroke planner
+
+- Files: crates/app/src/cell_style.rs
+- Verification: rustfmt --edition 2024 crates/app/src/cell_style.rs; standalone rustc --test harness: 8 passed
+- Risks / next: Root integrates planner into the app painter; no GPUI build or UI run performed.
+
+## 2026-10-17T01:41:38+00:00 — terminal_memory_budget
+
+Add bounded ACK-timeout diagnostics with synthetic producer milestone sidechannel and identity-checked wait-channel sampling
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py, docs/reports/soak-ack-timeout-20261017.md
+- Verification: python3 -m unittest scripts.test_soak_pty scripts.test_soak_admission (14 tests passed); python3 -m py_compile scripts/soak-pty.py scripts/test_soak_pty.py; git diff --check
+- Risks / next: Root may run the planned bounded reproducer and compare producer milestones with host sequence and /proc wait channels; no long run was started.
+
+## 2026-10-17T01:41:58+00:00 — terminal_memory_budget
+
+Bounded ACK timeout diagnostics with synthetic producer milestones and identity-checked wait-channel sampling
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py, docs/reports/soak-ack-timeout-20261017.md
+- Verification: python3 -m unittest scripts.test_soak_pty scripts.test_soak_admission (14 tests passed); py_compile passed; git diff --check passed
+- Risks / next: Root can review and run the planned bounded reproducer. No soak was started by this agent.
+
+## 2026-10-17T01:43:10+00:00 — terminal_memory_budget
+
+Correct ACK sidechannel sequence gaps and clarify target-only token visibility with snapshot ages
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py, docs/reports/soak-ack-timeout-20261017.md
+- Verification: python3 -m unittest scripts.test_soak_pty scripts.test_soak_admission (15 tests passed); py_compile passed; git diff --check passed
+- Risks / next: Ownership released to root for the planned frozen-host bounded reproducer; no soak launched in this slice.
+
+## 2026-10-17T01:45:49+00:00 — /root/font_render_profile
+
+Completed isolated X11/XIM IME harness with private SDK, process, window, and Pinyin activation gates
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/research/isolated-x11-ime-plan.md
+- Verification: python3 -m unittest -v scripts/test_isolated_ime_x11.py (12 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/isolated-ime-x11.py (plan-only); strict C compile plus no-display proc/XRes/window-negative helper tests; SDK archive/signature checks (13 X11, 2 renderer); git diff --check
+- Risks / next: Root reviews then runs only in private Xvfb/Fcitx namespace. This slice launched no X server, app, Fcitx, or synthetic input; runtime Pinyin behavior remains unproven.
+
+## 2026-10-17T01:46:10+00:00 — /root/font_render_profile
+
+Tightened isolated IME activation ordering and fail-closed app-window readiness
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/research/isolated-x11-ime-plan.md
+- Verification: python3 -m unittest -v scripts/test_isolated_ime_x11.py (12 passed); py_compile passed; default CLI stayed plan-only; strict helper compile and no-display PID/XRes checks passed; git diff --check passed
+- Risks / next: Harness is ready for root review. No Xvfb, Fcitx, PigADE UI, or synthetic input was run; actual Pinyin runtime result remains unknown.
+
+## 2026-10-17T01:46:16+00:00 — /root
+
+Review bounded ACK telemetry, reverify failed prefix with exact frozen host and start one1200s instrumented reproducer
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py, docs/reports/soak-ack-timeout-20261017.md, benchmarks/results/soak-ack-timeout-20261017, docs/AGENT_HANDOFF.md
+- Verification: 15 focused soak tests passed. Exact67ed712c frozen host verify-recovery passed all4 immutable failed-run journals: complete hot/parser/frame equality, cold counts0. New reproducer tool9206 active, not completed. No user desktop/provider state access.
+- Risks / next: Await1200s or failure telemetry, diagnose stage before changing deadlines/host. Complete MVP still open.
+
+## 2026-10-17T01:46:37+00:00 — /root
+
+Finalize ACK diagnostics integration documentation for coherent commit
+
+- Files: CHANGELOG.md, docs/PROJECT_MAP.md
+- Verification: Focused15-test soak suite passed; git diff --check clean.1200s diagnostic remains running.
+- Risks / next: Read actual producer/host stage on completion or failure; no deadline inflation.

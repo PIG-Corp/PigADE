@@ -128,7 +128,11 @@ unknown-outcome rules are unchanged. Concurrent VM I/O is only a hypothesis.
 and the exact frozen binary remain in
 `~/.local/state/pigade/soak/resize-repro-20261017`, same frozen67ed712c host from
 `soak-20261017T000738Z-6244149d/state/host-release`, with new instrumentation.
-It is not a24h acceptance run. A bounded read-only investigation is active; inspect its manifest/diagnostics before duplicates.
+It is not a24h acceptance run. Raw journals are CRC-valid and the missing token is absent from durable output. All four complete hot/parser/frame recovery comparisons passed afterward (cold counts0 in this prefix). New bounded producer milestones and identity-checked wait-channel diagnostics are covered by15 tests; see reports/soak-ack-timeout-20261017.md.
+
+**Running1200s ACK reproducer:** tool9206,
+`~/.local/state/pigade/soak/resize-ack-repro-20261017`, same frozen67ed712c binary,
+with the new telemetry. No24h or isolated PERF claim. Do not duplicate it.
 
 **Completed VM run:** tool50099 exited successfully,
 `~/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e`.

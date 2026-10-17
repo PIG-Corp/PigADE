@@ -1,0 +1,92 @@
+{
+  "status": "failed",
+  "started_at": "2026-10-17T01:11:22.024666+00:00",
+  "finished_at": "2026-10-17T01:28:17.358415+00:00",
+  "requested_seconds": 3600,
+  "actual_elapsed_seconds": 1013.162136019997,
+  "binary_sha256": "67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "0eff07f1653552ddf977b39bb9188f7edc53d42f33342259cf4eef59b139ab92",
+    "scripts/soak-pty.py": "12f79e4e19ead5a2223bb2b9b0c2f80a9b98c658558198f5220c80c49caa0948",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "environment": {
+    "filesystem": "btrfs",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44"
+  },
+  "errors": [
+    "RuntimeError: input ACK timeout: SOAK-0-196"
+  ],
+  "elapsed_24h_completed": false,
+  "real_time_soak_24h_integrity_pass": false,
+  "rec08_full_acceptance": false,
+  "verify_recovery_passed_all_sessions": false,
+  "resize_admission_retry_summary": [
+    {
+      "attempts": 489,
+      "max_wait_seconds": 0.025,
+      "retries": 162,
+      "total_wait_seconds": 4.04999999999999
+    },
+    {
+      "attempts": 401,
+      "max_wait_seconds": 0.025,
+      "retries": 74,
+      "total_wait_seconds": 1.8499999999999974
+    },
+    {
+      "attempts": 341,
+      "max_wait_seconds": 0.025,
+      "retries": 14,
+      "total_wait_seconds": 0.35000000000000003
+    },
+    {
+      "attempts": 369,
+      "max_wait_seconds": 0.025,
+      "retries": 42,
+      "total_wait_seconds": 1.0500000000000003
+    }
+  ],
+  "resize_admission_diagnostic_summary": {
+    "last_diagnostic": {
+      "elapsed_monotonic_seconds": 984.1896937839992,
+      "event": "resize_queue_full",
+      "generation": "44297ebf-5f9f-4b81-8638-4e684c009177",
+      "host_cpu_seconds": 128.61,
+      "host_rss_bytes": 198221824,
+      "retry_count": 160,
+      "session": "b6af1241-2d0c-4c25-8f9e-420ee3a22773",
+      "snapshot": {
+        "available": true,
+        "generation": "44297ebf-5f9f-4b81-8638-4e684c009177",
+        "metrics": {
+          "archive_commit_ns": 1956624,
+          "checkpoint_ns": 11190095294,
+          "checkpoints": 196,
+          "events": 17925,
+          "frame_publish_ns": 20401059659,
+          "journal_fsync_ns": 164358367065,
+          "model_apply_ns": 1030951257,
+          "output_bytes": 4113138
+        },
+        "sequence": 17925,
+        "state": "running",
+        "storage_error": null
+      },
+      "stream": 0,
+      "target_geometry": {
+        "cols": 112,
+        "rows": 32
+      }
+    },
+    "omitted_records": 0,
+    "record_limit": 1024,
+    "records_written": 23,
+    "sample_interval_seconds": 1.0,
+    "snapshot_timeout_seconds": 0.02
+  },
+  "scope": "Failed one-hour frozen-host reproducer; missing next ACK investigated separately. No live-state/clean producer CRC/completed soak claim."
+}
