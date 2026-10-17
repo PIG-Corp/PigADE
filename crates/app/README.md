@@ -4,6 +4,8 @@ The native GPUI application displays cell replicas from the independent Rust ses
 
 This is the application under development, not a separate comparison stand. Project/workspace/tab navigation, saved tiling, drag/drop/resize and reviewed startup context are connected to the real host. Terminal/recovery/platform gates and the full MVP remain open.
 
+Local queue saturation reports that the current input was not accepted and allows subsequent input once capacity returns; it never retries rejected bytes. Intermediate mouse motion leaves eight of the32 receipt slots for keys and button transitions. This local backpressure does not acknowledge host rejections or unlock unknown outcomes. Solid Unicode block elements are drawn against device-aligned cell geometry, keeping OpenCode logos and borders continuous when font and row heights differ; shade patterns retain font rendering.
+
 Idle updates use conditional polling: the host returns only selection metadata
 when generation/sequence/lifecycle state is unchanged. Cached cell allocations
 are retained, and the UI checks a lightweight revision before cloning or

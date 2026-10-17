@@ -83,7 +83,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
         strcmp(a.stage, "setup-split-right") && strcmp(a.stage, "setup-split-down") &&
         strcmp(a.stage, "setup-close") && strcmp(a.stage, "setup-focus-left") &&
-        strcmp(a.stage, "setup-live"))
+        strcmp(a.stage, "setup-live") && strcmp(a.stage, "opencode-input"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -368,6 +368,34 @@ static void setup_click(Display *dpy, Window app, int x, int y) {
         !XTestFakeButtonEvent(dpy, 1, True, CurrentTime) ||
         !XTestFakeButtonEvent(dpy, 1, False, CurrentTime)) fail("private setup click failed");
     XSync(dpy, False);
+}
+
+/* Fixed motion grid plus one fixed unsent string for the isolated OpenCode PTY. */
+static void opencode_input_sequence(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("OpenCode input requires the fixed private 1280x800 app");
+    for (int row = 0; row < 8; ++row) {
+        for (int column = 0; column < 16; ++column) {
+            int x = 650 + column * 39;
+            int y = 80 + row * 92;
+            Window child; int root_x, root_y;
+            if (!XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), x, y,
+                                       &root_x, &root_y, &child) ||
+                !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
+                fail("fixed OpenCode terminal motion failed");
+            XFlush(dpy);
+        }
+    }
+    XSync(dpy, False);
+    struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+    nanosleep(&settle, NULL);
+    const KeySym prompt[] = {
+        XK_p, XK_i, XK_g, XK_a, XK_d, XK_e, XK_i, XK_n,
+        XK_p, XK_u, XK_t, XK_w, XK_o, XK_r, XK_k, XK_s
+    };
+    for (size_t i = 0; i < sizeof(prompt) / sizeof(prompt[0]); ++i)
+        key(dpy, prompt[i]);
 }
 
 static void setup_create_sequence(Display *dpy) {
@@ -667,6 +695,8 @@ int main(int argc, char **argv) {
             setup_click(dpy, app_window, 924, 92);
         } else if (!strcmp(a.stage, "setup-split-down")) {
             setup_prefix(dpy, XK_s, 0);
+        } else if (!strcmp(a.stage, "opencode-input")) {
+            opencode_input_sequence(dpy, app_window);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -682,6 +712,7 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "history-open") ? "2" :
                             !strcmp(a.stage, "history-search") ? "6" :
                             !strcmp(a.stage, "history-readonly") ? "6" :
+                            !strcmp(a.stage, "opencode-input") ? "16" :
                             !strcmp(a.stage, "setup-open") ? "1" :
                             !strcmp(a.stage, "setup-create") ? "5" :
                             !strcmp(a.stage, "setup-shell") ? "1" :

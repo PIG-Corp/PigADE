@@ -2593,3 +2593,27 @@ Removed mandatory advanced review from ordinary AI pane creation per direct user
 - Files: DESIGN.md, README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, docs/AGENT_HANDOFF.md, docs/design/README.md, scripts/isolated-ime-x11.py
 - Verification: All158 app tests passed, strict all-target Clippy/fmt/debug/release builds passed; harness22 tests passed. Actual private X11 direct-agent01 passes exactly one fake Codex launch with empty argv/no delivered context, five-pane direct capture inspected, existing four-pane native input/compact layout invariants pass. Optional-context01 passes exact memory selection with no process start.
 - Risks / next: Default direct CLI uses native user auth/trust prompts; no task or common prompt is sent. Full CLI/platform/MVP gates remain open. Preserve current user sessions, deferred preferences stash and unrelated stress/IME edits.
+
+## 2026-10-17T18:48:11+00:00 — /root/opencode_glyphs_luna
+
+Added bounded cell-relative device geometry for Unicode block glyphs, including fractions and quadrants; kept shade patterns on font fallback.
+
+- Files: crates/app/src/block_glyph.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 passed; standalone rustc --test: 5/5 passed; scoped git diff --check passed. No Cargo jobs run.
+- Risks / next: Root can integrate block_glyph::plan in the cell painter and owns app build/test validation.
+
+## 2026-10-17T18:53:41+00:00 — /root/opencode_glyphs_luna
+
+Added a private OpenCode 1.19.3 mouse-and-unsent-prompt harness fixture with focused prelaunch catalog seeding.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; scripts/test_isolated_ime_x11.py: 23 tests passed, including helper compilation; scoped git diff --check passed. Live OpenCode fixture intentionally left for root.
+- Risks / next: Root owns running the isolated OpenCode fixture and reviewing the before/after captures.
+
+## 2026-10-17T18:56:17+00:00 — /root
+
+Fixed OpenCode typing lock after transient local queue saturation and rendered solid Unicode block elements against terminal cells; attached the repaired release UI to the original host without restarting CLI sessions.
+
+- Files: crates/app/src/main.rs, crates/app/src/mouse_delivery.rs, crates/app/src/block_glyph.rs, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: App166 tests passed; strict all-target Clippy, fmt, debug/release builds passed. Harness23 tests passed. Actual private X11 keyboard02 exact31 EN/RU/control bytes and Pinyin01 pass. Real OpenCode1.19.3 native02 passes128 mouse motions plus complete unsent prompt; before/after captures inspected, logo joins and no queue-full footer. Original host2540063/start8039124 and all5 generation IDs preserved; release UI2728317 mapped, log empty.
+- Risks / next: Known local rejected input is reported and never retried; host rejection/unknown locks remain. Shades/ordinary box drawing retain font rendering; full Wayland/platform/MVP gates remain open. Retain keyboard01 obsolete no-pane fixture failure and native01 early UI capture; preserve unrelated stress/IME edits and preferences stash.

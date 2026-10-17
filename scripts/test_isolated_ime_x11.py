@@ -174,6 +174,24 @@ class IsolatedImePlanTests(unittest.TestCase):
                          '-display', ':3', '-layout', 'us,ru', '-option', ''])
         self.assertEqual(run.call_args.kwargs['env'], env)
 
+    def test_opencode_mode_is_fixed_plan_only_with_no_enter_or_arbitrary_input(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'opencode']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'opencode')
+        self.assertIn('/usr/bin/opencode 1.19.3', plan['input']['opencode'])
+        self.assertIn('unsent prompt', plan['input']['opencode'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('x11-ime-input.c').read_text()
+        sequence = source.split('static void opencode_input_sequence', 1)[1].split('\n}', 1)[0]
+        self.assertIn('for (int row = 0; row < 8; ++row)', sequence)
+        self.assertIn('for (int column = 0; column < 16; ++column)', sequence)
+        self.assertNotIn('XK_Return', sequence)
+        self.assertNotIn('--text', source)
+
     def run_raw_fixture(self, expected, delivered):
         with tempfile.TemporaryDirectory() as temporary:
             path = str(Path(temporary) / 'control.sock')

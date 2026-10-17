@@ -124,6 +124,11 @@ impl MouseDelivery {
     pub fn has_capacity(&self) -> bool {
         self.pending.len() < MAX_PENDING
     }
+    pub fn has_motion_capacity(&self) -> bool {
+        // Intermediate pointer positions need not consume the slots reserved
+        // for keys, resize and button transitions. Admitted events stay FIFO.
+        self.pending.len() < MAX_PENDING - 8
+    }
     pub fn awaiting_cleanup(&self, target: &CommandTarget) -> bool {
         self.cleanup_waiting.contains_key(target)
     }

@@ -1,4 +1,5 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod block_glyph;
 mod cell_style;
 mod chrome;
 mod command_worker;
@@ -287,6 +288,62 @@ enum IpcMessage {
         token: u64,
         cleanup: Option<mouse_delivery::Cleanup>,
     },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AdmissionFailure {
+    Busy,
+    Reservation,
+    Disconnected,
+    Exhausted,
+}
+impl AdmissionFailure {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Busy => "Очередь ввода занята; этот ввод не принят. Повторите после освобождения",
+            Self::Reservation => "Ввод не принят: нет места для подтверждения команды",
+            Self::Disconnected => "Соединение с обработчиком ввода закрыто; переоткройте окно",
+            Self::Exhausted => "Исчерпан счетчик запросов; перезапустите приложение",
+        }
+    }
+    fn blocks_input(&self) -> bool {
+        matches!(self, Self::Disconnected | Self::Exhausted)
+    }
+}
+
+/// A local rejection proves no command was dispatched. It must not become a
+/// permanent input gate. Host rejections and unknown outcomes remain separate.
+fn admit_command(
+    delivery: &mut MouseDelivery,
+    next_id: &mut u64,
+    tx: &mpsc::SyncSender<IpcMessage>,
+    target: CommandTarget,
+    command: Value,
+    mouse_after: Option<MouseSnapshot>,
+) -> Result<(), AdmissionFailure> {
+    if !delivery.has_capacity() {
+        return Err(AdmissionFailure::Busy);
+    }
+    let next = next_id.checked_add(1).ok_or(AdmissionFailure::Exhausted)?;
+    let id = *next_id;
+    *next_id = next;
+    if !delivery.stage(id, target.clone(), mouse_after) {
+        return Err(AdmissionFailure::Reservation);
+    }
+    match tx.try_send(IpcMessage::Request {
+        id,
+        target,
+        command,
+    }) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            delivery.cancel_stage(id);
+            Err(match error {
+                mpsc::TrySendError::Full(_) => AdmissionFailure::Busy,
+                mpsc::TrySendError::Disconnected(_) => AdmissionFailure::Disconnected,
+            })
+        }
+    }
 }
 
 enum WorkerReceipt {
@@ -3429,37 +3486,19 @@ impl CanvasApp {
         mouse_after: Option<MouseSnapshot>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.mouse_delivery.has_capacity() {
-            self.input_error = Some("Очередь подтверждений команд заполнена".into());
-            cx.notify();
-            return false;
-        }
-        let Some(next) = self.next_request_id.checked_add(1) else {
-            self.input_error = Some("Исчерпан счетчик запросов; перезапустите приложение".into());
-            cx.notify();
-            return false;
-        };
-        let id = self.next_request_id;
-        self.next_request_id = next;
-        if !self
-            .mouse_delivery
-            .stage(id, target.clone(), mouse_after.clone())
-        {
-            self.input_error = Some("Не удалось зарезервировать подтверждение команды".into());
-            cx.notify();
-            return false;
-        }
-        if self
-            .tx
-            .try_send(IpcMessage::Request {
-                id,
-                target,
-                command: value,
-            })
-            .is_err()
-        {
-            self.mouse_delivery.cancel_stage(id);
-            self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
+        if let Err(error) = admit_command(
+            &mut self.mouse_delivery,
+            &mut self.next_request_id,
+            &self.tx,
+            target,
+            value,
+            mouse_after,
+        ) {
+            if error.blocks_input() {
+                self.input_error = Some(error.message().into());
+            } else {
+                self.input_notice = Some(error.message().into());
+            }
             cx.notify();
             return false;
         }
@@ -3483,7 +3522,7 @@ impl CanvasApp {
             return true;
         }
         if bytes.len() > 16 * 1024 {
-            self.input_error = Some("Ввод более 16 KiB не принят; разделите текст".into());
+            self.input_notice = Some("Ввод более 16 KiB не принят; разделите текст".into());
             cx.notify();
             return false;
         }
@@ -3603,22 +3642,28 @@ impl CanvasApp {
             }
             cleanup = Some(plan);
         }
-        if self
-            .tx
-            .try_send(IpcMessage::AcknowledgeKnownRejection {
-                target: target.clone(),
-                token,
-                cleanup: cleanup.clone(),
-            })
-            .is_err()
-        {
-            if let Some(cleanup) = cleanup {
-                self.mouse_delivery.cancel_cleanup(target, cleanup.id);
+        match self.tx.try_send(IpcMessage::AcknowledgeKnownRejection {
+            target: target.clone(),
+            token,
+            cleanup: cleanup.clone(),
+        }) {
+            Ok(()) => true,
+            Err(error) => {
+                if let Some(cleanup) = cleanup {
+                    self.mouse_delivery.cancel_cleanup(target, cleanup.id);
+                }
+                match error {
+                    mpsc::TrySendError::Full(_) => {
+                        self.input_notice =
+                            Some("Очередь команд занята; подтверждение не принято".into())
+                    }
+                    mpsc::TrySendError::Disconnected(_) => {
+                        self.input_error = Some(AdmissionFailure::Disconnected.message().into())
+                    }
+                }
+                false
             }
-            self.input_error = Some("Очередь команд заполнена; подтверждение не принято".into());
-            return false;
         }
-        true
     }
     fn pointer_index(&self, route: &PointerRoute) -> Option<usize> {
         route
@@ -3693,6 +3738,11 @@ impl CanvasApp {
         cx: &mut Context<Self>,
     ) {
         if self.prefix {
+            return;
+        }
+        // Hover/drag samples may be superseded before admission. Reserve queue
+        // slots for keyboard and button transitions; never discard queued bytes.
+        if matches!(action, PointerAction::Motion) && !self.mouse_delivery.has_motion_capacity() {
             return;
         }
         self.reconcile_pointer();
@@ -6179,22 +6229,55 @@ fn paint_panel(
                         }),
                         |window| {
                             if style.glyph_visible && c.text != " " {
-                                let mut glyphfont = font.clone();
-                                if c.flags & 2 != 0 {
-                                    glyphfont.weight = FontWeight::BOLD;
+                                let mut characters = c.text.chars();
+                                let block = characters.next().and_then(|character| {
+                                    characters
+                                        .next()
+                                        .is_none()
+                                        .then(|| {
+                                            block_glyph::plan(
+                                                character,
+                                                cell_width_px.saturating_mul(span.min(columns)),
+                                                cell_height_px,
+                                            )
+                                        })
+                                        .flatten()
+                                });
+                                if let Some(block) = block {
+                                    for rect in block.rects() {
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                origin
+                                                    + point(
+                                                        px(f32::from(rect.x_px) / scale),
+                                                        px(f32::from(rect.y_px) / scale),
+                                                    ),
+                                                size(
+                                                    px(f32::from(rect.width_px) / scale),
+                                                    px(f32::from(rect.height_px) / scale),
+                                                ),
+                                            ),
+                                            rgb(fg),
+                                        ));
+                                    }
+                                } else {
+                                    let mut glyphfont = font.clone();
+                                    if c.flags & 2 != 0 {
+                                        glyphfont.weight = FontWeight::BOLD;
+                                    }
+                                    if c.flags & 4 != 0 {
+                                        glyphfont.style = FontStyle::Italic;
+                                    }
+                                    text(
+                                        c.text.clone(),
+                                        origin,
+                                        &glyphfont,
+                                        rgb(fg).into(),
+                                        cell.height,
+                                        window,
+                                        cx,
+                                    );
                                 }
-                                if c.flags & 4 != 0 {
-                                    glyphfont.style = FontStyle::Italic;
-                                }
-                                text(
-                                    c.text.clone(),
-                                    origin,
-                                    &glyphfont,
-                                    rgb(fg).into(),
-                                    cell.height,
-                                    window,
-                                    cx,
-                                );
                             }
                             let underline_color = style
                                 .underline_color
@@ -7064,6 +7147,138 @@ mod tests {
         assert_eq!(color("Spec(Rgb { r: 1, g: 2, b: 3 })", true, &[]), 0x010203);
         assert_eq!(color("Indexed(196)", true, &[]), 0xff0000);
         assert_eq!(color("Named(BrightBlue)", true, &[]), 0x88c0ff);
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::{
+        AdmissionFailure, CommandTarget, DeliveryOutcome, IpcMessage, MouseDelivery,
+        RequestReceipt, admit_command, mouse_delivery,
+    };
+    use serde_json::json;
+    use std::sync::mpsc;
+
+    fn target() -> CommandTarget {
+        CommandTarget {
+            session: "session".into(),
+            generation: "generation".into(),
+        }
+    }
+
+    #[test]
+    fn receipt_capacity_recovers_without_retrying_rejected_input() {
+        let (tx, rx) = mpsc::sync_channel(mouse_delivery::MAX_PENDING);
+        let mut delivery = MouseDelivery::default();
+        let mut next = 1;
+        for _ in 0..mouse_delivery::MAX_PENDING {
+            admit_command(
+                &mut delivery,
+                &mut next,
+                &tx,
+                target(),
+                json!({"bytes": [97]}),
+                None,
+            )
+            .unwrap();
+        }
+        let error = admit_command(
+            &mut delivery,
+            &mut next,
+            &tx,
+            target(),
+            json!({"bytes": [98]}),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error, AdmissionFailure::Busy);
+        assert!(!error.blocks_input());
+        assert_eq!(next, 33);
+        for id in 1..=32 {
+            let IpcMessage::Request {
+                id: received,
+                target,
+                command,
+            } = rx.try_recv().unwrap()
+            else {
+                panic!("unexpected acknowledgement")
+            };
+            assert_eq!(received, id);
+            assert_eq!(command["bytes"], json!([97]));
+            delivery.request_receipt(RequestReceipt {
+                id,
+                target,
+                outcome: DeliveryOutcome::Accepted,
+            });
+        }
+        admit_command(
+            &mut delivery,
+            &mut next,
+            &tx,
+            target(),
+            json!({"bytes": [99]}),
+            None,
+        )
+        .unwrap();
+        let IpcMessage::Request { id, command, .. } = rx.try_recv().unwrap() else {
+            panic!("unexpected acknowledgement")
+        };
+        assert_eq!(id, 33);
+        assert_eq!(command["bytes"], json!([99]));
+        assert!(
+            rx.try_recv().is_err(),
+            "rejected bytes must never be retried"
+        );
+    }
+
+    #[test]
+    fn transport_backpressure_cancels_only_its_reservation_and_recovers() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let mut delivery = MouseDelivery::default();
+        let mut next = 1;
+        admit_command(&mut delivery, &mut next, &tx, target(), json!({}), None).unwrap();
+        let failure =
+            admit_command(&mut delivery, &mut next, &tx, target(), json!({}), None).unwrap_err();
+        assert_eq!(failure, AdmissionFailure::Busy);
+        assert!(!failure.blocks_input());
+        assert!(!delivery.settled_through(&target(), 1));
+        let _ = rx.try_recv().unwrap();
+        delivery.request_receipt(RequestReceipt {
+            id: 1,
+            target: target(),
+            outcome: DeliveryOutcome::Accepted,
+        });
+        assert!(delivery.settled_through(&target(), 2));
+        admit_command(&mut delivery, &mut next, &tx, target(), json!({}), None).unwrap();
+        drop(rx);
+        assert_eq!(
+            admit_command(&mut delivery, &mut next, &tx, target(), json!({}), None),
+            Err(AdmissionFailure::Disconnected)
+        );
+        assert!(AdmissionFailure::Disconnected.blocks_input());
+        assert!(AdmissionFailure::Exhausted.blocks_input());
+    }
+
+    #[test]
+    fn motion_pressure_leaves_eight_slots_for_keys_and_button_transitions() {
+        let mut delivery = MouseDelivery::default();
+        for id in 1..=24 {
+            assert!(delivery.has_motion_capacity());
+            assert!(delivery.stage(id, target(), None));
+        }
+        assert!(!delivery.has_motion_capacity());
+        for id in 25..=32 {
+            assert!(delivery.has_capacity());
+            assert!(delivery.stage(id, target(), None));
+        }
+        assert!(!delivery.has_capacity());
+        delivery.request_receipt(RequestReceipt {
+            id: 1,
+            target: target(),
+            outcome: DeliveryOutcome::Accepted,
+        });
+        assert!(delivery.has_capacity());
+        assert!(!delivery.has_motion_capacity());
     }
 }
 

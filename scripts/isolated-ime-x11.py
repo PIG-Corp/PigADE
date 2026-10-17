@@ -51,6 +51,7 @@ GENERATIONS_PASS = 'pass-private-x11-generation-history-selection-fixture'
 RESUME_PASS = 'pass-private-x11-codex-resume-review-fixture'
 HISTORY_PASS = 'pass-private-x11-readonly-terminal-history-fixture'
 SETUP_PASS = 'pass-private-x11-project-setup-shell-fixture'
+OPENCODE_PASS = 'pass-private-x11-opencode-mouse-terminal-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -356,20 +357,21 @@ def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
-            'history': HISTORY_PASS, 'setup': SETUP_PASS}[name]
+            'history': HISTORY_PASS, 'setup': SETUP_PASS,
+            'opencode': OPENCODE_PASS}[name]
 
 
-def seed_context_catalog(session, memory_fixture=False):
+def seed_context_catalog(session, memory_fixture=False, cwd='/artifacts'):
     catalog = host_request({'command': 'catalog'})['catalog']
     project, workspace, tab = (str(uuid.uuid4()) for _ in range(3))
     selection = dict(catalog['selection'], project_id=project, workspace_id=workspace, tab_id=tab)
     catalog = host_request({'command': 'catalog_apply', 'batch': {
         'projects': [{'expected_revision': None, 'value': {
-            'id': project, 'canonical_path': '/artifacts', 'git_common_dir': '/artifacts',
+            'id': project, 'canonical_path': cwd, 'git_common_dir': cwd,
             'name': 'Context fixture', 'roots': [], 'revision': 0}}],
         'workspaces': [{'expected_revision': None, 'value': {
             'id': workspace, 'project_id': project, 'task': 'Context editor fixture',
-            'cwd': '/artifacts', 'mode': 'shared_checkout', 'status': 'ready',
+            'cwd': cwd, 'mode': 'shared_checkout', 'status': 'ready',
             'error': None, 'context_revision': None, 'revision': 0}}],
         'tabs': [{'expected_revision': None, 'value': {
             'id': tab, 'workspace_id': workspace, 'name': 'Development',
@@ -1032,6 +1034,108 @@ def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, sa
     save()
 
 
+def prepare_opencode_fixture(report, save):
+    report['stage'] = 'opencode-real-cli-prelaunch'
+    save()
+    project = Path('/artifacts/opencode-workspace')
+    project.mkdir(mode=0o700)
+    before = fixture_generations()
+    session, generation = str(uuid.uuid4()), str(uuid.uuid4())
+    launched = host_request({'command': 'launch', 'spec': {
+        'session': session, 'generation': generation, 'operation': str(uuid.uuid4()),
+        'executable': '/usr/bin/opencode', 'args': [], 'cwd': str(project),
+        'geometry': {'rows': 24, 'cols': 80}}})
+    require(any(view.get('session') == session and view.get('generation') == generation
+                for view in launched.get('views', [])),
+            'OpenCode launch response omitted its exact session/generation')
+    wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        generation, {}).get('state') == 'running' else None), time.monotonic() + 12)
+    require(fixture_generations() == sorted(before + [(session, generation)]),
+            'OpenCode launch created an unexpected private PTY generation')
+    seed_context_catalog(session, cwd=str(project))
+    catalog = host_request({'command': 'catalog'})['catalog']
+    tab = catalog['tabs'][0]
+    layout = json.loads(tab['layout_json'])
+    require(layout.get('focused') == session,
+            'OpenCode PTY was not the focused pane before app startup')
+    report['opencode'] = {
+        'session': session, 'generation': generation, 'tab': tab['id'],
+        'executable': '/usr/bin/opencode', 'version': '1.19.3', 'launch_arguments': [],
+        'task_sent': False, 'focused_pane_before_app_start': True,
+        'network': 'private user/network namespaces; only loopback routes',
+        'home': 'fresh /home/pigade with no provider auth/history files',
+    }
+    save()
+
+
+def run_opencode_fixture(config, report, control, app, env, artifacts, save):
+    report['stage'] = 'opencode-fixed-mouse-and-prompt-input'
+    save()
+    deactivate_private_fcitx(config, env)
+    session, generation, tab = (report['opencode'][key]
+                                for key in ('session', 'generation', 'tab'))
+    catalog = host_request({'command': 'catalog'})['catalog']
+    selected = json.loads(next(item for item in catalog['tabs'] if item['id'] == tab)['layout_json'])
+    require(selected.get('focused') == session,
+            'preselected OpenCode PTY is not the focused pane before native input')
+
+    def logo_ready():
+        current = fixture_session_models(session).get(generation)
+        if not current or current.get('state') != 'running':
+            return None
+        text = view_text(current)
+        return (current if text.count('█') >= 8 and ('▀' in text or '▄' in text) and
+                '1.19.3' in text else None)
+
+    view = wait_until(logo_ready, time.monotonic() + 15)
+    helper_call(config, 'capture', '/artifacts/opencode-logo-before.ppm')
+    require(0 < (artifacts / 'opencode-logo-before.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'OpenCode logo capture exceeds bound')
+    report['opencode'].update({'state': view['state'], 'logo_block_cells_seen': True,
+                               'version': '1.19.3', 'version_observed_in_live_tui_cells': True,
+                               'capture_before': 'opencode-logo-before.ppm'})
+    save()
+
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'bootstrap PTY received input before fixed OpenCode interaction')
+    helper_call(config, 'opencode-input')
+    entered = wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        generation) and 'pigadeinputworks' in view_text(models[generation]) else None),
+        time.monotonic() + 10)
+    require(entered[generation].get('state') == 'running',
+            'OpenCode PTY exited after the unsent prompt input')
+    current_catalog = host_request({'command': 'catalog'})['catalog']
+    focused = json.loads(next(item for item in current_catalog['tabs']
+                              if item['id'] == tab)['layout_json']).get('focused')
+    require(focused == session,
+            'terminal focus moved away from the exact OpenCode pane during input')
+    models = fixture_session_models(session)
+    require(models[generation].get('state') == 'running' and
+            'pigadeinputworks' in view_text(models[generation]),
+            'OpenCode terminal cells do not contain the full unsent prompt')
+    # Model publication precedes UI polling/painting. This capture settle is
+    # visual review support, not an input-to-present latency measurement.
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/opencode-input-after.ppm')
+    require(0 < (artifacts / 'opencode-input-after.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'OpenCode input capture exceeds bound')
+    require(app.poll() is None, 'PigADE exited during OpenCode mouse/input fixture')
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'bootstrap PTY received input instead of the selected OpenCode PTY')
+    report['opencode'].update({
+        'mouse_motion_burst': 'fixed 128 private XTEST moves across terminal positions; no clicks',
+        'unsent_prompt': 'pigadeinputworks', 'full_prompt_in_host_cells': True,
+        'focused_pane_unchanged': True, 'app_alive': True,
+        'capture_after': 'opencode-input-after.ppm',
+        'queue_full_footer': 'retained screenshot for visual inspection; no UI text export available',
+        'bootstrap_pty_received_no_input': True,
+    })
+    report.update({'status': OPENCODE_PASS, 'stage': 'complete'})
+    save()
+
+
 def wait_for_private_xim(config: dict, timeout: float = 8.0) -> dict:
     deadline = time.monotonic() + timeout
     last_error = 'XIM owner has not appeared yet'
@@ -1651,10 +1755,13 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
-        if config.get('fixture') in ('context', 'memory', 'generations', 'resume', 'history'):
+        if config.get('fixture') in ('pinyin', 'keyboard', 'latency', 'context', 'memory',
+                                     'generations', 'resume', 'history'):
             report['fixture'].update(seed_context_catalog(session, memory_fixture=config.get('fixture') == 'memory'))
         if config.get('fixture') == 'resume':
             prepare_resume_fixture(report)
+        if config.get('fixture') == 'opencode':
+            prepare_opencode_fixture(report, save)
         report['stage'] = 'pigade-app'
         save()
         app_env = dict(fcitx_env)
@@ -1705,6 +1812,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'setup':
             run_setup_fixture(config, report, control, app_env, save)
+            return 0
+        if config.get('fixture') == 'opencode':
+            run_opencode_fixture(config, report, control, app, app_env, artifacts, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1845,9 +1955,10 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
+                 ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history fixture only',
+        'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1869,6 +1980,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
+                  'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',
@@ -1909,8 +2021,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, context, memory, generation, resume, history, or project setup fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode'], default='pinyin',
+                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, or OpenCode fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)
