@@ -1,0 +1,24 @@
+{
+  "status": "completed",
+  "scope": "Fresh single diagnostic process; maximum RSS for actual-model allocation_census including fixture construction, repeated census and legacy owned DTO checkpoint export. No host/UI/GPU/provider. Not whole-product acceptance.",
+  "captured_at_utc": "2026-10-16T23:53:41.928641+00:00",
+  "binary_sha256": "7627c6393e6b0ef41c083705dc34124b46679ae3525c957e2535c85a9d2919d9",
+  "frozen_binary": "/home/afterburner/.local/state/pigade/checkpoint-workspace-20261017/allocation-census-owned-dto",
+  "ru_maxrss_kib": 90480,
+  "source_sha256": {
+    "crates/terminal/src/lib.rs": "4094e2f6e8f35490d53020f266ab49fc1e4d6bf8006afd854019c994c9e2f864",
+    "crates/terminal/examples/allocation_census.rs": "383a9b4172ac136e52e9e62306659d8570b5135790a7ef2bbe382cc2e291866b",
+    "vendor/alacritty_terminal/src/term/resources.rs": "ef4ed641127abd01999f68030622b6cdbe7b3246975e256b48bab5b5a8547322"
+  },
+  "fixtures": [
+    "empty-120x36",
+    "10000-hot-rows-120x36",
+    "10000-hot-rows-after-50-resizes",
+    "262144-combining-marks-one-cell",
+    "4096-distinct-hyperlinks-1KiB-each"
+  ],
+  "all_checkpoints_unchanged": true,
+  "hardware_reference": "hardware-20261017.json",
+  "ambient_workload": "Concurrent frozen long corpus/24hsoak/build; not isolated performance; no page-cache eviction.",
+  "comparison_role": "Exploratory only: vendor decoder/module work was still in progress during this build. The final stable-source baseline is checkpoint-workspace-owned-dto-final-baseline.json; paired comparison uses that frozen binary."
+}

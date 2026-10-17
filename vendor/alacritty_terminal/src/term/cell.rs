@@ -166,6 +166,10 @@ impl Default for Cell {
 
 #[cfg(feature = "serde")]
 impl CellExtra {
+    pub(crate) fn checkpoint_borrowed_parts(&self) -> (&[char], Option<Color>, Option<&Hyperlink>) {
+        (&self.zerowidth, self.underline_color, self.hyperlink.as_ref())
+    }
+
     pub(crate) fn checkpoint_parts(&self) -> (Vec<char>, Option<Color>, Option<Hyperlink>) {
         (self.zerowidth.clone(), self.underline_color, self.hyperlink.clone())
     }

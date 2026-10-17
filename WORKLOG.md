@@ -825,3 +825,51 @@ Expose bounded unavailable-artifact recovery notices without blocking healthy te
 - Files: crates/session-host/src/recovery_diagnostics.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/recovery.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/recovery-warning-20261017, crates/terminal/examples/allocation_census.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, benchmarks/results/terminal-allocation-census-references.json, README.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/runtime-and-replay-cache.md, docs/reports/terminal-memory-census.md
 - Verification: Fresh root workspace133tests +Python27tests, strictClippy/fmt/releasebins/examples passed; app29tests/clippy/build passed with localrejected-input gate restored; Alacritty163lib+45ref+no-default passed. Root verified finalisolated app26027250/hostfface4d9 screenshot: namedwarning and four distinctchildACKs/seqadvance, samegeneration/PIDreopen; nativeAlert maps Notification101. Initialroleassumption/echo-only/immediatecapture limitations retained. Fresh30sample census5fixtures preserves checkpoint bytes and prioruniqueestimates.
 - Risks / next: Commit reviewed slice; continue whole-event/global memory admission and remainingstage0 gates. Fullcorpus firsttwooracles done, thirdgenerating; actual24hsoak running, neither completed. No fullMVP/platform/700MiB claim.
+
+## 2026-10-16T23:51:04+00:00 — terminal_memory_budget
+
+Extended pinned-VTE resource census with title and hyperlink callback/payload maxima and Term query callback counts; added continuation, OSC, title-push, and query-storm fixtures.
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, WORKLOG.md
+- Verification: Passed targeted patched-vte resource tests (15/15), alacritty_terminal no-default-features check, and Clippy with --cap-lints warn (only three pre-existing tty/unix.rs question_mark warnings; strict -D warnings remains blocked by those upstream warnings). rustfmt and git diff --check passed.
+- Risks / next: Census reports callback counts/payload sizes only; host admission integration and any response-byte bound remain separate work.
+
+## 2026-10-16T23:54:49+00:00 — recovery_slice_review
+
+Share a bounded initialized-cell decode budget across both checkpoint grids while keeping the standalone grid limit and valid generic Term maximum pair intact; add a small hostile second-grid regression.
+
+- Files: vendor/alacritty_terminal/src/grid/checkpoint.rs, vendor/alacritty_terminal/src/term/checkpoint.rs
+- Verification: cargo fmt --all --check; cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=vendor/vte checkpoint --lib (16 passed); cargo test -p pigade-terminal checkpoint --lib (4 passed); git diff --check on owned files
+- Risks / next: Root owns integration and full workspace verification; aggregate budget permits 16,777,216 normal-grid cells plus the maximum 512x4096 alternate viewport (2,097,152), preserving every checkpoint accepted by existing per-grid and terminal validation bounds.
+
+## 2026-10-16T23:58:34+00:00 — terminal_memory_budget
+
+Fixed soak producer command loss: preserve commands queued after RELEASE and added a real PTY regression for coalesced RELEASE+next PING.
+
+- Files: scripts/soak-pty.py, scripts/test_soak_admission.py, WORKLOG.md
+- Verification: All five soak admission/producer PTY tests passed; py_compile and git diff --check passed. Reproduced exact committed producer on a bounded PTY: after one ACK, coalesced RELEASE+next PING was dropped (no second ACK, producer kept running); fixed producer PTY test receives second ACK. Frozen run metadata and checkpoint-tail replay were inspected read-only; no host degradation observed in final sample.
+- Risks / next: The archived soak does not record whether the exact coalesced read occurred at SOAK-0-755, though the frozen producer has a deterministic command-loss race matching the missing ACK. Review the runner fix; do not start another full soak until root approves validation timing.
+
+## 2026-10-17T00:01:59+00:00 — /root/font_render_profile
+
+Added a borrowed semantic checkpoint serializer with byte-identical canonical row and pool traversal; source remains unmodified and each grid retains its configured history limit.
+
+- Files: vendor/alacritty_terminal/src/term/checkpoint/borrowed.rs, vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/src/grid/mod.rs
+- Verification: cargo test --offline --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=/home/afterburner/Projects/PigADE/vendor/vte: full vendor suite 172 unit + 45 ref + 1 doctest passed before the final grown-row fixture; same targeted borrowed suite afterward: 5 passed including all 45 corpus dirs at 3 cuts. cargo check --no-default-features passed. RUSTFLAGS=--cap-lints=warn cargo clippy --all-targets passed with 3 pre-existing tty/unix question_mark warnings; strict clippy fails only on those warnings.
+- Risks / next: Root owns checkpoint module reexport and cross-project integration; no whole-process or heap-cap claim. Keep new getters serde-gated and preserve canonical row/cursor traversal.
+
+## 2026-10-17T00:07:04+00:00 — terminal_memory_budget
+
+Added EOF exit handling to the soak producer ACK wait and a PTY hangup regression; ran requested bounded verified host smoke.
+
+- Files: scripts/soak-pty.py, scripts/test_soak_admission.py, WORKLOG.md
+- Verification: All six scripts/test_soak_admission.py tests passed, including coalesced RELEASE+PING and PTY EOF during ACK wait; py_compile and diff-check passed. 10.015s four-session soak-pty --verify completed on frozen release binary SHA-256 67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58. All four producer CRC/framing checks and checkpoint-tail recovery checks passed (complete_state_equal/frame_equal/cold_history_equal true); each stream acknowledged one ping and exited cleanly. 24h completion/integrity flag remains false.
+- Risks / next: The bounded smoke validates the runner and current host only; it does not replace the requested 24-hour soak. No full soak was launched.
+
+## 2026-10-17T00:10:54+00:00 — /root
+
+Stream validated borrowed checkpoints with exact schema2 bytes, bound envelope/two-grid import, expand callback census, repair soak command queue and restart actual24h verification
+
+- Files: crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/term/checkpoint.rs, vendor/alacritty_terminal/src/term/checkpoint/borrowed.rs, vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/grid/checkpoint.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, scripts/soak-pty.py, scripts/test_soak_admission.py, benchmarks/results, docs/adr/0009-borrowed-checkpoint-export.md, docs/research/terminal-admission-plan.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/terminal-memory-census.md, CHANGELOG.md
+- Verification: Fresh workspace135 tests/fmt/strictClippy/releasebins/examples pass; rootPython29pass; vendor173lib+45ref+no-default pass; vendoralltargetclippy passes with exactlythreeoldtty question_mark forcedwarnings (plainstrictfails, retained). Headerregression failswithoutguard andpassesfixed; fullenvelope matchesownedpathateveryfixturebyte; borrowed135refcuts/poolcursor/ring/grownrow/sourcevalidation paritypass. Tenalternatingfreshprocessesbefore/after showRSSp95 90484/82168KiB, identicalfixtures; no productbudgetclaim. Fixedproducer10.015s real4PTYsmoke passesCRC/fullfaststate+frame+coldoracle; failed3849.40ssoakretained.
+- Risks / next: Commit integration; actualthird24hsoak nowrunning tool44117 at retainedsoak-20261017T000738Z-6244149d, frozenhost67ed712c; fullcorpus tool65474 thirdoracle running. Continue whole-event/global accounting and remainingstage0/platform/CLI/productgates, noMVPcompleteclaim.

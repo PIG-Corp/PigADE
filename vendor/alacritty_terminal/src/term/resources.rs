@@ -9,26 +9,63 @@ use unicode_width::UnicodeWidthChar;
 use vte::ansi::{Handler, Hyperlink, Processor, Timeout};
 
 use crate::grid::{Grid, Row};
-use crate::term::Term;
 use crate::term::cell::{Cell, CellExtra, Hyperlink as TermHyperlink};
+use crate::term::Term;
 use std::collections::HashSet;
 use std::mem::size_of;
 
-/// Saturating counts observed while advancing one cloned processor.
+/// Saturating callback and payload counts observed while advancing one cloned
+/// processor. Query counters report parser callbacks, not response sizes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResourceCensus {
     /// Total `Handler::input` callbacks, including REP repetitions.
     pub input_chars: u64,
     /// Input callbacks whose pinned Unicode width is zero.
     pub zero_width_chars: u64,
+    /// Number of title-set callbacks, including reset-title callbacks.
+    pub title_set_callbacks: u64,
     /// UTF-8 bytes delivered through title callbacks.
     pub title_bytes: u64,
+    /// Largest UTF-8 title payload delivered by one set-title callback.
+    pub max_title_bytes: u64,
+    /// Number of title-stack pop callbacks.
+    pub title_pops: u64,
+    /// Number of hyperlink callbacks, including close-link callbacks.
+    pub hyperlink_updates: u64,
     /// UTF-8 bytes delivered in hyperlink identifiers.
     pub hyperlink_id_bytes: u64,
+    /// Largest UTF-8 identifier delivered by one hyperlink callback.
+    pub max_hyperlink_id_bytes: u64,
     /// UTF-8 bytes delivered in hyperlink URIs.
     pub hyperlink_uri_bytes: u64,
+    /// Largest UTF-8 URI delivered by one hyperlink callback.
+    pub max_hyperlink_uri_bytes: u64,
     /// Title-stack push callbacks.
     pub title_pushes: u64,
+    /// Device-attribute query callbacks.
+    pub identify_terminal_queries: u64,
+    /// Device-status query callbacks.
+    pub device_status_queries: u64,
+    /// DECRPM query callbacks.
+    pub report_mode_queries: u64,
+    /// DECRPM private-mode query callbacks.
+    pub report_private_mode_queries: u64,
+    /// Dynamic-color query callbacks.
+    pub dynamic_color_queries: u64,
+    /// UTF-8 bytes in dynamic-color callback prefix and terminator strings.
+    pub dynamic_color_query_bytes: u64,
+    /// Text-area size query callbacks (pixels).
+    pub text_area_size_pixels_queries: u64,
+    /// Text-area size query callbacks (characters).
+    pub text_area_size_chars_queries: u64,
+    /// Keyboard-mode query callbacks.
+    pub report_keyboard_mode_queries: u64,
+    /// Modify-other-keys query callbacks.
+    pub report_modify_other_keys_queries: u64,
+    /// OSC 52 clipboard-load query callbacks.
+    pub clipboard_load_queries: u64,
+    /// UTF-8 bytes in OSC 52 clipboard-load terminators.
+    pub clipboard_load_terminator_bytes: u64,
     /// True if any counter saturated at `u64::MAX`.
     pub saturated: bool,
 }
@@ -61,6 +98,20 @@ impl ResourceCensus {
             }
         }
     }
+
+    fn update_max_bytes(counter: &mut u64, saturated: &mut bool, amount: usize) {
+        match u64::try_from(amount) {
+            Ok(amount) => *counter = (*counter).max(amount),
+            Err(_) => {
+                *counter = u64::MAX;
+                *saturated = true;
+            }
+        }
+    }
+
+    fn increment(counter: &mut u64, saturated: &mut bool) {
+        Self::add_counter(counter, saturated, 1);
+    }
 }
 
 impl Handler for ResourceCensus {
@@ -73,18 +124,31 @@ impl Handler for ResourceCensus {
     }
 
     fn set_title(&mut self, title: Option<String>) {
+        Self::increment(&mut self.title_set_callbacks, &mut self.saturated);
         if let Some(title) = title {
             Self::add_bytes(&mut self.title_bytes, &mut self.saturated, title.len());
+            Self::update_max_bytes(&mut self.max_title_bytes, &mut self.saturated, title.len());
         }
     }
 
     fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
+        Self::increment(&mut self.hyperlink_updates, &mut self.saturated);
         if let Some(hyperlink) = hyperlink {
             if let Some(id) = hyperlink.id {
                 Self::add_bytes(&mut self.hyperlink_id_bytes, &mut self.saturated, id.len());
+                Self::update_max_bytes(
+                    &mut self.max_hyperlink_id_bytes,
+                    &mut self.saturated,
+                    id.len(),
+                );
             }
             Self::add_bytes(
                 &mut self.hyperlink_uri_bytes,
+                &mut self.saturated,
+                hyperlink.uri.len(),
+            );
+            Self::update_max_bytes(
+                &mut self.max_hyperlink_uri_bytes,
                 &mut self.saturated,
                 hyperlink.uri.len(),
             );
@@ -92,7 +156,69 @@ impl Handler for ResourceCensus {
     }
 
     fn push_title(&mut self) {
-        Self::add_counter(&mut self.title_pushes, &mut self.saturated, 1);
+        Self::increment(&mut self.title_pushes, &mut self.saturated);
+    }
+
+    fn pop_title(&mut self) {
+        Self::increment(&mut self.title_pops, &mut self.saturated);
+    }
+
+    fn identify_terminal(&mut self, _: Option<char>) {
+        Self::increment(&mut self.identify_terminal_queries, &mut self.saturated);
+    }
+
+    fn device_status(&mut self, _: usize) {
+        Self::increment(&mut self.device_status_queries, &mut self.saturated);
+    }
+
+    fn report_mode(&mut self, _: crate::vte::ansi::Mode) {
+        Self::increment(&mut self.report_mode_queries, &mut self.saturated);
+    }
+
+    fn report_private_mode(&mut self, _: crate::vte::ansi::PrivateMode) {
+        Self::increment(&mut self.report_private_mode_queries, &mut self.saturated);
+    }
+
+    fn dynamic_color_sequence(&mut self, prefix: String, _: usize, terminator: &str) {
+        Self::increment(&mut self.dynamic_color_queries, &mut self.saturated);
+        Self::add_bytes(
+            &mut self.dynamic_color_query_bytes,
+            &mut self.saturated,
+            prefix.len(),
+        );
+        Self::add_bytes(
+            &mut self.dynamic_color_query_bytes,
+            &mut self.saturated,
+            terminator.len(),
+        );
+    }
+
+    fn text_area_size_pixels(&mut self) {
+        Self::increment(&mut self.text_area_size_pixels_queries, &mut self.saturated);
+    }
+
+    fn text_area_size_chars(&mut self) {
+        Self::increment(&mut self.text_area_size_chars_queries, &mut self.saturated);
+    }
+
+    fn report_keyboard_mode(&mut self) {
+        Self::increment(&mut self.report_keyboard_mode_queries, &mut self.saturated);
+    }
+
+    fn report_modify_other_keys(&mut self) {
+        Self::increment(
+            &mut self.report_modify_other_keys_queries,
+            &mut self.saturated,
+        );
+    }
+
+    fn clipboard_load(&mut self, _: u8, terminator: &str) {
+        Self::increment(&mut self.clipboard_load_queries, &mut self.saturated);
+        Self::add_bytes(
+            &mut self.clipboard_load_terminator_bytes,
+            &mut self.saturated,
+            terminator.len(),
+        );
     }
 }
 
@@ -507,10 +633,107 @@ mod tests {
             &processor,
             b"\x1b]2;hello\x07\x1b]8;id=xy;https://e.test\x07\x1b[22t",
         );
+        assert_eq!(census.title_set_callbacks, 1);
         assert_eq!(census.title_bytes, 5);
+        assert_eq!(census.max_title_bytes, 5);
+        assert_eq!(census.hyperlink_updates, 1);
         assert_eq!(census.hyperlink_id_bytes, 2);
+        assert_eq!(census.max_hyperlink_id_bytes, 2);
         assert_eq!(census.hyperlink_uri_bytes, "https://e.test".len() as u64);
+        assert_eq!(
+            census.max_hyperlink_uri_bytes,
+            "https://e.test".len() as u64
+        );
         assert_eq!(census.title_pushes, 1);
+    }
+
+    #[test]
+    fn census_counts_title_push_amplification_and_partial_osc_continuation() {
+        let mut processor = Processor::<TestTimeout>::new();
+        let mut ignore = ResourceCensus::default();
+        processor.advance(&mut ignore, b"\x1b]2;title-prefix");
+        let before = state(&processor);
+
+        let suffix = format!("{}\x07{}", "x".repeat(4096), "\x1b[22t".repeat(100));
+        let census = census_output(&processor, suffix.as_bytes());
+        assert_eq!(census.title_set_callbacks, 1);
+        assert_eq!(census.title_bytes, ("title-prefix".len() + 4096) as u64);
+        assert_eq!(census.max_title_bytes, ("title-prefix".len() + 4096) as u64);
+        assert_eq!(census.title_pushes, 100);
+        assert_eq!(census.title_pops, 0);
+        assert_eq!(state(&processor), before);
+
+        let pop_processor = Processor::<TestTimeout>::new();
+        let pop_census = census_output(&pop_processor, b"\x1b[23t\x1b[23t");
+        assert_eq!(pop_census.title_pops, 2);
+        assert_eq!(
+            state(&pop_processor),
+            state(&Processor::<TestTimeout>::new())
+        );
+    }
+
+    #[test]
+    fn sync_timeout_census_counts_buffered_osc_without_mutating_processor() {
+        let mut processor = Processor::<TestTimeout>::new();
+        let mut ignore = ResourceCensus::default();
+        processor.advance(&mut ignore, b"\x1b[?2026h\x1b]2;buffered\x07");
+        assert!(processor.sync_timeout().pending_timeout());
+        let before = state(&processor);
+
+        let census = census_sync_timeout(&processor);
+        assert_eq!(census.title_set_callbacks, 1);
+        assert_eq!(census.title_bytes, "buffered".len() as u64);
+        assert_eq!(census.max_title_bytes, "buffered".len() as u64);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
+    fn census_counts_repeated_long_osc8_updates_and_maximum_payloads() {
+        let mut bytes = Vec::new();
+        let uri = "u".repeat(4096);
+        for index in 0..8 {
+            bytes.extend_from_slice(format!("\x1b]8;id={index};{uri}\x07").as_bytes());
+        }
+        assert!(bytes.len() < 0x1_0000);
+
+        let processor = Processor::<TestTimeout>::new();
+        let before = state(&processor);
+        let census = census_output(&processor, &bytes);
+        assert_eq!(census.hyperlink_updates, 8);
+        assert_eq!(census.hyperlink_id_bytes, 8); // Each numeric id is one digit.
+        assert_eq!(census.max_hyperlink_id_bytes, 1);
+        assert_eq!(census.hyperlink_uri_bytes, 8 * 4096);
+        assert_eq!(census.max_hyperlink_uri_bytes, 4096);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
+    fn census_counts_all_term_query_callbacks_without_answering_them() {
+        let query_block = concat!(
+            "\x1b[c\x1b[>c",               // Primary and secondary device attributes.
+            "\x1b[5n\x1b[6n",              // Device status.
+            "\x1b[4$p\x1b[?25$p",          // Public and private mode reports.
+            "\x1b[14t\x1b[18t",            // Pixel and character dimensions.
+            "\x1b[?u\x1b[?4m",             // Keyboard and modify-other-keys reports.
+            "\x1b]4;1;?\x07\x1b]10;?\x07", // Dynamic colors.
+            "\x1b]52;c;?\x07",             // Clipboard load query.
+        );
+        let bytes = query_block.repeat(256);
+        let processor = Processor::<TestTimeout>::new();
+        let before = state(&processor);
+        let census = census_output(&processor, bytes.as_bytes());
+        assert_eq!(census.identify_terminal_queries, 2 * 256);
+        assert_eq!(census.device_status_queries, 2 * 256);
+        assert_eq!(census.report_mode_queries, 256);
+        assert_eq!(census.report_private_mode_queries, 256);
+        assert_eq!(census.text_area_size_pixels_queries, 256);
+        assert_eq!(census.text_area_size_chars_queries, 256);
+        assert_eq!(census.report_keyboard_mode_queries, 256);
+        assert_eq!(census.report_modify_other_keys_queries, 256);
+        assert_eq!(census.dynamic_color_queries, 2 * 256);
+        assert!(census.dynamic_color_query_bytes > 0);
+        assert_eq!(census.clipboard_load_queries, 256);
+        assert_eq!(state(&processor), before);
     }
 
     #[test]

@@ -71,3 +71,16 @@ The five payload estimates match the original diagnostic; p95 traversal costs
 are 0.018/2.766/6.179/0.018/1.742 ms in fixture order. Concurrent long runs remain
 active, so neither set proves isolated performance. A policy based only on
 incoming mark bytes would miss the demonstrated fanout and is not installed.
+
+The pinned-parser census now counts title set/pop and payload maxima,
+hyperlink updates/maxima and each Term query callback kind, including OSC52
+queries which the configured live model disables. Partial and synchronized OSC,
+title pushes, long OSC8 updates and CSI-only query storms preserve original
+parser checkpoint bytes. Counts do not execute handlers or establish response
+byte bounds. See [admission plan](../research/terminal-admission-plan.md).
+
+Checkpoint export now borrows grids and payloads; shared two-grid import bounds
+and early envelope validation are integrated. The measured component RSS
+comparison and exact compatibility evidence are in
+[ADR0009](../adr/0009-borrowed-checkpoint-export.md). These repairs do not close
+the global budget, live growth or transient-reservation gaps above.

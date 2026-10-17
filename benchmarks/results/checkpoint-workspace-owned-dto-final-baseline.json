@@ -1,0 +1,29 @@
+{
+  "status": "completed",
+  "captured_at_utc": "2026-10-17T00:02:27.992126+00:00",
+  "scope": "Fresh actual-model allocation_census process incl fixture construction, retained model, repeated census and owned DTO checkpoint export; new borrowed module is compiled but not used by Terminal.checkpoint. No host/UI/GPU/provider. Not whole-product acceptance.",
+  "binary_sha256": "0dca464354e7b7ef46781b1a85e1aa4d0ff9c79a55282f440d180c6d751a1e75",
+  "frozen_binary": "/home/afterburner/.local/state/pigade/checkpoint-workspace-20261017/allocation-census-owned-dto-final",
+  "ru_maxrss_kib": 88576,
+  "source_sha256": {
+    "crates/terminal/src/lib.rs": "7aacf654e7d3ea11a6ad0d4d3558d1520678fe10415ebe53e1993c22b8e6577d",
+    "crates/terminal/examples/allocation_census.rs": "383a9b4172ac136e52e9e62306659d8570b5135790a7ef2bbe382cc2e291866b",
+    "vendor/alacritty_terminal/src/term/resources.rs": "ef4ed641127abd01999f68030622b6cdbe7b3246975e256b48bab5b5a8547322",
+    "vendor/alacritty_terminal/src/term/checkpoint.rs": "6b00f2b774ff2bad0560dee5074d1e8ad5a72fcb922d13a241e0f0c000caad32",
+    "vendor/alacritty_terminal/src/term/checkpoint/borrowed.rs": "d22bccf8f83127d14c09e32e1e6da29b852f30ab10a8fab73c88765289a398f0",
+    "vendor/alacritty_terminal/src/grid/checkpoint.rs": "b6258686810568495f9ae8963ba8fbf337db41045835c09875f55f0b579707cd",
+    "vendor/alacritty_terminal/src/grid/mod.rs": "2dac1d988483d0d9db083b87c81f896791245ae5019658e8d83b81ffb1bc5560",
+    "vendor/alacritty_terminal/src/term/cell.rs": "fffb7a44c9dcc138abc4da7a31a81da29cc50710ac9d7fb9133ab5c5fc7ebd9b"
+  },
+  "source_unchanged_during_run": true,
+  "all_checkpoints_unchanged": true,
+  "fixtures": [
+    "empty-120x36",
+    "10000-hot-rows-120x36",
+    "10000-hot-rows-after-50-resizes",
+    "262144-combining-marks-one-cell",
+    "4096-distinct-hyperlinks-1KiB-each"
+  ],
+  "hardware_reference": "hardware-20261017.json",
+  "ambient_workload": "Concurrent fullcorpus and builds. Actual24hsoak failed and is stopped. No cache eviction/isolatedperformance claim."
+}

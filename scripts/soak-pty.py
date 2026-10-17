@@ -33,32 +33,47 @@ ROWS, COLS = 36, 120
 # The producer splits UTF-8, CSI/OSC, and synchronized-output sequences across
 # separate PTY writes. Every byte, including ACKs, is covered by its CRC.
 PRODUCER = r'''
-import os,select,sys,termios,time,tty,zlib
+import errno,os,select,sys,termios,time,tty,zlib
+from collections import deque
 stream=int(sys.argv[1]); duration=int(sys.argv[2]); rate=int(sys.argv[3])
 tty.setraw(0,termios.TCSANOW)
-crc=count=0; pending=b''; stop=False
+crc=count=0; pending=b''; stop=False; commands=deque()
 def emit(data):
  global crc,count
  view=memoryview(data)
  while view:
   n=os.write(1,view); crc=zlib.crc32(view[:n],crc); count+=n; view=view[n:]
-def read_commands():
+def receive_commands(timeout=0):
  global pending,stop
- while select.select([0],[],[],0)[0]:
-  data=os.read(0,4096)
+ ready,_,_=select.select([0],[],[],timeout)
+ while ready:
+  try: data=os.read(0,4096)
+  except OSError as error:
+   if error.errno==errno.EIO: stop=True; return
+   raise
   if not data: stop=True; return
   pending+=data
- lines=pending.split(b'\n'); pending=lines.pop()
- for line in lines:
+  lines=pending.split(b'\n'); pending=lines.pop()
+  commands.extend(lines)
+  ready,_,_=select.select([0],[],[],0)
+def read_commands():
+ global stop
+ receive_commands()
+ while commands and not stop:
+  line=commands.popleft()
   if line.startswith(b'PING:'):
    token=line[5:]; emit(b'\r\nACK:'+token+b'\r\n')
    while True:
-    ready,_,_=select.select([0],[],[],.05)
-    if not ready: continue
-    pending+=os.read(0,4096)
-    commands=pending.split(b'\n'); pending=commands.pop()
-    if b'RELEASE:'+token in commands: break
-    if b'FINISH' in commands: stop=True; break
+    release=b'RELEASE:'+token
+    if release in commands:
+     commands.remove(release)
+     break
+    if b'FINISH' in commands:
+     commands.remove(b'FINISH')
+     stop=True
+     break
+    receive_commands(.05)
+    if stop: break
   elif line==b'FINISH': stop=True
 emit(('READY:%d\r\n'%stream).encode())
 start=time.monotonic_ns(); deadline=start+duration*1000000000

@@ -8,12 +8,14 @@ use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
 };
 pub(crate) mod bounded;
+pub(crate) mod borrowed;
 pub(crate) mod pools;
+pub use borrowed::TermCheckpointRef;
 pub use pools::{CellCheckpointV2, ExtraCheckpointV2, HyperlinkCheckpointV2};
 use pools::{ExportPools, ImportPools};
 
 use super::{Config, Osc52, TabStops, Term, TermDamageState, TermMode, color};
-use crate::grid::checkpoint::GridCheckpointV1;
+use crate::grid::checkpoint::{GridCheckpointV1, GridCheckpointV1Seed};
 use crate::index::{Line, Point};
 use crate::selection::Selection;
 use crate::vi_mode::ViModeCursor;
@@ -149,6 +151,11 @@ pub struct TermCheckpointV1 {
 }
 
 const MAX_COMBINING_CHARS: usize = 33_554_432;
+// The normal grid can consume its existing per-grid cap; the alternate grid
+// needs only its maximum viewport. This preserves every valid generic Term
+// checkpoint while preventing both grids from each consuming the full cap.
+const MAX_GRID_CELLS: usize = 16_777_216 + 512 * 4096;
+const MAX_GRID_CELLS_PER_GRID: usize = 16_777_216;
 fn index_count<I: Iterator<Item = u32> + Clone>(indices: I) -> Result<usize, CheckpointError> {
     let mut references = 0usize;
     let mut maximum = None;
@@ -234,6 +241,7 @@ impl<'de> Deserialize<'de> for TermCheckpointV1 {
                 self,
                 mut sequence: A,
             ) -> Result<Self::Value, A::Error> {
+                let mut grid_cell_budget = MAX_GRID_CELLS;
                 let schema: u32 = sequence
                     .next_element()?
                     .ok_or_else(|| de::Error::missing_field("schema"))?;
@@ -256,10 +264,16 @@ impl<'de> Deserialize<'de> for TermCheckpointV1 {
                     .next_element()?
                     .ok_or_else(|| de::Error::missing_field("selection"))?;
                 let grid: GridCheckpointV1 = sequence
-                    .next_element()?
+                    .next_element_seed(GridCheckpointV1Seed::new(
+                        &mut grid_cell_budget,
+                        MAX_GRID_CELLS_PER_GRID,
+                    ))?
                     .ok_or_else(|| de::Error::missing_field("grid"))?;
                 let inactive_grid: GridCheckpointV1 = sequence
-                    .next_element()?
+                    .next_element_seed(GridCheckpointV1Seed::new(
+                        &mut grid_cell_budget,
+                        MAX_GRID_CELLS_PER_GRID,
+                    ))?
                     .ok_or_else(|| de::Error::missing_field("inactive_grid"))?;
                 let extra_pool: Vec<ExtraCheckpointV2> = sequence
                     .next_element_seed(pools::ExtraPoolSeed::new(
@@ -341,6 +355,7 @@ impl<'de> Deserialize<'de> for TermCheckpointV1 {
                 })
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut grid_cell_budget = MAX_GRID_CELLS;
                 let mut schema: Option<u32> = None;
                 let mut core: Option<String> = None;
                 let mut is_focused: Option<bool> = None;
@@ -398,13 +413,19 @@ impl<'de> Deserialize<'de> for TermCheckpointV1 {
                             if grid.is_some() {
                                 return Err(de::Error::duplicate_field("grid"));
                             }
-                            grid = Some(map.next_value()?);
+                            grid = Some(map.next_value_seed(GridCheckpointV1Seed::new(
+                                &mut grid_cell_budget,
+                                MAX_GRID_CELLS_PER_GRID,
+                            ))?);
                         }
                         Field::InactiveGrid => {
                             if inactive_grid.is_some() {
                                 return Err(de::Error::duplicate_field("inactive_grid"));
                             }
-                            inactive_grid = Some(map.next_value()?);
+                            inactive_grid = Some(map.next_value_seed(GridCheckpointV1Seed::new(
+                                &mut grid_cell_budget,
+                                MAX_GRID_CELLS_PER_GRID,
+                            ))?);
                         }
                         Field::ExtraPool => {
                             if extra_pool.is_some() {

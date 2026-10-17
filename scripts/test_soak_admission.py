@@ -1,6 +1,12 @@
 """Retry safety at the boundary between rejection and an unknown outcome."""
 import importlib.util
+import os
+import pty
 from pathlib import Path
+import select
+import subprocess
+import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -78,6 +84,88 @@ class AdmissionRetryTests(unittest.TestCase):
         self.assertEqual(clock.now, .04)
         self.assertTrue(all(call.kwargs["timeout"] <= .04
                             for call in request.call_args_list))
+
+
+class ProducerCommandQueueTests(unittest.TestCase):
+    def test_release_and_next_ping_in_one_pty_read_preserve_next_command(self):
+        master, slave = pty.openpty()
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-u", "-c", SOAK.PRODUCER, "0", "30", "257"],
+            stdin=slave,
+            stdout=slave,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        os.close(slave)
+        output = bytearray()
+
+        def wait_for(marker, timeout=3):
+            deadline = time.monotonic() + timeout
+            while marker not in output:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.fail(f"producer did not emit {marker!r}; exit={child.poll()}")
+                ready, _, _ = select.select([master], [], [], remaining)
+                if ready:
+                    output.extend(os.read(master, 8192))
+
+        try:
+            wait_for(b"READY:0")
+            os.write(master, b"PING:first\n")
+            wait_for(b"ACK:first")
+
+            # A fast ACK loop can put the prior token's release and the next
+            # token in one PTY read. The consumer must retain lines after the
+            # release rather than dropping the following PING.
+            os.write(master, b"RELEASE:first\nPING:next\n")
+            wait_for(b"ACK:next")
+
+            os.write(master, b"RELEASE:next\nFINISH\n")
+            self.assertEqual(child.wait(timeout=3), 0)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=3)
+            os.close(master)
+
+    def test_pty_eof_during_ack_wait_exits_instead_of_spinning(self):
+        master, slave = pty.openpty()
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-u", "-c", SOAK.PRODUCER, "0", "30", "257"],
+            stdin=slave,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        os.close(slave)
+        output = bytearray()
+
+        def wait_for(marker, timeout=3):
+            deadline = time.monotonic() + timeout
+            while marker not in output:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.fail(f"producer did not emit {marker!r}; exit={child.poll()}")
+                ready, _, _ = select.select([child.stdout.fileno()], [], [], remaining)
+                if ready:
+                    output.extend(os.read(child.stdout.fileno(), 8192))
+
+        try:
+            wait_for(b"READY:0")
+            os.write(master, b"PING:eof\n")
+            wait_for(b"ACK:eof")
+            os.close(master)
+            master = -1
+            tail, _ = child.communicate(timeout=3)
+            output.extend(tail)
+            self.assertEqual(child.returncode, 0)
+            self.assertIn(b"PIGADE_ENDCRC:0:", output)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=3)
+            if master >= 0:
+                os.close(master)
 
 
 if __name__ == "__main__":

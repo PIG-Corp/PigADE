@@ -1,0 +1,164 @@
+{
+  "status": "completed",
+  "captured_at_utc": "2026-10-17T00:05:29.868592+00:00",
+  "scope": "Ten alternating fresh processes per variant running identical actual-model allocation_census fixtures. RSS includes fixture construction/reflow/census and export; not isolated checkpoint workspace or product budget.",
+  "percentile_method": "nearest rank; ten samples per variant (p95/p99 are sample maxima)",
+  "binary_sha256": {
+    "owned": "0dca464354e7b7ef46781b1a85e1aa4d0ff9c79a55282f440d180c6d751a1e75",
+    "borrowed": "c501adba03b617feaa02d0bddf56f5ec6032a7028d8c880cb265797feb7bbcdc"
+  },
+  "references": [
+    "checkpoint-workspace-owned-dto-final-baseline.json",
+    "checkpoint-workspace-borrowed-rss.json"
+  ],
+  "sample_method": "owned Popen child os.wait4(pid,0).ru_maxrss, Linux KiB; each diagnostic independently checks unchanged complete checkpoints",
+  "ambient_workload": "Frozen fullcorpus/build overlap; no UI/GPU/provider; no isolated timing claim",
+  "samples": [
+    {
+      "cycle": 0,
+      "variant": "owned",
+      "elapsed_seconds": 0.9084462060018268,
+      "max_rss_kib": 88644
+    },
+    {
+      "cycle": 0,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8241183399986767,
+      "max_rss_kib": 81540
+    },
+    {
+      "cycle": 1,
+      "variant": "owned",
+      "elapsed_seconds": 0.8928558339976007,
+      "max_rss_kib": 88276
+    },
+    {
+      "cycle": 1,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8231960699995398,
+      "max_rss_kib": 79084
+    },
+    {
+      "cycle": 2,
+      "variant": "owned",
+      "elapsed_seconds": 0.8925320640009886,
+      "max_rss_kib": 88268
+    },
+    {
+      "cycle": 2,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8150546549986757,
+      "max_rss_kib": 82168
+    },
+    {
+      "cycle": 3,
+      "variant": "owned",
+      "elapsed_seconds": 0.8955313929982367,
+      "max_rss_kib": 90284
+    },
+    {
+      "cycle": 3,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.817234786998597,
+      "max_rss_kib": 79740
+    },
+    {
+      "cycle": 4,
+      "variant": "owned",
+      "elapsed_seconds": 0.8815767839987529,
+      "max_rss_kib": 88352
+    },
+    {
+      "cycle": 4,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8238229210001009,
+      "max_rss_kib": 78516
+    },
+    {
+      "cycle": 5,
+      "variant": "owned",
+      "elapsed_seconds": 0.8995923139991646,
+      "max_rss_kib": 88196
+    },
+    {
+      "cycle": 5,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8103528740030015,
+      "max_rss_kib": 80728
+    },
+    {
+      "cycle": 6,
+      "variant": "owned",
+      "elapsed_seconds": 0.8986520029975509,
+      "max_rss_kib": 90484
+    },
+    {
+      "cycle": 6,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8191154820015072,
+      "max_rss_kib": 80868
+    },
+    {
+      "cycle": 7,
+      "variant": "owned",
+      "elapsed_seconds": 0.8915490170002158,
+      "max_rss_kib": 90400
+    },
+    {
+      "cycle": 7,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8160163659995305,
+      "max_rss_kib": 80036
+    },
+    {
+      "cycle": 8,
+      "variant": "owned",
+      "elapsed_seconds": 0.8883436500000244,
+      "max_rss_kib": 88300
+    },
+    {
+      "cycle": 8,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8170478600004571,
+      "max_rss_kib": 80548
+    },
+    {
+      "cycle": 9,
+      "variant": "owned",
+      "elapsed_seconds": 0.8971870019995549,
+      "max_rss_kib": 88568
+    },
+    {
+      "cycle": 9,
+      "variant": "borrowed",
+      "elapsed_seconds": 0.8175926379990415,
+      "max_rss_kib": 79680
+    }
+  ],
+  "summary": {
+    "owned": {
+      "max_rss_kib": {
+        "p50": 88352,
+        "p95": 90484,
+        "p99": 90484
+      },
+      "elapsed_seconds": {
+        "p50": 0.8928558339976007,
+        "p95": 0.9084462060018268,
+        "p99": 0.9084462060018268
+      }
+    },
+    "borrowed": {
+      "max_rss_kib": {
+        "p50": 80036,
+        "p95": 82168,
+        "p99": 82168
+      },
+      "elapsed_seconds": {
+        "p50": 0.817234786998597,
+        "p95": 0.8241183399986767,
+        "p99": 0.8241183399986767
+      }
+    }
+  }
+}

@@ -407,6 +407,17 @@ impl<T> Grid<T> {
     pub(crate) fn allocation_rows(&self) -> (&[Row<T>], usize) {
         (self.raw.allocation_rows(), self.raw.allocation_row_capacity())
     }
+
+    /// Configured history limit for semantic checkpoint validation.
+    #[cfg(feature = "serde")]
+    pub(crate) fn checkpoint_max_scroll_limit(&self) -> usize {
+        self.max_scroll_limit
+    }
+
+    #[cfg(feature = "serde")]
+    pub(crate) fn checkpoint_rows(&self) -> impl Iterator<Item = &Row<T>> {
+        self.raw.checkpoint_rows()
+    }
 }
 
 impl<T> Grid<T> {

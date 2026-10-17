@@ -22,6 +22,14 @@ encoded-byte budget while writing. `Term::from_checkpoint(dto,event_proxy)`
 validates before core construction, emits no listener events and recreates full
 render damage. Listeners and allocation caches are runtime dependencies.
 
+`TermCheckpointRef::new(&term)` validates a borrowed serialization view with the
+same schema2 bytes, canonical row/cursor pool order and logical-column policy.
+It streams cells and borrows combining/title/link data rather than allocating
+full owned grid/payload DTOs. Identity maps and an encoded output buffer still
+allocate; this is not a global workspace budget. Keep source validation aligned
+with DTO validation. Byte-parity tests include all45 reference recordings at
+three cuts, distinct cursor extras, ring history and grown backing-row tails.
+
 Both grids include active history/visible rows, row occupancy, flags (including
 soft wrap), geometry, history/display offsets, current/saved cursor templates,
 all character sets and pending wrap. The ring offset is normalized; unused
@@ -60,6 +68,10 @@ preallocated from untrusted size hints. In particular:
 
 - At most 10,512 rows per grid; at most 4,096 cells per row and 16,777,216 cells
   per grid, enforced by seeds sharing the grid cell budget while decoding rows.
+- A Term shares an18,874,368-cell decode budget across both grids, while keeping
+  the per-grid cap. Every valid generic pair fits: at most16,777,216 normal cells
+  plus the maximum512×4096 alternate viewport. Each grid validates before the
+  next one is decoded. This remains a count bound, not a byte/RSS envelope.
 - Validated visible geometry: 1..512 rows, 2..4096 columns; history capacity at
   most 10,000. Normal history capacity must match Config; alternate history is
   zero. The PigADE wrapper has tighter 512x1024 geometry and its own profile.
@@ -221,3 +233,16 @@ marks Arc in a caller-built Term, round-trips it through a valid checkpoint,
 then uses the pinned VTE Processor to mutate two cells and exercise copy-on-
 write. This demonstrates a conservative accounting case, not that ordinary
 ANSI output from a fresh terminal creates that sharing pattern.
+
+The parser-derived census also counts title-set and title-pop callbacks,
+maximum individual title payload, hyperlink callback count and maximum
+individual identifier/URI payloads, and the callback counts for device
+attributes/status, public/private mode reports, dynamic colors, text-area
+sizes, keyboard mode, modify-other-keys, and OSC 52 clipboard-load queries.
+Dynamic-color prefix/terminator and clipboard-load terminator bytes are
+reported as payload counts. These callbacks are observed by advancing the
+same cloned pinned VTE Processor; the census does not run Term handlers,
+enqueue or answer effects, or invent response-byte bounds. Fixtures cover
+partial OSC continuation, synchronized-timeout drain, title push/pop
+amplification, repeated long OSC 8 updates, query-only CSI/OSC storms, and
+unchanged original processor checkpoints after census.

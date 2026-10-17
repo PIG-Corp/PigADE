@@ -187,6 +187,20 @@ struct CheckpointV2 {
     processor: alacritty_terminal::vte::ansi::ProcessorCheckpointV1<OrderedTimeout>,
 }
 
+// Schema2 uses this exact prefix in Postcard. Borrow it before decoding any
+// owned grids, pools or parser buffers; no duplicate terminal parser is involved.
+type CheckpointHeader<'a> = (u32, &'a str, Geometry, &'a str);
+
+#[derive(Serialize)]
+struct CheckpointExport<'a> {
+    schema: u32,
+    profile: &'static str,
+    geometry: Geometry,
+    title: &'a str,
+    term: alacritty_terminal::term::checkpoint::TermCheckpointRef<'a, Listener>,
+    processor: alacritty_terminal::vte::ansi::ProcessorCheckpointV1<OrderedTimeout>,
+}
+
 pub struct Terminal {
     term: Term<Listener>,
     parser: Processor<OrderedTimeout>,
@@ -236,19 +250,18 @@ impl Terminal {
     /// Complete semantic state export for the pinned experimental core pair.
     /// Runtime sinks/damage and wall-clock deadlines are deliberately reconstructed.
     pub fn checkpoint(&self) -> Result<Vec<u8>> {
-        let snapshot = CheckpointV2 {
-            schema: 2,
-            profile: CORE_PROFILE.into(),
-            geometry: self.geometry,
-            title: self.title.clone(),
-            term: self.term.export_checkpoint(),
-            processor: self.parser.export_checkpoint(),
-        };
-        snapshot.term.validate()?;
         ensure!(
-            snapshot.title.len() <= 65536,
+            self.title.len() <= 65536,
             "title checkpoint budget exceeded"
         );
+        let snapshot = CheckpointExport {
+            schema: 2,
+            profile: CORE_PROFILE,
+            geometry: self.geometry,
+            title: &self.title,
+            term: alacritty_terminal::term::checkpoint::TermCheckpointRef::new(&self.term)?,
+            processor: self.parser.export_checkpoint(),
+        };
         Ok(postcard::to_io(&snapshot, CheckpointWriter::new(CHECKPOINT_BYTE_LIMIT))?.bytes)
     }
     pub fn from_checkpoint(bytes: &[u8], live: bool) -> Result<Self> {
@@ -260,6 +273,11 @@ impl Terminal {
             bytes.len() <= CHECKPOINT_BYTE_LIMIT,
             "checkpoint byte budget exceeded"
         );
+        let ((schema, profile, _, title), _): (CheckpointHeader<'_>, _) =
+            postcard::take_from_bytes(bytes)?;
+        ensure!(schema == 2, "incompatible checkpoint schema");
+        ensure!(profile == CORE_PROFILE, "incompatible checkpoint profile");
+        ensure!(title.len() <= 65_536, "title checkpoint budget exceeded");
         let (snapshot, remaining): (CheckpointV2, &[u8]) = postcard::take_from_bytes(bytes)?;
         ensure!(
             remaining.is_empty() && snapshot.schema == 2 && snapshot.profile == CORE_PROFILE,
@@ -413,6 +431,73 @@ mod tests {
     fn term() -> Terminal {
         Terminal::new(Geometry::new(12, 80).unwrap(), false)
     }
+    fn owned_checkpoint_oracle(terminal: &Terminal) -> Vec<u8> {
+        let snapshot = CheckpointV2 {
+            schema: 2,
+            profile: CORE_PROFILE.into(),
+            geometry: terminal.geometry,
+            title: terminal.title.clone(),
+            term: terminal.term.export_checkpoint(),
+            processor: terminal.parser.export_checkpoint(),
+        };
+        snapshot.term.validate().unwrap();
+        postcard::to_io(&snapshot, CheckpointWriter::new(CHECKPOINT_BYTE_LIMIT))
+            .unwrap()
+            .bytes
+    }
+    #[test]
+    fn checkpoint_envelope_rejects_bad_headers_before_decoding_term() {
+        // These are deliberately truncated envelopes: no Term/parser follows.
+        // A header-specific error proves rejection precedes those allocations.
+        let geometry = Geometry::new(12, 80).unwrap();
+        for (schema, profile, title, expected) in [
+            (
+                3,
+                CORE_PROFILE,
+                String::new(),
+                "incompatible checkpoint schema",
+            ),
+            (
+                2,
+                "wrong-profile",
+                String::new(),
+                "incompatible checkpoint profile",
+            ),
+            (
+                2,
+                CORE_PROFILE,
+                "Ж".repeat(32_769),
+                "title checkpoint budget exceeded",
+            ),
+        ] {
+            let bytes = postcard::to_allocvec(&(schema as u32, profile, geometry, title)).unwrap();
+            let error = Terminal::from_checkpoint(&bytes, false).err().unwrap();
+            assert!(error.to_string().contains(expected), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn checkpoint_title_import_matches_export_byte_limit() {
+        let original = term();
+        let saved = original.checkpoint().unwrap();
+        let mut snapshot: CheckpointV2 = postcard::from_bytes(&saved).unwrap();
+        snapshot.title = "Ж".repeat(32_768);
+        let boundary = postcard::to_allocvec(&snapshot).unwrap();
+        let restored = Terminal::from_checkpoint(&boundary, false).unwrap();
+        assert_eq!(restored.frame().title.len(), 65_536);
+        assert_eq!(restored.checkpoint().unwrap(), boundary);
+
+        snapshot.title.push('x');
+        let excessive = postcard::to_allocvec(&snapshot).unwrap();
+        let error = Terminal::from_checkpoint(&excessive, false).err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("title checkpoint budget exceeded")
+        );
+        assert_eq!(original.checkpoint().unwrap(), saved);
+    }
+
     #[test]
     fn utf8_and_escape_boundaries_do_not_change_cells() {
         let bytes = "Начало e\u{301} 界 👩\u{200d}💻\r\n\x1b[38;2;21;54;89mцвет\x1b[0m\x1b[?2004h\x1b]8;id=fixture;https://example.test\x07link\x1b]8;;\x07".as_bytes();
@@ -459,6 +544,11 @@ mod tests {
                 let mut live = term();
                 live.output(&bytes[..cut]);
                 let saved = live.checkpoint().unwrap();
+                assert_eq!(
+                    saved,
+                    owned_checkpoint_oracle(&live),
+                    "checkpoint wire changed: fixture={index} cut={cut}"
+                );
                 let mut restored = Terminal::from_checkpoint(&saved, false)
                     .unwrap_or_else(|e| panic!("fixture={index} cut={cut}: {e:#}"));
                 assert!(

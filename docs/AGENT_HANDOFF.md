@@ -281,6 +281,39 @@ ordinary ANSI reachability. Fresh release diagnostic results are in
 use incoming mark bytes alone; global/event/transient budgeting remains open.
 
 Latest retained-run inspection: the first two full corpus journals have reached
-1 GiB plus framing and their oracles completed; session three is generating.
-The soak has reached 3,603.09 seconds, 710 ACKs and 1,172 resizes per PTY, sampled
-host RSS277,217,280 bytes. These are running progress samples, not completed gates.
+1 GiB plus framing and their oracles completed; session three has reached its
+requested byte count and is verifying. The second real-time soak **FAILED at
+3,849.40 seconds** with `input ACK timeout: SOAK-0-755`; tool86044 has exited.
+See `benchmarks/results/soak-second-3849s-ack-timeout.json`. Earlier running
+samples above are historical. Do not start another24h attempt before the runner
+command-queue defect and its bounded PTY smoke are verified. Coalesced RELEASE
+and next PING were reproducibly discarded by the old producer; this matches the
+failure but input is intentionally not journaled, so the exact archived cause
+cannot be established as unique. The frozen corpus remains running/tool65474.
+
+Next resource work is sequenced in `research/terminal-admission-plan.md`.
+Borrowed-header import validation, aggregate two-grid decode budget and the
+query/title/link callback census are integrated. The wrapper now streams
+borrowed Term state into the same bounded writer, preserving exact schema2
+bytes. Root135 workspace tests and29 Python tests pass, plus vendor173 library
+tests,45 reference cases and no-default check. Workspace strict Clippy/fmt and
+release bins/examples pass. Vendor all-target Clippy passes with only the
+three existing tty/unix question_mark lints forced to warning; do not describe
+that exception as an entirely clean strict vendor run. App29 tests remain the
+unchanged verified baseline. ADR0009 records source validation, canonical pool
+order, all45×3 capture comparisons and full-envelope boundary oracles.
+
+Ten alternating fresh diagnostic processes per variant reduce model-process
+maximum-RSS p95 from90,484 to82,168 KiB. This includes fixture creation/reflow,
+census and export, not isolated checkpoint workspace or product RSS. Sources,
+frozen binaries and all samples are in the checkpoint-workspace JSON artifacts.
+Initial exploratory baseline remains marked as such.
+
+The producer queue and EOF fixes passed six focused tests and a real10.015s
+four-PTY smoke with journal CRC and full/checkpoint-tail hot/parser/frame/cold
+equality. Curated result: `benchmarks/results/soak-command-queue-fixed-10s.json`.
+A third actual24h attempt is now running at
+`/home/afterburner/.local/state/pigade/soak/soak-20261017T000738Z-6244149d`, tool44117,
+frozen hostSHA67ed712c…/PID1004612 with boot/start identity in its manifest. At
+120.07s it has23 ACKs and39 resizes perPTY and no admission retries. This does
+not pass24h; do not launch a duplicate. Previous tool86044 is a retained failure.

@@ -97,10 +97,9 @@ impl CursorCheckpointV1 {
 
 /// Rows are canonicalized to ring offset zero and contain only active history
 /// plus visible rows. A resize allocation cache is not semantic terminal state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GridCheckpointV1 {
-    #[serde(deserialize_with = "deserialize_rows")]
     pub rows: Vec<RowCheckpointV2>,
     pub columns: usize,
     pub lines: usize,
@@ -108,6 +107,176 @@ pub struct GridCheckpointV1 {
     pub max_scroll_limit: usize,
     pub cursor: CursorCheckpointV1,
     pub saved_cursor: CursorCheckpointV1,
+}
+
+/// Decode one grid against both its historical per-grid cell cap and a caller
+/// supplied aggregate budget. The aggregate budget lets a Term share one cap
+/// across its normal and alternate grids without changing this grid's wire form.
+pub(crate) struct GridCheckpointV1Seed<'a> {
+    remaining: &'a mut usize,
+    per_grid_limit: usize,
+}
+
+impl<'a> GridCheckpointV1Seed<'a> {
+    pub(crate) fn new(remaining: &'a mut usize, per_grid_limit: usize) -> Self {
+        Self {
+            remaining,
+            per_grid_limit,
+        }
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for GridCheckpointV1Seed<'_> {
+    type Value = GridCheckpointV1;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        struct GridVisitor<'a> {
+            budget: &'a mut usize,
+        }
+
+        impl<'de> Visitor<'de> for GridVisitor<'_> {
+            type Value = GridCheckpointV1;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a bounded terminal grid checkpoint")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let rows = sequence
+                    .next_element_seed(RowsSeed::new(self.budget))?
+                    .ok_or_else(|| de::Error::missing_field("rows"))?;
+                let columns = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("columns"))?;
+                let lines = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("lines"))?;
+                let display_offset = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("display_offset"))?;
+                let max_scroll_limit = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("max_scroll_limit"))?;
+                let cursor = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("cursor"))?;
+                let saved_cursor = sequence
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("saved_cursor"))?;
+                let grid = GridCheckpointV1 {
+                    rows,
+                    columns,
+                    lines,
+                    display_offset,
+                    max_scroll_limit,
+                    cursor,
+                    saved_cursor,
+                };
+                grid.validate().map_err(de::Error::custom)?;
+                Ok(grid)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                #[derive(Deserialize)]
+                #[serde(field_identifier, rename_all = "snake_case")]
+                enum Field {
+                    Rows,
+                    Columns,
+                    Lines,
+                    DisplayOffset,
+                    MaxScrollLimit,
+                    Cursor,
+                    SavedCursor,
+                }
+
+                let mut rows = None;
+                let mut columns = None;
+                let mut lines = None;
+                let mut display_offset = None;
+                let mut max_scroll_limit = None;
+                let mut cursor = None;
+                let mut saved_cursor = None;
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::Rows => {
+                            if rows.is_some() {
+                                return Err(de::Error::duplicate_field("rows"));
+                            }
+                            rows = Some(map.next_value_seed(RowsSeed::new(self.budget))?);
+                        }
+                        Field::Columns => set_once(&mut columns, map.next_value()?, "columns")?,
+                        Field::Lines => set_once(&mut lines, map.next_value()?, "lines")?,
+                        Field::DisplayOffset => {
+                            set_once(&mut display_offset, map.next_value()?, "display_offset")?
+                        }
+                        Field::MaxScrollLimit => {
+                            set_once(&mut max_scroll_limit, map.next_value()?, "max_scroll_limit")?
+                        }
+                        Field::Cursor => set_once(&mut cursor, map.next_value()?, "cursor")?,
+                        Field::SavedCursor => {
+                            set_once(&mut saved_cursor, map.next_value()?, "saved_cursor")?
+                        }
+                    }
+                }
+                let grid = GridCheckpointV1 {
+                    rows: rows.ok_or_else(|| de::Error::missing_field("rows"))?,
+                    columns: columns.ok_or_else(|| de::Error::missing_field("columns"))?,
+                    lines: lines.ok_or_else(|| de::Error::missing_field("lines"))?,
+                    display_offset: display_offset
+                        .ok_or_else(|| de::Error::missing_field("display_offset"))?,
+                    max_scroll_limit: max_scroll_limit
+                        .ok_or_else(|| de::Error::missing_field("max_scroll_limit"))?,
+                    cursor: cursor.ok_or_else(|| de::Error::missing_field("cursor"))?,
+                    saved_cursor: saved_cursor
+                        .ok_or_else(|| de::Error::missing_field("saved_cursor"))?,
+                };
+                grid.validate().map_err(de::Error::custom)?;
+                Ok(grid)
+            }
+        }
+
+        fn set_once<T, E: de::Error>(
+            slot: &mut Option<T>,
+            value: T,
+            name: &'static str,
+        ) -> Result<(), E> {
+            if slot.is_some() {
+                return Err(E::duplicate_field(name));
+            }
+            *slot = Some(value);
+            Ok(())
+        }
+
+        let initial = (*self.remaining).min(self.per_grid_limit);
+        let mut budget = initial;
+        let grid = deserializer.deserialize_struct(
+            "GridCheckpointV1",
+            &[
+                "rows",
+                "columns",
+                "lines",
+                "display_offset",
+                "max_scroll_limit",
+                "cursor",
+                "saved_cursor",
+            ],
+            GridVisitor {
+                budget: &mut budget,
+            },
+        )?;
+        *self.remaining -= initial - budget;
+        Ok(grid)
+    }
+}
+
+impl<'de> Deserialize<'de> for GridCheckpointV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut remaining = 16_777_216;
+        GridCheckpointV1Seed::new(&mut remaining, 16_777_216).deserialize(deserializer)
+    }
 }
 impl GridCheckpointV1 {
     pub fn validate(&self) -> Result<(), CheckpointError> {
@@ -310,44 +479,95 @@ impl<'de> DeserializeSeed<'de> for CellsSeed<'_> {
         deserializer.deserialize_seq(CellsVisitor(self.0))
     }
 }
-fn deserialize_rows<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<RowCheckpointV2>, D::Error> {
-    struct RowsVisitor;
-    impl<'de> Visitor<'de> for RowsVisitor {
-        type Value = Vec<RowCheckpointV2>;
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("at most 10512 terminal rows")
-        }
-        fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
-            const MAX_ROWS: usize = 10_512;
-            if sequence.size_hint().is_some_and(|hint| hint > MAX_ROWS) {
-                return Err(de::Error::custom("checkpoint row count limit exceeded"));
-            }
-            let mut rows = Vec::new();
-            let mut remaining = 16_777_216;
-            while rows.len() < MAX_ROWS {
-                match sequence.next_element_seed(RowSeed(&mut remaining))? {
-                    Some(row) => rows.push(row),
-                    None => return Ok(rows),
-                }
-            }
-            if sequence
-                .next_element_seed(bounded::Reject("checkpoint row count limit exceeded"))?
-                .is_some()
-            {
-                unreachable!();
-            }
-            Ok(rows)
-        }
+struct RowsSeed<'a> {
+    budget: &'a mut usize,
+}
+
+impl<'a> RowsSeed<'a> {
+    fn new(budget: &'a mut usize) -> Self {
+        Self { budget }
     }
-    deserializer.deserialize_seq(RowsVisitor)
+}
+
+impl<'de> DeserializeSeed<'de> for RowsSeed<'_> {
+    type Value = Vec<RowCheckpointV2>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        struct RowsVisitor<'a> {
+            budget: &'a mut usize,
+        }
+        impl<'de> Visitor<'de> for RowsVisitor<'_> {
+            type Value = Vec<RowCheckpointV2>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("at most 10512 terminal rows within the cell budget")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                const MAX_ROWS: usize = 10_512;
+                if sequence.size_hint().is_some_and(|hint| hint > MAX_ROWS) {
+                    return Err(de::Error::custom("checkpoint row count limit exceeded"));
+                }
+                let mut rows = Vec::new();
+                while rows.len() < MAX_ROWS {
+                    match sequence.next_element_seed(RowSeed(self.budget))? {
+                        Some(row) => rows.push(row),
+                        None => return Ok(rows),
+                    }
+                }
+                if sequence
+                    .next_element_seed(bounded::Reject("checkpoint row count limit exceeded"))?
+                    .is_some()
+                {
+                    unreachable!();
+                }
+                Ok(rows)
+            }
+        }
+        deserializer.deserialize_seq(RowsVisitor {
+            budget: self.budget,
+        })
+    }
 }
 
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+    use crate::{
+        index::{Column, Line},
+        term::checkpoint::pools::CellCheckpointV2,
+        vte::ansi::{Color, NamedColor},
+    };
     use serde::de::value::{Error, SeqDeserializer};
+
+    fn small_grid() -> GridCheckpointV1 {
+        let cell = CellCheckpointV2 {
+            c: ' ',
+            fg: Color::Named(NamedColor::White),
+            bg: Color::Named(NamedColor::Black),
+            flags: crate::term::cell::Flags::empty(),
+            extra: None,
+        };
+        let cursor = CursorCheckpointV1 {
+            point: Point::new(Line(0), Column(0)),
+            template: cell.clone(),
+            charsets: [CharsetV1::Ascii; 4],
+            input_needs_wrap: false,
+        };
+        GridCheckpointV1 {
+            rows: vec![RowCheckpointV2 {
+                cells: vec![cell.clone(), cell],
+                occupied: 0,
+            }],
+            columns: 2,
+            lines: 1,
+            display_offset: 0,
+            max_scroll_limit: 0,
+            cursor: cursor.clone(),
+            saved_cursor: cursor,
+        }
+    }
     struct AdvertisedRows;
     impl Iterator for AdvertisedRows {
         type Item = u8;
@@ -361,7 +581,10 @@ mod decode_tests {
     #[test]
     fn advertised_five_million_rows_rejected_before_first_element() {
         let decoder = SeqDeserializer::<_, Error>::new(AdvertisedRows);
-        let error = deserialize_rows(decoder).unwrap_err();
+        let mut remaining = 16_777_216;
+        let error = RowsSeed::new(&mut remaining)
+            .deserialize(decoder)
+            .unwrap_err();
         assert!(error.to_string().contains("row count"));
     }
     #[test]
@@ -386,5 +609,24 @@ mod decode_tests {
         let error = CellsSeed(&mut remaining).deserialize(decoder).unwrap_err();
         assert!(error.to_string().contains("cell limit"));
         assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn shared_grid_budget_rejects_second_grid_cells_before_decoding_them() {
+        let encoded = serde_json::to_string(&small_grid()).unwrap();
+        let mut remaining = 2;
+        let mut first = serde_json::Deserializer::from_str(&encoded);
+        let decoded = GridCheckpointV1Seed::new(&mut remaining, 16_777_216)
+            .deserialize(&mut first)
+            .unwrap();
+        assert_eq!(decoded.rows[0].cells.len(), 2);
+        assert_eq!(remaining, 0);
+
+        let mut second = serde_json::Deserializer::from_str(&encoded);
+        let error = GridCheckpointV1Seed::new(&mut remaining, 16_777_216)
+            .deserialize(&mut second)
+            .unwrap_err();
+        assert!(error.to_string().contains("cell limit"), "{error}");
+        assert_eq!(remaining, 0);
     }
 }

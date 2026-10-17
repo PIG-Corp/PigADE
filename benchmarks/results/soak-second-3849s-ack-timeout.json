@@ -1,0 +1,105 @@
+{
+  "actual_elapsed_seconds": 3849.4027495149985,
+  "binary_path": "/home/afterburner/Projects/PigADE/target/release/pigade-session-host",
+  "binary_sha256": "d8d4b58171ee378527dbbfaa44c5f4b3cc368123f73c4d8a69353226acfa041a",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "elapsed_24h_completed": false,
+  "environment": {
+    "filesystem": "btrfs",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44"
+  },
+  "errors": [
+    "RuntimeError: input ACK timeout: SOAK-0-755"
+  ],
+  "filesystem": "btrfs",
+  "finished_at": "2026-10-16T23:47:23.907327+00:00",
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    798111,
+    1458763
+  ],
+  "host_log_tail": "",
+  "host_pid": 798111,
+  "measurement_started_at": "2026-10-16T22:43:19.714957+00:00",
+  "other_open_gates": [
+    "4 sessions x 1 GiB plus 100000 resizes/session",
+    "VM reboot",
+    "UI/GPU and platform acceptance"
+  ],
+  "rate_bytes_per_second_per_session": 4096,
+  "real_time_elapsed": false,
+  "real_time_soak_24h_integrity_pass": false,
+  "rec08_full_acceptance": false,
+  "requested_seconds": 86400,
+  "resize_admission_retry_summary": [
+    {
+      "attempts": 2538,
+      "max_wait_seconds": 0.025,
+      "retries": 1290,
+      "total_wait_seconds": 32.24999999999924
+    },
+    {
+      "attempts": 1462,
+      "max_wait_seconds": 0.025,
+      "retries": 214,
+      "total_wait_seconds": 5.3500000000000085
+    },
+    {
+      "attempts": 1444,
+      "max_wait_seconds": 0.025,
+      "retries": 196,
+      "total_wait_seconds": 4.900000000000002
+    },
+    {
+      "attempts": 1315,
+      "max_wait_seconds": 0.025,
+      "retries": 67,
+      "total_wait_seconds": 1.674999999999998
+    }
+  ],
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/soak-20261016T224310Z-0f87d77e",
+  "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
+  "sessions": [
+    {
+      "generation": "e8b69cc6-e747-4aee-abe6-23ae9795b05c",
+      "journal": "e8b69cc6-e747-4aee-abe6-23ae9795b05c.journal",
+      "pid": 798116,
+      "session": "9db6f149-45cb-443c-a8b3-338a3f399c05",
+      "stream": 0
+    },
+    {
+      "generation": "5c7bb967-f10d-40af-a147-9a5502210504",
+      "journal": "5c7bb967-f10d-40af-a147-9a5502210504.journal",
+      "pid": 798123,
+      "session": "a7a14852-7cf4-40f7-85a9-6a2ef9f34ced",
+      "stream": 1
+    },
+    {
+      "generation": "8edb1b76-1976-4462-96cd-8fe98e94f257",
+      "journal": "8edb1b76-1976-4462-96cd-8fe98e94f257.journal",
+      "pid": 798437,
+      "session": "15a6ee99-5ed0-4e65-b8f9-85138a9389d5",
+      "stream": 2
+    },
+    {
+      "generation": "5c60c3b7-730c-4861-9b88-efed0d403654",
+      "journal": "5c60c3b7-730c-4861-9b88-efed0d403654.journal",
+      "pid": 798811,
+      "session": "b290076b-ba2a-4159-bed7-438280b32f9f",
+      "stream": 3
+    }
+  ],
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "45a690554ab503788ddfc28f8147536ccd25d8e41fb43c74ab3369737013ddd4",
+    "scripts/soak-pty.py": "7e57f98ca14dacab2d96947d4c9793b354579647f77fd204fbf27ebcbfb02499",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "started_at": "2026-10-16T22:43:10.865507+00:00",
+  "state_directory": "/home/afterburner/.local/state/pigade/soak/soak-20261016T224310Z-0f87d77e/state",
+  "state_retained": true,
+  "status": "failed",
+  "verify_recovery_passed_all_sessions": false,
+  "verify_requested": true
+}

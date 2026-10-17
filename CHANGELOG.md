@@ -23,6 +23,8 @@
 - Invalid typed journal tails retain the last valid generation/model/history with a sequence-specific error instead of dropping the session. Full/fast recovery and hidden-state continuation regressions cover this path; raw sources are unchanged.
 - Unreadable/incompatible journal artifacts produce bounded nonfatal recovery warnings without fake sessions or blocking healthy terminals. Poll validation is atomic; notice-only updates preserve cached cells. Unix filename controls and extreme omission counts are covered.
 - Resource census now distinguishes shared allocation size from reference-weighted combining capacity; a checkpoint-import/VTE continuation regression demonstrates copy-on-write fanout. Whole-event/global admission is still open.
+- Checkpoint export borrows the validated grid and payloads while preserving exact schema2 bytes; import checks the borrowed envelope before owned decoding and shares a cell budget across both grids. Model-process RSS measurements and their scope are recorded in ADR0009.
+- The second real-time soak failed after64minutes. A producer bug discarding the next PING after a coalesced RELEASE is reproduced and repaired; failed evidence is retained and the24h gate remains open.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 
