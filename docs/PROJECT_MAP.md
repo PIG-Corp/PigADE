@@ -76,3 +76,8 @@ Actual fixed X11 EN/RU/CLI keyboard now passes after a reproduced Alt-printable 
 `crates/app/src/command_worker.rs` owns per-target known/unknown command gates
 and resize cache invalidation. `mouse_delivery.rs` owns the bounded speculative
 mouse state/host-admission receipt ledger and explicit release-cleanup plans.
+
+`crates/app/src/wake_signal.rs` supplies one coalesced pending bit and one
+cancellable waiter; IPC state/receipt notifications use it without new parser
+state. Private fixed-key latency samples and their explicit limits live in
+[the input latency report](reports/input-latency-x11-20261017.md).

@@ -211,3 +211,11 @@ mouse request receipts before explicit ACK cleanup; see
 [report](reports/app-command-rejection.md). Unknown outcomes remain locked.
 Local pre-admission input errors are still global. Native saturated-host mouse
 acceptance and generation-safe IME composition remain open.
+
+## Event wake / private input latency
+
+App command-channel and UI-state wake are integrated;116 app tests and strict
+Clippy/release pass. Private50-key ordered causal-color samples pass exact input;
+final p50=95.752ms, p95=96.627ms, p99=111.938ms. Slow/earlier runs are retained.
+This is software X11 diagnosis, not formal echo/input-to-present acceptance.
+Output arriving after a poll can still wait50ms. See reports/input-latency-x11-20261017.md.

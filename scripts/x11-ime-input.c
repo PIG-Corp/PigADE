@@ -1,7 +1,8 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only `compose` (nihao) and
  * `commit` (Space), or one fixed EN/RU/CLI sequence can synthesize input,
- * after private-server ownership checks. No arbitrary key/text arguments.
+ * after private-server ownership checks. The latency stage uses50 fixed
+ * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
 #define _GNU_SOURCE
 #include <X11/Xatom.h>
@@ -69,7 +70,7 @@ static Args parse_args(int argc, char **argv) {
     if (strcmp(a.stage, "preflight") && strcmp(a.stage, "probe-window") &&
         strcmp(a.stage, "focus") && strcmp(a.stage, "compose") &&
         strcmp(a.stage, "commit") && strcmp(a.stage, "capture") &&
-        strcmp(a.stage, "keyboard"))
+        strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -326,6 +327,47 @@ static void capture(Display *dpy, const char *path) {
     fsync(fd); close(fd); XDestroyImage(image);
 }
 
+static uint64_t monotonic_ns(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now)) fail("monotonic clock unavailable");
+    return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+}
+
+/* Fixed50 alphabet keys, each observed through a causally unique flat cell color.
+ * This measures private software X11 pixels, not physical monitor scanout. */
+static void latency_sequence(const Args *a, Display *dpy, xcb_connection_t *c) {
+    uint64_t samples[50];
+    keyboard_group(dpy, 0);
+    for (unsigned int index = 0; index < 50; ++index) {
+        verify_app_focus_target(a, dpy, c, 0);
+        KeyCode code = XKeysymToKeycode(dpy, XK_a + index % 26);
+        if (!code) fail("fixed alphabet key unavailable");
+        uint64_t start = monotonic_ns();
+        if (!XTestFakeKeyEvent(dpy, code, True, CurrentTime) ||
+            !XTestFakeKeyEvent(dpy, code, False, CurrentTime))
+            fail("latency key submission failed; no retry");
+        XFlush(dpy);
+        while (1) {
+            XImage *pixel = XGetImage(dpy, DefaultRootWindow(dpy), 20, 120, 1, 1, AllPlanes, ZPixmap);
+            if (!pixel) fail("private pixel readback failed");
+            unsigned long value = XGetPixel(pixel, 0, 0);
+            int matched = component(value, pixel->red_mask) == 17 + 4 * index &&
+                          component(value, pixel->green_mask) == 239 &&
+                          component(value, pixel->blue_mask) == 27;
+            XDestroyImage(pixel);
+            uint64_t elapsed = monotonic_ns() - start;
+            if (elapsed > UINT64_C(1000000000)) fail("fixed latency color deadline; no key retry");
+            if (matched) { samples[index] = elapsed; break; }
+            struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
+            nanosleep(&pause, NULL);
+        }
+    }
+    printf("{\"stage\":\"latency\",\"scope\":\"XTEST-submit to private root pixel readback\","
+           "\"pixel\":[20,120],\"samples_ns\":[");
+    for (size_t i = 0; i < 50; ++i) printf("%s%" PRIu64, i ? "," : "", samples[i]);
+    puts("]}");
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--self-test-proc")) {
         printf("%llu\n", self_process_start());
@@ -357,6 +399,8 @@ int main(int argc, char **argv) {
     } else if (!strcmp(a.stage, "capture")) {
         verify_app_focus_target(&a, dpy, c, 0); XSync(dpy, False); capture(dpy, a.output);
         printf("{\"stage\":\"capture\",\"path\":\"%s\",\"width\":%d,\"height\":%d}\n", a.output, DisplayWidth(dpy, DefaultScreen(dpy)), DisplayHeight(dpy, DefaultScreen(dpy)));
+    } else if (!strcmp(a.stage, "latency")) {
+        latency_sequence(&a, dpy, c);
     } else if (!strcmp(a.stage, "focus")) {
         verify_app_focus_target(&a, dpy, c, 1);
         printf("{\"stage\":\"focus\",\"app_pid\":%ld,\"focus_verified\":true}\n", (long)a.app);
@@ -365,7 +409,7 @@ int main(int argc, char **argv) {
         if (!strcmp(a.stage, "compose")) {
             const KeySym sequence[] = { XK_n, XK_i, XK_h, XK_a, XK_o };
             for (size_t i = 0; i < sizeof(sequence) / sizeof(sequence[0]); ++i) key(dpy, sequence[i]);
-        } else if (!strcmp(a.stage, "keyboard")) keyboard_sequence(dpy);
+        } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, !strcmp(a.stage, "compose") ? "5" :

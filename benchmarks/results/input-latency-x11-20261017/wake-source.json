@@ -1,0 +1,20 @@
+{
+  "parent_commit": "8f049383bbc2ea711bd21445979020fbf9c7aaa6",
+  "binary_sha256": "484b1eacdb8df844c422e298470a3bd7736dc7907e8b7af79942cf0681bb9669",
+  "files": {
+    "crates/app/src/cell_style.rs": "cfa7b981fbafc0f318b571576881469fce05608db80f37dc241b710fa1379977",
+    "crates/app/src/command_worker.rs": "d2006933d35fd6c31c7f874306f475bd0ee43f354c80c1a8f450e394119a4ae7",
+    "crates/app/src/cursor.rs": "d0a386bb72215b961f53c55aa033a5b191ff46bed0c4e51a3f56d819a9a0961e",
+    "crates/app/src/font.rs": "50ee7e3acae91eb7ea928f1d9bbd8013cfb18e5fbf18c812eb3f85e5ddfae3a8",
+    "crates/app/src/input.rs": "b89d24382213e639123a5f65e07d7ca653695802a17a8c1d10b36b20ddef9ae6",
+    "crates/app/src/main.rs": "a6ef4ccf5cab7be595668b3b4ec394f21369845a9f75a9b0b53906bd757da9b6",
+    "crates/app/src/mouse.rs": "b7fb8f6ccb958336805c6a32cc98b1d2539754a889e58f997667122c9fa6e735",
+    "crates/app/src/mouse_delivery.rs": "3f590569e93e8b726d3f60532448d5b6b2f3c8769eb2166ac5f128ab378ddcb9",
+    "crates/app/src/palette.rs": "3d2a483110ac78357b1aeacfe90df9bc903c219313cd49c375209914bf2f519b",
+    "crates/app/src/protocol.rs": "2b6915fce04460693238d743d90bd62e682e2316754af14c0bdc07d5815dc081",
+    "crates/app/src/selection.rs": "7164cf50292d4a30f05242bff1d1ebb9103ad871ba0e0377eca74304d533597c",
+    "crates/app/src/wake_signal.rs": "72b54423db80d4a01c978c27de53dfa9ea3c141bff6c476e24f4f7b11d876973",
+    "crates/app/Cargo.toml": "c8ae46d54b115c4afd9df112b47d755b20419fcf8c7445804d763ec09ee42d57",
+    "crates/app/Cargo.lock": "ae279f67079e8c042c4d816518174dbbedef3e0fdc576595fa661a51dfc3e478"
+  }
+}

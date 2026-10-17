@@ -1577,3 +1577,59 @@ Integrate exact-target command gates and bounded mouse admission receipts; retai
 - Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, crates/app/src/mouse_delivery.rs, docs/reports/app-command-rejection.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root bootstrap test --locked: 110 passed; bootstrap fmt --check passed; agent strict Clippy passed; root strict Clippy launched. Headless only, no saturated native mouse acceptance.
 - Risks / next: Commit verified gate slice; integrate event wake and measure causal cell latency; local input_error remains global.
+
+## 2026-10-17T02:47:07+00:00 — /root/terminal_memory_budget
+
+Gate future soak producer streaming on all-session visible READY
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py
+- Verification: python3 scripts/test_soak_pty.py (5 passed); git diff --check -- scripts/soak-pty.py scripts/test_soak_pty.py
+- Risks / next: Root may review and use this handshake in a future run; no soak was launched.
+
+## 2026-10-17T02:47:52+00:00 — font_render_profile
+
+Bind private Wayland runner startup to parent kernel-verified namespace identities before inside-side work
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (13 passed); git diff --check -- scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; bounded headless bwrap --info-fd probe confirmed reported child PID plus mnt/pid/user/ipc/net namespace inodes matched /proc/<pid>/ns handles and differed from outer handles
+- Risks / next: Root review required before --run; no compositor, app, or input launched
+
+## 2026-10-17T02:48:05+00:00 — font_render_profile
+
+Validate bwrap child namespaces in the parent before releasing a one-shot inside startup gate
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (13 passed); bwrap --info-fd headless probe matched /proc child PID and all five namespace identities to open outer handles and confirmed separation; no compositor or app launched
+- Risks / next: Root should review parent startup gate and --run integration; this work does not establish hostile same-user security or an actual Wayland run
+
+## 2026-10-17T02:49:03+00:00 — /root/terminal_memory_budget
+
+Update soak admission PTY regressions for READY/START producer barrier
+
+- Files: scripts/test_soak_admission.py
+- Verification: python3 scripts/test_soak_admission.py (11 passed); python3 scripts/test_soak_pty.py (5 passed); python3 -m unittest discover -s scripts -p test_*.py (153 passed)
+- Risks / next: Root may integrate the updated test contract; no soak process or runtime artifact was touched.
+
+## 2026-10-17T02:49:04+00:00 — font_render_profile
+
+Bound all parent namespace gate reads and EOF validation by one monotonic deadline
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (14 passed); partial-token/open-writer regression returns within 50ms timeout; trailing whitespace scan clean
+- Risks / next: Root to rerun final private Wayland fixture after review; no GUI or input run by this agent
+
+## 2026-10-17T02:51:24+00:00 — font_render_profile
+
+Record bwrap user namespace metadata while relying on parent-verified kernel IDs; close only owned descriptors and persist failed launch status
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (17 passed); regressions cover user-info mismatch vs strict other namespace info, reused fd safety, and running-to-failed-closed report transition
+- Risks / next: Root may rerun private fixture after review; no GUI, compositor, or input was run by this agent
+
+## 2026-10-17T02:53:22+00:00 — root
+
+Integrate bounded event wake for commands/state/receipts and source-bound causal X11 latency fixture; retain baseline and slow runs
+
+- Files: crates/app/src/main.rs, crates/app/src/wake_signal.rs, crates/app/README.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/reports/input-latency-x11-20261017.md, benchmarks/results/input-latency-x11-20261017, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root bootstrap test116/116, all-target Clippy -D warnings, release build and fmt passed. Four private50-key measurements exact/no extras; final source-bound p50=95.752ms p95=96.627ms p99=111.938ms, reviewed ACK capture. Initial integration slower sample retained. Formal PERF acceptance remains open.
+- Risks / next: Host output-change wake/profiling and isolated physical GPU latency; async checkpoint investigation after reproduced5.46s actor checkpoint stall.

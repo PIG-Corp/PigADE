@@ -9,6 +9,7 @@ mod mouse_delivery;
 mod palette;
 mod protocol;
 mod selection;
+mod wake_signal;
 use command_worker::{
     CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
     confirmed_ended_state,
@@ -30,6 +31,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use wake_signal::{WaitOutcome, WakeSignal};
 
 const HEADER: f32 = 32.;
 const GAP: f32 = 6.;
@@ -274,26 +276,42 @@ fn resize_key(command: &Value) -> Option<ResizeKey> {
     })
 }
 
-fn publish_worker_notices(shared: &Arc<Mutex<State>>, gate: &WorkerGate) {
-    shared.lock().unwrap().set_command_notices(gate.notices());
+fn publish_worker_notices(shared: &Arc<Mutex<State>>, gate: &WorkerGate, wake: &WakeSignal) {
+    let changed = {
+        let mut state = shared.lock().unwrap();
+        let revision = state.revision;
+        state.set_command_notices(gate.notices());
+        state.revision != revision
+    };
+    if changed {
+        wake.notify();
+    }
 }
 
-fn ipc(
-    socket: PathBuf,
-) -> (
-    mpsc::SyncSender<IpcMessage>,
-    Arc<Mutex<State>>,
-    mpsc::Receiver<WorkerReceipt>,
-) {
+struct WorkerConnection {
+    tx: mpsc::SyncSender<IpcMessage>,
+    shared: Arc<Mutex<State>>,
+    receipts: mpsc::Receiver<WorkerReceipt>,
+    wake: WakeSignal,
+}
+
+fn ipc(socket: PathBuf) -> WorkerConnection {
     let (tx, rx) = mpsc::sync_channel(32);
     let (receipt_tx, receipt_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Mutex::new(State::default()));
     let output = shared.clone();
+    let wake = WakeSignal::default();
+    let worker_wake = wake.clone();
     thread::spawn(move || {
         let mut gate = WorkerGate::default();
+        let mut pending = None;
         loop {
-            // At most 32 queued commands, no retries of ambiguous input/resize.
-            while let Ok(message) = rx.try_recv() {
+            // Bound each batch so continuous input cannot starve cell polling.
+            // A recv_timeout wake retains the first command for this same FIFO.
+            for _ in 0..32 {
+                let Some(message) = pending.take().or_else(|| rx.try_recv().ok()) else {
+                    break;
+                };
                 match message {
                     IpcMessage::AcknowledgeKnownRejection {
                         target,
@@ -330,7 +348,7 @@ fn ipc(
                                     });
                                 let outcome = delivery_outcome(&dispatch);
                                 if dispatch != Dispatch::Executed {
-                                    publish_worker_notices(&output, &gate);
+                                    publish_worker_notices(&output, &gate, &worker_wake);
                                 }
                                 if dispatch == Dispatch::CapacityExceeded {
                                     let mut state = output.lock().unwrap();
@@ -340,6 +358,7 @@ fn ipc(
                                 }
                                 if !send_worker_receipt(
                                     &receipt_tx,
+                                    &worker_wake,
                                     WorkerReceipt::Request(RequestReceipt {
                                         id,
                                         target: target.clone(),
@@ -349,10 +368,11 @@ fn ipc(
                                     return;
                                 }
                             }
-                            publish_worker_notices(&output, &gate);
+                            publish_worker_notices(&output, &gate, &worker_wake);
                         }
                         if !send_worker_receipt(
                             &receipt_tx,
+                            &worker_wake,
                             WorkerReceipt::Acknowledgement {
                                 target,
                                 token,
@@ -387,7 +407,7 @@ fn ipc(
                                     })
                             });
                         if dispatch != Dispatch::Executed {
-                            publish_worker_notices(&output, &gate);
+                            publish_worker_notices(&output, &gate, &worker_wake);
                         }
                         if dispatch == Dispatch::CapacityExceeded {
                             let mut state = output.lock().unwrap();
@@ -397,6 +417,7 @@ fn ipc(
                         let outcome = delivery_outcome(&dispatch);
                         if !send_worker_receipt(
                             &receipt_tx,
+                            &worker_wake,
                             WorkerReceipt::Request(RequestReceipt {
                                 id,
                                 target,
@@ -415,6 +436,7 @@ fn ipc(
                 .iter()
                 .map(View::known)
                 .collect::<Vec<_>>();
+            let previous_revision = output.lock().unwrap().revision;
             match protocol::poll(&socket, &known) {
                 Ok(reply) => {
                     let mut state = output.lock().unwrap();
@@ -439,14 +461,36 @@ fn ipc(
                     output.lock().unwrap().fail(e);
                 }
             }
-            thread::sleep(Duration::from_millis(50));
+            let changed = output.lock().unwrap().revision != previous_revision;
+            if changed {
+                worker_wake.notify();
+            }
+            pending = match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(message) => Some(message),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            };
         }
     });
-    (tx, shared, receipt_rx)
+    WorkerConnection {
+        tx,
+        shared,
+        receipts: receipt_rx,
+        wake,
+    }
 }
 
-fn send_worker_receipt(sender: &mpsc::SyncSender<WorkerReceipt>, receipt: WorkerReceipt) -> bool {
-    sender.send(receipt).is_ok()
+fn send_worker_receipt(
+    sender: &mpsc::SyncSender<WorkerReceipt>,
+    wake: &WakeSignal,
+    receipt: WorkerReceipt,
+) -> bool {
+    // Wake before a potentially blocking send, then again after admission: the
+    // first drain may race ahead of the insertion. No state lock is held here.
+    wake.notify();
+    let sent = sender.send(receipt).is_ok();
+    wake.notify();
+    sent
 }
 
 fn delivery_outcome(dispatch: &Dispatch) -> DeliveryOutcome {
@@ -566,12 +610,16 @@ impl CanvasApp {
     fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        tx: mpsc::SyncSender<IpcMessage>,
-        receipts: mpsc::Receiver<WorkerReceipt>,
-        shared: Arc<Mutex<State>>,
+        connection: WorkerConnection,
         diagnostic_preedit_pending: bool,
         diagnostic_selection: bool,
     ) -> Self {
+        let WorkerConnection {
+            tx,
+            shared,
+            receipts,
+            wake,
+        } = connection;
         let focus = cx.focus_handle();
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
@@ -597,9 +645,16 @@ impl CanvasApp {
         ];
         cx.spawn(async move |weak, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(50))
-                    .await;
+                if let WaitOutcome::Failed(_) = wake
+                    .wait_or_timeout(cx.background_executor().timer(Duration::from_millis(50)))
+                    .await
+                {
+                    // Preserve bounded periodic service if the single-consumer
+                    // signal contract fails; never spin or discard receipts.
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                }
                 if weak
                     .update_in(cx, |this, window, cx| {
                         // Drain worker receipts before state/revision work: a
@@ -2438,7 +2493,7 @@ fn main() {
     let diagnostic_selection = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-selection");
-    let (tx, shared, receipts) = ipc(socket.into());
+    let connection = ipc(socket.into());
     application().run(move |cx: &mut App| {
         cx.set_reduce_motion(reduced_motion);
         crate::font::install(cx).expect("bundled terminal font profile must load");
@@ -2460,9 +2515,7 @@ fn main() {
                     CanvasApp::new(
                         window,
                         cx,
-                        tx,
-                        receipts,
-                        shared,
+                        connection,
                         diagnostic_preedit,
                         diagnostic_selection,
                     )

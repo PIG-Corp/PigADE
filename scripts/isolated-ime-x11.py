@@ -42,6 +42,8 @@ FIXTURE_TOKEN = '__PIGADE_IME_CHILD_ACK_20261017__'
 KEYBOARD_EXPECTED = b'ab1Z\x03\x04\x1a\x12\x0c\x01\x1bx\x1b[D\x1b[H\r' + 'привет'.encode('utf-8')
 KEYBOARD_PASS = 'pass-private-x11-en-ru-cli-keyboard-fixture'
 IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
+LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
+LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 FIXTURE = r'''import json, os, select, socket, sys, termios, time, tty
 control_path = sys.argv[1]
 expected = bytes.fromhex(sys.argv[2])
@@ -91,6 +93,34 @@ try:
             break
         else:
             raise SystemExit(33)
+finally:
+    termios.tcsetattr(fd, termios.TCSANOW, original)
+    control.close()
+'''
+
+
+LATENCY_FIXTURE = r'''import os, select, socket, sys, termios, tty
+fd = sys.stdin.fileno()
+original = termios.tcgetattr(fd)
+control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+control.connect(sys.argv[1])
+assert sys.argv[2] == bytes(97 + index % 26 for index in range(50)).hex()
+def emit(payload):
+    remaining = memoryview(payload)
+    while remaining:
+        written = os.write(1, remaining)
+        remaining = remaining[written:]
+try:
+    tty.setraw(fd, termios.TCSANOW)
+    emit(b"PIGADE-IME-READY\r\n")
+    control.sendall(b"READY\n")
+    assert control.recv(64) == b"START\n"
+    for index in range(50):
+        assert os.read(fd, 1) == bytes([97 + index % 26])
+        emit(("\x1b[48;2;%d;239;27m\x1b[2J\x1b[H" % (17 + 4 * index)).encode())
+    assert not select.select([fd], [], [], 0.35)[0], "extra fixture input"
+    control.sendall(b"FIFTY_EXACT_KEYS\n")
+    emit(b"__PIGADE_IME_CHILD_ACK_20261017__\r\n")
 finally:
     termios.tcsetattr(fd, termios.TCSANOW, original)
     control.close()
@@ -291,9 +321,7 @@ def prepare_private_keyboard(config: dict, env: dict) -> None:
             'private US/RU keyboard map load failed: ' + result.stderr[-240:])
 
 
-def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, save):
-    report['stage'] = 'native-en-ru-cli-keyboard'
-    save()
+def deactivate_private_fcitx(config, env):
     remote = config['x11_root'] + '/usr/bin/fcitx5-remote'
     result = subprocess.run([remote, '-c'], stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -305,6 +333,48 @@ def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, sa
                             text=True, timeout=3, check=False, env=env)
     require(result.returncode == 0 and result.stdout.strip() == '1',
             'private Fcitx did not confirm inactive state')
+
+
+def fixture_status(name):
+    return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS}[name]
+
+
+def run_latency_fixture(config, report, control, app, fcitx, env, save):
+    report['stage'] = 'fixed-input-cell-latency'
+    save()
+    deactivate_private_fcitx(config, env)
+    report['fcitx']['activation_state'] = 1
+    control.sendall(b'START\n')
+    samples = helper_call(config, 'latency', timeout=60)
+    values = samples.get('samples_ns')
+    require(isinstance(values, list) and len(values) == 50 and
+            all(type(value) is int and 0 < value <= 1_000_000_000 for value in values),
+            'latency helper omitted bounded numeric samples')
+    require(json_line(control, timeout=3) == 'FIFTY_EXACT_KEYS',
+            'latency fixture did not receive exactly50 ordered fixed keys')
+    ordered = sorted(values)
+    report['latency'] = {**samples, 'sample_count': 50,
+                         'p50_ns': ordered[24], 'p95_ns': ordered[47],
+                         'p99_ns': ordered[49], 'max_ns': ordered[-1],
+                         'quantile': 'nearest-rank',
+                         'sample_interval_poll_sleep_ns': 1_000_000,
+                         'scope': 'software Xvfb/Lavapipe observed-cell diagnostic; physical input/present gate unclaimed'}
+    def ack_seen():
+        views = host_request({'command': 'poll', 'known': []}).get('views', [])
+        return bool(views and FIXTURE_TOKEN in view_text(views[0]))
+    wait_until(ack_seen, time.monotonic() + 8)
+    report['latency']['child_ack_seen'] = True
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/committed.ppm')
+    require(app.poll() is None and fcitx.poll() is None, 'app/Fcitx exited during latency probe')
+    report.update({'status': LATENCY_PASS, 'stage': 'complete'})
+    save()
+
+
+def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, save):
+    report['stage'] = 'native-en-ru-cli-keyboard'
+    save()
+    deactivate_private_fcitx(config, env)
     report['fcitx']['activation_state'] = 1
     control.sendall(b'CHECK\n')
     require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
@@ -727,8 +797,9 @@ def inside_run() -> int:
         require(host.poll() is None, 'private host exited before fixture setup')
         session, generation, operation = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
         spec = {'session': session, 'generation': generation, 'operation': operation,
-                'executable': '/usr/bin/python3', 'args': ['-c', FIXTURE, str(control_path),
-                    (KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else '你好'.encode()).hex()],
+                'executable': '/usr/bin/python3', 'args': ['-c', LATENCY_FIXTURE if config.get('fixture') == 'latency' else FIXTURE, str(control_path),
+                    (LATENCY_KEYS if config.get('fixture') == 'latency' else
+                     KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else '你好'.encode()).hex()],
                 'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
         launch = host_request({'command': 'launch', 'spec': spec})
         require(launch.get('error') is None, 'private fixture launch failed')
@@ -747,7 +818,7 @@ def inside_run() -> int:
         app_env['LIBGL_ALWAYS_SOFTWARE'] = 'true'
         app_env['VK_DRIVER_FILES'] = '/pigade/platform-sdk/lavapipe-icd.json'
         app_env['VK_ICD_FILENAMES'] = '/pigade/platform-sdk/lavapipe-icd.json'
-        if config.get('fixture') == 'keyboard':
+        if config.get('fixture') in ('keyboard', 'latency'):
             prepare_private_keyboard(config, app_env)
         app = start_process(app_command(), env=app_env)
         children.append(app)
@@ -767,6 +838,9 @@ def inside_run() -> int:
         report['app']['baseline_capture'] = 'baseline.ppm'
         report['app']['initial_settle_seconds'] = 5
         save()
+        if config.get('fixture') == 'latency':
+            run_latency_fixture(config, report, control, app, fcitx, app_env, save)
+            return 0
         if config.get('fixture') == 'keyboard':
             run_keyboard_fixture(config, report, control, app, fcitx, app_env, artifacts, save)
             return 0
@@ -890,13 +964,13 @@ def outer_run(args) -> dict:
         run_result.update({'status': 'failed-closed', 'failure_stage': 'bwrap-exit',
                            'failure_reason': 'private run exited without a terminal report'})
     atomic_json(args.output / 'run.json', run_result)
-    if exit_status != 0 or run_result.get('status') != (KEYBOARD_PASS if args.fixture == 'keyboard' else IME_PASS):
+    if exit_status != 0 or run_result.get('status') != fixture_status(args.fixture):
         raise RuntimeError('isolated fixture failed closed; private run.json retains stage metadata')
     return {'status': run_result['status'], 'run': str(args.output / 'run.json'),
             'app_sha256': sha256(app), 'host_sha256': sha256(host),
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
-                (['committed.ppm'] if args.fixture == 'keyboard' else ['preedit.ppm', 'committed.ppm'])],
+                (['committed.ppm'] if args.fixture in ('keyboard', 'latency') else ['preedit.ppm', 'committed.ppm'])],
             'limits': ['one fixed local X11 keyboard/IME fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
@@ -911,6 +985,7 @@ def plan(args) -> dict:
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
+                  'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',
@@ -929,8 +1004,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard'], default='pinyin',
-                        help='fixed native Pinyin commit or fixed EN/RU and CLI shortcuts')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency'], default='pinyin',
+                        help='fixed Pinyin commit, EN/RU shortcuts, or50 causal color latency samples')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)
     parser.add_argument('--host', type=Path, default=DEFAULT_HOST)
     parser.add_argument('--x11-sdk', type=Path, default=X11_SDK)

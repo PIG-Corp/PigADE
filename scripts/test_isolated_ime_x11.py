@@ -217,6 +217,40 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertFalse(result['exact_once'])
         self.assertEqual(result['extra_bytes'], len(expected))
 
+    def test_latency_child_checks_ordered_input_and_rejects_trailing_duplicate(self):
+        for duplicate in (False, True):
+            with self.subTest(duplicate=duplicate), tempfile.TemporaryDirectory() as temporary:
+                path = str(Path(temporary) / 'control.sock')
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                master, slave = pty.openpty()
+                process = None
+                control = None
+                try:
+                    listener.bind(path); listener.listen(1); listener.settimeout(3)
+                    process = subprocess.Popen(['/usr/bin/python3', '-I', '-c', IME.LATENCY_FIXTURE,
+                                                path, IME.LATENCY_KEYS.hex()], stdin=slave,
+                                               stdout=slave, stderr=subprocess.DEVNULL, close_fds=True)
+                    os.close(slave); slave = -1
+                    control, _ = listener.accept()
+                    self.assertEqual(IME.json_line(control, timeout=2), 'READY')
+                    control.sendall(b'START\n')
+                    os.write(master, IME.LATENCY_KEYS + (IME.LATENCY_KEYS[-1:] if duplicate else b''))
+                    if duplicate:
+                        with self.assertRaises(RuntimeError):
+                            IME.json_line(control, timeout=3)
+                        self.assertNotEqual(process.wait(timeout=3), 0)
+                    else:
+                        self.assertEqual(IME.json_line(control, timeout=3), 'FIFTY_EXACT_KEYS')
+                        self.assertEqual(process.wait(timeout=3), 0)
+                finally:
+                    if control is not None:
+                        control.close()
+                    listener.close(); os.close(master)
+                    if slave >= 0:
+                        os.close(slave)
+                    if process is not None and process.poll() is None:
+                        process.kill(); process.wait(timeout=3)
+
     def test_helper_contains_only_fixed_input_stages_and_server_validation(self):
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         self.assertIn('const KeySym sequence[] = { XK_n, XK_i, XK_h, XK_a, XK_o }', source)
