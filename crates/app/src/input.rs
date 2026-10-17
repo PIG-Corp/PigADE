@@ -9,6 +9,51 @@ pub const APP_CURSOR: u32 = 1 << 1;
 pub const LINE_FEED_NEW_LINE: u32 = 1 << 8;
 const KITTY_KEYBOARD_PROTOCOL: u32 = 0b1_1111 << 18;
 
+pub const BRACKETED_PASTE: u32 = 1 << 4;
+const MAX_INPUT_BYTES: usize = 16 * 1024;
+
+/// One explicit paste is one bounded input command. Normal typing and IME
+/// commits must not use this path. Refuse embedded terminal controls rather
+/// than silently changing pasted text or allowing an injected closing marker.
+/// Xterm bracketed paste uses CSI200~/CSI201~; normal paste maps LF to CR.
+/// CRLF and bare CR are normalized to LF inside bracketed paste.
+pub fn paste(text: &str, modes: u32) -> Result<Vec<u8>, &'static str> {
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bracketed = modes & BRACKETED_PASTE != 0;
+    let overhead = if bracketed { 12 } else { 0 };
+    if text.len() > MAX_INPUT_BYTES - overhead {
+        return Err("Вставка более 16 KiB не принята");
+    }
+    if text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\r' | '\n'))
+    {
+        return Err("Буфер содержит управляющие символы; вставка не выполнена");
+    }
+    let mut bytes = Vec::with_capacity(text.len() + overhead);
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[200~");
+    }
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+        }
+        if matches!(c, '\r' | '\n') {
+            bytes.push(if bracketed { b'\n' } else { b'\r' });
+        } else {
+            let mut buffer = [0; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+        }
+    }
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[201~");
+    }
+    Ok(bytes)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Modifiers {
     pub control: bool,
@@ -508,5 +553,48 @@ mod tests {
             key("up", Modifiers::default(), 1 << 18),
             Encoded::Unsupported(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::{BRACKETED_PASTE, MAX_INPUT_BYTES, paste};
+    #[test]
+    fn explicit_paste_obeys_acknowledged_mode_and_preserves_unicode() {
+        assert_eq!(
+            paste("привет\t日本😀\r\nnext\rlast\n", BRACKETED_PASTE).unwrap(),
+            "\x1b[200~привет\t日本😀\nnext\nlast\n\x1b[201~".as_bytes()
+        );
+        assert_eq!(paste("a\r\nb\rc\n", 0).unwrap(), b"a\rb\rc\r");
+        assert!(paste("", BRACKETED_PASTE).unwrap().is_empty());
+    }
+    #[test]
+    fn paste_refuses_embedded_controls_and_closing_marker() {
+        for text in [
+            "a\x1b[201~evil",
+            "\x03",
+            "\x00",
+            "\x7f",
+            "\u{9b}201~",
+            "\u{85}",
+        ] {
+            assert!(paste(text, BRACKETED_PASTE).is_err());
+            assert!(paste(text, 0).is_err());
+        }
+    }
+    #[test]
+    fn bounded_paste_includes_wrappers_in_atomic_input_limit() {
+        assert_eq!(
+            paste(&"x".repeat(MAX_INPUT_BYTES - 12), BRACKETED_PASTE)
+                .unwrap()
+                .len(),
+            MAX_INPUT_BYTES
+        );
+        assert!(paste(&"x".repeat(MAX_INPUT_BYTES - 11), BRACKETED_PASTE).is_err());
+        assert_eq!(
+            paste(&"x".repeat(MAX_INPUT_BYTES), 0).unwrap().len(),
+            MAX_INPUT_BYTES
+        );
+        assert!(paste(&"x".repeat(MAX_INPUT_BYTES + 1), 0).is_err());
     }
 }

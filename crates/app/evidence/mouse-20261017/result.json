@@ -1,0 +1,148 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "render_and_reopen_pass",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532954]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]",
+      "ipc": "ipc:[4026533017]",
+      "net": "net:[4026533022]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "compositor": {
+    "pid": 5,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[3156833]",
+      "socket:[3156833]"
+    ]
+  },
+  "recoveryWarning": {
+    "journal": "bad.journal",
+    "message": "journal corruption at byte 0: UnsupportedVersion",
+    "sourceSha256Before": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceSha256After": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceBytesUnchanged": true,
+    "listAndPollDiagnosticsMatch": true,
+    "omitted": 0,
+    "fourHealthyPtysRunning": true,
+    "hostProtocolChildAcknowledged": true,
+    "inputProbe": {
+      "submitted": "__PIGADE_RECOVERY_PROBE_N__",
+      "childOutput": "__PIGADE_RECOVERY_CHILD_ACK_N__",
+      "ackIsDifferentFromSubmittedTTYText": true
+    },
+    "screenshotSettleSeconds": 0.5
+  },
+  "output": {
+    "scale": 1,
+    "physical_pixels": [
+      1280,
+      800
+    ],
+    "logical_size_requested": [
+      1280,
+      800
+    ],
+    "scope": "one fixed integer-scale private software output; no fractional or multi-monitor claim"
+  },
+  "views": [
+    {
+      "session": "9ab9d759-50b5-45db-afcb-0a613f88d01b",
+      "generation": "576e5f87-16a5-4ec0-a4b0-c2af50fe721e",
+      "pid": 12,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "5a6e95a6-25e0-493a-9a21-26041ab3697f",
+      "generation": "992096b7-a6cf-4041-b8d2-435455b92561",
+      "pid": 17,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "3cdff984-5b3b-420e-a2ec-e516d5a2755a",
+      "generation": "a7c5c873-4d0f-4795-b483-fbfd777988c5",
+      "pid": 22,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "e66de878-51c2-414c-aad1-c24f1e8b1cd9",
+      "generation": "f6785822-4ca5-4e08-b5ed-ba734bccaff6",
+      "pid": 27,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "wayland-screenshot-2026-10-17_01-01-13.png",
+      "sha256": "e10b3230321d9bf701a814f133379aa3057ffb36fb6a09d483275933e2d17e80",
+      "bytes": 75003
+    }
+  ]
+}

@@ -1025,3 +1025,59 @@ Integrate redacted offline provider PTY evidence and precise CLI matrix
 - Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md, docs/reports/provider-pty-20261017.md, docs/compatibility/CLI.md, benchmarks/results/provider-pty-20261017, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Fresh scripts unittest discover: 53 passed. Root executed frozen-host Codex/OpenCode offline startup+2resizes+1s checks; Claude running check failed after resizes, retained and classified. Curated hashes reviewed; no task/context/resume certification.
 - Risks / next: Finish mouse/selection PTY integration; native provider conversations and exact resume remain open.
+
+## 2026-10-17T01:01:24+00:00 — font_render_profile
+
+Add pure frame-bound cell selection and safe plain-text extraction model
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/selection.rs; compiled selection.rs with a temporary DTO-compatible rustc test harness; 7 unit tests passed, covering reverse order, wide spacers, combining text, soft/hard breaks, blank-row policy, bounds/geometry, and frame identity
+- Risks / next: No main.rs or clipboard integration in this slice; root owns module wiring and native-app build verification. Selection invalidates at any new sequence until stable historical-frame selection is implemented.
+
+## 2026-10-17T01:02:54+00:00 — font_render_profile
+
+Normalize wide-cell selection endpoints and add allocation-free hit testing
+
+- Files: crates/app/src/selection.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; focused rustc-compatible selection harness: 10 passed; git diff --check -- crates/app/src/selection.rs
+- Risks / next: Root can integrate the pure selection module into mouse/painter code; no full app build was run because module wiring is owned by root.
+
+## 2026-10-17T01:03:52+00:00 — terminal_memory_budget
+
+Harden PTY mouse test cleanup and assert stale-generation input isolation
+
+- Files: crates/session-host/tests/mouse_input.rs
+- Verification: rustfmt --edition 2021 crates/session-host/tests/mouse_input.rs; cargo test -p pigade-session-host --test mouse_input (12 passed, no warnings); git diff --check -- crates/session-host/tests/mouse_input.rs
+- Risks / next: PTY fixture cleanup now requests Stop for the exact generation and waits for its exited snapshot before stopping the owned host process; stale generation input gets an unknown-generation error before valid PTY ACK.
+
+## 2026-10-17T01:08:59+00:00 — terminal_memory_budget
+
+Added bounded resize queue-full diagnostics and hardened soak child cleanup with pidfd identity revalidation; curated prior saturation evidence without raw journals
+
+- Files: scripts/soak-pty.py, scripts/test_soak_admission.py, docs/reports/soak-resize-saturation.md, benchmarks/results/soak-resize-saturation-20261017/manifest.json, benchmarks/results/soak-resize-saturation-20261017/samples-last.json, benchmarks/results/soak-resize-saturation-20261017/progress-last.json
+- Verification: python3 -m unittest scripts/test_soak_admission.py (11 passed); python3 -m py_compile scripts/soak-pty.py scripts/test_soak_admission.py; git diff --check scoped paths
+- Risks / next: No soak launched. Use existing frozen reproducer after root approves; inspect bounded queue-full diagnostics for actor stall cause.
+
+## 2026-10-17T01:12:06+00:00 — recovery_slice_review
+
+Harden VM result collection against partial serial writes, add regression coverage, preserve failed attempt metadata, and curate completed full-corpus reboot evidence
+
+- Files: scripts/vm-reboot.py, scripts/test_vm_reboot.py, docs/reports/long-history-full-20261017.md, benchmarks/results/vm-reboot-full-20261017/failed-attempt.json, benchmarks/results/vm-reboot-full-20261017/result.json
+- Verification: python3 -m unittest scripts.test_vm_reboot.SerialResultTests -v (3 passed); python3 -m unittest scripts.test_vm_reboot -q (22 passed); python3 -m py_compile scripts/vm-reboot.py scripts/test_vm_reboot.py; git diff --check; exact-input full VM rerun completed recovery_verified with 2 distinct guest boot IDs, all 4 first/second boot views equal, unchanged fixture inventory, and 405-441-byte checkpoint-tail reads
+- Risks / next: Root integrates these files and retains explicit scope: host-only timings, VM copy hash verification, no full cold history oracle in VM, no UI/provider/24-hour soak/REC-08 claims
+
+## 2026-10-17T01:12:28+00:00 — /root
+
+Plan handoff refresh: replace obsolete running snapshots with current verified state, preserve detailed history in WORKLOG and reports
+
+- Files: docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: Documentation-only update; preserve contracts, current frozen run identities, open release gates and evidence links. No product behavior changes.
+- Risks / next: Write concise current handoff after integrating input and recovery evidence; retain failed runs and historical WORKLOG.
+
+## 2026-10-17T01:12:49+00:00 — /root
+
+Integrate generation-bound mouse reporting, local cell selection and atomic explicit bracketed paste
+
+- Files: crates/app/src/main.rs, crates/app/src/input.rs, crates/app/src/mouse.rs, crates/app/src/selection.rs, crates/session-host/tests/mouse_input.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/mouse-20261017, crates/app/evidence/selection-20261017, docs/reports/mouse-input.md, docs/reports/selection-and-paste.md, crates/app/README.md, CHANGELOG.md
+- Verification: Root: 174 workspace tests, fmt/strict all-target Clippy/release bins/examples passed; app61 tests/fmt/strictClippy/debug+release builds passed; Python59 tests passed. Actual raw PTY confirms mouse+paste bytes, stalegeneration rejected. Private same-app selection render/reopen passed and final PNG visually inspected; binary/source hashes retained. Luna independent review found2 P2 bugs; root fixed nonblocking stale-paste notice and explicit locally-rejected release reconciliation, re-review passed.
+- Risks / next: Native pointer/clipboard/IME/platform acceptance, stable history selection/search and >16KiB streaming paste remain open. Resolve sustained resize saturation with same-frozen instrumented reproducer; no MVP completion claim.

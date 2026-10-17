@@ -26,10 +26,12 @@ NAMESPACES = ('mnt', 'pid', 'user', 'ipc', 'net')
 IME_PREEDIT = '日本😀'
 
 
-def app_command(ime_preedit):
+def app_command(ime_preedit, selection_fixture=False):
     command = ['/pigade/app', '/artifacts/state/host.sock']
     if ime_preedit:
         command.append('--diagnostic-preedit')
+    if selection_fixture:
+        command.append('--diagnostic-selection')
     return command
 
 
@@ -522,7 +524,7 @@ def inside():
                 'omitted': initial_reply['recovery'].get('omitted'),
             }
         initial_ids = sorted((v['session'], v['generation'], v['pid']) for v in initial)
-        first = start(app_command(config.get('ime_preedit', False)))
+        first = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False)))
         # Wait for host acknowledgement of app-computed viewport dimensions.
         wait_for(lambda: all(v['frame']['geometry'] != {'rows': 24, 'cols': 80} for v in request({'command': 'list'})))
         require(first.poll() is None, 'application exited before capture')
@@ -602,7 +604,7 @@ def inside():
                             'scope': 'one fixed integer-scale private software output; no fractional or multi-monitor claim'}
         first.kill()
         first.wait(timeout=5)
-        reopened = start(app_command(config.get('ime_preedit', False)))
+        reopened = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False)))
         time.sleep(1)
         require(reopened.poll() is None, 'reopened app exited')
         final = request({'command': 'list'})
@@ -650,6 +652,7 @@ def outside(args):
         'app_sha256': sha(args.app), 'host_sha256': sha(args.host), 'sdk_packages': manifest['packages'],
         'accessibility_probe': args.accessibility, 'recovery_warning': args.recovery_warning,
         'ime_preedit': args.ime_preedit,
+        'selection_fixture': args.selection_fixture,
         'output_scale': args.scale,
         'font_preflight': embedded_fonts}, indent=2) + '\n')
     (output / 'passwd').write_text(f'pigade:x:{os.getuid()}:{os.getgid()}:Isolated test:/home/test:/usr/bin/bash\n')
@@ -689,6 +692,8 @@ if __name__ == '__main__':
                         help='opt in to a private-bus, read-only AT-SPI tree inspection (not Orca/full acceptance)')
     parser.add_argument('--recovery-warning', action='store_true',
                         help='opt in to malformed-journal recovery, healthy PTY input and Alert coverage')
+    parser.add_argument('--selection-fixture', action='store_true',
+                        help='stage local cell selection in the same app, without input injection')
     parser.add_argument('--ime-preedit', action='store_true',
                         help='show a local same-app composition fixture without desktop input or PTY commit')
     sys.exit(outside(parser.parse_args()))

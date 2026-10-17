@@ -1,0 +1,12 @@
+{
+  "sources": {
+    "crates/app/src/main.rs": "2796ce7833229f41398f7876e154a611163f1d817a6b150ccdaeab055c43ced5",
+    "crates/app/src/input.rs": "1e76e08f519ff779667ed9308c56c5cdc6e8d85e01c2c7afe50e81752e7b7558",
+    "crates/app/src/mouse.rs": "b7fb8f6ccb958336805c6a32cc98b1d2539754a889e58f997667122c9fa6e735",
+    "crates/app/src/selection.rs": "202af76fbf830d83cabcd53b6cfc25c48851961e4ccba6c49d782e0cbe79f496",
+    "crates/app/src/protocol.rs": "0ffb0d1e938284bf9eb241f886adf119f4cff3a07d3733b6413dd88be7a3ce2d",
+    "crates/app/src/font.rs": "50ee7e3acae91eb7ea928f1d9bbd8013cfb18e5fbf18c812eb3f85e5ddfae3a8"
+  },
+  "debug_app_sha256": "3b458a7d12dff04491e12c5be921863d8a45211f79b299a22f5d496fc4364047",
+  "release_app_sha256": "4d29b1a9b8bd927eb4bba60481e3123df967c641e30b6c1b263be651e8c5d160"
+}

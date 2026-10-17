@@ -1,7 +1,9 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
 mod font;
 mod input;
+mod mouse;
 mod protocol;
+mod selection;
 use gpui::{prelude::*, *};
 use gpui_platform::application;
 use protocol::{
@@ -200,6 +202,79 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
     (tx, shared)
 }
 
+#[derive(Clone)]
+struct PointerRoute {
+    session: String,
+    generation: String,
+    encoder: mouse::Encoder,
+    position: mouse::Position,
+    wheel: mouse::WheelAccumulator,
+}
+
+impl PointerRoute {
+    fn index(&self, state: &State) -> Option<usize> {
+        state
+            .views
+            .iter()
+            .position(|view| view.session == self.session && view.generation == self.generation)
+    }
+    fn event(
+        &mut self,
+        action: PointerAction,
+        position: mouse::Position,
+        modifiers: mouse::Modifiers,
+        modes: u32,
+    ) -> Option<Vec<u8>> {
+        let mut reported_position = position;
+        let bytes = match action {
+            PointerAction::Press(button) => self.encoder.press(button, position, modifiers, modes),
+            PointerAction::Release(button) => {
+                let mut candidate = self.encoder.clone();
+                if let Some(bytes) = candidate.release(button, position, modifiers, modes) {
+                    self.encoder = candidate;
+                    Some(bytes)
+                } else {
+                    // Legacy encodings cannot represent every host column.
+                    // Close a previously reported press at its last encodable
+                    // position instead of leaving the CLI's button held.
+                    reported_position = self.position;
+                    self.encoder
+                        .release(button, self.position, modifiers, modes)
+                }
+            }
+            PointerAction::Motion => self.encoder.motion(position, modifiers, modes),
+        };
+        if bytes.is_some() {
+            self.position = reported_position;
+        }
+        bytes
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PointerAction {
+    Press(mouse::Button),
+    Release(mouse::Button),
+    Motion,
+}
+
+fn pointer_button(button: MouseButton) -> Option<mouse::Button> {
+    match button {
+        MouseButton::Left => Some(mouse::Button::Left),
+        MouseButton::Middle => Some(mouse::Button::Middle),
+        MouseButton::Right => Some(mouse::Button::Right),
+        MouseButton::Navigate(_) => None,
+    }
+}
+
+fn pointer_modifiers(modifiers: Modifiers) -> mouse::Modifiers {
+    mouse::Modifiers {
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        control: modifiers.control,
+    }
+}
+
 struct CanvasApp {
     focus: FocusHandle,
     selected: usize,
@@ -209,10 +284,17 @@ struct CanvasApp {
     shared: Arc<Mutex<State>>,
     panes: Vec<PaneGeometry>,
     text_input: input::TextInput,
+    pointer: Option<PointerRoute>,
+    selection: Option<selection::CellSelection>,
+    selection_dragging: bool,
+    clipboard_pending: bool,
+    input_epoch: u64,
     input_error: Option<String>,
+    input_notice: Option<String>,
     resized: Vec<(String, u16, u16)>,
     _input_subscriptions: Vec<Subscription>,
     diagnostic_preedit_pending: bool,
+    diagnostic_selection: bool,
 }
 impl CanvasApp {
     fn new(
@@ -221,16 +303,23 @@ impl CanvasApp {
         tx: mpsc::SyncSender<Value>,
         shared: Arc<Mutex<State>>,
         diagnostic_preedit_pending: bool,
+        diagnostic_selection: bool,
     ) -> Self {
         let focus = cx.focus_handle();
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
+                this.selection_dragging = false;
+                this.input_epoch = this.input_epoch.wrapping_add(1);
+                this.finish_pointer(cx);
                 this.text_input.cancel();
                 window.notify_text_input_changed(&this.focus);
                 cx.notify();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
+                    this.selection_dragging = false;
+                    this.input_epoch = this.input_epoch.wrapping_add(1);
+                    this.finish_pointer(cx);
                     this.text_input.cancel();
                     window.notify_text_input_changed(&this.focus);
                     cx.notify();
@@ -250,14 +339,48 @@ impl CanvasApp {
                         };
                         if let Some(next) = next {
                             if composition_target_changed(&this.state, this.selected, &next) {
+                                this.input_epoch = this.input_epoch.wrapping_add(1);
                                 this.text_input.cancel();
                                 window.notify_text_input_changed(&this.focus);
                             }
                             let views_changed = next.views.is_some();
                             apply_state_update(&mut this.state, next);
+                            this.reconcile_pointer();
+                            if this.selection.as_ref().is_some_and(|selection| {
+                                !this
+                                    .state
+                                    .views
+                                    .iter()
+                                    .any(|view| selection.is_current(view))
+                            }) {
+                                this.selection = None;
+                                this.selection_dragging = false;
+                            }
                             if views_changed {
                                 this.selected =
                                     this.selected.min(this.state.views.len().saturating_sub(1));
+                            }
+                            if this.diagnostic_selection
+                                && let Some(view) = this.state.views.get(this.selected)
+                            {
+                                this.selection = selection::CellSelection::new(
+                                    view,
+                                    selection::CellPosition {
+                                        row: 1.min(
+                                            view.frame.geometry.rows.saturating_sub(1) as usize
+                                        ),
+                                        column: 0,
+                                    },
+                                    selection::CellPosition {
+                                        row: 3.min(
+                                            view.frame.geometry.rows.saturating_sub(1) as usize
+                                        ),
+                                        column: 18.min(
+                                            view.frame.geometry.cols.saturating_sub(1) as usize
+                                        ),
+                                    },
+                                )
+                                .ok();
                             }
                             if this.diagnostic_preedit_pending && !this.state.views.is_empty() {
                                 this.text_input.key(false);
@@ -283,37 +406,436 @@ impl CanvasApp {
             shared,
             panes: Vec::new(),
             text_input: input::TextInput::default(),
+            pointer: None,
+            selection: None,
+            selection_dragging: false,
+            clipboard_pending: false,
+            input_epoch: 0,
             input_error: None,
+            input_notice: None,
             resized: Vec::new(),
             _input_subscriptions: input_subscriptions,
             diagnostic_preedit_pending,
+            diagnostic_selection,
         }
     }
     fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.send_to(self.selected, bytes, cx);
+    }
+    /// Admission to the local bounded queue only. The IPC worker never retries
+    /// an ambiguous command; its error freezes further input.
+    fn send_to(&mut self, index: usize, bytes: Vec<u8>, cx: &mut Context<Self>) -> bool {
         if bytes.is_empty() {
-            return;
+            return true;
         }
         if bytes.len() > 16 * 1024 {
             self.input_error = Some("Ввод более 16 KiB не принят; разделите текст".into());
             cx.notify();
+            return false;
+        }
+        let Some(view) = self.state.views.get(index) else {
+            return false;
+        };
+        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+            return false;
+        }
+        let mut value = command(view, "input");
+        value["bytes"] = json!(bytes);
+        if self.tx.try_send(value).is_err() {
+            self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
+            cx.notify();
+            return false;
+        }
+        true
+    }
+    fn pointer_index(&self, route: &PointerRoute) -> Option<usize> {
+        route.index(&self.state).filter(|&index| {
+            can_send_to_view(
+                &self.state.views[index],
+                &self.state,
+                self.input_error.as_deref(),
+            )
+        })
+    }
+    fn reconcile_pointer(&mut self) {
+        // A stopped/replaced generation must never receive an old drag release.
+        if self.pointer.as_ref().is_some_and(|route| {
+            !self.state.views.iter().any(|view| {
+                view.session == route.session
+                    && view.generation == route.generation
+                    && view.state == "running"
+                    && view.storage_error.is_none()
+            })
+        }) {
+            self.pointer = None;
+        }
+    }
+    fn finish_pointer(&mut self, cx: &mut Context<Self>) {
+        let Some(mut route) = self.pointer.clone() else {
+            return;
+        };
+        if !route.encoder.has_pressed() {
+            route.wheel.reset();
+            self.pointer = None;
             return;
         }
+        let Some(index) = self.pointer_index(&route) else {
+            return;
+        };
+        let modes = self.state.views[index].frame.modes;
+        let bytes = route
+            .encoder
+            .release_all(route.position, mouse::Modifiers::default(), modes);
+        if bytes.is_none_or(|bytes| self.send_to(index, bytes, cx)) {
+            self.pointer = None;
+        }
+    }
+    fn pointer_hit(&self, point: Point<Pixels>) -> Option<(usize, mouse::Position)> {
+        self.panes
+            .iter()
+            .zip(&self.state.views)
+            .enumerate()
+            .find_map(|(index, (pane, view))| {
+                pane.pointer_position(point, &view.frame.geometry, false)
+                    .map(|position| (index, position))
+            })
+    }
+    fn pointer_event(
+        &mut self,
+        action: PointerAction,
+        point: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if self.prefix {
+            return;
+        }
+        self.reconcile_pointer();
+        let captured = self
+            .pointer
+            .as_ref()
+            .filter(|route| route.encoder.has_pressed());
+        let hit = if let Some(route) = captured {
+            self.pointer_index(route).and_then(|index| {
+                self.panes
+                    .get(index)?
+                    .pointer_position(point, &self.state.views[index].frame.geometry, true)
+                    .map(|position| (index, position))
+            })
+        } else {
+            self.pointer_hit(point)
+        };
+        let Some((index, position)) = hit else { return };
+        let view = &self.state.views[index];
+        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+            return;
+        }
+        let mut route = self
+            .pointer
+            .clone()
+            .filter(|route| route.session == view.session && route.generation == view.generation)
+            .unwrap_or_else(|| PointerRoute {
+                session: view.session.clone(),
+                generation: view.generation.clone(),
+                encoder: mouse::Encoder::default(),
+                position,
+                wheel: mouse::WheelAccumulator::default(),
+            });
+        let modes = view.frame.modes;
+        let modifiers = pointer_modifiers(modifiers);
+        let bytes = route.event(action, position, modifiers, modes);
+        // Rejected local admission cannot consume a button transition. A single
+        // queued command binds bytes and state to the same process generation.
+        if bytes.is_none_or(|bytes| self.send_to(index, bytes, cx)) {
+            self.pointer = Some(route);
+        }
+    }
+    fn extend_selection(&mut self, point: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        let Some((pane, view)) = self
+            .panes
+            .iter()
+            .zip(&self.state.views)
+            .find(|(_, view)| selection.is_current(view))
+        else {
+            self.selection_dragging = false;
+            self.selection = None;
+            return;
+        };
+        if let Some(position) = pane.pointer_position(point, &view.frame.geometry, true) {
+            let _ = selection.set_focus(
+                view,
+                selection::CellPosition {
+                    row: position.row,
+                    column: position.column,
+                },
+            );
+            cx.notify();
+        }
+    }
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        if self.clipboard_pending {
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+        }
+        let Some(selection) = &self.selection else {
+            self.input_notice = Some("Нет выделения для копирования".into());
+            cx.notify();
+            return;
+        };
+        let Some(view) = self
+            .state
+            .views
+            .iter()
+            .find(|view| selection.is_current(view))
+        else {
+            return;
+        };
+        if let Ok(text) = selection.text(view) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.input_notice = Some("Выделение скопировано".into());
+            cx.notify();
+        }
+    }
+    fn select_visible(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.state.views.get(self.selected) {
-            if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
-                return;
+            self.selection = selection::CellSelection::new(
+                view,
+                selection::CellPosition { row: 0, column: 0 },
+                selection::CellPosition {
+                    row: view.frame.geometry.rows.saturating_sub(1) as usize,
+                    column: view.frame.geometry.cols.saturating_sub(1) as usize,
+                },
+            )
+            .ok();
+            self.selection_dragging = false;
+            cx.notify();
+        }
+    }
+    fn pointer_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self
+            .panes
+            .iter()
+            .position(|pane| pane.bounds.contains(&event.position))
+        {
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+            if self.selected != index
+                && !self
+                    .pointer
+                    .as_ref()
+                    .is_some_and(|route| route.encoder.has_pressed())
+            {
+                self.selected = index;
+                self.selection = None;
+                self.selection_dragging = false;
+                self.text_input.cancel();
+                window.notify_text_input_changed(&self.focus);
             }
-            let mut value = command(view, "input");
-            value["bytes"] = json!(bytes);
-            if self.tx.try_send(value).is_err() {
-                self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
-                cx.notify();
+            self.focus.focus(window, cx);
+            if event.button == MouseButton::Left
+                && !self.prefix
+                && !self
+                    .pointer
+                    .as_ref()
+                    .is_some_and(|route| route.encoder.has_pressed())
+                && let Some((hit, position)) = self.pointer_hit(event.position)
+                && hit == index
+            {
+                let view = &self.state.views[index];
+                if event.modifiers.shift
+                    || view.frame.modes
+                        & (mouse::MOUSE_REPORT_CLICK | mouse::MOUSE_DRAG | mouse::MOUSE_MOTION)
+                        == 0
+                {
+                    let position = selection::CellPosition {
+                        row: position.row,
+                        column: position.column,
+                    };
+                    self.selection = selection::CellSelection::new(view, position, position).ok();
+                    self.selection_dragging = self.selection.is_some();
+                    self.text_input.cancel();
+                    window.notify_text_input_changed(&self.focus);
+                    cx.notify();
+                    return;
+                }
+            }
+            self.selection = None;
+            self.selection_dragging = false;
+            if let Some(button) = pointer_button(event.button) {
+                self.pointer_event(
+                    PointerAction::Press(button),
+                    event.position,
+                    event.modifiers,
+                    cx,
+                );
+            }
+            cx.notify();
+        }
+    }
+    fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if event.button == MouseButton::Left && self.selection_dragging {
+            self.extend_selection(event.position, cx);
+            self.selection_dragging = false;
+            return;
+        }
+        if let Some(button) = pointer_button(event.button) {
+            self.pointer_event(
+                PointerAction::Release(button),
+                event.position,
+                event.modifiers,
+                cx,
+            );
+        }
+    }
+    fn pointer_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_dragging {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.extend_selection(event.position, cx);
+            } else {
+                self.selection_dragging = false;
+            }
+            return;
+        }
+        if event.pressed_button.is_none()
+            && self
+                .pointer
+                .as_ref()
+                .is_some_and(|route| route.encoder.has_pressed())
+        {
+            // Recover a release delivered outside this window without inventing
+            // a press in the newly hovered pane.
+            self.finish_pointer(cx);
+        }
+        self.pointer_event(PointerAction::Motion, event.position, event.modifiers, cx);
+    }
+    fn pointer_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.prefix || event.modifiers.shift {
+            return;
+        }
+        let Some((index, position)) = self.pointer_hit(event.position) else {
+            return;
+        };
+        let view = &self.state.views[index];
+        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+            return;
+        }
+        if self.pointer.as_ref().is_some_and(|route| {
+            route.encoder.has_pressed()
+                && (route.session != view.session || route.generation != view.generation)
+        }) {
+            return;
+        }
+        let mut route = self
+            .pointer
+            .clone()
+            .filter(|route| route.session == view.session && route.generation == view.generation)
+            .unwrap_or_else(|| PointerRoute {
+                session: view.session.clone(),
+                generation: view.generation.clone(),
+                encoder: mouse::Encoder::default(),
+                position,
+                wheel: mouse::WheelAccumulator::default(),
+            });
+        let lines = match event.delta {
+            ScrollDelta::Lines(delta) => delta.y,
+            ScrollDelta::Pixels(delta) => {
+                f32::from(delta.y) / f32::from(self.panes[index].cell.height)
+            }
+        };
+        let modes = view.frame.modes;
+        if modes & (mouse::MOUSE_REPORT_CLICK | mouse::MOUSE_DRAG | mouse::MOUSE_MOTION) == 0 {
+            return;
+        }
+        let modifiers = pointer_modifiers(event.modifiers);
+        let mut bytes = Vec::new();
+        for step in route.wheel.take_steps(lines) {
+            if let Some(report) = route.encoder.wheel(step, position, modifiers, modes) {
+                bytes.extend(report);
             }
         }
+        if !bytes.is_empty() {
+            route.position = position;
+        }
+        if self.send_to(index, bytes, cx) {
+            self.pointer = Some(route);
+            cx.stop_propagation();
+        }
+    }
+    fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.text_input.cancel();
+        window.notify_text_input_changed(&self.focus);
+        let modes = self
+            .state
+            .views
+            .get(self.selected)
+            .map_or(0, |view| view.frame.modes);
+        match input::paste(text, modes) {
+            Ok(bytes) => self.send(bytes, cx),
+            Err(reason) => self.input_notice = Some(reason.into()),
+        }
+        cx.notify();
+    }
+    fn request_paste(&mut self, cx: &mut Context<Self>) {
+        if self.clipboard_pending {
+            return;
+        }
+        let Some(view) = self.state.views.get(self.selected) else {
+            return;
+        };
+        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+            return;
+        }
+        let target = (view.session.clone(), view.generation.clone());
+        let epoch = self.input_epoch;
+        self.clipboard_pending = true;
+        self.input_notice = None;
+        let clipboard = cx.read_from_clipboard_async();
+        cx.spawn(async move |weak, cx| {
+            let result = clipboard.await;
+            let _ = weak.update_in(cx, |this, window, cx| {
+                this.clipboard_pending = false;
+                if epoch != this.input_epoch
+                    || !this.focus.is_focused(window)
+                    || !window.is_window_active()
+                    || !this.state.views.get(this.selected).is_some_and(|view| {
+                        (&view.session, &view.generation) == (&target.0, &target.1)
+                    })
+                {
+                    this.input_notice = Some("Вставка отменена: изменился фокус или панель".into());
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(Some(item)) => {
+                        if let Some(text) = item.text() {
+                            this.paste_text(&text, window, cx);
+                        }
+                    }
+                    Ok(None) => (),
+                    Err(_) => {
+                        this.input_notice =
+                            Some("Не удалось прочитать буфер обмена; вставка не выполнена".into());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
     fn error(&self) -> Option<&str> {
         self.input_error.as_deref().or(self.state.error.as_deref())
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_notice = None;
+        if self.clipboard_pending {
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+        }
         let k = &event.keystroke;
         if k.modifiers.control
             && k.modifiers.shift
@@ -321,6 +843,8 @@ impl CanvasApp {
             && !k.modifiers.platform
             && k.key == "space"
         {
+            self.finish_pointer(cx);
+            self.selection_dragging = false;
             self.prefix = !self.prefix;
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
@@ -330,6 +854,15 @@ impl CanvasApp {
         }
         if self.prefix {
             self.prefix = false;
+            if k.key == "c" {
+                self.copy_selection(cx);
+            }
+            if k.key == "a" {
+                self.select_visible(cx);
+            }
+            if k.key == "v" {
+                self.request_paste(cx);
+            }
             if let Ok(index) = k.key.parse::<usize>()
                 && (1..=self.state.views.len()).contains(&index)
             {
@@ -339,6 +872,12 @@ impl CanvasApp {
             // It never resends a failed or unknown command.
             if k.key == "escape" {
                 self.input_error = None;
+                // A rejected local release never reached the worker. Close its
+                // remembered press before accepting a fresh click. An unknown
+                // IPC outcome stays blocked by state.error and is not retried.
+                self.finish_pointer(cx);
+                self.selection = None;
+                self.selection_dragging = false;
             }
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
@@ -453,6 +992,29 @@ impl PaneGeometry {
             rows: ((bottom - y).max(0.) / ch).floor().clamp(1., 128.) as u16,
             cols: ((right - x).max(0.) / cw).floor().clamp(2., 256.) as u16,
         }
+    }
+    /// Hit tests only visible, acknowledged cells. During resize the pending
+    /// pane dimensions cannot invent coordinates outside the last host frame.
+    fn pointer_position(
+        self,
+        point: Point<Pixels>,
+        geometry: &protocol::Geometry,
+        clamp: bool,
+    ) -> Option<mouse::Position> {
+        let rows = self.rows.min(geometry.rows) as usize;
+        let cols = self.cols.min(geometry.cols) as usize;
+        let x = f32::from(point.x - self.origin.x) / f32::from(self.cell.width);
+        let y = f32::from(point.y - self.origin.y) / f32::from(self.cell.height);
+        if rows == 0 || cols == 0 || !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        if !clamp && (x < 0. || y < 0. || x >= cols as f32 || y >= rows as f32) {
+            return None;
+        }
+        Some(mouse::Position {
+            row: y.floor().clamp(0., (rows - 1) as f32) as usize,
+            column: x.floor().clamp(0., (cols - 1) as f32) as usize,
+        })
     }
 }
 fn project_panels(bounds: Bounds<Pixels>, count: usize, scale: f32) -> Vec<Bounds<Pixels>> {
@@ -580,9 +1142,7 @@ impl EntityInputHandler for CanvasApp {
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = item.text() {
-            // Paste must not inherit a staged Meta key from ordinary typing.
-            self.text_input.key(false);
-            self.replace_text_in_range(None, &text, window, cx);
+            self.paste_text(&text, window, cx);
         }
     }
     fn replace_and_mark_text_in_range(
@@ -640,14 +1200,16 @@ impl Render for CanvasApp {
         let preedit = self.text_input.preedit.clone();
         let preedit_selection = self.text_input.selection_bytes();
         let selected = self.selected;
+        let selection = self.selection.clone();
         let attached = self.state.error.is_none();
         let terminal_label = self.state.views.get(selected).map_or_else(
             || "Терминал: нет выбранной сессии".to_owned(),
             |view| format!("Терминал {} · {}", view.frame.title, view.state),
         );
-        let status = self.error().map(str::to_owned).unwrap_or_else(|| {
+        let status = self.error().or(self.input_notice.as_deref()).map(str::to_owned).unwrap_or_else(|| {
             if self.prefix {
-                "Режим PigADE: 1–4 — фокус · Escape — выход".into()
+                "Режим PigADE: 1–4 — фокус · A/C/V — выделить/копировать/вставить · Escape — выход"
+                    .into()
             } else {
                 format!(
                     "PigADE 0.0.1-dev · {} сессий · Ctrl+Shift+Space, 1–4 — фокус",
@@ -729,6 +1291,7 @@ impl Render for CanvasApp {
                                             pane,
                                             views.get(index),
                                             (index == selected, attached),
+                                            selection.as_ref(),
                                             &font,
                                             window,
                                             cx,
@@ -778,23 +1341,50 @@ impl Render for CanvasApp {
                         .flex()
                         .items_center()
                         .text_color(rgb(0xb0b8c5))
-                        .child(status),
+                        .child(div().flex_1().child(status))
+                        .child(
+                            div()
+                                .id("copy-selection")
+                                .role(Role::Button)
+                                .aria_label("Копировать выделение")
+                                .px(px(8.))
+                                .child("Копировать")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.copy_selection(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("paste-clipboard")
+                                .role(Role::Button)
+                                .aria_label("Вставить из буфера обмена")
+                                .px(px(8.))
+                                .child("Вставить")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.request_paste(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        ),
                 )
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    if let Some(index) = this
-                        .panes
-                        .iter()
-                        .position(|pane| pane.bounds.contains(&event.position))
-                    {
-                        this.selected = index;
-                    }
-                    this.focus.focus(window, cx);
-                    cx.notify();
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::pointer_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::pointer_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::pointer_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::pointer_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::pointer_up))
+            .on_mouse_up(MouseButton::Right, cx.listener(Self::pointer_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::pointer_up))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::pointer_up))
+            .on_mouse_up_out(MouseButton::Right, cx.listener(Self::pointer_up))
+            .on_mouse_move(cx.listener(Self::pointer_move))
+            .on_scroll_wheel(cx.listener(Self::pointer_wheel))
     }
 }
 /// Font metric descent is negative on GPUI Linux and positive on some
@@ -955,6 +1545,7 @@ fn paint_panel(
     pane: PaneGeometry,
     view: Option<&View>,
     (selected, attached): (bool, bool),
+    selection: Option<&selection::CellSelection>,
     font: &Font,
     window: &mut Window,
     cx: &mut App,
@@ -1023,6 +1614,12 @@ fn paint_panel(
                 let mut bg = color(&c.bg, false);
                 if c.flags & 1 != 0 {
                     std::mem::swap(&mut fg, &mut bg);
+                }
+                if selection.is_some_and(|selection| {
+                    selection.contains(view, selection::CellPosition { row: y, column: x })
+                }) {
+                    bg = 0x354c70;
+                    fg = 0xf2f4f7;
                 }
                 match operation {
                     CellPaint::Background(..) => {
@@ -1139,7 +1736,12 @@ fn main() {
     let socket = std::env::args()
         .nth(1)
         .expect("usage: pigade-app /path/to/host.sock");
-    let diagnostic_preedit = std::env::args().nth(2).as_deref() == Some("--diagnostic-preedit");
+    let diagnostic_preedit = std::env::args()
+        .skip(2)
+        .any(|arg| arg == "--diagnostic-preedit");
+    let diagnostic_selection = std::env::args()
+        .skip(2)
+        .any(|arg| arg == "--diagnostic-selection");
     let (tx, shared) = ipc(socket.into());
     application().run(move |cx: &mut App| {
         crate::font::install(cx).expect("bundled terminal font profile must load");
@@ -1157,7 +1759,16 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
-                let view = cx.new(|cx| CanvasApp::new(window, cx, tx, shared, diagnostic_preedit));
+                let view = cx.new(|cx| {
+                    CanvasApp::new(
+                        window,
+                        cx,
+                        tx,
+                        shared,
+                        diagnostic_preedit,
+                        diagnostic_selection,
+                    )
+                });
                 let focus = view.read(cx).focus.clone();
                 focus.focus(window, cx);
                 view
@@ -1195,6 +1806,151 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn pointer_hit_uses_acknowledged_visible_cells_and_clamps_captured_release() {
+        let pane = PaneGeometry::new(
+            Bounds::new(point(px(0.), px(0.)), size(px(300.), px(200.))),
+            size(px(8.), px(16.)),
+            1.25,
+        );
+        let geometry = super::protocol::Geometry { rows: 3, cols: 4 };
+        assert_eq!(
+            pane.pointer_position(pane.origin, &geometry, false),
+            Some(super::mouse::Position { row: 0, column: 0 })
+        );
+        assert!(
+            pane.pointer_position(point(px(10.), px(10.)), &geometry, false)
+                .is_none(),
+            "header is not a terminal cell"
+        );
+        let beyond_ack = pane.origin + point(pane.cell.width * 4., pane.cell.height);
+        assert!(
+            pane.pointer_position(beyond_ack, &geometry, false)
+                .is_none()
+        );
+        assert_eq!(
+            pane.pointer_position(point(px(900.), px(-50.)), &geometry, true),
+            Some(super::mouse::Position { row: 0, column: 3 })
+        );
+        assert!(
+            pane.pointer_position(point(px(f32::NAN), px(0.)), &geometry, true)
+                .is_none()
+        );
+        assert!(
+            pane.pointer_position(
+                pane.origin,
+                &super::protocol::Geometry { rows: 0, cols: 4 },
+                true
+            )
+            .is_none()
+        );
+    }
+
+    fn route() -> super::PointerRoute {
+        super::PointerRoute {
+            session: "s".into(),
+            generation: "g".into(),
+            encoder: super::mouse::Encoder::default(),
+            position: super::mouse::Position { row: 0, column: 0 },
+            wheel: super::mouse::WheelAccumulator::default(),
+        }
+    }
+
+    #[test]
+    fn pointer_capture_follows_identity_across_reordering_and_refuses_new_generation() {
+        let mut other = view(None);
+        other.session = "other".into();
+        let mut state = State {
+            views: vec![other, view(None)],
+            ..State::default()
+        };
+        let route = route();
+        assert_eq!(route.index(&state), Some(1));
+        state.views.swap(0, 1);
+        assert_eq!(route.index(&state), Some(0));
+        state.views[0].generation = "replacement".into();
+        assert_eq!(route.index(&state), None);
+    }
+
+    #[test]
+    fn rejected_pointer_candidate_does_not_consume_press_or_release() {
+        use super::{
+            PointerAction,
+            mouse::{Button, MOUSE_DRAG, Modifiers, Position, SGR_MOUSE},
+        };
+        let original = route();
+        let mut candidate = original.clone();
+        assert_eq!(
+            candidate
+                .event(
+                    PointerAction::Press(Button::Left),
+                    Position { row: 2, column: 3 },
+                    Modifiers::default(),
+                    MOUSE_DRAG | SGR_MOUSE
+                )
+                .unwrap(),
+            b"\x1b[<0;4;3M"
+        );
+        assert!(!original.encoder.has_pressed());
+        assert!(candidate.encoder.has_pressed());
+        let accepted = candidate;
+        let mut rejected_release = accepted.clone();
+        rejected_release.event(
+            PointerAction::Release(Button::Left),
+            Position { row: 3, column: 4 },
+            Modifiers::default(),
+            MOUSE_DRAG | SGR_MOUSE,
+        );
+        assert!(accepted.encoder.has_pressed());
+        assert!(!rejected_release.encoder.has_pressed());
+    }
+
+    #[test]
+    fn legacy_drag_release_outside_encoding_range_uses_last_reported_position() {
+        use super::{
+            PointerAction,
+            mouse::{Button, MOUSE_DRAG, Modifiers, Position},
+        };
+        let mut route = route();
+        let last = Position { row: 0, column: 4 };
+        route
+            .event(
+                PointerAction::Press(Button::Left),
+                last,
+                Modifiers::default(),
+                MOUSE_DRAG,
+            )
+            .unwrap();
+        let outside = Position {
+            row: 0,
+            column: 250,
+        };
+        assert!(
+            route
+                .event(
+                    PointerAction::Motion,
+                    outside,
+                    Modifiers::default(),
+                    MOUSE_DRAG
+                )
+                .is_none()
+        );
+        assert_eq!(route.position, last);
+        assert_eq!(
+            route
+                .event(
+                    PointerAction::Release(Button::Left),
+                    outside,
+                    Modifiers::default(),
+                    MOUSE_DRAG
+                )
+                .unwrap(),
+            b"\x1b[M#%!"
+        );
+        assert!(!route.encoder.has_pressed());
+        assert_eq!(route.position, last);
     }
 
     #[test]

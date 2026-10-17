@@ -57,6 +57,11 @@ class RecoveryWarningTests(unittest.TestCase):
         self.assertEqual(diagnostic[-1], '--diagnostic-preedit')
         self.assertNotIn(RENDER.IME_PREEDIT, ' '.join(diagnostic))
 
+    def test_selection_fixture_is_explicit_and_has_no_tty_input(self):
+        plain = RENDER.app_command(False)
+        self.assertEqual(RENDER.app_command(False, True), [*plain, '--diagnostic-selection'])
+        self.assertEqual(RENDER.app_command(True, True), [*plain, '--diagnostic-preedit', '--diagnostic-selection'])
+
     def test_recovery_reason_is_required_for_the_named_journal(self):
         reply = {'recovery': {'issues': [
             {'journal': 'broken.journal', 'message': 'invalid journal header'}], 'omitted': 0}}
