@@ -16,6 +16,7 @@ mod recovery_tests;
 mod replay_cache;
 mod request_decode;
 pub use recovery_diagnostics::{RecoveryDiagnostics, RecoveryIssue};
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -43,6 +44,41 @@ const OUTPUT_CHUNK: usize = 16 * 1024;
 // the PTY reader finish a burst split across several kernel reads.
 const OUTPUT_BATCH: usize = 64 * 1024;
 const OUTPUT_BATCH_WINDOW: Duration = Duration::from_micros(250);
+const MAX_PENDING_QUERY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const QUERY_RESPONSE_RETRY: Duration = Duration::from_millis(2);
+// A bounded burst can match response production without starving PTY output.
+const QUERY_RESPONSE_BURST: usize = 8;
+
+fn enqueue_query_responses(
+    queue: &mut VecDeque<Vec<u8>>,
+    queued_bytes: &mut usize,
+    responses: &[u8],
+    max_pending_bytes: usize,
+) -> Result<()> {
+    let new_total = queued_bytes
+        .checked_add(responses.len())
+        .context("terminal query response byte count overflow")?;
+    ensure!(
+        new_total <= max_pending_bytes,
+        "pending terminal query response budget exceeded"
+    );
+    if responses.is_empty() {
+        return Ok(());
+    }
+
+    let mut remaining = responses;
+    if let Some(tail) = queue.back_mut() {
+        let available = input::MAX_INPUT_BYTES - tail.len();
+        let copied = available.min(remaining.len());
+        tail.extend_from_slice(&remaining[..copied]);
+        remaining = &remaining[copied..];
+    }
+    for chunk in remaining.chunks(input::MAX_INPUT_BYTES) {
+        queue.push_back(chunk.to_vec());
+    }
+    *queued_bytes = new_total;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
@@ -1015,6 +1051,53 @@ mod batching_tests {
     }
 }
 
+#[cfg(test)]
+mod query_response_queue_tests {
+    use super::*;
+
+    #[test]
+    fn tiny_replies_coalesce_into_bounded_fifo_chunks() {
+        let mut queue = VecDeque::new();
+        let mut queued_bytes = 0;
+        let mut expected = Vec::new();
+        for _ in 0..10_000 {
+            let response = b"\x1b[1;1R";
+            expected.extend_from_slice(response);
+            enqueue_query_responses(
+                &mut queue,
+                &mut queued_bytes,
+                response,
+                MAX_PENDING_QUERY_RESPONSE_BYTES,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(queued_bytes, expected.len());
+        assert_eq!(queue.iter().map(Vec::len).sum::<usize>(), expected.len());
+        assert!(
+            queue
+                .iter()
+                .all(|chunk| chunk.len() <= input::MAX_INPUT_BYTES)
+        );
+        assert_eq!(queue.len(), expected.len().div_ceil(input::MAX_INPUT_BYTES));
+        let actual = queue.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn response_budget_rejection_keeps_pending_fifo_unchanged() {
+        let mut queue = VecDeque::from([b"already queued".to_vec()]);
+        let mut queued_bytes = 14;
+        let before_queue = queue.clone();
+        let before_bytes = queued_bytes;
+        let over_budget = [0u8; 1];
+
+        assert!(enqueue_query_responses(&mut queue, &mut queued_bytes, &over_budget, 14).is_err());
+        assert_eq!(queue, before_queue);
+        assert_eq!(queued_bytes, before_bytes);
+    }
+}
+
 /// Bounds dirty recovery tails by data, event count, measured model work and
 /// idle wall time. Work is a scheduling heuristic, not a recovery budget claim.
 struct CheckpointProgress {
@@ -1088,28 +1171,28 @@ fn actor(
     let mut deferred = None;
     let mut checkpoints = CheckpointProgress::default();
     let mut metrics = metrics::SessionMetrics::default();
-    let mut query_responses: Vec<u8> = Vec::new();
-    let mut query_response_offset = 0;
+    // Fixed-size response chunks cap both owned bytes and queue-node count.
+    // Query replies are ordered, but a full input writer must never prevent
+    // this actor from draining PTY output (which may unblock the child reader).
+    let mut query_responses: VecDeque<Vec<u8>> = VecDeque::new();
+    let mut query_response_bytes = 0usize;
     loop {
         if let Ok(Control::Stop) = config.control.try_recv() {
             let _ = child.kill();
         }
-        if !query_responses.is_empty() {
-            let end = (query_response_offset + input::MAX_INPUT_BYTES).min(query_responses.len());
-            match writer.try_write(query_responses[query_response_offset..end].to_vec()) {
+        for _ in 0..QUERY_RESPONSE_BURST {
+            let Some(response) = query_responses.front() else {
+                break;
+            };
+            match writer.try_write(response.clone()) {
                 Ok(()) => {
-                    query_response_offset = end;
-                    if end == query_responses.len() {
-                        query_responses.clear();
-                        query_response_offset = 0;
-                    } else {
-                        continue;
-                    }
+                    let completed = query_responses.pop_front().expect("front response");
+                    query_response_bytes -= completed.len();
                 }
-                Err(input::InputWriteError::Full) => {
-                    thread::sleep(Duration::from_millis(2));
-                    continue;
-                }
+                // Continue servicing the ordered action queue. Retrying on a
+                // short receive timeout below still makes progress when the
+                // child reads input while producing no output.
+                Err(input::InputWriteError::Full) => break,
                 Err(error) => {
                     let mut v = view.lock().expect("view lock");
                     v.storage_error = Some(format!("PTY query response failed: {error}"));
@@ -1127,6 +1210,8 @@ fn actor(
         } else {
             let received = if terminal.sync_timeout_pending() {
                 rx.recv_timeout(Duration::from_millis(10))
+            } else if !query_responses.is_empty() {
+                rx.recv_timeout(QUERY_RESPONSE_RETRY)
             } else if checkpoints.events > 0 {
                 rx.recv_timeout(Duration::from_secs(5).saturating_sub(checkpoints.clock.elapsed()))
             } else {
@@ -1218,6 +1303,23 @@ fn actor(
                 EventKind::Exit => (),
             }
             let model_work = model_start.elapsed();
+            // Check the combined pending-response bound before committing
+            // derived history/checkpoint state or publishing this model event.
+            // The raw event is already durable and remains replayable on error.
+            let responses = terminal.take_responses();
+            if !responses.is_empty() {
+                ensure!(
+                    responses.len() <= MAX_PENDING_QUERY_RESPONSE_BYTES,
+                    "terminal query response budget exceeded"
+                );
+                let pending = query_response_bytes
+                    .checked_add(responses.len())
+                    .context("terminal query response byte count overflow")?;
+                ensure!(
+                    pending <= MAX_PENDING_QUERY_RESPONSE_BYTES,
+                    "pending terminal query response budget exceeded"
+                );
+            }
             // Derived cells and index reach durability before either the frame
             // or a checkpoint is allowed to reference their committed root.
             let archive_start = Instant::now();
@@ -1233,13 +1335,13 @@ fn actor(
                 history,
             )?;
             let checkpoint_work = checkpoint_start.elapsed();
-            let responses = terminal.take_responses();
             if !responses.is_empty() {
-                ensure!(
-                    responses.len() <= 16 * 1024 * 1024,
-                    "terminal query response budget exceeded"
-                );
-                query_responses = responses;
+                enqueue_query_responses(
+                    &mut query_responses,
+                    &mut query_response_bytes,
+                    &responses,
+                    MAX_PENDING_QUERY_RESPONSE_BYTES,
+                )?;
             }
             let frame_start = Instant::now();
             let frame = terminal.frame();

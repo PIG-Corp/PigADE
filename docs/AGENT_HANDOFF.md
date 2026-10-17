@@ -26,7 +26,12 @@ injection, `--last`, automatic repeated task or silent new conversation.
   generation/sequence watermarks, never independently parses ANSI. Ordered
   output/resize/timer records are CRC-journaled/fsynced before model publication.
   Output batches are bounded64KiB with a250μs collector, reader queue8×16KiB;
-  input has a separate bounded writer. Input itself is not journaled.
+  input has a separate bounded writer. Pending terminal query replies use a
+  coalesced16MiB payload FIFO and at most eight16KiB admission attempts before
+  servicing output; a full writer no longer deadlocks the actor against child
+  output. Operational response-cap degradation retains the live published view
+  while recovery can apply the raw-durable tail; see reports/query-response-backpressure.md.
+  Input itself is not journaled.
 - Durable intent/helper launch protocol, OS boot/PID/start identity, operation
   IDs, generation locks and unknown-outcome reconciliation prevent blind retry.
   QueueFull is marked pre-admission; unknown input/launch outcomes never retry.
@@ -74,8 +79,8 @@ injection, `--last`, automatic repeated task or silent new conversation.
 
 ## Latest verification
 
-- Root workspace fmt, strict all-target Clippy and177 tests passed (including
-  the25-test input target:23 shared pure codec tests and2 real raw-PTY tests).
+- Root workspace fmt, strict all-target Clippy and180 tests passed (including
+  the27-test input target:25 shared pure codec tests and2 real raw-PTY tests).
   Release workspace bins/examples build passed. Native app90 tests, strict
   all-target Clippy, fmt and debug/release builds passed. Python126 tests and9 explicit pinned XIM state tests passed.
   Fresh checks must still follow future changes.

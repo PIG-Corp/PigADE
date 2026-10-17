@@ -47,3 +47,5 @@ This section describes development work; it is not a release announcement.
 - Terminal underline variants, custom underline colors and strikeout render from host cell metadata, including blank/wide cells. Bounded pure plans and source-bound software captures at scale1/2 cover the integration; font-exact metrics and physical platform checks remain open.
 
 - GPUI X11 now creates/focuses valid XIM contexts in order and filters stale IC callbacks. Exact downstream patch hashes, nine lifecycle tests and private actual-app Pinyin debug/release commits are retained; session-generation reset and full platform acceptance remain open. Signed test-only X11/IME tooling never drives the active desktop.
+
+- Fixed a reproduced PTY output/query-reply wait cycle. Coalesced bounded FIFO replies no longer prevent actor output draining; real PTY tests verify50,000 exact replies and explicit response-cap degradation with durable raw-tail recovery. This is independent of the unresolved soak ACK incident.

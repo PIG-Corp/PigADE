@@ -14,6 +14,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_read.rs | Bounded asynchronous canonical-record reads; exact generation/sequence, no ANSI parsing or host-command-thread cold I/O |
 | crates/session-host/src/replay_cache.rs | Leased, marked private replay caches and bounded fail-closed orphan collection; sources are preserved |
+| crates/session-host/tests/query_backpressure.rs | Real PTY cyclic-wait regression, exact50k query FIFO and bounded-response degradation/raw-tail recovery |
 | crates/session-host/src/metrics.rs | Bounded numeric per-session pipeline counters; no terminal content or input bytes |
 | crates/session-host/src/poll.rs | Conditional bounded polling: stable `(session,generation)` selection and metadata-only replies when the client watermark is current |
 | crates/session-host/src/recovery_diagnostics.rs | Bounded unavailable-artifact notices with escaped display basenames; no fabricated sessions or source changes |
@@ -66,3 +67,5 @@ maintenance are described in `reports/runtime-and-replay-cache.md`. Storage quot
 compression and global model heap admission remain independent unfinished work.
 
 The pinned GPUI X11 focus correction now passes one native Pinyin commit in the actual debug/release app; a settled clean-upstream baseline lacked an active IC. See [ADR0010](adr/0010-gpui-x11-ime-focus-lifecycle.md) and [source-bound report](reports/x11-ime-20261017.md). Composition-generation barriers, inline preedit and the full platform gate remain open.
+
+The response-priority actor wait cycle is reproduced and repaired with bounded FIFO replies while draining PTY output; [report](reports/query-response-backpressure.md). This repair does not establish a cause for the separate soak ACK timeout.

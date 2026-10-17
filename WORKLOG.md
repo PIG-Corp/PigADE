@@ -1401,3 +1401,43 @@ Retain successful1200s same-host ACK diagnostic alongside prior failures
 - Files: benchmarks/results/soak-ack-timeout-20261017/completed-1200s-summary.json, docs/reports/soak-ack-timeout-20261017.md, docs/research/soak-pipeline-audit.md
 - Verification: Reviewed all4 CRC/full recovery results and bounded summary:1200.068s,238 ACKs/stream,396 resizes/stream,2856 producer milestones with0 gaps; cold counts0. No unique RCA. Independent source audit identifies a separately reproducible query-response wait cycle; its pending fix is not yet part of this commit.
 - Risks / next: Existing7200s diagnostic10513 continues unchanged on frozen67ed host; no24h acceptance. Review/fix query-response and app rejection independently.
+
+## 2026-10-17T02:15:09+00:00 — recovery_slice_review
+
+Add explicit known-rejection acknowledgement and fail-closed command queue gate; discard/report requests queued after an IPC failure and permit rejected resizes to be retried only after acknowledgement
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs crates/app/src/command_worker.rs; crates/app/bootstrap.sh test --locked (95 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root integrates and runs release/private keyboard verification; unknown outcomes remain locked by design.
+
+## 2026-10-17T02:15:41+00:00 — terminal_memory_budget
+
+Corrected response FIFO chunk-node accounting by coalescing small replies into 16 KiB tail chunks; added low-cap helper rejection, tiny-response bounded-node/FIFO tests, and a real-PTY response-budget test proving the live view retains its last published sequence while durable raw tail replays as history. Updated audit to distinguish side-effect delivery refusal from model-event acceptance.
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/query_backpressure.rs, docs/research/soak-pipeline-audit.md
+- Verification: cargo test -p pigade-session-host passed: 56 unit tests, 49 integration tests, doc tests; both query_backpressure tests passed including 2.9M generated CSI 6n queries reaching the 16 MiB response cap and valid-prefix replay; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --config skip_children=true on owned Rust files; git diff --check passed.
+- Risks / next: Root review. This validates query-response backpressure handling and raw-tail recovery behavior; it does not attribute any soak timeout to this mechanism.
+
+## 2026-10-17T02:15:44+00:00 — terminal_memory_budget
+
+Correction to prior validation wording: the cap regression fixture emits exactly 300 batches × 10,000 = 3,000,000 CSI 6n query requests; parsing stops when accumulated response bytes cross 16 MiB, so fewer than all emitted requests are necessarily processed.
+
+- Files: crates/session-host/tests/query_backpressure.rs
+- Verification: Confirmed fixture loop and test result from current source; no code changed.
+- Risks / next: No action; retain exact test fixture count in future reports.
+
+## 2026-10-17T02:17:59+00:00 — recovery_slice_review
+
+Bind known-rejection acknowledgements to the observed notice token so stale UI snapshots cannot hide newly dropped work; exercise production dispatch gating through the request closure and prune obsolete resize generations
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs crates/app/src/command_worker.rs; crates/app/bootstrap.sh test --locked (98 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root integrates and runs release/private keyboard verification; unknown command outcomes remain blocked by contract.
+
+## 2026-10-17T02:18:41+00:00 — /root
+
+Review and integrate query-response FIFO backpressure repair, bound admission bursts and verify raw-tail recovery
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/query_backpressure.rs, docs/reports/query-response-backpressure.md, docs/research/soak-pipeline-audit.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root fresh180 workspace tests passed; targeted2 real PTY tests repeated after bounded8-chunk admission burst pass5.32s, strict workspace Clippy/fmt and fresh release bins/examples build pass. Tinyreply queue-node amplification corrected on review. Cap refusal is live sideeffect delivery, not model event rejection; rawtail recovery advances exactly1 valid event with no external replay effects.
+- Risks / next: Do not attribute frozen-host soak failure to thisquery mechanism. Globalheap/admission and full MVP remainopen; app commandgate/native Alt fixes pendingseparate integration.
