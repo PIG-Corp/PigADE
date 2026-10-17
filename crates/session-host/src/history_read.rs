@@ -106,5 +106,6 @@ pub(crate) fn response(
         recovery: None,
         selected: None,
         history_chunk,
+        change_token: None,
     }
 }

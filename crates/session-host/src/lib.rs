@@ -1,5 +1,6 @@
 //! Linux prototype: authenticated local IPC and durable, per-generation terminal actors.
 mod catalog;
+pub mod changes;
 #[doc(hidden)]
 pub mod checkpoint;
 pub mod history;
@@ -100,6 +101,10 @@ pub enum Command {
     Poll {
         known: Vec<poll::Known>,
     },
+    WaitForChange {
+        after: changes::Token,
+        timeout_ms: u16,
+    },
     Catalog,
     CatalogApply {
         batch: pigade_storage::CatalogBatch,
@@ -174,6 +179,9 @@ pub struct Response {
     pub selected: Option<Vec<poll::SessionInfo>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_chunk: Option<history::RecordChunk>,
+    /// Current host publication epoch; absent for older peers and non-poll replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_token: Option<changes::Token>,
 }
 
 /// Stable machine-readable proof that no part of a command was admitted.
@@ -365,6 +373,7 @@ struct ActorConfig {
     control: mpsc::Receiver<Control>,
     history: Arc<history::History>,
     probe: Arc<metrics::ActorProbe>,
+    changes: changes::ChangeHub,
 }
 struct Host {
     root: PathBuf,
@@ -373,6 +382,7 @@ struct Host {
     metadata: MetadataStore,
     catalog_notice: Option<String>,
     recovery: RecoveryDiagnostics,
+    changes: changes::ChangeHub,
     _lock: File,
 }
 
@@ -560,9 +570,16 @@ impl Host {
         bail!("unknown session generation")
     }
     fn dispatch(&mut self, command: Command) -> Result<Response> {
+        if matches!(&command, Command::WaitForChange { .. }) {
+            bail!("wait_for_change is only available through the IPC notification service");
+        }
         if let Command::Poll { known } = command {
             self.reconcile_exits()?;
-            let result = poll::poll(self.sessions.iter().map(|s| s.view.as_ref()), &known)?;
+            let result = poll::poll(
+                self.sessions.iter().map(|s| s.view.as_ref()),
+                &known,
+                &self.changes,
+            )?;
             return Ok(Response {
                 protocol: PROTOCOL,
                 views: result.views,
@@ -573,6 +590,7 @@ impl Host {
                 recovery: self.recovery.response(),
                 selected: Some(result.selected),
                 history_chunk: None,
+                change_token: result.change_token,
             });
         }
         let catalog = match command {
@@ -593,6 +611,7 @@ impl Host {
                     recovery: self.recovery.response(),
                     selected: None,
                     history_chunk: None,
+                    change_token: None,
                 });
             }
         };
@@ -606,6 +625,7 @@ impl Host {
             recovery: self.recovery.response(),
             selected: None,
             history_chunk: None,
+            change_token: None,
         })
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -679,6 +699,7 @@ impl Host {
             metadata,
             catalog_notice,
             recovery,
+            changes: changes::ChangeHub::new(),
             _lock: lock,
         })
     }
@@ -779,6 +800,9 @@ impl Host {
                 // Wake a clean actor sleeping without a timer. A full output
                 // queue already guarantees it will wake and inspect Stop.
                 let _ = session.commands.try_send(Action::Wake);
+            }
+            Command::WaitForChange { .. } | Command::Poll { .. } => {
+                unreachable!("poll and change waits are handled before terminal command dispatch")
             }
             _ => (),
         }
@@ -930,6 +954,7 @@ impl Host {
         let actor_writer = writer.clone();
         let actor_history = history.clone();
         let actor_probe_for_thread = actor_probe.clone();
+        let actor_changes = self.changes.clone();
         thread::spawn(move || {
             actor(
                 rx,
@@ -944,6 +969,7 @@ impl Host {
                     control: control_rx,
                     history: actor_history,
                     probe: actor_probe_for_thread,
+                    changes: actor_changes,
                 },
             )
         });
@@ -955,6 +981,7 @@ impl Host {
             control: control_tx,
             _history: Some(history),
         });
+        notify_actor_change(&self.changes, "session launch");
         Ok(vec![snapshot_view(
             self.sessions.last().expect("new session"),
         )])
@@ -1364,6 +1391,7 @@ fn actor(
             current.storage_error = Some(format!("checkpoint completion failed: {error:#}"));
             current.state = "degraded".into();
             drop(current);
+            notify_actor_change(&config.changes, "checkpoint completion failure");
             loop {
                 wait_degraded(&config.control, &mut *child);
             }
@@ -1394,6 +1422,7 @@ fn actor(
                     v.storage_error = Some(format!("PTY query response failed: {error}"));
                     v.state = "degraded".into();
                     drop(v);
+                    notify_actor_change(&config.changes, "query response failure");
                     loop {
                         std::hint::black_box((&query_responses, &rx, &master));
                         wait_degraded(&config.control, &mut *child);
@@ -1442,6 +1471,7 @@ fn actor(
                                 Some(format!("idle checkpoint failed: {error:#}"));
                             current.state = "degraded".into();
                             drop(current);
+                            notify_actor_change(&config.changes, "idle checkpoint failure");
                             loop {
                                 wait_degraded(&config.control, &mut *child);
                             }
@@ -1579,8 +1609,9 @@ fn actor(
             Ok(true)
         })();
         match result {
-            Ok(true) => (),
+            Ok(true) => notify_actor_change(&config.changes, "terminal publication"),
             Ok(false) => {
+                notify_actor_change(&config.changes, "terminal exit publication");
                 probe.enter(metrics::ActorStage::Exited, Some(candidate_sequence));
                 break;
             }
@@ -1591,12 +1622,40 @@ fn actor(
                 current.state = "degraded".into();
                 // Preserve the durable prefix and stop reading. No further publication/commands.
                 drop(current);
+                notify_actor_change(&config.changes, "terminal actor degraded");
                 loop {
                     std::hint::black_box((&pending_action, &rx, &master));
                     wait_degraded(&config.control, &mut *child);
                 }
             }
         }
+    }
+}
+
+fn notify_actor_change(changes: &changes::ChangeHub, reason: &str) {
+    if let Err(error) = changes.notify() {
+        // Wait requests also fail closed; clients can fall back to Poll. Keep
+        // the wake-path failure visible instead of treating it as success.
+        changes.report_failure_once(|| {
+            eprintln!("host change notification failed ({reason}): {error:#}");
+        });
+    }
+}
+
+#[cfg(test)]
+mod change_notification_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_change_hub_does_not_turn_committed_publication_into_failure() {
+        let changes = changes::ChangeHub::new();
+        changes.close_for_test();
+
+        // Notifications are an optimization. A failed hub is reported once,
+        // but it must not propagate as a failed terminal/launch operation.
+        notify_actor_change(&changes, "test publication");
+        notify_actor_change(&changes, "test publication retry");
+        assert!(changes.token().is_err());
     }
 }
 
@@ -1648,7 +1707,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     );
     let mut host = Host::open(root.clone())?;
     host.endpoint_root = runtime.clone();
-    let jobs = ipc_server::bind(&runtime.join("host.sock"))?;
+    let jobs = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
     let history_reader = history_read::Reader::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
@@ -1687,6 +1746,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 recovery: host.recovery.response(),
                 selected: None,
                 history_chunk: None,
+                change_token: None,
             },
         };
         let _ = job.reply.try_send(response);

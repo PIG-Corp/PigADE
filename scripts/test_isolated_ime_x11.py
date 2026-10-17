@@ -36,6 +36,12 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertFalse(value['input']['arbitrary_text_argument'])
         popen.assert_not_called(); run.assert_not_called()
 
+    def test_publication_trace_adds_only_the_fixed_app_diagnostic_flag(self):
+        self.assertEqual(IME.app_command(), ['/pigade/app', '/artifacts/state/host.sock'])
+        self.assertEqual(IME.app_command(True), ['/pigade/app', '/artifacts/state/host.sock',
+                                                 '--diagnostic-publication-trace'])
+        self.assertEqual(IME.app_command('arbitrary'), IME.app_command())
+
     def test_real_run_requires_a_new_external_output_directory(self):
         result = subprocess.run([os.environ.get('PYTHON', '/usr/bin/python3'), str(SCRIPT), '--run'],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -286,6 +292,109 @@ class IsolatedImePlanTests(unittest.TestCase):
                                      env={'PATH': '/usr/bin', 'DISPLAY': ':99999'})
             self.assertEqual(missing.returncode, 2)
             self.assertIn('verified app window is absent', missing.stderr)
+            diagnostic = subprocess.run([str(helper), '--self-test-latency-diagnostic'],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, timeout=2, check=True,
+                                        env={'PATH': '/usr/bin', 'DISPLAY': ':99999'})
+            parsed = IME.parse_latency_helper_diagnostic(diagnostic.stdout)
+            self.assertEqual(parsed['sample_count'], 7)
+            self.assertEqual(parsed['failed_index'], 7)
+            self.assertEqual(parsed['samples_ns'], [100, 110, 120, 130, 140, 150, 160])
+            self.assertEqual(parsed['expected_rgb'], [45, 239, 27])
+            self.assertEqual(parsed['observed_rgb'], [41, 239, 27])
+            self.assertEqual(parsed['reason'], 'color_deadline')
+
+    def latency_diagnostic_payload(self):
+        return {
+            'version': 1, 'stage': 'latency',
+            'scope': 'XTEST-submit to private root pixel readback', 'pixel': [20, 120],
+            'sample_count': 7, 'samples_ns': list(range(100, 107)), 'failed_index': 7,
+            'expected_rgb': [45, 239, 27], 'observed_rgb': [41, 239, 27],
+            'elapsed_ns': 1_000_100_000, 'reason': 'color_deadline',
+        }
+
+    def test_latency_diagnostic_rejects_oversize_malformed_and_nonfixture_values(self):
+        valid = self.latency_diagnostic_payload()
+        self.assertEqual(IME.parse_latency_helper_diagnostic(json.dumps(valid)),
+                         {**valid, 'samples_ns': list(range(100, 107))})
+        cases = []
+        cases.append(b'x' * (IME.MAX_LATENCY_DIAGNOSTIC_BYTES + 1))
+        cases.append(b'{not json')
+        for change in (
+                {'unexpected_raw_text': 'do not retain'},
+                {'version': True},
+                {'failed_index': 8},
+                {'observed_rgb': [256, 0, 0]},
+                {'reason': 'arbitrary-provider-output'},
+                {'samples_ns': list(range(100, 106))},
+                {'expected_rgb': [46, 239, 27]}):
+            altered = dict(valid); altered.update(change)
+            cases.append(json.dumps(altered))
+        for candidate in cases:
+            with self.subTest(candidate_type=type(candidate).__name__):
+                with self.assertRaises((ValueError, TypeError, json.JSONDecodeError)):
+                    IME.parse_latency_helper_diagnostic(candidate)
+
+    def test_latency_failure_helper_preserves_only_validated_fixed_diagnostic(self):
+        with mock.patch.dict(IME.os.environ, {'LD_LIBRARY_PATH': ''}), \
+                mock.patch.object(IME.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=2, stdout=json.dumps(self.latency_diagnostic_payload()),
+                stderr='arbitrary helper stderr must not be retained')):
+            with self.assertRaisesRegex(RuntimeError, 'no key retry') as caught:
+                IME.helper_call({'display': ':3', 'boot_id': 'boot', 'xvfb_pid': 1,
+                                 'xvfb_start': 2, 'xvfb_socket_inode': 3,
+                                 'fcitx_pid': 4, 'fcitx_start': 5,
+                                 'app_pid': 6, 'app_start': 7}, 'latency')
+        self.assertEqual(caught.exception.latency_diagnostic_status, 'validated')
+        self.assertEqual(caught.exception.latency_diagnostic['failed_index'], 7)
+        self.assertNotIn('arbitrary helper stderr', str(caught.exception))
+
+    def test_latency_failure_diagnostic_collection_cannot_mask_original_exception(self):
+        original = RuntimeError('fixed latency color deadline; no key retry')
+        with mock.patch.object(IME, 'collect_latency_failure_diagnostics',
+                               side_effect=OSError('private diagnostic failure')):
+            snapshot = IME.capture_latency_failure_diagnostics({}, {}, Path('/nonexistent'), original)
+        self.assertEqual(snapshot, {'status': 'unavailable', 'error_type': 'OSError'})
+        self.assertEqual(str(original), 'fixed latency color deadline; no key retry')
+
+    def test_latency_host_snapshot_redacts_content_and_bounds_palette_and_cells(self):
+        sentinel = 'PRIVATE_SENTINEL_MUST_NOT_ESCAPE'
+        cells = [{'text': chr(97 + index % 26), 'bg': 'Spec(Rgb { r: 45, g: 239, b: 27 })',
+                  'fg': sentinel, 'hyperlink': 1} for index in range(8)]
+        cells[7]['text'] = sentinel
+        reply = {'views': [{
+            'session': 'fixture-session', 'generation': 'private-generation', 'sequence': 10,
+            'state': 'running', 'pid': 999, 'storage_error': None,
+            'frame': {'geometry': {'rows': 2, 'cols': 4}, 'cells': cells,
+                      'cursor': [1, 2], 'modes': 7, 'history_lines': 0,
+                      'sync_pending_bytes': 0, 'title': sentinel, 'colors': sentinel,
+                      'palette_overrides': [[7, [45, 239, 27]]]},
+            'actor_diagnostic': {'version': 1, 'status': 'available',
+                                 'stage': 'model_apply', 'candidate_sequence': 11,
+                                 'entered_monotonic_ns': 123,
+                                 'reader': {'read_calls': 3, 'bytes_read': 8,
+                                            'last_read_bytes': 4, 'enqueued_calls': 2,
+                                            'bytes_enqueued': 8,
+                                            'last_read_monotonic_ns': 100,
+                                            'last_enqueued_monotonic_ns': 101}},
+        }]}
+        summary = IME.sanitize_latency_host_snapshot(reply, 'fixture-session', [45, 239, 27])
+        encoded = json.dumps(summary)
+        self.assertNotIn(sentinel, encoded)
+        self.assertNotIn('private-generation', encoded)
+        self.assertNotIn('fixture-session', encoded)
+        self.assertEqual(summary['sequence'], 10)
+        self.assertEqual(summary['cell_samples'][7]['text_class'], 'redacted')
+        self.assertTrue(summary['cell_samples'][7]['matches_failed_expected_rgb'])
+        self.assertEqual(summary['palette_overrides'], [[7, [45, 239, 27]]])
+        self.assertEqual(summary['actor_diagnostic']['stage'], 'model_apply')
+        reply['views'][0]['frame']['cells'] = cells * 9000
+        with self.assertRaisesRegex(ValueError, 'bounds'):
+            IME.sanitize_latency_host_snapshot(reply, 'fixture-session', [45, 239, 27])
+        reply['views'][0]['frame']['cells'] = cells
+        reply['views'][0]['frame']['palette_overrides'] = [[999, [0, 0, 0]]]
+        with self.assertRaisesRegex(ValueError, 'palette'):
+            IME.sanitize_latency_host_snapshot(reply, 'fixture-session', [45, 239, 27])
 
     def test_xim_selection_name_matches_pinned_upstream_registration_form(self):
         # xcb-imdkit constructs its registered atom as "@server=<serverName>".

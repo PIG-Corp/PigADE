@@ -1801,3 +1801,43 @@ Retain completed1200s async checkpoint integrity diagnostic and start same-froze
 - Files: benchmarks/results/async-checkpoint-20261017, docs/reports/async-checkpoint-20261017.md, docs/AGENT_HANDOFF.md, CHANGELOG.md, docs/research/isolated-wayland-v3-plan.md
 - Verification: Tool89343 exited0:1200.043s, four producer CRC/full+checkpoint-tail exact-state/frame checks pass,238ACK/396resizes perstream. Cold0 explicitlyvacuous; RSS20.3to206.2MB stillfills hot history. Disk106GiB available before actual24h tool82653 startup. Restored explicit checked SDKversion/license table.
 - Risks / next: 82653 active86400s,55262 old7200s independentlyactive; no24h/PERF/leak acceptance. Notification presentation deadline failure separately diagnosed.
+
+## 2026-10-17T03:25:08+00:00 — /root/font_render_profile
+
+Add bounded partial X11 latency failure diagnostics and sanitized failure-time host/capture snapshots.
+
+- Files: scripts/x11-ime-input.c, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts.test_isolated_ime_x11 -v (21 tests passed; includes strict C helper build/selftests); git diff --check
+- Risks / next: Root may rerun the private latency fixture with the frozen app/host; this agent did not run UI or alter the latency deadline/input sequence.
+
+## 2026-10-17T03:25:27+00:00 — terminal_memory_budget
+
+Documented proposed durable output resource-refusal and resize transaction boundary; no runtime changes
+
+- Files: docs/research/durable-resource-refusal-next.md
+- Verification: Checked referenced source paths exist; git diff --check
+- Risks / next: Protocol/event/profile design remains proposed; root to select implementation slice after integration review
+
+## 2026-10-17T03:26:06+00:00 — recovery_slice_review
+
+Added bounded numeric publication tracing with nonblocking capped records and owned logger tests
+
+- Files: crates/app/src/publication_trace.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/app/Cargo.toml -- crates/app/src/publication_trace.rs (passed); rustc --edition=2024 --test /tmp/pigade-publication-trace-harness.rs -o /tmp/pigade-publication-trace-tests && /tmp/pigade-publication-trace-tests (4 passed)
+- Risks / next: Root to register/integrate the module and run pinned native app checks; no app binary/UI validation run in this slice.
+
+## 2026-10-17T03:26:37+00:00 — recovery_slice_review
+
+Counted failed first trace writes as dropped and made writer-failure test synchronize on observed failure and verify no retry
+
+- Files: crates/app/src/publication_trace.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/app/Cargo.toml -- crates/app/src/publication_trace.rs (passed); standalone rustc test harness: 4 passed; git diff --check for owned module (passed)
+- Risks / next: Root app integration test/build remains the integration owner validation.
+
+## 2026-10-17T03:29:57+00:00 — root
+
+Integrate bounded host publication waits, independent app command transport and finite numeric diagnosis
+
+- Files: crates/session-host/src/changes.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/poll.rs, crates/session-host/src/history_read.rs, crates/session-host/src/checkpoint.rs, crates/session-host/tests/change_notifications.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/publication_trace.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, benchmarks/results/notification-20261017, docs/adr/0012-host-publication-notification.md, docs/reports/host-notification-20261017.md, docs/research/durable-resource-refusal-next.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root206 workspace+125 app tests, strict both Clippy, fmt and release builds pass; X11 harness22tests pass. Root fixed committed-launch notifier error propagation, retained initial1s latency failure and exact recovery; subsequent50-key runs pass atp95~97ms.362 boundedtrace records identify50 Poll→UI segments p95~41.5ms. Root visually inspected independentACK capture. Timing start correction and exact intermediate helper source retained.
+- Risks / next: Test removal of redundant redraws; initial1s outlier unresolved, formal performance/memory/nativegeneration/fullMVP gates open. Actual24h82653 and old7200s55262 remain active.

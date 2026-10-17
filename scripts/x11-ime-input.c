@@ -333,30 +333,65 @@ static uint64_t monotonic_ns(void) {
     return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
 }
 
+static void latency_failure_json(unsigned int failed_index, const uint64_t *samples,
+                                 const unsigned int expected[3], const unsigned int observed[3],
+                                 uint64_t elapsed_ns, const char *reason) {
+    printf("{\"version\":1,\"stage\":\"latency\","
+           "\"scope\":\"XTEST-submit to private root pixel readback\","
+           "\"pixel\":[20,120],\"sample_count\":%u,\"samples_ns\":[",
+           failed_index);
+    for (unsigned int i = 0; i < failed_index; ++i)
+        printf("%s%" PRIu64, i ? "," : "", samples[i]);
+    printf("],\"failed_index\":%u,\"expected_rgb\":[%u,%u,%u],"
+           "\"observed_rgb\":[%u,%u,%u],\"elapsed_ns\":%" PRIu64
+           ",\"reason\":\"%s\"}\n",
+           failed_index, expected[0], expected[1], expected[2],
+           observed[0], observed[1], observed[2], elapsed_ns, reason);
+    fflush(stdout);
+}
+
+static void latency_fail(unsigned int index, const uint64_t *samples,
+                         uint64_t elapsed_ns, unsigned int observed_r,
+                         unsigned int observed_g, unsigned int observed_b,
+                         const char *reason, const char *message) {
+    const unsigned int expected[3] = {17 + 4 * index, 239, 27};
+    const unsigned int observed[3] = {observed_r, observed_g, observed_b};
+    latency_failure_json(index, samples, expected, observed, elapsed_ns, reason);
+    fail(message);
+}
+
 /* Fixed50 alphabet keys, each observed through a causally unique flat cell color.
  * This measures private software X11 pixels, not physical monitor scanout. */
 static void latency_sequence(const Args *a, Display *dpy, xcb_connection_t *c) {
-    uint64_t samples[50];
+    uint64_t samples[50] = {0};
     keyboard_group(dpy, 0);
     for (unsigned int index = 0; index < 50; ++index) {
         verify_app_focus_target(a, dpy, c, 0);
         KeyCode code = XKeysymToKeycode(dpy, XK_a + index % 26);
-        if (!code) fail("fixed alphabet key unavailable");
+        if (!code) latency_fail(index, samples, 1,
+                                0, 0, 0, "keycode_unavailable", "fixed alphabet key unavailable");
         uint64_t start = monotonic_ns();
         if (!XTestFakeKeyEvent(dpy, code, True, CurrentTime) ||
             !XTestFakeKeyEvent(dpy, code, False, CurrentTime))
-            fail("latency key submission failed; no retry");
+            latency_fail(index, samples, monotonic_ns() - start,
+                         0, 0, 0, "key_submission_failed", "latency key submission failed; no retry");
         XFlush(dpy);
         while (1) {
             XImage *pixel = XGetImage(dpy, DefaultRootWindow(dpy), 20, 120, 1, 1, AllPlanes, ZPixmap);
-            if (!pixel) fail("private pixel readback failed");
+            if (!pixel) latency_fail(index, samples, monotonic_ns() - start,
+                                     0, 0, 0, "pixel_readback_failed", "private pixel readback failed");
             unsigned long value = XGetPixel(pixel, 0, 0);
-            int matched = component(value, pixel->red_mask) == 17 + 4 * index &&
-                          component(value, pixel->green_mask) == 239 &&
-                          component(value, pixel->blue_mask) == 27;
+            unsigned int observed[3] = {component(value, pixel->red_mask),
+                                        component(value, pixel->green_mask),
+                                        component(value, pixel->blue_mask)};
+            unsigned int expected[3] = {17 + 4 * index, 239, 27};
+            int matched = observed[0] == expected[0] && observed[1] == expected[1] &&
+                          observed[2] == expected[2];
             XDestroyImage(pixel);
             uint64_t elapsed = monotonic_ns() - start;
-            if (elapsed > UINT64_C(1000000000)) fail("fixed latency color deadline; no key retry");
+            if (elapsed > UINT64_C(1000000000))
+                latency_fail(index, samples, elapsed, observed[0], observed[1], observed[2],
+                             "color_deadline", "fixed latency color deadline; no key retry");
             if (matched) { samples[index] = elapsed; break; }
             struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
             nanosleep(&pause, NULL);
@@ -382,6 +417,13 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && !strcmp(argv[1], "--self-test-window-missing")) {
         (void)require_app_window(None);
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--self-test-latency-diagnostic")) {
+        uint64_t samples[50] = {100, 110, 120, 130, 140, 150, 160};
+        latency_failure_json(7, samples, (unsigned int[]){45,239,27},
+                             (unsigned int[]){41,239,27}, UINT64_C(1000100000),
+                             "color_deadline");
         return 0;
     }
     Args a = parse_args(argc, argv);

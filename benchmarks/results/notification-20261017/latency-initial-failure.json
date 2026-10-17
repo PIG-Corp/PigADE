@@ -1,0 +1,95 @@
+{
+  "status": "failed-closed",
+  "stage": "fixed-input-cell-latency",
+  "failure_stage": "fixed-input-cell-latency",
+  "failure_type": "RuntimeError",
+  "failure_reason": "private X11 helper failed its identity/protocol check: x11-ime-input: fixed latency color deadline; no key retry",
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "3e15e45b-4b79-4204-ab91-2def75c60f4c",
+    "ready": true,
+    "session": "5acf4e1f-ee64-4855-ad53-b1f70c429536",
+    "tty": "raw/no-echo"
+  },
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 34,
+    "start_time_ticks": 3120864,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 5783,
+      "stream_sha256": "e8552f38550383593641a21bb7617ce6d42d0f88e5ece5bd278d81508a564e4d",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "4c0209ab41f203f71a7d36983b6a275f0239bb2f804e47dfba5b6bebeae10aaf",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "private_run": "/home/afterburner/.local/state/pigade/notification-latency-x11-20261017",
+  "app_sha256": "3eba79d2d9b84d14e280a6a1de8ac07409432f49db6c61cedcd8a13e747af39a",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "harness_sha256": "6a3010a7d633310ba3d1860a968f1c732fedaeafd25dd74e867b5cdc83e5f6ad",
+  "helper_sha256": "2770c1a41fe41c2f561cb2c2d164a100e7086fd3ee0eb2d3e2b0a66a31f4931f",
+  "partial_samples": "not retained by original helper; no sample distribution claim",
+  "post_cleanup_full_replay": {
+    "sequence": 10,
+    "storage_error": null,
+    "first_cell_background_rgb": [
+      45,
+      239,
+      27
+    ],
+    "corresponding_zero_based_sample_index": 7
+  },
+  "limits": "Replay proves saved model only; original failure had no contemporaneous capture/host snapshot. No physical present or formal PERF acceptance.",
+  "recovery_verification": {
+    "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+    "sequence": 10,
+    "recovery_path": "checkpoint-tail",
+    "full_replay_ms": 5.5270470000000005,
+    "checkpoint_tail_ms": 9.308861,
+    "semantic_checkpoint_bytes": 360074,
+    "complete_state_equal": true,
+    "frame_equal": true,
+    "cold_history_records": 0,
+    "cold_history_equal": true,
+    "archive_comparison_ms": 0.00015099999999999998,
+    "full_journal_bytes_read": 917,
+    "checkpoint_tail_journal_bytes_read": 811,
+    "cold_archive_format": "row2,index1,retirement1"
+  },
+  "source_journal_sha256": "9bdf5f7c8b76f0d674fff5780d76cfdf6876250b1e3c25b1bd900ffe336efdc1",
+  "source_unchanged_after_verification": true
+}

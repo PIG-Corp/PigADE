@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::View;
+use crate::changes::{ChangeHub, Token};
 
 pub const MAX_VIEWS: usize = 32;
 pub const MAX_SELECTED: usize = 4;
@@ -70,6 +71,7 @@ impl SessionInfo {
 pub struct PollResult {
     pub selected: Vec<SessionInfo>,
     pub views: Vec<View>,
+    pub change_token: Option<Token>,
 }
 
 /// Poll up to 32 host views, selecting the four lowest `(session, generation)` pairs.
@@ -81,7 +83,22 @@ pub struct PollResult {
 pub fn poll<'a>(
     views: impl IntoIterator<Item = &'a Mutex<View>>,
     known: &[Known],
+    changes: &ChangeHub,
 ) -> Result<PollResult> {
+    // Sample before taking any view locks. If publication races this walk, the
+    // returned epoch is stale and the next wait immediately observes the bump.
+    let change_token = match changes.token() {
+        Ok(token) => Some(token),
+        Err(error) => {
+            // Preserve conditional polling when notification service state is
+            // poisoned or exhausted. `None` tells clients to use their bounded
+            // timer fallback; the failure remains visible in host diagnostics.
+            changes.report_failure_once(|| {
+                eprintln!("host change token unavailable; Poll remains active: {error:#}");
+            });
+            None
+        }
+    };
     ensure!(
         known.len() <= MAX_SELECTED,
         "too many known session watermarks"
@@ -152,6 +169,7 @@ pub fn poll<'a>(
     Ok(PollResult {
         selected,
         views: changed_views,
+        change_token,
     })
 }
 
@@ -196,7 +214,7 @@ mod tests {
     fn unchanged_watermark_returns_metadata_without_cloning_view() {
         let session = Uuid::from_u128(10);
         let current = view(session, Uuid::from_u128(20));
-        let result = poll([&current], &[watermark(&current)]).unwrap();
+        let result = poll([&current], &[watermark(&current)], &ChangeHub::new()).unwrap();
         assert_eq!(result.selected.len(), 1);
         assert!(result.views.is_empty());
         assert_eq!(result.selected[0].geometry, Geometry::new(8, 40).unwrap());
@@ -214,7 +232,7 @@ mod tests {
             let current = view(Uuid::from_u128(10), Uuid::from_u128(20));
             let known = watermark(&current);
             mutate(&mut current.lock().unwrap());
-            let result = poll([&current], &[known]).unwrap();
+            let result = poll([&current], &[known], &ChangeHub::new()).unwrap();
             assert_eq!(result.views.len(), 1);
         }
     }
@@ -225,7 +243,7 @@ mod tests {
             .rev()
             .map(|id| Arc::new(view(Uuid::from_u128(id), Uuid::from_u128(100 + id))))
             .collect::<Vec<_>>();
-        let result = poll(views.iter().map(AsRef::as_ref), &[]).unwrap();
+        let result = poll(views.iter().map(AsRef::as_ref), &[], &ChangeHub::new()).unwrap();
         assert_eq!(result.selected.len(), MAX_SELECTED);
         assert_eq!(
             result
@@ -243,11 +261,11 @@ mod tests {
         let views = (1..=MAX_VIEWS + 1)
             .map(|id| view(Uuid::from_u128(id as u128), Uuid::from_u128(100)))
             .collect::<Vec<_>>();
-        assert!(poll(views.iter(), &[]).is_err());
+        assert!(poll(views.iter(), &[], &ChangeHub::new()).is_err());
 
         let current = view(Uuid::from_u128(1), Uuid::from_u128(2));
         let known = watermark(&current);
-        assert!(poll([&current], &[known.clone(), known]).is_err());
+        assert!(poll([&current], &[known.clone(), known], &ChangeHub::new()).is_err());
     }
 
     #[test]
@@ -259,11 +277,79 @@ mod tests {
         let result = poll(
             [old_generation.as_ref(), new_generation.as_ref()],
             &[old_watermark],
+            &ChangeHub::new(),
         )
         .unwrap();
 
         assert_eq!(result.selected.len(), 2);
         assert_eq!(result.views.len(), 1);
         assert_eq!(result.views[0].generation, Uuid::from_u128(11));
+    }
+
+    #[test]
+    fn poll_epoch_is_captured_before_view_iteration_to_prevent_lost_wake() {
+        let current = view(Uuid::from_u128(1), Uuid::from_u128(2));
+        let changes = ChangeHub::new();
+        let mut yielded = false;
+        let poll_views = std::iter::from_fn(|| {
+            if yielded {
+                None
+            } else {
+                yielded = true;
+                changes.notify().unwrap();
+                Some(&current)
+            }
+        });
+
+        let result = poll(poll_views, &[], &changes).unwrap();
+        let token = result.change_token.unwrap();
+        assert_eq!(token.revision, 0);
+        let wake = changes
+            .wait(token, std::time::Duration::from_millis(100))
+            .unwrap();
+        assert!(wake.changed);
+        assert_eq!(wake.token.revision, 1);
+    }
+
+    #[test]
+    fn change_wait_then_conditional_poll_catches_up_the_latest_complete_frame() {
+        let current = view(Uuid::from_u128(31), Uuid::from_u128(32));
+        let changes = ChangeHub::new();
+        let first = poll([&current], &[], &changes).unwrap();
+        let known = first.selected[0].known();
+
+        {
+            let mut view = current.lock().unwrap();
+            view.sequence += 1;
+            let mut terminal = Terminal::new(Geometry::new(8, 40).unwrap(), false);
+            terminal.output(b"fresh frame");
+            view.frame = terminal.frame();
+        }
+        let committed = changes.notify().unwrap();
+        let wake = changes
+            .wait(
+                first.change_token.unwrap(),
+                std::time::Duration::from_millis(100),
+            )
+            .unwrap();
+        assert!(wake.changed);
+        assert_eq!(wake.token, committed);
+
+        let latest = poll([&current], &[known], &changes).unwrap();
+        assert_eq!(latest.views.len(), 1);
+        assert_eq!(latest.views[0].sequence, 8);
+        assert!(latest.views[0].frame.text().contains("fresh frame"));
+        assert_eq!(latest.selected[0].sequence, 8);
+    }
+
+    #[test]
+    fn unavailable_notification_token_keeps_conditional_poll_usable() {
+        let changes = ChangeHub::new();
+        changes.close_for_test();
+        let current = view(Uuid::from_u128(41), Uuid::from_u128(42));
+        let result = poll([&current], &[], &changes).unwrap();
+        assert!(result.change_token.is_none());
+        assert_eq!(result.views.len(), 1);
+        assert_eq!(result.views[0].sequence, 7);
     }
 }

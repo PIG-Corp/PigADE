@@ -93,3 +93,9 @@ describe metric and recovery limits.
 verified private Wayland-v3 fixture. Actual one-fixture success, failed attempts,
 source hashes and visual captures are recorded in
 [the Wayland IME report](reports/wayland-ime-20261017.md).
+
+`session-host/src/changes.rs` supplies coalesced incarnation/revision tokens;
+WaitForChange bypasses serialized command dispatch within bounded peer-auth IPC.
+The app command and Poll threads are independent; optional `publication_trace.rs`
+records finite numeric milestones. See ADR0012 and
+[notification measurements](reports/host-notification-20261017.md).

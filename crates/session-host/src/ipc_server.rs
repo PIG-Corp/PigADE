@@ -19,8 +19,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    CommandRejection, PROTOCOL, Request, Response, encode, peer_pid, receive_request, send,
-    send_encoded,
+    Command, CommandRejection, PROTOCOL, Request, Response, changes::ChangeHub, encode, peer_pid,
+    receive_request, send, send_encoded,
 };
 
 const CONNECTION_LIMIT: usize = 16;
@@ -35,7 +35,7 @@ pub struct Job {
 
 /// Caller must hold the host ownership lock and have validated its private state
 /// directory. The worker admission count also bounds simultaneous frame buffers.
-pub fn bind(socket: &Path) -> Result<Receiver<Job>> {
+pub fn bind(socket: &Path, changes: ChangeHub) -> Result<Receiver<Job>> {
     if let Ok(metadata) = fs::symlink_metadata(socket) {
         // A stale socket is safe to unlink only under the caller's ownership lock.
         // SAFETY: geteuid has no preconditions.
@@ -75,12 +75,13 @@ pub fn bind(socket: &Path) -> Result<Receiver<Job>> {
                 }
                 let slot = ConnectionSlot(active.clone());
                 let sender = sender.clone();
+                let changes = changes.clone();
                 // If spawn fails, dropping its closure also releases the slot.
                 let _ = thread::Builder::new()
                     .name("pigade-ipc-client".into())
                     .spawn(move || {
                         let _slot = slot;
-                        let _ = process_connection(stream, sender);
+                        let _ = process_connection(stream, sender, changes);
                     });
             }
         })?;
@@ -108,6 +109,7 @@ fn error_response(
         recovery: None,
         selected: None,
         history_chunk: None,
+        change_token: None,
     }
 }
 
@@ -140,7 +142,11 @@ fn encode_reply(response: Response) -> Result<Vec<u8>> {
     }
 }
 
-fn process_connection(mut stream: UnixStream, jobs: SyncSender<Job>) -> Result<()> {
+fn process_connection(
+    mut stream: UnixStream,
+    jobs: SyncSender<Job>,
+    changes: ChangeHub,
+) -> Result<()> {
     // Validate here too so tests and any future caller cannot bypass peer auth.
     peer_pid(&stream)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -161,6 +167,25 @@ fn process_connection(mut stream: UnixStream, jobs: SyncSender<Job>) -> Result<(
             &mut stream,
             &error_response("unsupported IPC protocol", None),
         )?;
+        return Ok(());
+    }
+    if let Command::WaitForChange { after, timeout_ms } = &request.command {
+        let response = match changes.wait(*after, Duration::from_millis(u64::from(*timeout_ms))) {
+            Ok(result) => Response {
+                protocol: PROTOCOL,
+                views: Vec::new(),
+                error: None,
+                rejected_before_admission: None,
+                catalog: None,
+                catalog_notice: None,
+                recovery: None,
+                selected: None,
+                history_chunk: None,
+                change_token: Some(result.token),
+            },
+            Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
+        };
+        send(&mut stream, &response)?;
         return Ok(());
     }
     let (reply, receiver) = mpsc::sync_channel(1);
@@ -204,7 +229,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs));
+        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
         send(
             &mut client,
             &Request {
@@ -224,6 +249,7 @@ mod tests {
             recovery: None,
             selected: None,
             history_chunk: None,
+            change_token: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -235,7 +261,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs));
+        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
         send(
             &mut client,
             &Request {
@@ -265,7 +291,7 @@ mod tests {
         })
         .ok()
         .unwrap();
-        let worker = thread::spawn(move || process_connection(server, jobs));
+        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
         send(
             &mut client,
             &Request {
@@ -297,7 +323,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs));
+        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
         send(
             &mut client,
             &Request {
@@ -325,6 +351,72 @@ mod tests {
             receiver.try_recv().is_err(),
             "dispatched command was retried"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn change_wait_bypasses_dispatch_queue_and_does_not_block_other_commands() -> Result<()> {
+        let changes = ChangeHub::new();
+        let initial = changes.token()?;
+        let (jobs, receiver) = mpsc::sync_channel(2);
+
+        let (mut wait_client, wait_server) = UnixStream::pair()?;
+        wait_client.set_read_timeout(Some(IO_TIMEOUT))?;
+        let wait_jobs = jobs.clone();
+        let wait_changes = changes.clone();
+        let wait_worker =
+            thread::spawn(move || process_connection(wait_server, wait_jobs, wait_changes));
+        send(
+            &mut wait_client,
+            &Request {
+                protocol: PROTOCOL,
+                command: Command::WaitForChange {
+                    after: initial,
+                    timeout_ms: 900,
+                },
+            },
+        )?;
+
+        let (mut command_client, command_server) = UnixStream::pair()?;
+        command_client.set_read_timeout(Some(IO_TIMEOUT))?;
+        let command_changes = changes.clone();
+        let command_worker =
+            thread::spawn(move || process_connection(command_server, jobs, command_changes));
+        send(
+            &mut command_client,
+            &Request {
+                protocol: PROTOCOL,
+                command: Command::List,
+            },
+        )?;
+
+        let job = receiver.recv_timeout(IO_TIMEOUT)?;
+        assert!(matches!(job.request.command, Command::List));
+        assert!(
+            receiver.try_recv().is_err(),
+            "wait must never enter Host jobs"
+        );
+        job.reply.send(Response {
+            protocol: PROTOCOL,
+            views: Vec::new(),
+            error: None,
+            rejected_before_admission: None,
+            catalog: None,
+            catalog_notice: None,
+            recovery: None,
+            selected: None,
+            history_chunk: None,
+            change_token: None,
+        })?;
+        assert!(receive::<Response>(&mut command_client)?.error.is_none());
+        command_worker.join().unwrap()?;
+
+        let changed = changes.notify()?;
+        let response: Response = receive(&mut wait_client)?;
+        assert!(response.views.is_empty());
+        assert!(response.error.is_none());
+        assert_eq!(response.change_token, Some(changed));
+        wait_worker.join().unwrap()?;
         Ok(())
     }
 }

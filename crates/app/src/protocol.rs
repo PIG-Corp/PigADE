@@ -137,6 +137,30 @@ impl View {
         }
     }
 }
+/// Opaque notification epoch; independent of terminal generation/sequence.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ChangeToken {
+    pub host_instance: String,
+    pub revision: u64,
+}
+impl ChangeToken {
+    fn validate(&self) -> Result<(), String> {
+        let bytes = self.host_instance.as_bytes();
+        if bytes.len() != 36
+            || bytes.iter().enumerate().any(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    *byte != b'-'
+                } else {
+                    !byte.is_ascii_hexdigit()
+                }
+            })
+        {
+            return Err("Invalid host notification epoch".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 struct Response {
     protocol: u32,
@@ -148,6 +172,8 @@ struct Response {
     selected: Option<Vec<Known>>,
     #[serde(default)]
     recovery: Option<RecoveryDiagnostics>,
+    #[serde(default)]
+    change_token: Option<ChangeToken>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -303,9 +329,48 @@ fn poll_response(reply: Response) -> Result<Poll, String> {
     })
 }
 
-pub fn poll(socket: &Path, known: &[Known]) -> Result<Poll, String> {
-    let reply = request_response(socket, json!({"command":"poll", "known":known}))?;
-    poll_response(reply)
+#[derive(Debug, PartialEq, Eq)]
+pub enum PollError {
+    Busy,
+    Failed(String),
+}
+
+fn decode_poll(reply: Response) -> Result<(Poll, Option<ChangeToken>), PollError> {
+    if reply.error.is_some() && reply.rejected_before_admission.as_deref() == Some("queue_full") {
+        return Err(PollError::Busy);
+    }
+    let token = reply.change_token.clone();
+    if let Some(token) = &token {
+        token.validate().map_err(PollError::Failed)?;
+    }
+    Ok((poll_response(reply).map_err(PollError::Failed)?, token))
+}
+
+pub fn poll(socket: &Path, known: &[Known]) -> Result<(Poll, Option<ChangeToken>), PollError> {
+    let reply = request_response(socket, json!({"command":"poll", "known":known}))
+        .map_err(PollError::Failed)?;
+    decode_poll(reply)
+}
+
+/// This read-only wait has no input/launch admission or retry semantics. An old
+/// host omits the Poll token, so callers retain bounded legacy polling instead.
+pub fn wait_for_change(socket: &Path, after: &ChangeToken) -> Result<ChangeToken, String> {
+    after.validate()?;
+    let reply = request_response(
+        socket,
+        json!({
+            "command":"wait_for_change", "after":after, "timeout_ms":1000,
+        }),
+    )?;
+    if let Some(error) = reply.error {
+        return Err(error);
+    }
+    if !reply.views.is_empty() || reply.selected.is_some() || reply.recovery.is_some() {
+        return Err("Unexpected terminal data in change wait reply".into());
+    }
+    let token = reply.change_token.ok_or("Host omitted change wait token")?;
+    token.validate()?;
+    Ok(token)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -410,6 +475,7 @@ mod tests {
             rejected_before_admission: rejection.map(str::to_owned),
             selected: None,
             recovery: None,
+            change_token: None,
         }
     }
 
@@ -749,5 +815,54 @@ mod tests {
             assert_eq!(cached, expected);
             assert_eq!(recovery, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    #[test]
+    fn readonly_poll_rejection_keeps_safe_retry_classification() {
+        let reply: Response = serde_json::from_value(json!({"protocol":2,"views":[],"error":"busy","rejected_before_admission":"queue_full"})).unwrap();
+        assert!(matches!(decode_poll(reply), Err(PollError::Busy)));
+        let reply: Response =
+            serde_json::from_value(json!({"protocol":2,"views":[],"error":"unknown"})).unwrap();
+        assert!(matches!(decode_poll(reply), Err(PollError::Failed(_))));
+    }
+
+    #[test]
+    fn notification_token_accepts_only_bounded_uuid_epoch() {
+        let valid = "33333333-3333-4333-8333-333333333333";
+        assert!(
+            ChangeToken {
+                host_instance: valid.into(),
+                revision: u64::MAX
+            }
+            .validate()
+            .is_ok()
+        );
+        for invalid in [
+            "",
+            "33333333_3333-4333-8333-333333333333",
+            "33333333-3333-4333-8333-33333333333z",
+            "界",
+        ] {
+            assert!(
+                ChangeToken {
+                    host_instance: invalid.into(),
+                    revision: 0
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn old_host_without_notification_token_remains_compatible() {
+        let reply: Response =
+            serde_json::from_value(json!({"protocol":2,"views":[],"selected":[],"error":null}))
+                .unwrap();
+        assert!(reply.change_token.is_none());
+        assert!(poll_response(reply).is_ok());
     }
 }

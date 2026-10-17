@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "parent_commit": "094658e906f94a32c2e0712b7080ad52a3de2549",
+  "app_sha256": "22b762dbf0506996a6ca1c817f8ed26e61cff8859d2418520ec7347bd02392f3",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "files": {
+    "crates/app/Cargo.lock": "ae279f67079e8c042c4d816518174dbbedef3e0fdc576595fa661a51dfc3e478",
+    "crates/app/Cargo.toml": "c8ae46d54b115c4afd9df112b47d755b20419fcf8c7445804d763ec09ee42d57",
+    "crates/app/src/cell_style.rs": "cfa7b981fbafc0f318b571576881469fce05608db80f37dc241b710fa1379977",
+    "crates/app/src/command_worker.rs": "d2006933d35fd6c31c7f874306f475bd0ee43f354c80c1a8f450e394119a4ae7",
+    "crates/app/src/cursor.rs": "d0a386bb72215b961f53c55aa033a5b191ff46bed0c4e51a3f56d819a9a0961e",
+    "crates/app/src/font.rs": "50ee7e3acae91eb7ea928f1d9bbd8013cfb18e5fbf18c812eb3f85e5ddfae3a8",
+    "crates/app/src/input.rs": "b89d24382213e639123a5f65e07d7ca653695802a17a8c1d10b36b20ddef9ae6",
+    "crates/app/src/main.rs": "130ce0f62a6906926ac859465d8804ee72eb887f7b6ae3fb80f177eb10240498",
+    "crates/app/src/mouse.rs": "b7fb8f6ccb958336805c6a32cc98b1d2539754a889e58f997667122c9fa6e735",
+    "crates/app/src/mouse_delivery.rs": "3f590569e93e8b726d3f60532448d5b6b2f3c8769eb2166ac5f128ab378ddcb9",
+    "crates/app/src/palette.rs": "3d2a483110ac78357b1aeacfe90df9bc903c219313cd49c375209914bf2f519b",
+    "crates/app/src/protocol.rs": "4a454902cda634cfaf6fe69de75e105a333528bc9d2a80216f0d6df0237bd98a",
+    "crates/app/src/publication_trace.rs": "8ed9a3d2d57471bf419b451c17b237b196046a8c8f52ecf7d1a1d163aefa9cc9",
+    "crates/app/src/selection.rs": "7164cf50292d4a30f05242bff1d1ebb9103ad871ba0e0377eca74304d533597c",
+    "crates/app/src/wake_signal.rs": "72b54423db80d4a01c978c27de53dfa9ea3c141bff6c476e24f4f7b11d876973",
+    "scripts/isolated-ime-x11.py": "8d1832721d304722348a0c8678bd733b02fedb0529383413cda7f211be2a44d5",
+    "scripts/x11-ime-input.c": "40b0cf93e74abd7bd9a348d79b5e2f9615a85f95c52e5f73c5cf12201c2335a0"
+  },
+  "scope": "app notification transport plus optional finite numeric trace; host same477d frozen source.json"
+}

@@ -8,6 +8,7 @@ mod mouse;
 mod mouse_delivery;
 mod palette;
 mod protocol;
+mod publication_trace;
 mod selection;
 mod wake_signal;
 use command_worker::{
@@ -23,6 +24,7 @@ use palette::color;
 use protocol::{
     Cell, CommandFailure, Poll, PollChanges, RecoveryDiagnostics, View, command, request,
 };
+use publication_trace::{Stage as TraceStage, Trace};
 use serde_json::{Value, json};
 use std::{
     ops::Range,
@@ -43,6 +45,7 @@ struct State {
     error: Option<String>,
     command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
+    poll_backpressured: bool,
 }
 impl State {
     fn fail(&mut self, error: String) {
@@ -73,6 +76,7 @@ struct StateUpdate {
     error: Option<String>,
     command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
+    poll_backpressured: bool,
 }
 
 fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
@@ -83,6 +87,7 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
         error: shared.error.clone(),
         command_notices: shared.command_notices.clone(),
         recovery: shared.recovery.clone(),
+        poll_backpressured: shared.poll_backpressured,
     })
 }
 
@@ -91,6 +96,7 @@ fn apply_state_update(state: &mut State, update: StateUpdate) {
     state.error = update.error;
     state.command_notices = update.command_notices;
     state.recovery = update.recovery;
+    state.poll_backpressured = update.poll_backpressured;
     if let Some(views) = update.views {
         state.views_revision = update.views_revision;
         state.views = views;
@@ -293,191 +299,252 @@ struct WorkerConnection {
     shared: Arc<Mutex<State>>,
     receipts: mpsc::Receiver<WorkerReceipt>,
     wake: WakeSignal,
+    trace: Trace,
 }
 
-fn ipc(socket: PathBuf) -> WorkerConnection {
+fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
     let (tx, rx) = mpsc::sync_channel(32);
     let (receipt_tx, receipt_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Mutex::new(State::default()));
     let output = shared.clone();
     let wake = WakeSignal::default();
     let worker_wake = wake.clone();
+    let command_socket = socket.clone();
+    let command_trace = trace.clone();
     thread::spawn(move || {
         let mut gate = WorkerGate::default();
-        let mut pending = None;
-        loop {
-            // Bound each batch so continuous input cannot starve cell polling.
-            // A recv_timeout wake retains the first command for this same FIFO.
-            for _ in 0..32 {
-                let Some(message) = pending.take().or_else(|| rx.try_recv().ok()) else {
-                    break;
-                };
-                match message {
-                    IpcMessage::AcknowledgeKnownRejection {
-                        target,
-                        token,
-                        cleanup,
-                    } => {
-                        let cleanup_id = cleanup.as_ref().map(|cleanup| cleanup.id);
-                        let accepted = gate.acknowledge(&target, token);
-                        if accepted {
-                            if let Some(cleanup) = cleanup {
-                                let id = cleanup.id;
-                                let command = json!({
-                                    "command": "input",
-                                    "session": target.session,
-                                    "generation": target.generation,
-                                    "bytes": cleanup.bytes,
-                                });
-                                let dispatch =
-                                    gate.dispatch_request_with_id(target.clone(), None, id, || {
-                                        request(&socket, command).map(|_| ()).map_err(|error| {
-                                            match error {
-                                                CommandFailure::NotAdmitted { .. } => {
-                                                    RequestFailure::NotAdmitted(format!(
-                                                        "Команда не принята: {error}"
-                                                    ))
-                                                }
-                                                CommandFailure::OutcomeUnknown(_) => {
-                                                    RequestFailure::OutcomeUnknown(format!(
-                                                        "Исход команды неизвестен: {error}"
-                                                    ))
-                                                }
+        while let Ok(message) = rx.recv() {
+            let ended = output
+                .lock()
+                .unwrap()
+                .views
+                .iter()
+                .filter(|view| confirmed_ended_state(&view.state))
+                .map(|view| CommandTarget {
+                    session: view.session.clone(),
+                    generation: view.generation.clone(),
+                })
+                .collect::<Vec<_>>();
+            gate.remove_ended(ended.into_iter());
+            publish_worker_notices(&output, &gate, &worker_wake);
+            match message {
+                IpcMessage::AcknowledgeKnownRejection {
+                    target,
+                    token,
+                    cleanup,
+                } => {
+                    let cleanup_id = cleanup.as_ref().map(|cleanup| cleanup.id);
+                    let accepted = gate.acknowledge(&target, token);
+                    if accepted {
+                        if let Some(cleanup) = cleanup {
+                            let id = cleanup.id;
+                            let command = json!({
+                                "command": "input",
+                                "session": target.session,
+                                "generation": target.generation,
+                                "bytes": cleanup.bytes,
+                            });
+                            let dispatch =
+                                gate.dispatch_request_with_id(target.clone(), None, id, || {
+                                    request(&command_socket, command)
+                                        .map(|_| ())
+                                        .map_err(|error| match error {
+                                            CommandFailure::NotAdmitted { .. } => {
+                                                RequestFailure::NotAdmitted(format!(
+                                                    "Команда не принята: {error}"
+                                                ))
+                                            }
+                                            CommandFailure::OutcomeUnknown(_) => {
+                                                RequestFailure::OutcomeUnknown(format!(
+                                                    "Исход команды неизвестен: {error}"
+                                                ))
                                             }
                                         })
-                                    });
-                                let outcome = delivery_outcome(&dispatch);
-                                if dispatch != Dispatch::Executed {
-                                    publish_worker_notices(&output, &gate, &worker_wake);
-                                }
-                                if dispatch == Dispatch::CapacityExceeded {
-                                    let mut state = output.lock().unwrap();
-                                    state
-                                        .fail("Слишком много заблокированных сессий команд".into());
-                                    state.set_command_notices(gate.notices());
-                                }
-                                if !send_worker_receipt(
-                                    &receipt_tx,
-                                    &worker_wake,
-                                    WorkerReceipt::Request(RequestReceipt {
-                                        id,
-                                        target: target.clone(),
-                                        outcome,
-                                    }),
-                                ) {
-                                    return;
-                                }
+                                });
+                            let outcome = delivery_outcome(&dispatch);
+                            if dispatch != Dispatch::Executed {
+                                publish_worker_notices(&output, &gate, &worker_wake);
                             }
-                            publish_worker_notices(&output, &gate, &worker_wake);
+                            if dispatch == Dispatch::CapacityExceeded {
+                                let mut state = output.lock().unwrap();
+                                state.fail("Слишком много заблокированных сессий команд".into());
+                                state.set_command_notices(gate.notices());
+                            }
+                            if !send_worker_receipt(
+                                &receipt_tx,
+                                &worker_wake,
+                                WorkerReceipt::Request(RequestReceipt {
+                                    id,
+                                    target: target.clone(),
+                                    outcome,
+                                }),
+                            ) {
+                                return;
+                            }
                         }
-                        if !send_worker_receipt(
-                            &receipt_tx,
-                            &worker_wake,
-                            WorkerReceipt::Acknowledgement {
-                                target,
-                                token,
-                                accepted,
-                                cleanup_id,
-                            },
-                        ) {
-                            return;
-                        }
+                        publish_worker_notices(&output, &gate, &worker_wake);
                     }
-                    IpcMessage::Request {
-                        id,
-                        target,
-                        command,
-                    } => {
-                        let resize = resize_key(&command);
-                        let dispatch =
-                            gate.dispatch_request_with_id(target.clone(), resize, id, || {
-                                request(&socket, command)
-                                    .map(|_| ())
-                                    .map_err(|error| match error {
-                                        CommandFailure::NotAdmitted { .. } => {
-                                            RequestFailure::NotAdmitted(format!(
-                                                "Команда не принята: {error}"
-                                            ))
-                                        }
-                                        CommandFailure::OutcomeUnknown(_) => {
-                                            RequestFailure::OutcomeUnknown(format!(
-                                                "Исход команды неизвестен: {error}"
-                                            ))
-                                        }
-                                    })
-                            });
-                        if dispatch != Dispatch::Executed {
-                            publish_worker_notices(&output, &gate, &worker_wake);
-                        }
-                        if dispatch == Dispatch::CapacityExceeded {
-                            let mut state = output.lock().unwrap();
-                            state.fail("Слишком много заблокированных сессий команд".into());
-                            state.set_command_notices(gate.notices());
-                        }
-                        let outcome = delivery_outcome(&dispatch);
-                        if !send_worker_receipt(
-                            &receipt_tx,
-                            &worker_wake,
-                            WorkerReceipt::Request(RequestReceipt {
-                                id,
-                                target,
-                                outcome,
-                            }),
-                        ) {
-                            return;
-                        }
+                    if !send_worker_receipt(
+                        &receipt_tx,
+                        &worker_wake,
+                        WorkerReceipt::Acknowledgement {
+                            target,
+                            token,
+                            accepted,
+                            cleanup_id,
+                        },
+                    ) {
+                        return;
+                    }
+                }
+                IpcMessage::Request {
+                    id,
+                    target,
+                    command,
+                } => {
+                    let resize = resize_key(&command);
+                    let dispatch =
+                        gate.dispatch_request_with_id(target.clone(), resize, id, || {
+                            command_trace.record(TraceStage::CommandDispatch, id, &[]);
+                            let result = request(&command_socket, command);
+                            command_trace.record(TraceStage::CommandReply, id, &[]);
+                            result.map(|_| ()).map_err(|error| match error {
+                                CommandFailure::NotAdmitted { .. } => RequestFailure::NotAdmitted(
+                                    format!("Команда не принята: {error}"),
+                                ),
+                                CommandFailure::OutcomeUnknown(_) => {
+                                    RequestFailure::OutcomeUnknown(format!(
+                                        "Исход команды неизвестен: {error}"
+                                    ))
+                                }
+                            })
+                        });
+                    if dispatch != Dispatch::Executed {
+                        publish_worker_notices(&output, &gate, &worker_wake);
+                    }
+                    if dispatch == Dispatch::CapacityExceeded {
+                        let mut state = output.lock().unwrap();
+                        state.fail("Слишком много заблокированных сессий команд".into());
+                        state.set_command_notices(gate.notices());
+                    }
+                    let outcome = delivery_outcome(&dispatch);
+                    if !send_worker_receipt(
+                        &receipt_tx,
+                        &worker_wake,
+                        WorkerReceipt::Request(RequestReceipt {
+                            id,
+                            target,
+                            outcome,
+                        }),
+                    ) {
+                        return;
                     }
                 }
             }
-            let known = output
+        }
+    });
+    spawn_poll_worker(socket, Arc::downgrade(&shared), wake.clone(), trace.clone());
+    WorkerConnection {
+        tx,
+        shared,
+        receipts: receipt_rx,
+        wake,
+        trace,
+    }
+}
+
+fn apply_poll_result(
+    state: &mut State,
+    result: Result<(Poll, Option<protocol::ChangeToken>), protocol::PollError>,
+) -> Option<protocol::ChangeToken> {
+    let backpressured = matches!(&result, Err(protocol::PollError::Busy));
+    if state.poll_backpressured != backpressured {
+        state.poll_backpressured = backpressured;
+        state.revision = state.revision.wrapping_add(1);
+    }
+    match result {
+        Ok((reply, token)) => match apply_poll(state, reply) {
+            Ok(_) => token,
+            Err(error) => {
+                state.fail(error);
+                None
+            }
+        },
+        Err(protocol::PollError::Busy) => None,
+        Err(protocol::PollError::Failed(error)) => {
+            state.fail(error);
+            None
+        }
+    }
+}
+
+fn trace_publication(trace: &Trace, stage: TraceStage, state: &State) {
+    let mut sequences = [0; 4];
+    let count = state.views.len().min(sequences.len());
+    for (sequence, view) in sequences.iter_mut().zip(&state.views) {
+        *sequence = view.sequence;
+    }
+    trace.record(stage, state.revision, &sequences[..count]);
+}
+
+fn spawn_poll_worker(
+    socket: PathBuf,
+    shared: std::sync::Weak<Mutex<State>>,
+    wake: WakeSignal,
+    trace: Trace,
+) {
+    thread::spawn(move || {
+        let mut token = None;
+        let mut next_poll = Instant::now();
+        loop {
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            if let Some(after) = token.take() {
+                // Wait on a separate connection/thread: neither input nor the
+                // serialized host command dispatcher can wait behind this call.
+                // A read-only wait failure falls back to bounded polling; the
+                // subsequent validated Poll establishes current replica state.
+                if protocol::wait_for_change(&socket, &after).is_err() {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            } else if next_poll > Instant::now() {
+                thread::sleep(next_poll.saturating_duration_since(Instant::now()));
+            }
+            // Coalesce cell snapshots to at most60 polls/s during output bursts.
+            // Every raw event remains in the host journal/history.
+            if next_poll > Instant::now() {
+                thread::sleep(next_poll.saturating_duration_since(Instant::now()));
+            }
+            let started = Instant::now();
+            let known = shared
                 .lock()
                 .unwrap()
                 .views
                 .iter()
                 .map(View::known)
                 .collect::<Vec<_>>();
-            let previous_revision = output.lock().unwrap().revision;
-            match protocol::poll(&socket, &known) {
-                Ok(reply) => {
-                    let mut state = output.lock().unwrap();
-                    match apply_poll(&mut state, reply) {
-                        Ok(_) => {
-                            let ended_targets = state
-                                .views
-                                .iter()
-                                .filter(|view| confirmed_ended_state(&view.state))
-                                .map(|view| CommandTarget {
-                                    session: view.session.clone(),
-                                    generation: view.generation.clone(),
-                                })
-                                .collect::<Vec<_>>();
-                            gate.remove_ended(ended_targets.into_iter());
-                            state.set_command_notices(gate.notices());
-                        }
-                        Err(error) => state.fail(error),
-                    }
+            let result = protocol::poll(&socket, &known);
+            let changed = {
+                let mut state = shared.lock().unwrap();
+                let revision = state.revision;
+                token = apply_poll_result(&mut state, result);
+                if revision != state.revision {
+                    trace_publication(&trace, TraceStage::PollApplied, &state);
                 }
-                Err(e) => {
-                    output.lock().unwrap().fail(e);
-                }
-            }
-            let changed = output.lock().unwrap().revision != previous_revision;
-            if changed {
-                worker_wake.notify();
-            }
-            pending = match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(message) => Some(message),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                revision != state.revision
             };
+            if changed {
+                wake.notify();
+            }
+            next_poll = started
+                + if token.is_some() {
+                    Duration::from_nanos(16_666_667)
+                } else {
+                    Duration::from_millis(50)
+                };
         }
     });
-    WorkerConnection {
-        tx,
-        shared,
-        receipts: receipt_rx,
-        wake,
-    }
 }
 
 fn send_worker_receipt(
@@ -588,6 +655,7 @@ struct CanvasApp {
     tx: mpsc::SyncSender<IpcMessage>,
     receipts: mpsc::Receiver<WorkerReceipt>,
     shared: Arc<Mutex<State>>,
+    trace: Trace,
     mouse_delivery: MouseDelivery,
     next_request_id: u64,
     panes: Vec<PaneGeometry>,
@@ -619,7 +687,9 @@ impl CanvasApp {
             shared,
             receipts,
             wake,
+            trace,
         } = connection;
+        let ui_trace = trace.clone();
         let focus = cx.focus_handle();
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
@@ -692,6 +762,7 @@ impl CanvasApp {
                             }
                             let views_changed = next.views.is_some();
                             apply_state_update(&mut this.state, next);
+                            trace_publication(&ui_trace, TraceStage::UiApplied, &this.state);
                             let ended_targets = this
                                 .state
                                 .views
@@ -785,6 +856,7 @@ impl CanvasApp {
             tx,
             receipts,
             shared,
+            trace,
             mouse_delivery: MouseDelivery::default(),
             next_request_id: 1,
             panes: Vec::new(),
@@ -1841,6 +1913,8 @@ impl Render for CanvasApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let painter = entity.clone();
+        let trace = self.trace.clone();
+        let paint_revision = self.state.revision;
         let views = self.state.views.clone();
         let preedit = self.text_input.preedit.clone();
         let preedit_selection = self.text_input.selection_bytes();
@@ -1852,7 +1926,9 @@ impl Render for CanvasApp {
             || "Терминал: нет выбранной сессии".to_owned(),
             |view| format!("Терминал {} · {}", view.frame.title, view.state),
         );
-        let status = self.error().or_else(|| self.input_notice.clone()).unwrap_or_else(|| {
+        let status = self.error()
+            .or_else(|| self.state.poll_backpressured.then(|| "Обновление терминала задержано".into()))
+            .or_else(|| self.input_notice.clone()).unwrap_or_else(|| {
             if self.prefix {
                 "Режим PigADE: 1–4 — фокус · A/C/V — выделить/копировать/вставить · Escape — выход"
                     .into()
@@ -1925,6 +2001,16 @@ impl Render for CanvasApp {
                                 (font, panes)
                             },
                             move |bounds, (font, panes), window, cx| {
+                                let mut sequences = [0; 4];
+                                let count = views.len().min(sequences.len());
+                                for (sequence, view) in sequences.iter_mut().zip(&views) {
+                                    *sequence = view.sequence;
+                                }
+                                trace.record(
+                                    TraceStage::Paint,
+                                    paint_revision,
+                                    &sequences[..count],
+                                );
                                 let focus = painter.read(cx).focus.clone();
                                 window.handle_input(
                                     &focus,
@@ -2493,7 +2579,15 @@ fn main() {
     let diagnostic_selection = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-selection");
-    let connection = ipc(socket.into());
+    let trace = if std::env::args()
+        .skip(2)
+        .any(|arg| arg == "--diagnostic-publication-trace")
+    {
+        Trace::enabled().expect("publication diagnostic logger must start")
+    } else {
+        Trace::disabled()
+    };
+    let connection = ipc(socket.into(), trace);
     application().run(move |cx: &mut App| {
         cx.set_reduce_motion(reduced_motion);
         crate::font::install(cx).expect("bundled terminal font profile must load");
@@ -3051,5 +3145,208 @@ mod tests {
         assert_eq!(color("Spec(Rgb { r: 1, g: 2, b: 3 })", true, &[]), 0x010203);
         assert_eq!(color("Indexed(196)", true, &[]), 0xff0000);
         assert_eq!(color("Named(BrightBlue)", true, &[]), 0x88c0ff);
+    }
+}
+
+#[cfg(test)]
+mod notification_transport_tests {
+    use super::Trace;
+    use super::{
+        CommandTarget, DeliveryOutcome, IpcMessage, Poll, RequestReceipt, State, WorkerReceipt,
+        apply_poll_result, ipc,
+    };
+    use serde_json::{Value, json};
+    use std::{
+        fs::{self, DirBuilder},
+        io::{Read, Write},
+        os::unix::{
+            fs::{DirBuilderExt, PermissionsExt},
+            net::UnixListener,
+        },
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use std::{
+        path::PathBuf,
+        sync::mpsc,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    struct PrivateHost {
+        root: PathBuf,
+        release: Option<mpsc::Sender<()>>,
+        thread: Option<thread::JoinHandle<Result<(), String>>>,
+    }
+    impl Drop for PrivateHost {
+        fn drop(&mut self) {
+            if let Some(release) = self.release.take() {
+                let _ = release.send(());
+            }
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn read_command(stream: &mut std::os::unix::net::UnixStream) -> Result<Value, String> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .map_err(|e| e.to_string())?;
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).map_err(|e| e.to_string())?;
+        let length = u32::from_le_bytes(length) as usize;
+        if !(1..=4096).contains(&length) {
+            return Err("test request bound".into());
+        }
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&body).map_err(|e| e.to_string())
+    }
+
+    fn reply(stream: &mut std::os::unix::net::UnixStream, value: Value) -> Result<(), String> {
+        let bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+        stream
+            .write_all(&(bytes.len() as u32).to_le_bytes())
+            .and_then(|_| stream.write_all(&bytes))
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn readonly_poll_backpressure_does_not_latch_global_input_error() {
+        let mut state = State::default();
+        apply_poll_result(&mut state, Err(super::protocol::PollError::Busy));
+        assert!(state.poll_backpressured);
+        assert!(state.error.is_none());
+        let revision = state.revision;
+        apply_poll_result(
+            &mut state,
+            Ok((
+                Poll {
+                    selected: vec![],
+                    views: vec![],
+                    recovery: None,
+                },
+                None,
+            )),
+        );
+        assert!(!state.poll_backpressured);
+        assert!(state.error.is_none());
+        assert!(state.revision > revision);
+    }
+
+    #[test]
+    fn blocked_change_wait_does_not_block_input_worker() -> Result<(), String> {
+        let root = std::env::temp_dir().join(format!(
+            "pg-notify-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .map_err(|e| e.to_string())?;
+        let socket = root.join("host.sock");
+        let listener = UnixListener::bind(&socket).map_err(|e| e.to_string())?;
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut release = Some(release_rx);
+            let mut waiter = None;
+            let mut received_input = false;
+            for _ in 0..3 {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() > deadline {
+                                return Err("test host accept deadline".into());
+                            }
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                };
+                let request = read_command(&mut stream)?;
+                let token =
+                    json!({"host_instance":"33333333-3333-4333-8333-333333333333","revision":0});
+                match request["command"]["command"].as_str() {
+                    Some("poll") => reply(
+                        &mut stream,
+                        json!({"protocol":2,"views":[],"selected":[],"error":null,"change_token":token}),
+                    )?,
+                    Some("wait_for_change") => {
+                        let release = release.take().ok_or("duplicate test waiter")?;
+                        let started_tx = started_tx.clone();
+                        waiter = Some(thread::spawn(move || {
+                            started_tx.send(()).map_err(|e| e.to_string())?;
+                            let _ = release.recv_timeout(Duration::from_secs(4));
+                            reply(
+                                &mut stream,
+                                json!({"protocol":2,"views":[],"error":null,"change_token":token}),
+                            )
+                        }));
+                    }
+                    Some("input") => {
+                        received_input = true;
+                        reply(&mut stream, json!({"protocol":2,"views":[],"error":null}))?;
+                    }
+                    _ => return Err("unexpected test request".into()),
+                }
+            }
+            if let Some(waiter) = waiter {
+                waiter.join().map_err(|_| "test waiter panic")??;
+            }
+            if !received_input {
+                return Err("input was never dispatched".into());
+            }
+            Ok(())
+        });
+        let mut host = PrivateHost {
+            root,
+            release: Some(release_tx),
+            thread: Some(server),
+        };
+        let connection = ipc(socket, Trace::disabled());
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|e| format!("wait never started: {e}"))?;
+        let target = CommandTarget {
+            session: "11111111-1111-4111-8111-111111111111".into(),
+            generation: "22222222-2222-4222-8222-222222222222".into(),
+        };
+        connection.tx.try_send(IpcMessage::Request {
+            id: 1, target: target.clone(), command: json!({"command":"input","session":target.session,"generation":target.generation,"bytes":[120]}),
+        }).map_err(|e| e.to_string())?;
+        let receipt = connection
+            .receipts
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|e| format!("input blocked behind change wait: {e}"))?;
+        assert!(matches!(
+            receipt,
+            WorkerReceipt::Request(RequestReceipt {
+                id: 1,
+                outcome: DeliveryOutcome::Accepted,
+                ..
+            })
+        ));
+        drop(connection);
+        host.release.take().unwrap().send(()).unwrap();
+        host.thread
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|_| "test host panic")??;
+        Ok(())
     }
 }

@@ -66,3 +66,5 @@ This section describes development work; it is not a release announcement.
 - One private actual-app Wayland-v3/Fcitx Pinyin fixture passes with exact raw PTY bytes and reviewed preedit/candidate captures. Signed SDK preparation, kernel/peer namespace attestation and a persistent fixed test keyboard are reproducible; target-generation and full platform gates remain open.
 
 - Frozen async-checkpoint host completed1200 actual seconds with four producer CRCs,238 ACKs/396 resizes per stream and exact full/checkpoint-tail recovery; slow resize/journal cases retained. A new actual24h run is active; cold rows in this short run are zero and the24h/resource gates remain open.
+
+- Dedicated bounded host change waits wake cell polling independently of input. Tokens close publication races and survive host restart through fresh epochs; failed service falls back without changing committed launch results. Real host/PTy and app UDS regressions pass. Retained private latency runs still miss formal budgets; finite numeric traces prepare the next redraw fix.

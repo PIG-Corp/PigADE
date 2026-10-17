@@ -38,12 +38,19 @@ SCREEN = (1280, 800, 24)
 NAMESPACES = ('mnt', 'pid', 'user', 'ipc', 'net')
 MAX_IPC = 8 * 1024 * 1024
 MAX_CAPTURE_BYTES = 1280 * 800 * 3 + 128
+MAX_LATENCY_DIAGNOSTIC_BYTES = 4096
 FIXTURE_TOKEN = '__PIGADE_IME_CHILD_ACK_20261017__'
 KEYBOARD_EXPECTED = b'ab1Z\x03\x04\x1a\x12\x0c\x01\x1bx\x1b[D\x1b[H\r' + 'привет'.encode('utf-8')
 KEYBOARD_PASS = 'pass-private-x11-en-ru-cli-keyboard-fixture'
 IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
 LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
+HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
+ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
+                'history_commit', 'checkpoint', 'frame_build', 'publish', 'query_responses',
+                'exited', 'degraded'}
+LATENCY_FAILURE_REASONS = {'color_deadline', 'keycode_unavailable',
+                           'key_submission_failed', 'pixel_readback_failed'}
 FIXTURE = r'''import json, os, select, socket, sys, termios, time, tty
 control_path = sys.argv[1]
 expected = bytes.fromhex(sys.argv[2])
@@ -272,8 +279,11 @@ def compile_helper(source: Path, output: Path) -> dict:
             'libraries': ['X11', 'Xtst', 'xcb', 'xcb-res']}
 
 
-def app_command() -> list[str]:
-    return ['/pigade/app', '/artifacts/state/host.sock']
+def app_command(publication_trace=False) -> list[str]:
+    command = ['/pigade/app', '/artifacts/state/host.sock']
+    if publication_trace is True:
+        command.append('--diagnostic-publication-trace')
+    return command
 
 
 def window_verified(result: dict) -> bool:
@@ -432,7 +442,9 @@ def inside_config(args, output, helper, x11_evidence, platform_evidence):
         'x11_root': '/pigade/x11-sdk', 'x11_extraction_root': str(extracted_root),
         'platform_root': str(args.platform_sdk / 'root'),
         'private_icd': '/pigade/platform-sdk/lavapipe-icd.json',
-        'private_icd_host': str(output / 'lavapipe-icd.json'), 'app_command': app_command(),
+        'private_icd_host': str(output / 'lavapipe-icd.json'),
+        'publication_trace': getattr(args, 'publication_trace', False) is True,
+        'app_command': app_command(getattr(args, 'publication_trace', False)),
         'host_command': ['/pigade/host', 'serve', '/artifacts/state'],
         'screen': list(SCREEN), 'namespaces': list(NAMESPACES),
         'fixture_token': FIXTURE_TOKEN, 'fixture': getattr(args, 'fixture', 'pinyin'),
@@ -606,10 +618,212 @@ def helper_call(config, stage, output=None, timeout=5):
                                  'XAUTHORITY': '/run/pigade-test/Xauthority',
                                  'XMODIFIERS': '@im=fcitx', 'LC_ALL': 'C.utf8',
                                  'LD_LIBRARY_PATH': os.environ['LD_LIBRARY_PATH']})
+    require(len(result.stdout) <= MAX_LATENCY_DIAGNOSTIC_BYTES and
+            len(result.stderr) <= MAX_LATENCY_DIAGNOSTIC_BYTES, 'helper output exceeded bound')
+    if result.returncode != 0:
+        error = RuntimeError('private X11 helper failed its identity/protocol check')
+        if stage == 'latency':
+            try:
+                error.latency_diagnostic = parse_latency_helper_diagnostic(result.stdout)
+                error.latency_diagnostic_status = 'validated'
+            except (ValueError, TypeError, json.JSONDecodeError):
+                error.latency_diagnostic_status = 'invalid-or-missing'
+            if getattr(error, 'latency_diagnostic_status', None) == 'validated':
+                error.args = ('fixed latency ' + error.latency_diagnostic['reason'] + '; no key retry',)
+        elif result.stderr:
+            error.args = (error.args[0] + ': ' + result.stderr[:160],)
+        raise error
     require(result.returncode == 0,
             'private X11 helper failed its identity/protocol check: ' + result.stderr.strip()[:240])
-    require(len(result.stdout) <= 4096 and len(result.stderr) <= 4096, 'helper output exceeded bound')
     return json.loads(result.stdout)
+
+
+def _bounded_uint(value, maximum=(1 << 64) - 1):
+    return type(value) is int and 0 <= value <= maximum
+
+
+def _rgb_string(value):
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r'Spec\(Rgb \{ r: (\d+), g: (\d+), b: (\d+) \}\)', value)
+    if not match:
+        return None
+    channels = [int(channel) for channel in match.groups()]
+    return channels if all(channel <= 255 for channel in channels) else None
+
+
+def sanitize_latency_host_snapshot(reply, session, expected_rgb):
+    if not isinstance(reply, dict) or not isinstance(reply.get('views'), list) or len(reply['views']) > 32:
+        raise ValueError('host poll response shape invalid')
+    matching = [view for view in reply['views']
+                if isinstance(view, dict) and view.get('session') == session]
+    result = {'view_count': len(reply['views']), 'matching_fixture_views': len(matching)}
+    if len(matching) != 1:
+        return result
+    view = matching[0]
+    frame = view.get('frame')
+    if not isinstance(frame, dict):
+        raise ValueError('host frame shape invalid')
+    geometry = frame.get('geometry')
+    cells = frame.get('cells')
+    if not isinstance(geometry, dict) or not isinstance(cells, list):
+        raise ValueError('host frame fields invalid')
+    rows, cols = geometry.get('rows'), geometry.get('cols')
+    if (type(rows) is not int or type(cols) is not int or not 0 <= rows <= 512 or
+            not 0 <= cols <= 512 or rows * cols > 65536 or len(cells) > 65536):
+        raise ValueError('host frame geometry exceeds diagnostic bounds')
+    sequence = view.get('sequence')
+    if not _bounded_uint(sequence):
+        raise ValueError('host sequence invalid')
+    state = view.get('state')
+    if state not in HOST_STATES:
+        state = 'other'
+    cursor = frame.get('cursor')
+    cursor_summary = None
+    if (isinstance(cursor, list) and len(cursor) == 2 and type(cursor[0]) is int and
+            type(cursor[1]) is int and -512 <= cursor[0] <= 512 and 0 <= cursor[1] <= 512):
+        cursor_summary = cursor
+    modes = frame.get('modes')
+    if not _bounded_uint(modes, (1 << 32) - 1):
+        modes = None
+    palette = frame.get('palette_overrides')
+    palette_summary = []
+    if isinstance(palette, list) and len(palette) <= 269:
+        for entry in palette:
+            if (not isinstance(entry, list) or len(entry) != 2 or type(entry[0]) is not int or
+                    not 0 <= entry[0] <= 268 or not isinstance(entry[1], list) or
+                    len(entry[1]) != 3 or any(type(x) is not int or not 0 <= x <= 255 for x in entry[1])):
+                raise ValueError('host palette entry invalid')
+            palette_summary.append([entry[0], list(entry[1])])
+    else:
+        raise ValueError('host palette exceeds diagnostic bounds')
+    cell_samples = []
+    for index, cell in enumerate(cells[:50]):
+        if not isinstance(cell, dict) or not isinstance(cell.get('text'), str):
+            raise ValueError('host cell shape invalid')
+        text = cell['text']
+        text_bytes = len(text.encode('utf-8'))
+        if text_bytes > 128:
+            raise ValueError('host cell text length exceeds diagnostic bound')
+        text_class = ('empty' if not text else 'fixed_latency_ascii'
+                      if len(text) == 1 and text.encode('utf-8') in LATENCY_KEYS else 'redacted')
+        bg = _rgb_string(cell.get('bg'))
+        cell_samples.append({'index': index, 'text_class': text_class, 'text_bytes': text_bytes,
+                             'bg_rgb': bg,
+                             'matches_failed_expected_rgb': bg == expected_rgb})
+    actor = view.get('actor_diagnostic')
+    actor_summary = None
+    if actor is not None:
+        if not isinstance(actor, dict):
+            raise ValueError('actor diagnostic shape invalid')
+        stage = actor.get('stage')
+        if stage is not None and stage not in ACTOR_STAGES:
+            stage = 'other'
+        reader = actor.get('reader', {})
+        if not isinstance(reader, dict):
+            raise ValueError('actor reader diagnostic shape invalid')
+        numeric_fields = ('read_calls', 'bytes_read', 'last_read_bytes', 'enqueued_calls',
+                          'bytes_enqueued')
+        actor_summary = {'version': actor.get('version') if _bounded_uint(actor.get('version'), 255) else None,
+                         'sample_available': actor.get('status') == 'available',
+                         'stage': stage,
+                         'candidate_sequence': actor.get('candidate_sequence')
+                             if actor.get('candidate_sequence') is None or _bounded_uint(actor.get('candidate_sequence')) else None,
+                         'entered_monotonic_ns': actor.get('entered_monotonic_ns')
+                             if actor.get('entered_monotonic_ns') is None or _bounded_uint(actor.get('entered_monotonic_ns')) else None,
+                         'reader': {key: reader.get(key) if _bounded_uint(reader.get(key)) else None
+                                    for key in numeric_fields}}
+    history_lines = frame.get('history_lines')
+    pending = frame.get('sync_pending_bytes')
+    return {**result, 'sequence': sequence, 'state': state, 'pid_present': view.get('pid') is not None,
+            'storage_error_present': isinstance(view.get('storage_error'), str) and bool(view['storage_error']),
+            'geometry': {'rows': rows, 'cols': cols}, 'cell_count': len(cells),
+            'cursor': cursor_summary, 'modes': modes,
+            'history_lines': history_lines if _bounded_uint(history_lines) else None,
+            'sync_pending_bytes': pending if _bounded_uint(pending) else None,
+            'palette_overrides': palette_summary, 'cell_samples': cell_samples,
+            'actor_diagnostic': actor_summary}
+
+
+def collect_latency_failure_diagnostics(config, report, artifacts, error):
+    diagnostics = {'helper_status': getattr(error, 'latency_diagnostic_status', 'unavailable')}
+    validated = getattr(error, 'latency_diagnostic', None)
+    if validated is not None:
+        diagnostics['helper'] = validated
+        expected = validated['expected_rgb']
+    else:
+        expected = None
+    try:
+        reply = host_request({'command': 'poll', 'known': []}, timeout=4)
+        diagnostics['host_poll'] = sanitize_latency_host_snapshot(
+            reply, report.get('fixture', {}).get('session'), expected)
+    except BaseException as snapshot_error:
+        diagnostics['host_poll'] = {'status': 'unavailable',
+                                    'error_type': type(snapshot_error).__name__}
+    try:
+        helper_call(config, 'capture', '/artifacts/latency-failure.ppm', timeout=8)
+        capture = artifacts / 'latency-failure.ppm'
+        info = capture.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= 0 or info.st_size > MAX_CAPTURE_BYTES:
+            raise ValueError('private capture type/size invalid')
+        diagnostics['capture'] = {'status': 'captured', 'file': capture.name,
+                                  'bytes': info.st_size, 'sha256': sha256(capture),
+                                  'scope': 'private Xvfb root'}
+    except BaseException as capture_error:
+        diagnostics['capture'] = {'status': 'unavailable',
+                                  'error_type': type(capture_error).__name__}
+    return diagnostics
+
+
+def capture_latency_failure_diagnostics(config, report, artifacts, error):
+    """Best-effort bounded evidence collection; never changes the original failure."""
+    try:
+        return collect_latency_failure_diagnostics(config, report, artifacts, error)
+    except BaseException as diagnostic_error:
+        return {'status': 'unavailable', 'error_type': type(diagnostic_error).__name__}
+
+
+def parse_latency_helper_diagnostic(payload):
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
+    if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_LATENCY_DIAGNOSTIC_BYTES:
+        raise ValueError('latency diagnostic size/type invalid')
+    value = json.loads(payload)
+    expected_fields = {'version', 'stage', 'scope', 'pixel', 'sample_count', 'samples_ns',
+                       'failed_index', 'expected_rgb', 'observed_rgb', 'elapsed_ns', 'reason'}
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise ValueError('latency diagnostic schema mismatch')
+    if (type(value['version']) is not int or value['version'] != 1 or
+            value['stage'] != 'latency' or
+            value['scope'] != 'XTEST-submit to private root pixel readback' or
+            value['pixel'] != [20, 120] or
+            not isinstance(value['pixel'], list) or
+            any(type(item) is not int for item in value['pixel'])):
+        raise ValueError('latency diagnostic identity mismatch')
+    failed = value['failed_index']
+    samples = value['samples_ns']
+    if (type(failed) is not int or not 0 <= failed < 50 or
+            type(value['sample_count']) is not int):
+        raise ValueError('latency diagnostic index invalid')
+    if (not isinstance(samples, list) or len(samples) != failed or value['sample_count'] != failed or
+            any(type(sample) is not int or not 0 < sample <= 1_000_000_000 for sample in samples)):
+        raise ValueError('latency diagnostic samples invalid')
+    def rgb(candidate):
+        return (isinstance(candidate, list) and len(candidate) == 3 and
+                all(type(channel) is int and 0 <= channel <= 255 for channel in candidate))
+    expected = [17 + 4 * failed, 239, 27]
+    if value['expected_rgb'] != expected or not rgb(value['observed_rgb']):
+        raise ValueError('latency diagnostic color invalid')
+    elapsed = value['elapsed_ns']
+    if type(elapsed) is not int or not 0 < elapsed <= 60_000_000_000:
+        raise ValueError('latency diagnostic duration invalid')
+    reason = value['reason']
+    if reason not in LATENCY_FAILURE_REASONS or (reason == 'color_deadline' and elapsed <= 1_000_000_000):
+        raise ValueError('latency diagnostic reason invalid')
+    return {'version': 1, 'stage': 'latency', 'scope': value['scope'], 'pixel': [20, 120],
+            'sample_count': failed, 'samples_ns': list(samples), 'failed_index': failed,
+            'expected_rgb': expected, 'observed_rgb': list(value['observed_rgb']),
+            'elapsed_ns': elapsed, 'reason': reason}
 
 
 def atomic_json(path: Path, value: dict):
@@ -820,7 +1034,7 @@ def inside_run() -> int:
         app_env['VK_ICD_FILENAMES'] = '/pigade/platform-sdk/lavapipe-icd.json'
         if config.get('fixture') in ('keyboard', 'latency'):
             prepare_private_keyboard(config, app_env)
-        app = start_process(app_command(), env=app_env)
+        app = start_process(app_command(config.get('publication_trace') is True), env=app_env)
         children.append(app)
         boot, app_start = process_identity(app.pid)
         require(boot == boot_id, 'app process boot identity differs')
@@ -896,6 +1110,10 @@ def inside_run() -> int:
         save()
         return 0
     except Exception as error:
+        if (report.get('stage') == 'fixed-input-cell-latency' and
+                isinstance(locals().get('config'), dict)):
+            report['latency_failure_diagnostics'] = capture_latency_failure_diagnostics(
+                config, report, artifacts, error)
         report.update({'status': 'failed-closed', 'failure_type': type(error).__name__,
                        'failure_stage': report.get('stage'), 'failure_reason': str(error)[:320]})
         save()
@@ -980,6 +1198,7 @@ def plan(args) -> dict:
         'status': 'plan-only-no-process-no-write',
         'run_requires_explicit_flag': '--run',
         'actual_app_only': True, 'fixture': args.fixture,
+        'publication_trace': getattr(args, 'publication_trace', False) is True,
         'app': str(args.app), 'host': str(args.host), 'output': str(args.output) if args.output else None,
         'private_sdk': str(args.x11_sdk / 'evidence/manifest.json'),
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
@@ -1006,6 +1225,8 @@ def parse_args(argv=None):
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
     parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency'], default='pinyin',
                         help='fixed Pinyin commit, EN/RU shortcuts, or50 causal color latency samples')
+    parser.add_argument('--publication-trace', action='store_true',
+                        help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)
     parser.add_argument('--host', type=Path, default=DEFAULT_HOST)
     parser.add_argument('--x11-sdk', type=Path, default=X11_SDK)

@@ -264,3 +264,14 @@ requested86400 actual seconds +CRC/fullrecovery on same frozen4e4a0fcb…
 (source4d75513). Do not duplicate/restart/change that executable. Short1200s
 result passes but RSSstillfillinghot history; no leak/totalmemory/PERF claim.
 Original7200s tool55262 stays independently active on610e.
+
+## Bounded host notification integrated
+
+Host ChangeHub and independent app Poll thread are integrated;206 workspace and
+125 app tests pass, strict Clippy/fmt/release pass. ADR0012/report
+reports/host-notification-20261017.md records wait race/cap/legacy/readonlyBusy
+contracts. Initial frozen3eba/477d latency failed at1s; retained ratherthan
+discarded. Later exact50key runs pass p95≈97ms. Numeric trace22b762db… finds
+Poll→UI p95≈41.5ms; next testredundant unchanged-frame redraw hypothesis.
+Opt-in trace is bounded/nonblocking/numeric-only; no formal PERF claim.
+Resource refusal protocol remains proposed in research/durable-resource-refusal-next.md.

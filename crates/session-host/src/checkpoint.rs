@@ -919,6 +919,7 @@ mod tests {
                     control: control_rx,
                     history: actor_history,
                     probe: actor_probe,
+                    changes: crate::changes::ChangeHub::new(),
                 },
             );
         });

@@ -1,0 +1,411 @@
+{
+  "status": "pass-private-x11-fixed-input-cell-latency-fixture",
+  "stage": "complete",
+  "latency": {
+    "child_ack_seen": true,
+    "max_ns": 99321618,
+    "p50_ns": 95581957,
+    "p95_ns": 97207575,
+    "p99_ns": 99321618,
+    "pixel": [
+      20,
+      120
+    ],
+    "quantile": "nearest-rank",
+    "sample_count": 50,
+    "sample_interval_poll_sleep_ns": 1000000,
+    "samples_ns": [
+      55158833,
+      95150079,
+      95665317,
+      95860447,
+      95547442,
+      48809458,
+      95021665,
+      97152781,
+      94967492,
+      94971990,
+      48441609,
+      96103048,
+      96070024,
+      95257642,
+      96470345,
+      95504140,
+      97207575,
+      94057163,
+      97746909,
+      94295055,
+      95403529,
+      95375867,
+      95736632,
+      95255248,
+      95690374,
+      96922603,
+      95585224,
+      99321618,
+      91657066,
+      96514729,
+      95372290,
+      95552011,
+      96483639,
+      94933827,
+      95870415,
+      96042081,
+      95678131,
+      96864142,
+      96596554,
+      94261721,
+      95581957,
+      95715111,
+      96734536,
+      95023979,
+      95480215,
+      95372640,
+      96434836,
+      95179744,
+      95949054,
+      96499379
+    ],
+    "scope": "software Xvfb/Lavapipe observed-cell diagnostic; physical input/present gate unclaimed",
+    "stage": "latency"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "a4a9b207-a141-4b7e-b014-be5472a8ac6f",
+    "ready": true,
+    "session": "1f868088-0477-4a29-98cd-c11617322d2b",
+    "tty": "raw/no-echo"
+  },
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock",
+      "--diagnostic-publication-trace"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 35,
+    "start_time_ticks": 3165328,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 5783,
+      "stream_sha256": "e8552f38550383593641a21bb7617ce6d42d0f88e5ece5bd278d81508a564e4d",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 9714,
+      "stream_sha256": "4265bfac0850c0f14edee21661a3b6faaa98a61c8087e9bb5ee44a02a4c28a9b",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "288117ffaf6b6adf8ba77d5f5c3c9cf28ad633bab713bc0555abb1b2f5793066",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "private_run": "/home/afterburner/.local/state/pigade/notification-latency-x11-trace-20261017",
+  "app_sha256": "22b762dbf0506996a6ca1c817f8ed26e61cff8859d2418520ec7347bd02392f3",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "harness_sha256": "8d1832721d304722348a0c8678bd733b02fedb0529383413cda7f211be2a44d5",
+  "helper_sha256": "cec087fd8acd2d21a35c10038eee16bb64a22d064384ec27feb94bad82719819",
+  "trace_records": 362,
+  "trace_summary_absent": "Owned harness terminates app after capture; logger final Drop summary not observed. No assertion of zero dropped records.",
+  "segments": [
+    {
+      "sequence": 3,
+      "poll_to_ui_ns": 374000,
+      "ui_to_paint_begin_ns": 3280749
+    },
+    {
+      "sequence": 4,
+      "poll_to_ui_ns": 40714929,
+      "ui_to_paint_begin_ns": 6685132
+    },
+    {
+      "sequence": 5,
+      "poll_to_ui_ns": 39525782,
+      "ui_to_paint_begin_ns": 7357038
+    },
+    {
+      "sequence": 6,
+      "poll_to_ui_ns": 41026101,
+      "ui_to_paint_begin_ns": 7233132
+    },
+    {
+      "sequence": 7,
+      "poll_to_ui_ns": 40345258,
+      "ui_to_paint_begin_ns": 7494178
+    },
+    {
+      "sequence": 8,
+      "poll_to_ui_ns": 373429,
+      "ui_to_paint_begin_ns": 256938
+    },
+    {
+      "sequence": 9,
+      "poll_to_ui_ns": 40085124,
+      "ui_to_paint_begin_ns": 7440617
+    },
+    {
+      "sequence": 10,
+      "poll_to_ui_ns": 42617832,
+      "ui_to_paint_begin_ns": 5490234
+    },
+    {
+      "sequence": 11,
+      "poll_to_ui_ns": 39966098,
+      "ui_to_paint_begin_ns": 7136028
+    },
+    {
+      "sequence": 12,
+      "poll_to_ui_ns": 26071960,
+      "ui_to_paint_begin_ns": 6738994
+    },
+    {
+      "sequence": 13,
+      "poll_to_ui_ns": 366335,
+      "ui_to_paint_begin_ns": 264913
+    },
+    {
+      "sequence": 14,
+      "poll_to_ui_ns": 41455426,
+      "ui_to_paint_begin_ns": 6627412
+    },
+    {
+      "sequence": 15,
+      "poll_to_ui_ns": 40573612,
+      "ui_to_paint_begin_ns": 7261676
+    },
+    {
+      "sequence": 16,
+      "poll_to_ui_ns": 40640398,
+      "ui_to_paint_begin_ns": 6782427
+    },
+    {
+      "sequence": 17,
+      "poll_to_ui_ns": 40564634,
+      "ui_to_paint_begin_ns": 7200010
+    },
+    {
+      "sequence": 18,
+      "poll_to_ui_ns": 39970626,
+      "ui_to_paint_begin_ns": 7518745
+    },
+    {
+      "sequence": 19,
+      "poll_to_ui_ns": 40225912,
+      "ui_to_paint_begin_ns": 7159372
+    },
+    {
+      "sequence": 20,
+      "poll_to_ui_ns": 39563153,
+      "ui_to_paint_begin_ns": 6161198
+    },
+    {
+      "sequence": 21,
+      "poll_to_ui_ns": 39376659,
+      "ui_to_paint_begin_ns": 7094880
+    },
+    {
+      "sequence": 22,
+      "poll_to_ui_ns": 38990155,
+      "ui_to_paint_begin_ns": 6864012
+    },
+    {
+      "sequence": 23,
+      "poll_to_ui_ns": 39496376,
+      "ui_to_paint_begin_ns": 7162689
+    },
+    {
+      "sequence": 24,
+      "poll_to_ui_ns": 39765497,
+      "ui_to_paint_begin_ns": 7108957
+    },
+    {
+      "sequence": 25,
+      "poll_to_ui_ns": 24247546,
+      "ui_to_paint_begin_ns": 7416641
+    },
+    {
+      "sequence": 26,
+      "poll_to_ui_ns": 40650137,
+      "ui_to_paint_begin_ns": 6890021
+    },
+    {
+      "sequence": 27,
+      "poll_to_ui_ns": 41016553,
+      "ui_to_paint_begin_ns": 6463952
+    },
+    {
+      "sequence": 28,
+      "poll_to_ui_ns": 40668311,
+      "ui_to_paint_begin_ns": 7112624
+    },
+    {
+      "sequence": 29,
+      "poll_to_ui_ns": 40178021,
+      "ui_to_paint_begin_ns": 7791633
+    },
+    {
+      "sequence": 30,
+      "poll_to_ui_ns": 40587708,
+      "ui_to_paint_begin_ns": 6786625
+    },
+    {
+      "sequence": 31,
+      "poll_to_ui_ns": 37213332,
+      "ui_to_paint_begin_ns": 5492097
+    },
+    {
+      "sequence": 32,
+      "poll_to_ui_ns": 41395582,
+      "ui_to_paint_begin_ns": 5901374
+    },
+    {
+      "sequence": 33,
+      "poll_to_ui_ns": 41024919,
+      "ui_to_paint_begin_ns": 5988449
+    },
+    {
+      "sequence": 34,
+      "poll_to_ui_ns": 39598089,
+      "ui_to_paint_begin_ns": 6997285
+    },
+    {
+      "sequence": 35,
+      "poll_to_ui_ns": 41472388,
+      "ui_to_paint_begin_ns": 6274432
+    },
+    {
+      "sequence": 36,
+      "poll_to_ui_ns": 39528047,
+      "ui_to_paint_begin_ns": 6400972
+    },
+    {
+      "sequence": 37,
+      "poll_to_ui_ns": 40585043,
+      "ui_to_paint_begin_ns": 6768601
+    },
+    {
+      "sequence": 38,
+      "poll_to_ui_ns": 40448473,
+      "ui_to_paint_begin_ns": 5875516
+    },
+    {
+      "sequence": 39,
+      "poll_to_ui_ns": 40300402,
+      "ui_to_paint_begin_ns": 7026080
+    },
+    {
+      "sequence": 40,
+      "poll_to_ui_ns": 41184812,
+      "ui_to_paint_begin_ns": 6541610
+    },
+    {
+      "sequence": 41,
+      "poll_to_ui_ns": 39389102,
+      "ui_to_paint_begin_ns": 6892316
+    },
+    {
+      "sequence": 42,
+      "poll_to_ui_ns": 36308284,
+      "ui_to_paint_begin_ns": 9030304
+    },
+    {
+      "sequence": 43,
+      "poll_to_ui_ns": 40018908,
+      "ui_to_paint_begin_ns": 7313094
+    },
+    {
+      "sequence": 44,
+      "poll_to_ui_ns": 40015452,
+      "ui_to_paint_begin_ns": 7218384
+    },
+    {
+      "sequence": 45,
+      "poll_to_ui_ns": 40115601,
+      "ui_to_paint_begin_ns": 6968681
+    },
+    {
+      "sequence": 46,
+      "poll_to_ui_ns": 38480477,
+      "ui_to_paint_begin_ns": 7727411
+    },
+    {
+      "sequence": 47,
+      "poll_to_ui_ns": 39387209,
+      "ui_to_paint_begin_ns": 6113917
+    },
+    {
+      "sequence": 48,
+      "poll_to_ui_ns": 41390012,
+      "ui_to_paint_begin_ns": 6049585
+    },
+    {
+      "sequence": 49,
+      "poll_to_ui_ns": 41407915,
+      "ui_to_paint_begin_ns": 6297997
+    },
+    {
+      "sequence": 50,
+      "poll_to_ui_ns": 41065975,
+      "ui_to_paint_begin_ns": 6271808
+    },
+    {
+      "sequence": 51,
+      "poll_to_ui_ns": 40439447,
+      "ui_to_paint_begin_ns": 6556778
+    },
+    {
+      "sequence": 52,
+      "poll_to_ui_ns": 40820230,
+      "ui_to_paint_begin_ns": 6958491
+    }
+  ],
+  "poll_to_ui": {
+    "p50_ms": 40.178021,
+    "p95_ms": 41.455426,
+    "p99_ms": 42.617832
+  },
+  "ui_to_paint_begin": {
+    "p50_ms": 6.864012,
+    "p95_ms": 7.727411,
+    "p99_ms": 9.030304
+  },
+  "scope": "Finite opt-in numeric trace and software pixel observation, not hardware present/PERF."
+}
