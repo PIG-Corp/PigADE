@@ -1,0 +1,226 @@
+{
+  "actual_elapsed_seconds": 548.8196214890013,
+  "failure": {
+    "stream": 0,
+    "timeout_seconds": 5,
+    "token_index": 104,
+    "type": "input_ack_timeout"
+  },
+  "frozen_host": {
+    "path": "/home/afterburner/.local/state/pigade/soak/soak-20261017T000738Z-6244149d/state/host-release",
+    "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+    "sha256": "67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58"
+  },
+  "integrity_scope": {
+    "cold_history_records": "zero for all streams; cold-history equality checks are vacuous",
+    "complete_state_and_frame_equality": "passed for all streams",
+    "full_acceptance": false,
+    "journal_event_framing_and_crc": "validated for all four journals, including complete replay and checkpoint-tail equality",
+    "producer_rolling_crc": "not available: the timeout aborted before clean FINISH and PIGADE_ENDCRC trailers",
+    "root_cause_established": false
+  },
+  "journals": [
+    {
+      "checkpoint_tail_ms": 30.196989000000002,
+      "cold_history_equal": true,
+      "cold_history_records": 0,
+      "complete_state_equal": true,
+      "frame_equal": true,
+      "full_replay_ms": 192.33652800000002,
+      "generation": "e7dd4fd9-6611-4d51-b244-342664ce7335",
+      "journal_bytes": 2586466,
+      "journal_event_counts": {
+        "1": 10336,
+        "2": 174,
+        "3": 0,
+        "4": 0
+      },
+      "journal_event_framing_and_crc_valid": true,
+      "journal_last_sequence": 10510,
+      "journal_sha256": "c8d0b02ca59ede7608ea6d326ba645e5313be49588fee9849a89687e18077ac2",
+      "recovery_path": "checkpoint-tail",
+      "replay_final_frame_contains_timeout_token": true,
+      "stream": 0,
+      "timeout_target_ack_event": [
+        {
+          "marker_present": true,
+          "payload_bytes": 2342,
+          "sequence": 10510
+        }
+      ]
+    },
+    {
+      "checkpoint_tail_ms": 29.352942,
+      "cold_history_equal": true,
+      "cold_history_records": 0,
+      "complete_state_equal": true,
+      "frame_equal": true,
+      "full_replay_ms": 195.649705,
+      "generation": "796c8a8d-19dd-48c6-8ca6-85bdda685101",
+      "journal_bytes": 2566046,
+      "journal_event_counts": {
+        "1": 10265,
+        "2": 174,
+        "3": 0,
+        "4": 0
+      },
+      "journal_event_framing_and_crc_valid": true,
+      "journal_last_sequence": 10439,
+      "journal_sha256": "8ec225374682cb27a78e63e44861ddf333030f3ad45a2698899b1980728c1fca",
+      "recovery_path": "checkpoint-tail",
+      "stream": 1
+    },
+    {
+      "checkpoint_tail_ms": 30.346464,
+      "cold_history_equal": true,
+      "cold_history_records": 0,
+      "complete_state_equal": true,
+      "frame_equal": true,
+      "full_replay_ms": 237.704887,
+      "generation": "1dea9860-0212-428f-8021-6f0c425912fc",
+      "journal_bytes": 2547624,
+      "journal_event_counts": {
+        "1": 10183,
+        "2": 174,
+        "3": 0,
+        "4": 0
+      },
+      "journal_event_framing_and_crc_valid": true,
+      "journal_last_sequence": 10357,
+      "journal_sha256": "6e020445ec646ff648c7b0a32434095313bb329e08d5dac7c9c745280c91fdc1",
+      "recovery_path": "checkpoint-tail",
+      "stream": 2
+    },
+    {
+      "checkpoint_tail_ms": 31.459151,
+      "cold_history_equal": true,
+      "cold_history_records": 0,
+      "complete_state_equal": true,
+      "frame_equal": true,
+      "full_replay_ms": 194.54973999999999,
+      "generation": "4a323703-7cf7-4f2f-ad6e-93db945d06ce",
+      "journal_bytes": 2551252,
+      "journal_event_counts": {
+        "1": 10114,
+        "2": 174,
+        "3": 0,
+        "4": 0
+      },
+      "journal_event_framing_and_crc_valid": true,
+      "journal_last_sequence": 10288,
+      "journal_sha256": "6f8117021b4cfef2a478dc6a577791a95c094c56145d42e39760f2677bb29eec",
+      "recovery_path": "checkpoint-tail",
+      "stream": 3
+    }
+  ],
+  "process_wait_sample_at_timeout": {
+    "children": [
+      {
+        "pid": 1261631,
+        "start_ticks": 2673002,
+        "state": "S",
+        "stream": 0,
+        "wchan": "do_select"
+      },
+      {
+        "pid": 1261831,
+        "start_ticks": 2673388,
+        "state": "S",
+        "stream": 1,
+        "wchan": "wait_woken"
+      },
+      {
+        "pid": 1261915,
+        "start_ticks": 2673773,
+        "state": "S",
+        "stream": 2,
+        "wchan": "wait_woken"
+      },
+      {
+        "pid": 1261997,
+        "start_ticks": 2674158,
+        "state": "S",
+        "stream": 3,
+        "wchan": "wait_woken"
+      }
+    ],
+    "host": {
+      "pid": 1261624,
+      "start_ticks": 2672997,
+      "state": "S",
+      "threads": {
+        "count": 16,
+        "state_counts": {
+          "D": 1,
+          "S": 15
+        },
+        "wait_channels": [
+          {
+            "state": "S",
+            "tid": 1261625,
+            "wchan": "__skb_wait_for_more_packets"
+          },
+          {
+            "state": "S",
+            "tid": 1261633,
+            "wchan": "wait_woken"
+          },
+          {
+            "state": "D",
+            "tid": 1262000,
+            "wchan": "folio_wait_bit_common.llvm.3696238855497797896"
+          }
+        ]
+      },
+      "wchan": "futex_wait"
+    },
+    "identity_diagnostic_errors": [],
+    "note": "Point-in-time wait channels; thread-to-session ownership is not inferred in this summary.",
+    "processes_absent_after_final_exit": true
+  },
+  "producer_sidechannel": {
+    "counts": {
+      "0:ack_write_completed": 105,
+      "0:ping_received": 105,
+      "0:release_observed": 104,
+      "1:ack_write_completed": 104,
+      "1:ping_received": 104,
+      "1:release_observed": 104,
+      "2:ack_write_completed": 104,
+      "2:ping_received": 104,
+      "2:release_observed": 104,
+      "3:ack_write_completed": 104,
+      "3:ping_received": 104,
+      "3:release_observed": 104
+    },
+    "records_omitted": 0,
+    "records_written": 1250,
+    "sequence_gaps": 0
+  },
+  "requested_seconds": 7200,
+  "resize_admission_retries_by_stream": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/resize-ack-long-20261017",
+  "schema": 1,
+  "stage_timing": {
+    "ack_write_completed": true,
+    "ack_write_to_last_snapshot_completion_seconds": 5.024401462,
+    "child_ack_write_after_ping_read_us": 20.079,
+    "child_ping_read_after_request_completion_ms": 7.853625,
+    "input_request_duration_ms": 8.380879,
+    "input_request_status": "writer_queue_admitted",
+    "release_observed_for_target": false,
+    "snapshot_at_timeout": {
+      "sequence": 10509,
+      "snapshot_duration_ns": 17333417,
+      "state": "running",
+      "storage_error": null,
+      "target_token_visible": false
+    }
+  },
+  "status": "failed"
+}

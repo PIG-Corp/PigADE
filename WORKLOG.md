@@ -1441,3 +1441,19 @@ Review and integrate query-response FIFO backpressure repair, bound admission bu
 - Files: crates/session-host/src/lib.rs, crates/session-host/tests/query_backpressure.rs, docs/reports/query-response-backpressure.md, docs/research/soak-pipeline-audit.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root fresh180 workspace tests passed; targeted2 real PTY tests repeated after bounded8-chunk admission burst pass5.32s, strict workspace Clippy/fmt and fresh release bins/examples build pass. Tinyreply queue-node amplification corrected on review. Cap refusal is live sideeffect delivery, not model event rejection; rawtail recovery advances exactly1 valid event with no external replay effects.
 - Risks / next: Do not attribute frozen-host soak failure to thisquery mechanism. Globalheap/admission and full MVP remainopen; app commandgate/native Alt fixes pendingseparate integration.
+
+## 2026-10-17T02:18:42+00:00 — terminal_memory_budget
+
+Analyzed the failed frozen 7200-second soak from bounded ACK telemetry, journal event bytes, process wait-channel sample, and frozen-host recovery; updated the report and wrote a curated no-raw-output summary.
+
+- Files: docs/reports/soak-ack-timeout-20261017.md, benchmarks/results/soak-ack-timeout-20261017/failed-7200s-summary.json
+- Verification: Confirmed manifest status failed at 548.8196s on frozen binary SHA 67ed712c…; PING admitted, producer read it 7.854ms later and completed ACK write 20.079us after that. Timeout snapshot remained sequence 10509/no token; final stream-0 journal sequence 10510 includes the token and replay shows it. Frozen-host verify-recovery passed all four journals with complete-state/frame equality; event framing/checksums validated. python json.tool and git diff --check passed.
+- Risks / next: ACK output reached durable replay but missed five-second live publication; stage within PTY reader/actor/publish remains unresolved because no event timestamps exist and wait-channel data is point-in-time only. No soak or host was launched.
+
+## 2026-10-17T02:20:15+00:00 — /root
+
+Retain failed7200s diagnostic that localizes ACK delay after child write and before live publication
+
+- Files: docs/reports/soak-ack-timeout-20261017.md, benchmarks/results/soak-ack-timeout-20261017/failed-7200s-summary.json, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: Tool10513exited1 at548.819621s. Root read boundedtimeout+producerartifacts; exactACK104 milestones present,noRelease/no seqgaps. Agent validatedall4 frozen-hostcomplete/frame recovery with0coldrows. Finalevent10510containsACK; snapshot10509 took17.333ms after5s deadline. No cleanENDCRC or24h pass.
+- Risks / next: Implement independent bounded actor/PTYreader stage probe before anotherreproducer; no deadlineinflation or inputloss claim.
