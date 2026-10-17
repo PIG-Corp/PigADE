@@ -1297,3 +1297,27 @@ Finalize ACK diagnostics integration documentation for coherent commit
 - Files: CHANGELOG.md, docs/PROJECT_MAP.md
 - Verification: Focused15-test soak suite passed; git diff --check clean.1200s diagnostic remains running.
 - Risks / next: Read actual producer/host stage on completion or failure; no deadline inflation.
+
+## 2026-10-17T01:46:39+00:00 — recovery_slice_review
+
+Completed bounded cell decoration planner and opt-in host fixture
+
+- Files: crates/app/src/cell_style.rs, scripts/isolated-render.py, scripts/test_isolated_render.py
+- Verification: Standalone Rust module tests 10 passed; python3 -m unittest scripts.test_isolated_render -v 16 passed; py_compile passed; rustfmt passed; git diff --check passed. No GUI launched.
+- Risks / next: Root integrates cell_style in painter and may run isolated decoration fixture after build; fixture checks host metadata only.
+
+## 2026-10-17T01:55:17+00:00 — terminal_memory_budget
+
+Add deterministic manifest-pinned downstream GPUI patch applier with dry-run, pre/postimage checks, locking, and fail-closed path validation
+
+- Files: scripts/apply-gpui-patches.py, scripts/test_apply_gpui_patches.py
+- Verification: python3 -m unittest scripts.test_apply_gpui_patches (7 tests passed); py_compile passed; git diff --check passed
+- Risks / next: Root can write the immutable patch manifest and invoke: python3 scripts/apply-gpui-patches.py SOURCE_DIR MANIFEST. The script has not been applied to the actual upstream checkout.
+
+## 2026-10-17T01:57:08+00:00 — /root
+
+Integrate bounded cell decorations, fix decorated-space omission and verify fixed-scale software captures
+
+- Files: crates/app/src/main.rs, crates/app/src/cell_style.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/decorations-20261017, docs/reports/terminal-decorations.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Failing blank-decoration regression reproduced before implementation;90 native app tests pass afterward, strict all-target Clippy/fmt/debug/release builds pass.16 fixture tests pass. Real four-PTY private render/resize/reopen passes scale1/2; root visually inspected both PNGs, custom RGB pixel counts36/68. Root corrected fixture missing underline flag and actual Spec(Rgb) wire color; no new ANSI parser.
+- Risks / next: Apply/review tracked GPUI XIM focus fix after baseline capture; ACK reproducer9206 still active. No full MVP/platform/GPU/fractional-scale acceptance.

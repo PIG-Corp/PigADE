@@ -1,4 +1,5 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod cell_style;
 mod cursor;
 mod font;
 mod input;
@@ -1470,7 +1471,7 @@ fn terminal_line_height(ascent: Pixels, descent: Pixels) -> Pixels {
 #[derive(Clone, Copy)]
 enum CellPaint<'a> {
     Background(usize, &'a Cell),
-    Glyph(usize, &'a Cell),
+    Foreground(usize, &'a Cell),
 }
 fn cell_paint_order(cells: &[Cell]) -> impl Iterator<Item = CellPaint<'_>> {
     cells
@@ -1481,8 +1482,8 @@ fn cell_paint_order(cells: &[Cell]) -> impl Iterator<Item = CellPaint<'_>> {
             cells
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.flags & (64 | 256 | 1024) == 0 && c.text != " ")
-                .map(|(i, c)| CellPaint::Glyph(i, c)),
+                .filter(|(_, c)| cell_style::needs_foreground(c))
+                .map(|(i, c)| CellPaint::Foreground(i, c)),
         )
 }
 
@@ -1676,6 +1677,9 @@ fn paint_panel(
         return;
     };
     let frame = &view.frame;
+    let scale = valid_scale(window.scale_factor());
+    let cell_width_px = (f32::from(cell.width) * scale).round() as u16;
+    let cell_height_px = (f32::from(cell.height) * scale).round() as u16;
     let cursor = cursor::plan(frame, pane.rows, pane.cols, focused)
         .filter(|plan| !plan.blinking || cursor_visible);
     let cursor_color = frame
@@ -1703,10 +1707,13 @@ fn paint_panel(
         // following spacer/row must never erase wide glyphs or descenders.
         for operation in cell_paint_order(&frame.cells) {
             let (i, c) = match operation {
-                CellPaint::Background(i, c) | CellPaint::Glyph(i, c) => (i, c),
+                CellPaint::Background(i, c) | CellPaint::Foreground(i, c) => (i, c),
             };
             let x = i % frame.geometry.cols as usize;
             let y = i / frame.geometry.cols as usize;
+            if x >= usize::from(pane.cols) || y >= usize::from(pane.rows) {
+                continue;
+            }
             let origin = pane.origin + point(cell.width * x as f32, cell.height * y as f32);
             let mut fg = color(&c.fg, true, &frame.palette_overrides);
             let mut bg = color(&c.bg, false, &frame.palette_overrides);
@@ -1724,31 +1731,77 @@ fn paint_panel(
                 CellPaint::Background(..) => {
                     window.paint_quad(fill(Bounds::new(origin, cell), rgb(bg)))
                 }
-                CellPaint::Glyph(..) => {
-                    let mut glyphfont = font.clone();
-                    if c.flags & 2 != 0 {
-                        glyphfont.weight = FontWeight::BOLD;
-                    }
-                    if c.flags & 4 != 0 {
-                        glyphfont.style = FontStyle::Italic;
-                    }
-                    // Shape the host-owned cluster, including combining
-                    // marks. Clip ink to its host-assigned one/two-cell span
-                    // so fallback overhang cannot paint into the next cell.
+                CellPaint::Foreground(..) => {
+                    let span = glyph_span_cells(c.flags) as u16;
+                    let columns = pane.cols.min(frame.geometry.cols).saturating_sub(x as u16);
+                    let style = cell_style::plan(
+                        c,
+                        cell_width_px,
+                        cell_height_px,
+                        span,
+                        cell_width_px.saturating_mul(span.min(columns)),
+                    );
+                    let span_bounds = if style.width_px != 0 {
+                        Bounds::new(
+                            origin,
+                            size(px(f32::from(style.width_px) / scale), cell.height),
+                        )
+                    } else {
+                        glyph_span_bounds(origin, cell, c.flags)
+                    };
+                    // All backgrounds precede foregrounds. Host-owned wide
+                    // spans and decorations stay inside acknowledged full cells.
                     window.with_content_mask(
                         Some(ContentMask {
-                            bounds: glyph_span_bounds(origin, cell, c.flags),
+                            bounds: span_bounds,
                         }),
                         |window| {
-                            text(
-                                c.text.clone(),
-                                origin,
-                                &glyphfont,
-                                rgb(fg).into(),
-                                cell.height,
-                                window,
-                                cx,
-                            );
+                            if style.glyph_visible && c.text != " " {
+                                let mut glyphfont = font.clone();
+                                if c.flags & 2 != 0 {
+                                    glyphfont.weight = FontWeight::BOLD;
+                                }
+                                if c.flags & 4 != 0 {
+                                    glyphfont.style = FontStyle::Italic;
+                                }
+                                text(
+                                    c.text.clone(),
+                                    origin,
+                                    &glyphfont,
+                                    rgb(fg).into(),
+                                    cell.height,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            let underline_color = style
+                                .underline_color
+                                .map(|value| color(value, true, &frame.palette_overrides))
+                                .unwrap_or(fg);
+                            for (line, stroke_color) in style
+                                .underline
+                                .into_iter()
+                                .flatten()
+                                .map(|line| (line, underline_color))
+                                .chain(style.strike.map(|line| (line, fg)))
+                            {
+                                for stroke in line.segments() {
+                                    window.paint_quad(fill(
+                                        Bounds::new(
+                                            origin
+                                                + point(
+                                                    px(f32::from(stroke.x_px) / scale),
+                                                    px(f32::from(stroke.y_px) / scale),
+                                                ),
+                                            size(
+                                                px(f32::from(stroke.width_px) / scale),
+                                                px(f32::from(stroke.height_px) / scale),
+                                            ),
+                                        ),
+                                        rgb(stroke_color),
+                                    ));
+                                }
+                            }
                         },
                     );
                 }
@@ -2223,7 +2276,7 @@ mod tests {
                     assert!(!glyph_started);
                     coverage[index] = false;
                 }
-                CellPaint::Glyph(index, cell) => {
+                CellPaint::Foreground(index, cell) => {
                     glyph_started = true;
                     clusters.push(cell.text.as_str());
                     coverage[index] = true;
@@ -2238,6 +2291,32 @@ mod tests {
         }
         assert!(coverage[1] && coverage[4]);
         assert_eq!(clusters, ["界", "g", "e\u{301}"]);
+    }
+    #[test]
+    fn decorated_spaces_receive_foreground_without_revealing_hidden_cells() {
+        let cell = |flags| Cell {
+            text: " ".into(),
+            fg: "Named(Foreground)".into(),
+            bg: "Named(Background)".into(),
+            flags,
+            underline: None,
+            hyperlink: None,
+        };
+        let cells = [
+            cell(8),
+            cell(512),
+            cell(2048),
+            cell(8 | 256),
+            cell(8 | 64),
+            cell(0),
+        ];
+        let foreground: Vec<_> = cell_paint_order(&cells)
+            .filter_map(|op| match op {
+                CellPaint::Foreground(index, _) => Some(index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(foreground, [0, 1, 2]);
     }
     #[test]
     fn pane_projection_uses_available_area_without_fake_panels() {

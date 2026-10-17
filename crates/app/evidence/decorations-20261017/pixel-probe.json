@@ -1,0 +1,39 @@
+{
+  "scope": "Exact17/238/119 underlines from four owned real PTYs at fixed software scale1/2; not all-decoration pixel oracle or physical monitor check.",
+  "captures": [
+    {
+      "scale": 1,
+      "custom_underline_rgb": [
+        17,
+        238,
+        119
+      ],
+      "exact_pixels": 36,
+      "rows": [
+        125,
+        496
+      ],
+      "physical_output": [
+        1280,
+        800
+      ]
+    },
+    {
+      "scale": 2,
+      "custom_underline_rgb": [
+        17,
+        238,
+        119
+      ],
+      "exact_pixels": 68,
+      "rows": [
+        249,
+        991
+      ],
+      "physical_output": [
+        2560,
+        1600
+      ]
+    }
+  ]
+}

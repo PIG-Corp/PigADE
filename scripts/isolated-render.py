@@ -38,6 +38,16 @@ CURSOR_FIXTURE_EXPECTED = [
 CURSOR_FIXTURE_SESSIONS = [
     f'00000000-0000-4000-8000-{index:012x}' for index in range(1, 5)
 ]
+DECORATION_FIXTURE_EXPECTED = {
+    'S': 1 << 3,
+    'D': 1 << 11,
+    'C': 1 << 12,
+    'P': 1 << 13,
+    'A': 1 << 14,
+    'T': 1 << 9,
+    'U': 1 << 3,
+    '漢': (1 << 5) | (1 << 3),
+}
 
 
 def app_command(ime_preedit, selection_fixture=False, selected_pane=0, reduced_motion=False):
@@ -69,12 +79,87 @@ def cursor_fixture_command(index):
     return f"printf '{sequences[index]}'; "
 
 
-def shell_fixture(index, recovery_warning=False, palette_fixture=False, cursor_fixture=False):
+def decoration_fixture_command():
+    """Emit short, harmless SGR samples through the owned shell PTY."""
+    return (r"printf '\033[4mS\033[0m \033[4:2mD\033[0m "
+            r"\033[4:3mC\033[0m \033[4:4mP\033[0m \033[4:5mA\033[0m "
+            r"\033[9mT\033[0m\r\n\033[4;58:2::17:238:119mU\033[0m\r\n"
+            r"\033[4m漢\033[0mB\r\n"
+            r"L\033[4m   \033[0mR\r\n"
+            r"V\033[8mMASKED\033[28mW\r\n'; ")
+
+
+def cell_rows(view):
+    frame = view['frame']
+    cols = frame['geometry']['cols']
+    return [frame['cells'][start:start + cols]
+            for start in range(0, len(frame['cells']), cols)]
+
+
+def decoration_fixture_valid(view):
+    rows = cell_rows(view)
+    row_text = [''.join(cell['text'] for cell in row) for row in rows]
+
+    def marked_cell(marker, source_rows=rows):
+        matches = [cell for row in source_rows for cell in row if cell['text'] == marker]
+        return matches[0] if len(matches) == 1 else None
+
+    style_row = next((row for row, text in zip(rows, row_text)
+                      if text.startswith('S D C P A T')), [])
+    if not style_row:
+        return False
+    for marker, expected_flags in DECORATION_FIXTURE_EXPECTED.items():
+        cell = marked_cell(marker, [style_row]) if marker in 'SDCPAT' else marked_cell(marker)
+        if cell is None or cell['flags'] & expected_flags != expected_flags:
+            return False
+    colored = marked_cell('U')
+    if colored['underline'] != 'Spec(Rgb { r: 17, g: 238, b: 119 })':
+        return False
+
+    wide = marked_cell('漢')
+    wide_row = next(row for row in rows if wide in row)
+    wide_index = wide_row.index(wide)
+    if wide_index + 1 >= len(wide_row) or not (wide_row[wide_index + 1]['flags'] & (1 << 6)):
+        return False
+
+    space_index = next((i for i, text in enumerate(row_text) if text.startswith('L')),
+                       None)
+    if space_index is None:
+        return False
+    space_row = rows[space_index]
+    left = next((i for i, cell in enumerate(space_row) if cell['text'] == 'L'), None)
+    right = next((i for i, cell in enumerate(space_row) if cell['text'] == 'R'), None)
+    if left is None or right is None or right - left != 4:
+        return False
+    if any(space_row[i]['flags'] & (1 << 3) == 0 for i in range(left + 1, right)):
+        return False
+
+    hidden_index = next((i for i, text in enumerate(row_text) if text.startswith('V')),
+                        None)
+    if hidden_index is None:
+        return False
+    hidden_row = rows[hidden_index]
+    hidden_start = next((i for i, cell in enumerate(hidden_row) if cell['text'] == 'M'), None)
+    if hidden_start is None:
+        return False
+    if any(hidden_row[i]['flags'] & (1 << 8) == 0 for i in range(hidden_start, hidden_start + 6)):
+        return False
+    if not any(text.startswith('V') and 'MASKED' in text for text in row_text):
+        return False
+    return True
+
+
+def shell_fixture(index, recovery_warning=False, palette_fixture=False, cursor_fixture=False,
+                  decoration_fixture=False):
     prefix = palette_fixture_command() if palette_fixture else ''
     if cursor_fixture:
         prefix += cursor_fixture_command(index)
+    if decoration_fixture:
+        prefix += decoration_fixture_command()
     palette_sample = (r"\033[31mNAMED-INDEX-1\033[0m/\033[38;5;1mINDEXED-1\033[0m\r\n"
                       if palette_fixture else '')
+    if decoration_fixture:
+        return prefix + shell_read_loop(recovery_warning)
     return (prefix +
             f"printf '\033]2;Bash {index+1}\007\033[38;2;89;180;255mPigADE · Bash {index+1}\033[0m\r\nРусский · é · 界\r\nA漢B xあ中한y · fi != ->\r\n{palette_sample}\033[1mA漢B xあ中한y · bold\033[0m\r\n\033[3mA漢B xあ中한y · italic\033[0m\r\n\033[1;3mA漢B xあ中한y · bold italic\033[0m\r\n'; "
             + shell_read_loop(recovery_warning))
@@ -545,12 +630,14 @@ def inside():
                 config.get('recovery_warning', False),
                 config.get('palette_fixture', False),
                 config.get('cursor_fixture', False),
+                config.get('decoration_fixture', False),
             )
             session = (CURSOR_FIXTURE_SESSIONS[index] if config.get('cursor_fixture')
                        else str(uuid.uuid4()))
             spec = {'session': session, 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
                     'executable': '/usr/bin/bash', 'args': ['--noprofile', '--norc', '-c', shell_script],
-                    'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
+                    'cwd': '/artifacts', 'geometry': {'rows': 10 if config.get('decoration_fixture') else 24,
+                                                       'cols': 80}}
             request({'command': 'launch', 'spec': spec})
             specs.append(spec)
         initial_reply = request_response({'command': 'list'})
@@ -577,7 +664,8 @@ def inside():
         first = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False),
                                   config.get('selected_pane', 0), config.get('reduced_motion', False)))
         # Wait for host acknowledgement of app-computed viewport dimensions.
-        wait_for(lambda: all(v['frame']['geometry'] != {'rows': 24, 'cols': 80} for v in request({'command': 'list'})))
+        initial_geometry = {'rows': 10 if config.get('decoration_fixture') else 24, 'cols': 80}
+        wait_for(lambda: all(v['frame']['geometry'] != initial_geometry for v in request({'command': 'list'})))
         require(first.poll() is None, 'application exited before capture')
         if config.get('palette_fixture'):
             def palette_ready():
@@ -648,6 +736,32 @@ def inside():
                 'afterUiResize': True,
                 'stableAcrossPolls': True,
                 'scope': 'owned shell PTYs emitted steady DECSCUSR shapes and DECTCEM hide; typed host metadata only',
+            }
+        if config.get('decoration_fixture'):
+            def decorations_ready():
+                views = request({'command': 'list'})
+                if len(views) == 4 and all(decoration_fixture_valid(view) for view in views):
+                    return views
+                return None
+
+            decoration_first = wait_for(decorations_ready, timeout=10)
+            decoration_second = request({'command': 'list'})
+            require(len(decoration_second) == 4 and all(
+                view['frame'].get('geometry') != {'rows': 10, 'cols': 80}
+                and decoration_fixture_valid(view) for view in decoration_second
+            ), 'decoration metadata changed or failed to survive stable UI resize')
+            require([view['frame']['cells'] for view in decoration_first]
+                    == [view['frame']['cells'] for view in decoration_second],
+                    'decoration metadata changed between stable host polls')
+            report['decorationFixture'] = {
+                'expectedFlagMasks': DECORATION_FIXTURE_EXPECTED,
+                'fourSessionsMatched': True,
+                'customUnderlineRgb': [17, 238, 119],
+                'wideSpacerAndDecoratedSpacesChecked': True,
+                'hiddenTextRetainedInHostMetadata': True,
+                'afterUiResize': True,
+                'stableAcrossPolls': True,
+                'scope': 'owned shell PTYs emitted SGR styles; typed host metadata only',
             }
         if config.get('accessibility_probe'):
             # Setting ScreenReaderEnabled true makes the private launcher also
@@ -777,6 +891,7 @@ def outside(args):
         'selection_fixture': args.selection_fixture,
         'palette_fixture': args.palette_fixture,
         'cursor_fixture': args.cursor_fixture,
+        'decoration_fixture': args.decoration_fixture,
         'selected_pane': args.selected_pane,
         'reduced_motion': args.reduced_motion,
         'output_scale': args.scale,
@@ -824,6 +939,8 @@ if __name__ == '__main__':
                         help='set/reset/set synthetic OSC palette values in owned shell PTYs and verify host metadata')
     parser.add_argument('--cursor-fixture', action='store_true',
                         help='emit steady block/underline/beam and hidden cursor shapes in owned shell PTYs')
+    parser.add_argument('--decoration-fixture', action='store_true',
+                        help='emit bounded SGR underline/strike/wide/hidden samples in owned shell PTYs')
     parser.add_argument('--selected-pane', type=int, choices=range(4), default=0,
                         help='start the actual app focused on pane 0..3 (private diagnostic state only)')
     parser.add_argument('--reduced-motion', action='store_true',

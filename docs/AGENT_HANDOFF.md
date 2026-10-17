@@ -55,7 +55,7 @@ injection, `--last`, automatic repeated task or silent new conversation.
   imported Zed GPL terminal integration. Bundled OFL font aliases, fixed JP CJK
   fallback and cell-span clipping are documented in ADR0008. Unsupported glyph
   fallback is not deterministic across platforms.
-- Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and remaining decorations are still open. Typed cursor shapes/visibility/blink now reach the painter; four source-bound steady software captures verify block/underline/beam/hollow/hidden pixels. Actual blink timing remains open; see reports/terminal-cursor.md.
+- Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and font-exact decoration positions are still open. Cell underline variants/custom color/strikeout and decorated spaces now render from host attributes; fixed-scale1/2 captures are in reports/terminal-decorations.md. Typed cursor shapes/visibility/blink now reach the painter; four source-bound steady software captures verify block/underline/beam/hollow/hidden pixels. Actual blink timing remains open; see reports/terminal-cursor.md.
 - Native local IME has UTF16 range/selection handling and a clipped overlay;
   actual Linux IME reset ordering is unverified. Do not reintroduce the removed
   cancelled-until-KeyDown latch: IMEs may consume physical keys themselves.
@@ -72,7 +72,7 @@ injection, `--last`, automatic repeated task or silent new conversation.
 
 - Root workspace fmt, strict all-target Clippy and177 tests passed (including
   the25-test input target:23 shared pure codec tests and2 real raw-PTY tests).
-  Release workspace bins/examples build passed. Native app79 tests, strict
+  Release workspace bins/examples build passed. Native app90 tests, strict
   all-target Clippy, fmt and debug/release builds passed. Python92 tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
