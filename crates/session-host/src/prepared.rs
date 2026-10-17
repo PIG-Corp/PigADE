@@ -49,6 +49,12 @@ pub struct LaunchPreview {
     pub can_launch: bool,
     pub unavailable_reason: Option<String>,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub executable: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub conversation: Option<pigade_storage::ConversationBinding>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -182,6 +188,9 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
             can_launch: unavailable_reason.is_none(),
             unavailable_reason,
             warnings,
+            executable: Some(executable.clone()),
+            cwd: Some(workspace.cwd.clone()),
+            conversation: None,
         };
         let plan = StoredPlan {
             requested_revision: preview.context.id,
@@ -318,13 +327,85 @@ pub(crate) fn session_context(
         plan.preview.session == session && plan.preview.generation == generation,
         "saved context generation mismatch"
     );
-    Ok((plan.preview, phase))
+    let mut preview = plan.preview;
+    preview.executable = Some(plan.launch.executable);
+    preview.cwd = Some(plan.launch.cwd);
+    preview.conversation = host.metadata.conversation_binding(session)?;
+    ensure!(
+        preview.conversation.as_ref().is_none_or(
+            |binding| binding.session_id == session && binding.provider == preview.provider
+        ),
+        "saved conversation owner differs from its session"
+    );
+    Ok((preview, phase))
+}
+
+/// Bind only the selected logical session and a user-supplied exact ID. This
+/// stores provenance; it does not spawn, send input or certify native resume.
+pub(crate) fn bind_conversation(
+    host: &mut Host,
+    session: Uuid,
+    generation: Uuid,
+    conversation_id: &str,
+    expected_revision: u64,
+) -> Result<(LaunchPreview, String)> {
+    let (mut preview, phase) = session_context(host, session, generation)?;
+    let record = host
+        .metadata
+        .get_launch(preview.plan_id)?
+        .context("Сессия ещё не запускалась; привязка диалога недоступна")?;
+    ensure!(
+        record.session_id == session && record.generation == generation,
+        "conversation launch generation differs from its source"
+    );
+    match preview.provider.as_str() {
+        "codex" | "claude" => {
+            let id = Uuid::parse_str(conversation_id).context("Нужен точный UUID диалога CLI")?;
+            ensure!(
+                !id.is_nil() && id.to_string() == conversation_id,
+                "Используйте полный UUID диалога в стандартной записи"
+            );
+        }
+        "opencode" => ensure!(
+            conversation_id.starts_with("ses_") && conversation_id.len() > 4,
+            "Нужен точный ID OpenCode вида ses_…"
+        ),
+        _ => anyhow::bail!("Привязка диалога недоступна для shell"),
+    }
+    let binding = host.metadata.bind_conversation(
+        pigade_storage::ConversationBinding {
+            session_id: session,
+            source_generation: generation,
+            plan_id: preview.plan_id,
+            context_revision: preview.context.id,
+            provider: preview.provider.clone(),
+            conversation_id: conversation_id.to_owned(),
+            revision: expected_revision,
+            bound_at_unix_ms: 0,
+            author: String::new(),
+        },
+        expected_revision,
+    )?;
+    preview.conversation = Some(binding);
+    Ok((preview, phase))
 }
 
 /// Validate the reviewed snapshot and startup parameters together before any
 /// attempt is admitted. A damaged saved plan cannot silently launch other text.
 fn validate_plan(plan: &StoredPlan) -> Result<()> {
     plan.preview.context.validate()?;
+    ensure!(
+        plan.preview
+            .executable
+            .as_ref()
+            .is_none_or(|path| *path == plan.launch.executable)
+            && plan
+                .preview
+                .cwd
+                .as_ref()
+                .is_none_or(|path| *path == plan.launch.cwd),
+        "saved launch provenance differs from its review"
+    );
     let memory_block = plan
         .preview
         .context

@@ -2,11 +2,11 @@
 
 `supported` requires executed certification, not the presence of a help flag. `unknown` is deliberately not treated as supported. Version/help probe results: [installed-cli-probes.json](installed-cli-probes.json). Probes only run `--version` / `--help`; they do not start a provider task, copy credentials or inspect private provider databases.
 
-| CLI / exact installed version | Version/help in this environment | Generic PTY | Context delivery + receipt | Exact native resume | Automatic conversation binding | Auto-resume certified |
+| CLI / exact installed version | Version/help in this environment | Generic PTY | Context delivery + receipt | Exact native resume | Conversation binding (automatic/manual) | Auto-resume certified |
 |---|---|---|---|---|---|---|
-| Claude Code 2.1.259 | executed, exit 0 | offline startup + 2 resizes observed; final running check failed (API connectivity) | product startup `--append-system-prompt` implemented; receipt unconfirmed | documented `--resume ID`; not executed | unknown | no |
-| Codex 0.162.1 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | product `-c developer_instructions=…` frozen revision/role transport implemented; fake-CLI real-PTY snapshot/reopen test passes; model receipt unconfirmed; earlier exec nonce receipt separate | exact-ID `exec resume` executed across2 CLI processes; interactive TUI pending | structured `thread.started` ID observed in exec; product binding pending | no |
-| OpenCode 1.18.22 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | unknown | documented `--session ID`; not executed | unknown | no |
+| Claude Code 2.1.259 | executed, exit 0 | offline startup + 2 resizes observed; final running check failed (API connectivity) | product startup `--append-system-prompt` implemented; receipt unconfirmed | documented `--resume ID`; not executed | explicit user UUID binding; automatic unknown | no |
+| Codex 0.162.1 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | product `-c developer_instructions=…` frozen revision/role transport implemented; fake-CLI real-PTY snapshot/reopen test passes; model receipt unconfirmed; earlier exec nonce receipt separate | exact-ID `exec resume` executed across2 CLI processes; interactive TUI pending | structured `thread.started` ID observed in exec; product explicit user UUID binding implemented; existence unverified | no |
+| OpenCode 1.18.22 | executed, exit 0 | offline startup + 2 resizes + 1 s running passed; full TUI certification open | unknown | documented `--session ID`; not executed | explicit user ses_ binding; automatic unknown | no |
 | Previous supported version of each CLI | not selected/installed | unknown | unknown | unknown | unknown | no |
 | Bash 5.3.3, Python 3.14 | actual PTY input/output, alternate TUI, resize and reconnect tested | supported in prototype tests | unsupported (explicit input only) | unsupported | unsupported | no |
 
@@ -23,3 +23,5 @@ Official sources inspected:
 - [OpenCode CLI](https://opencode.ai/docs/cli/) and [agents](https://opencode.ai/docs/agents/): session selection and documented role configuration. Actual adapter tests remain required.
 
 No account/login changes or provider-home writes are part of these probes. Real task/resume testing needs dedicated test conversations and recorded versions; it is an open release gate, not silently inferred from local authentication.
+
+Product manual binding (schema6): PigADE records a user-supplied exact conversation ID against one logical session, source generation, launch plan and frozen context. Real-host fake-CLI PTY tests verify save/CAS/reopen and unchanged terminal generations. They do not verify the ID exists at a provider or certify interactive native resume. Automatic ID discovery, generation-head presentation and native resume remain pending; all native-resume capability flags remain disabled.

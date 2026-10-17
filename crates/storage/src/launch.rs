@@ -97,7 +97,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 5,
+            version <= 6,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -106,13 +106,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 5 {
-            Some(backup_before_migration(&connection, path, version, 5)?)
+        let migration_backup = if version > 0 && version < 6 {
+            Some(backup_before_migration(&connection, path, version, 6)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 5 {
+        if version < 6 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -133,9 +133,12 @@ impl MetadataStore {
             if version < 4 {
                 crate::context::migrate_context_schema(&tx)?;
             }
-            crate::context::migrate_context_v5(&tx)?;
-            crate::prepared_launch::migrate_prepared_launch_schema(&tx)?;
-            tx.pragma_update(None, "user_version", 5)?;
+            if version < 5 {
+                crate::context::migrate_context_v5(&tx)?;
+                crate::prepared_launch::migrate_prepared_launch_schema(&tx)?;
+            }
+            crate::conversation::migrate_conversation_schema(&tx)?;
+            tx.pragma_update(None, "user_version", 6)?;
             tx.commit()?;
         }
         File::open(
@@ -609,7 +612,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 6)?;
+        store.connection.pragma_update(None, "user_version", 7)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

@@ -217,6 +217,12 @@ pub struct LaunchPreview {
     pub can_launch: bool,
     pub unavailable_reason: Option<String>,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub executable: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub conversation: Option<pigade_storage::ConversationBinding>,
 }
 
 pub struct ProductReply {

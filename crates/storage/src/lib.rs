@@ -5,6 +5,7 @@
 pub mod archive;
 mod catalog;
 mod context;
+mod conversation;
 mod journal;
 mod launch;
 mod memory;
@@ -12,6 +13,7 @@ mod prepared_launch;
 
 pub use catalog::*;
 pub use context::*;
+pub use conversation::*;
 pub use journal::*;
 pub use launch::*;
 pub use memory::*;

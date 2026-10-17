@@ -348,6 +348,21 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
     );
     let plan_id = preview.plan_id;
     let old_hash = preview.context.content_hash.clone();
+    let conversation_id = Uuid::new_v4().to_string();
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::BindConversation {
+                session: preview.session,
+                generation: preview.generation,
+                conversation_id: conversation_id.clone(),
+                expected_revision: 0,
+            }
+        )?
+        .error
+        .is_some(),
+        "unlaunched preview accepted a conversation binding"
+    );
     ensure!(
         preview.context.text.contains("OLD_PROJECT_CONTEXT")
             && preview.context.text.contains("OLD_WORKSPACE_CONTEXT")
@@ -453,6 +468,62 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         "repeat start created a duplicate generation"
     );
 
+    let bound = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: preview.session,
+            generation: preview.generation,
+            conversation_id: conversation_id.clone(),
+            expected_revision: 0,
+        },
+    )?
+    .launch_preview
+    .context("binding ACK omitted its preview")?;
+    let binding = bound
+        .conversation
+        .context("binding ACK omitted saved binding")?;
+    ensure!(binding.revision == 1 && binding.provider == "codex" && binding.author == "user");
+    ensure!(
+        binding.session_id == preview.session
+            && binding.source_generation == preview.generation
+            && binding.plan_id == preview.plan_id
+            && binding.context_revision == preview.context.id
+            && binding.conversation_id == conversation_id
+    );
+    ensure!(bound.context.content_hash == old_hash && bound.cwd.as_ref() == Some(&root));
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::BindConversation {
+                session: preview.session,
+                generation: preview.generation,
+                conversation_id: Uuid::new_v4().to_string(),
+                expected_revision: 0,
+            }
+        )?
+        .error
+        .is_some(),
+        "stale binding save overwrote the head"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::BindConversation {
+                session: preview.session,
+                generation: preview.generation,
+                conversation_id: "--last".into(),
+                expected_revision: 1,
+            }
+        )?
+        .error
+        .is_some(),
+        "non-UUID alias was accepted as exact Codex conversation"
+    );
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "binding spawned an extra process"
+    );
+
     let recovered_context = success(
         &host.socket(),
         Command::GetSessionContext {
@@ -464,6 +535,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         .launch_preview
         .context("session context lookup omitted the reviewed snapshot")?;
     ensure!(stored_preview.context.content_hash == old_hash);
+    ensure!(stored_preview.conversation == Some(binding.clone()));
     ensure!(recovered_context.launch_phase.as_deref() == Some("delivered_unconfirmed"));
 
     host.restart()?;
@@ -485,6 +557,8 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         .launch_preview
         .context("reopened host lost its reviewed context snapshot")?;
     ensure!(reopened_preview.context.content_hash == old_hash);
+    ensure!(reopened_preview.conversation == Some(binding));
+    ensure!(reopened_preview.cwd.as_ref() == Some(&root));
     ensure!(after_restart.launch_phase.as_deref() == Some("delivered_unconfirmed"));
     let history = success(&host.socket(), Command::List)?.views;
     ensure!(history.len() == 1, "reopen created or lost a generation");

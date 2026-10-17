@@ -2337,3 +2337,19 @@ Ship revision-bound startup memory section selection and keep launch review acti
 - Files: crates/app/src/memory_choice.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/storage/src/memory.rs, crates/storage/src/context.rs, crates/storage/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/tests/context_launch.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: App 148 tests passed; final memory-choice regression and strict Clippy/debug build pass after integration; storage memory 7 tests pass; real-host PTY context_launch passes selected UTF-8 argv checksum, stale revision rejection, frozen context and host reopen; strict storage/host Clippy and release host build pass. Existing X11 harness 22 unit tests pass. Native isolated fixture02 verifies exact43-byte selection/no extra generation and fixed-footer capture visually inspected; subsequent preamble-cap/C# title edges verified by targeted tests and rebuilt binaries. Version/fmt/diff checks pass
 - Risks / next: Native mouse/small-window/provider-specific and full accessibility acceptance remain open. Continue product settings/theme and durable native conversation binding; terminal/performance/full MVP gates remain open. Desktop untouched.
+
+## 2026-10-17T14:56:36+00:00 — conversation_storage
+
+Add revisioned explicit provider conversation bindings with schema v6 migration
+
+- Files: crates/storage/src/conversation.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs
+- Verification: cargo test -p pigade-storage --offline --locked (55 passed); cargo clippy -p pigade-storage --all-targets --offline --locked -- -D warnings (passed); rustfmt --edition 2024 --check on owned storage files (passed); git diff --check (passed). cargo fmt --all --check reports existing concurrent formatting differences in session-host/lib.rs and prepared.rs; not changed further.
+- Risks / next: Root can consume the exported binding API and host provenance; one repository-wide fmt check remains blocked by concurrent host edits.
+
+## 2026-10-17T15:04:45+00:00 — /root
+
+Connect explicit CLI conversation binding to native UI and immutable launch provenance
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/src/catalog.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/conversation.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/context.rs, README.md, crates/app/README.md, crates/storage/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
+- Verification: Full cargo test --workspace passes after repairing v2 test fixture to actually remove post-v2 tables; strict workspace Clippy and full release bins/examples build pass. App148 tests passed, final strict Clippy/debug build/fmt pass after shell/empty-selection guards and provenance labels. Real-host PTY test covers bind CAS, exact UUID validation, unlaunched-plan rejection, unchanged generation, context identity and binding reopen. Official OpenAI Docs resume page fetched; no native-resume certification inferred. Version/diff checks pass
+- Risks / next: Conversation sheet isolated visual/accessibility verification remains open. Native resume capability stays false: next implement logical-session generation head/history presentation and certified exact-ID resume through existing durable gate. No provider history/auth copied or desktop automation performed; full MVP gates stay open.

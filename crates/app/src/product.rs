@@ -32,6 +32,7 @@ pub(super) enum ProductAction {
     ReloadMemory,
     ToggleContextDelivery,
     InspectSessionContext,
+    InspectConversation,
     PanCanvas,
     RevealFocusedPane,
     SelectProject(Uuid),
@@ -56,6 +57,7 @@ pub(super) enum DialogKind {
     ProjectContext,
     LaunchReview,
     SessionContext,
+    Conversation,
     Transfer,
     Sessions,
 }
@@ -71,6 +73,7 @@ impl DialogKind {
             Self::ProjectContext => "Контекст проекта",
             Self::LaunchReview => "Проверка запуска",
             Self::SessionContext => "Контекст выбранной сессии",
+            Self::Conversation => "Диалог CLI",
             Self::Transfer => "Перенести панель",
             Self::Sessions => "Неразмещённые сессии",
         }
@@ -90,6 +93,7 @@ impl DialogKind {
                 "Разделы памяти: номера через запятую; пусто — без памяти",
             ],
             Self::SessionContext => &[],
+            Self::Conversation => &["Точный ID диалога CLI"],
             Self::Transfer => &[],
             Self::Sessions => &[],
         }
@@ -105,6 +109,7 @@ impl DialogKind {
             Self::ProjectContext => "Сохранить ревизию",
             Self::LaunchReview => "Подтвердить и запустить",
             Self::SessionContext => "Закрыть",
+            Self::Conversation => "Сохранить привязку",
             Self::Transfer => "Закрыть",
             Self::Sessions => "Закрыть",
         }
@@ -277,6 +282,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Контекст выбранной сессии",
             ProductAction::InspectSessionContext,
+        ),
+        (
+            "Диалог CLI · привязать ID · B",
+            ProductAction::InspectConversation,
         ),
         ("Перенести панель", ProductAction::OpenTransfer),
         ("Сессии", ProductAction::OpenSessions),
@@ -1091,8 +1100,61 @@ impl ProductUi {
             return self.sessions_overlay(cx);
         }
 
+        let can_bind = dialog.kind != DialogKind::Conversation
+            || self.launch_preview.as_ref().is_some_and(|preview| {
+                matches!(preview.provider.as_str(), "codex" | "claude" | "opencode")
+            });
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
+        if dialog.kind == DialogKind::Conversation
+            && let Some(preview) = &self.launch_preview
+        {
+            let binding_status = preview
+                .conversation
+                .as_ref()
+                .map(|binding| {
+                    format!(
+                        "Ручная привязка v{} · указана вами · {}",
+                        binding.revision, binding.conversation_id,
+                    )
+                })
+                .unwrap_or_else(|| "Диалог ещё не привязан".into());
+            fields = fields.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(format!(
+                        "{} · CLI {}",
+                        preview.provider, preview.cli_version
+                    ))
+                    .child(format!(
+                        "Программа: {}",
+                        preview
+                            .executable
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "неизвестна для старого host".into())
+                    ))
+                    .child(format!("Сессия {}", preview.session))
+                    .child(format!("Поколение {}", preview.generation))
+                    .child(format!("Контекст {}", preview.context.id))
+                    .child(format!(
+                        "Рабочая папка: {}",
+                        preview
+                            .cwd
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "неизвестна для старого host".into())
+                    ))
+                    .child(binding_status),
+            );
+        }
         for (index, label) in dialog.kind.fields().iter().enumerate() {
+            if !can_bind {
+                break;
+            }
             let active = index == dialog.active_field;
             let multiline = dialog_field_multiline(dialog.kind, index);
             let buffer = &dialog.fields[index];
@@ -1134,6 +1196,28 @@ impl ProductUi {
                     this.editor_wheel(index, event, window, cx);
                 }));
             fields = fields.child(field);
+        }
+
+        if dialog.kind == DialogKind::Conversation && can_bind {
+            fields = fields.child(div().id("conversation-binding-note").role(Role::Status)
+                .text_size(px(12.)).text_color(colors.muted)
+                .child("Скопируйте точный ID средствами CLI. Для Codex и Claude нужен UUID; для OpenCode — ses_…. Привязка сохраняет ваш выбор, но не проверяет существование беседы и не запускает процесс. Содержимое и авторизация CLI не копируются."))
+                .child(div().id("conversation-resume-status").role(Role::Status)
+                    .text_size(px(12.)).text_color(colors.accent)
+                    .child("Нативное продолжение пока недоступно: интерактивный resume и выбор нового поколения ещё не прошли проверку. История остаётся доступна."));
+            fields = fields.child(self.action_control(
+                "conversation-reload".into(),
+                "Обновить сохранённую привязку".into(),
+                ProductAction::InspectConversation,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        } else if dialog.kind == DialogKind::Conversation {
+            fields = fields.child(div().id("conversation-unsupported").role(Role::Status).text_size(px(12.)).text_color(colors.muted).child("У обычного shell нет диалога провайдера. Его история хранится как терминальное поколение."));
         }
 
         if matches!(
@@ -1185,21 +1269,25 @@ impl ProductUi {
             );
         }
 
-        let submit = self.action_control(
-            "product-dialog-submit".into(),
-            dialog.kind.submit_label().into(),
-            if dialog.kind == DialogKind::Palette {
-                ProductAction::CloseDialog
-            } else {
-                ProductAction::SubmitDialog
-            },
-            ControlStyle {
-                role: Role::Button,
-                selected: true,
-                compact: true,
-            },
-            cx,
-        );
+        let submit = if !can_bind {
+            div().into_any_element()
+        } else {
+            self.action_control(
+                "product-dialog-submit".into(),
+                dialog.kind.submit_label().into(),
+                if dialog.kind == DialogKind::Palette {
+                    ProductAction::CloseDialog
+                } else {
+                    ProductAction::SubmitDialog
+                },
+                ControlStyle {
+                    role: Role::Button,
+                    selected: true,
+                    compact: true,
+                },
+                cx,
+            )
+        };
         let close = self.action_control(
             "product-dialog-close".into(),
             "Отмена".into(),
@@ -1359,6 +1447,12 @@ impl ProductUi {
                     capability_label(preview.capabilities.native_resume),
                     capability_label(preview.capabilities.conversation_id)
                 ));
+            if let Some(cwd) = &preview.cwd {
+                metadata = metadata.child(format!("Рабочая папка: {}", cwd.display()));
+            }
+            if let Some(executable) = &preview.executable {
+                metadata = metadata.child(format!("Программа: {}", executable.display()));
+            }
             context_blocks = effective_context_blocks(
                 &preview.context,
                 "launch-review-context-blocks",
@@ -1824,6 +1918,7 @@ impl ProductUi {
                     "Сессия {} · поколение {}",
                     preview.session, preview.generation
                 ))
+                .child(format!("Диалог CLI: {}", preview.conversation.as_ref().map(|binding| binding.conversation_id.as_str()).unwrap_or("не привязан")))
                 .child(
                     div()
                         .id("session-context-readonly-note")

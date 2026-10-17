@@ -48,3 +48,5 @@ include every partial-frame write boundary, uncertain fsync, checksums, generati
 and sequence corruption, launch ordering, idempotency, persistent unknown locks,
 and real SIGKILL of journal and SQLite writers. VM reboot and 24-hour soak remain
 integration validation outside this crate.
+
+Schema6 adds append-only user conversation bindings. A session head advances through revision CAS, preserving older bindings; the current provider/ID may belong to only one logical session. Bindings retain source generation, launch plan and context snapshot UUID, user author and save timestamp. Host code supplies and validates the actual launch provenance. This is metadata persistence, not provider existence validation or native resume. Existing schema1–5 databases receive a durable pre-v6 backup before migration.

@@ -619,7 +619,18 @@ mod tests {
     }
     fn downgrade_fixture_to_schema_two(path: &std::path::Path) -> Result<()> {
         let connection = rusqlite::Connection::open(path)?;
-        connection.execute_batch("PRAGMA synchronous=FULL; BEGIN IMMEDIATE; DROP TABLE layout_revisions; PRAGMA user_version=2; COMMIT;")?;
+        // Construct an actual v2 schema rather than relabeling a current DB.
+        connection.execute_batch(
+            "PRAGMA synchronous=FULL; BEGIN IMMEDIATE;
+            DROP TRIGGER conversation_bindings_no_update;
+            DROP TRIGGER conversation_bindings_no_delete;
+            DROP TABLE conversation_bindings;
+            DROP TABLE prepared_launches;
+            DROP TABLE context_heads;
+            DROP TABLE context_revisions;
+            DROP TABLE layout_revisions;
+            PRAGMA user_version=2; COMMIT;",
+        )?;
         assert_eq!(
             connection.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
             2

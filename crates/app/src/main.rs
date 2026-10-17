@@ -775,6 +775,7 @@ struct CanvasApp {
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
     pending_context_inspection: bool,
+    pending_conversation_inspection: bool,
     pending_context_editor: Option<uuid::Uuid>,
     editor_dialog: Option<uuid::Uuid>,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
@@ -944,13 +945,16 @@ impl CanvasApp {
                                             } else { "CLI запущен без передачи контекста." }.into());
                                         } else if (this.product.launch_phase.is_some() && this.pending_context_inspection)
                                             || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
-                                            let kind = if this.product.launch_phase.is_some() {product::DialogKind::SessionContext} else {product::DialogKind::LaunchReview};
+                                            let kind = if this.product.launch_phase.is_some() { if this.pending_conversation_inspection { product::DialogKind::Conversation } else { product::DialogKind::SessionContext } } else {product::DialogKind::LaunchReview};
                                             let mut dialog = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).cloned().unwrap_or_else(|| product::Dialog::new(kind));
                                             if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into(),preview.memory.as_ref().map(|memory| memory_choice::format_sections(&memory.selected)).unwrap_or_default().into()]; }
+                                            if kind == product::DialogKind::Conversation && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.conversation.as_ref().map(|binding| binding.conversation_id.clone()).unwrap_or_default().into()]; }
+                                            if kind == product::DialogKind::Conversation && !matches!(preview.provider.as_str(),"codex"|"claude"|"opencode") { dialog.fields.clear(); }
                                             this.product.dialog = Some(dialog);
                                         }
                                         this.pending_launch_review = false;
                                         this.pending_context_inspection = false;
+                                        this.pending_conversation_inspection = false;
                                         this.product.launch_preview = Some(preview);
                                     }
                                     if let Some(context) = reply.context {
@@ -965,6 +969,7 @@ impl CanvasApp {
                                     }
                                     this.pending_launch_review = false;
                                     this.pending_context_inspection = false;
+                                    this.pending_conversation_inspection = false;
                                     this.pending_context_editor = None;
                                     if error.rejected_before_launch {
                                         this.product_launch_unknown = false;
@@ -1122,6 +1127,7 @@ impl CanvasApp {
             pending_launch: None,
             pending_launch_review: false,
             pending_context_inspection: false,
+            pending_conversation_inspection: false,
             pending_context_editor: None,
             editor_dialog: None,
             layout_geometry: None,
@@ -1688,6 +1694,7 @@ impl CanvasApp {
         ) {
             self.pending_launch_review = false;
             self.pending_context_inspection = false;
+            self.pending_conversation_inspection = false;
             self.pending_context_editor = None;
         }
         match action {
@@ -1758,10 +1765,18 @@ impl CanvasApp {
                     self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
                 }
             }
-            A::InspectSessionContext => {
+            A::InspectSessionContext | A::InspectConversation => {
+                if self.product.busy {
+                    return;
+                }
                 self.pending_context_inspection = true;
+                self.pending_conversation_inspection = action == A::InspectConversation;
                 if let Some(view) = self.state.views.get(self.selected) {
                     self.product_command(json!({"command":"get_session_context","session":view.session,"generation":view.generation}),cx);
+                } else {
+                    self.pending_context_inspection = false;
+                    self.pending_conversation_inspection = false;
+                    self.product.notice = Some("Сначала выберите терминальную панель".into());
                 }
             }
             A::ToggleMemory | A::ToggleMemorySection(_) => {
@@ -1998,6 +2013,16 @@ impl CanvasApp {
                     DialogKind::Context => {
                         if let Some(context) = &self.product.context {
                             self.product_command(json!({"command":"save_context","expected_revision":context.revision,"document":{"scope_id":context.scope_id,"revision":context.revision,"instructions":field(0),"role":field(1),"memory":field(2)}}),cx);
+                        }
+                    }
+                    DialogKind::Conversation => {
+                        if !self.product.busy
+                            && let Some(preview) = &self.product.launch_preview
+                            && matches!(preview.provider.as_str(), "codex" | "claude" | "opencode")
+                        {
+                            self.pending_context_inspection = true;
+                            self.pending_conversation_inspection = true;
+                            self.product_command(json!({"command":"bind_conversation","session":preview.session,"generation":preview.generation,"conversation_id":field(0).trim(),"expected_revision":preview.conversation.as_ref().map(|binding| binding.revision).unwrap_or(0)}),cx);
                         }
                     }
                     DialogKind::Palette => {
@@ -3352,6 +3377,7 @@ impl CanvasApp {
                 } else {
                     product::ProductAction::EditContext
                 }),
+                "b" => Some(product::ProductAction::InspectConversation),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
                 "s" => Some(product::ProductAction::Layout("split_down".into())),

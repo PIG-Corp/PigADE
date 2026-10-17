@@ -136,6 +136,12 @@ pub enum Command {
         session: Uuid,
         generation: Uuid,
     },
+    BindConversation {
+        session: Uuid,
+        generation: Uuid,
+        conversation_id: String,
+        expected_revision: u64,
+    },
     LaunchInTab {
         tab: Uuid,
         provider: String,
@@ -759,6 +765,21 @@ impl Host {
                 generation,
             } => {
                 let (preview, phase) = prepared::session_context(self, *session, *generation)?;
+                return Ok(self.launch_response(None, preview, Some(phase)));
+            }
+            Command::BindConversation {
+                session,
+                generation,
+                conversation_id,
+                expected_revision,
+            } => {
+                let (preview, phase) = prepared::bind_conversation(
+                    self,
+                    *session,
+                    *generation,
+                    conversation_id,
+                    *expected_revision,
+                )?;
                 return Ok(self.launch_response(None, preview, Some(phase)));
             }
             _ => (),
