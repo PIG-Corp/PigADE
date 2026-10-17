@@ -72,3 +72,7 @@ The pinned GPUI X11 focus correction now passes one native Pinyin commit in the 
 The response-priority actor wait cycle is reproduced and repaired with bounded FIFO replies while draining PTY output; [report](reports/query-response-backpressure.md). This repair does not establish a cause for the separate soak ACK timeout.
 
 Actual fixed X11 EN/RU/CLI keyboard now passes after a reproduced Alt-printable loss repair; the same release passes Pinyin again. See [keyboard evidence](reports/x11-keyboard-20261017.md). Full native target-generation barriers remain open; [source review](research/ime-generation-barrier-next.md) demonstrates why reused XIM IC IDs are insufficient.
+
+`crates/app/src/command_worker.rs` owns per-target known/unknown command gates
+and resize cache invalidation. `mouse_delivery.rs` owns the bounded speculative
+mouse state/host-admission receipt ledger and explicit release-cleanup plans.

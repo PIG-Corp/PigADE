@@ -5,12 +5,19 @@ mod cursor;
 mod font;
 mod input;
 mod mouse;
+mod mouse_delivery;
 mod palette;
 mod protocol;
 mod selection;
-use command_worker::{CommandNotice, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate};
+use command_worker::{
+    CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
+    confirmed_ended_state,
+};
 use gpui::{prelude::*, *};
 use gpui_platform::application;
+use mouse_delivery::{
+    MouseDelivery, MouseSnapshot, Outcome as DeliveryOutcome, ReceiptEffect, RequestReceipt,
+};
 use palette::color;
 use protocol::{
     Cell, CommandFailure, Poll, PollChanges, RecoveryDiagnostics, View, command, request,
@@ -32,7 +39,7 @@ struct State {
     views_revision: u64,
     views: Vec<View>,
     error: Option<String>,
-    command_notice: Option<CommandNotice>,
+    command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
 }
 impl State {
@@ -43,11 +50,17 @@ impl State {
         }
     }
 
-    fn set_command_notice(&mut self, notice: Option<CommandNotice>) {
-        if self.command_notice != notice {
-            self.command_notice = notice;
+    fn set_command_notices(&mut self, notices: Vec<CommandNotice>) {
+        if self.command_notices != notices {
+            self.command_notices = notices;
             self.revision = self.revision.wrapping_add(1);
         }
+    }
+
+    fn notice_for(&self, view: &View) -> Option<&CommandNotice> {
+        self.command_notices.iter().find(|notice| {
+            notice.target.session == view.session && notice.target.generation == view.generation
+        })
     }
 }
 
@@ -56,7 +69,7 @@ struct StateUpdate {
     views_revision: u64,
     views: Option<Vec<View>>,
     error: Option<String>,
-    command_notice: Option<CommandNotice>,
+    command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
 }
 
@@ -66,7 +79,7 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
         views_revision: shared.views_revision,
         views: (current.views_revision != shared.views_revision).then(|| shared.views.clone()),
         error: shared.error.clone(),
-        command_notice: shared.command_notice.clone(),
+        command_notices: shared.command_notices.clone(),
         recovery: shared.recovery.clone(),
     })
 }
@@ -74,7 +87,7 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
 fn apply_state_update(state: &mut State, update: StateUpdate) {
     state.revision = update.revision;
     state.error = update.error;
-    state.command_notice = update.command_notice;
+    state.command_notices = update.command_notices;
     state.recovery = update.recovery;
     if let Some(views) = update.views {
         state.views_revision = update.views_revision;
@@ -83,7 +96,25 @@ fn apply_state_update(state: &mut State, update: StateUpdate) {
 }
 
 fn composition_target_changed(state: &State, selected: usize, update: &StateUpdate) -> bool {
-    if update.error.is_some() || update.command_notice.is_some() {
+    if update.error.is_some() {
+        return true;
+    }
+    let updated_target = update
+        .views
+        .as_ref()
+        .and_then(|views| views.get(selected))
+        .map(|view| (&view.session, &view.generation));
+    let current_target = state
+        .views
+        .get(selected)
+        .map(|view| (&view.session, &view.generation));
+    if update.command_notices.iter().any(|notice| {
+        updated_target.is_some_and(|(session, generation)| {
+            notice.target.session == *session && notice.target.generation == *generation
+        }) || current_target.is_some_and(|(session, generation)| {
+            notice.target.session == *session && notice.target.generation == *generation
+        })
+    }) {
         return true;
     }
     let Some(views) = update.views.as_ref() else {
@@ -122,7 +153,7 @@ fn cursor_target_changed(state: &State, selected: usize, update: &StateUpdate) -
 fn can_send_to_view(view: &View, state: &State, local_error: Option<&str>) -> bool {
     view.state == "running"
         && state.error.is_none()
-        && state.command_notice.is_none()
+        && state.notice_for(view).is_none()
         && local_error.is_none()
         && view.storage_error.is_none()
 }
@@ -193,8 +224,33 @@ fn recovery_warning(
 }
 
 enum IpcMessage {
-    Request(Value),
-    AcknowledgeKnownRejection(u64),
+    Request {
+        id: u64,
+        target: CommandTarget,
+        command: Value,
+    },
+    AcknowledgeKnownRejection {
+        target: CommandTarget,
+        token: u64,
+        cleanup: Option<mouse_delivery::Cleanup>,
+    },
+}
+
+enum WorkerReceipt {
+    Request(RequestReceipt),
+    Acknowledgement {
+        target: CommandTarget,
+        token: u64,
+        accepted: bool,
+        cleanup_id: Option<u64>,
+    },
+}
+
+fn command_target(command: &Value) -> Option<CommandTarget> {
+    Some(CommandTarget {
+        session: command.get("session")?.as_str()?.to_owned(),
+        generation: command.get("generation")?.as_str()?.to_owned(),
+    })
 }
 
 fn resize_key(command: &Value) -> Option<ResizeKey> {
@@ -202,7 +258,7 @@ fn resize_key(command: &Value) -> Option<ResizeKey> {
         return None;
     }
     Some(ResizeKey {
-        generation: command.get("generation")?.as_str()?.to_owned(),
+        target: command_target(command)?,
         rows: command
             .get("geometry")?
             .get("rows")?
@@ -218,12 +274,19 @@ fn resize_key(command: &Value) -> Option<ResizeKey> {
     })
 }
 
-fn publish_worker_notice(shared: &Arc<Mutex<State>>, notice: Option<CommandNotice>) {
-    shared.lock().unwrap().set_command_notice(notice);
+fn publish_worker_notices(shared: &Arc<Mutex<State>>, gate: &WorkerGate) {
+    shared.lock().unwrap().set_command_notices(gate.notices());
 }
 
-fn ipc(socket: PathBuf) -> (mpsc::SyncSender<IpcMessage>, Arc<Mutex<State>>) {
+fn ipc(
+    socket: PathBuf,
+) -> (
+    mpsc::SyncSender<IpcMessage>,
+    Arc<Mutex<State>>,
+    mpsc::Receiver<WorkerReceipt>,
+) {
     let (tx, rx) = mpsc::sync_channel(32);
+    let (receipt_tx, receipt_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Mutex::new(State::default()));
     let output = shared.clone();
     thread::spawn(move || {
@@ -232,39 +295,115 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<IpcMessage>, Arc<Mutex<State>>) {
             // At most 32 queued commands, no retries of ambiguous input/resize.
             while let Ok(message) = rx.try_recv() {
                 match message {
-                    IpcMessage::AcknowledgeKnownRejection(token) => {
-                        if gate.acknowledge(token) {
-                            publish_worker_notice(&output, None);
+                    IpcMessage::AcknowledgeKnownRejection {
+                        target,
+                        token,
+                        cleanup,
+                    } => {
+                        let cleanup_id = cleanup.as_ref().map(|cleanup| cleanup.id);
+                        let accepted = gate.acknowledge(&target, token);
+                        if accepted {
+                            if let Some(cleanup) = cleanup {
+                                let id = cleanup.id;
+                                let command = json!({
+                                    "command": "input",
+                                    "session": target.session,
+                                    "generation": target.generation,
+                                    "bytes": cleanup.bytes,
+                                });
+                                let dispatch =
+                                    gate.dispatch_request_with_id(target.clone(), None, id, || {
+                                        request(&socket, command).map(|_| ()).map_err(|error| {
+                                            match error {
+                                                CommandFailure::NotAdmitted { .. } => {
+                                                    RequestFailure::NotAdmitted(format!(
+                                                        "Команда не принята: {error}"
+                                                    ))
+                                                }
+                                                CommandFailure::OutcomeUnknown(_) => {
+                                                    RequestFailure::OutcomeUnknown(format!(
+                                                        "Исход команды неизвестен: {error}"
+                                                    ))
+                                                }
+                                            }
+                                        })
+                                    });
+                                let outcome = delivery_outcome(&dispatch);
+                                if dispatch != Dispatch::Executed {
+                                    publish_worker_notices(&output, &gate);
+                                }
+                                if dispatch == Dispatch::CapacityExceeded {
+                                    let mut state = output.lock().unwrap();
+                                    state
+                                        .fail("Слишком много заблокированных сессий команд".into());
+                                    state.set_command_notices(gate.notices());
+                                }
+                                if !send_worker_receipt(
+                                    &receipt_tx,
+                                    WorkerReceipt::Request(RequestReceipt {
+                                        id,
+                                        target: target.clone(),
+                                        outcome,
+                                    }),
+                                ) {
+                                    return;
+                                }
+                            }
+                            publish_worker_notices(&output, &gate);
+                        }
+                        if !send_worker_receipt(
+                            &receipt_tx,
+                            WorkerReceipt::Acknowledgement {
+                                target,
+                                token,
+                                accepted,
+                                cleanup_id,
+                            },
+                        ) {
+                            return;
                         }
                     }
-                    IpcMessage::Request(command) => {
+                    IpcMessage::Request {
+                        id,
+                        target,
+                        command,
+                    } => {
                         let resize = resize_key(&command);
-                        match gate.dispatch_request(resize, || {
-                            request(&socket, command)
-                                .map(|_| ())
-                                .map_err(|error| match error {
-                                    CommandFailure::NotAdmitted { .. } => {
-                                        RequestFailure::NotAdmitted(format!(
-                                            "Команда не принята: {error}"
-                                        ))
-                                    }
-                                    CommandFailure::OutcomeUnknown(_) => {
-                                        RequestFailure::OutcomeUnknown(format!(
-                                            "Исход команды неизвестен: {error}"
-                                        ))
-                                    }
-                                })
-                        }) {
-                            Dispatch::Executed => (),
-                            Dispatch::Dropped | Dispatch::RejectedKnown => {
-                                publish_worker_notice(&output, gate.notice().cloned());
-                            }
-                            Dispatch::OutcomeUnknown => {
-                                let mut state = output.lock().unwrap();
-                                let message = gate.notice().unwrap().message.clone();
-                                state.fail(message);
-                                state.set_command_notice(gate.notice().cloned());
-                            }
+                        let dispatch =
+                            gate.dispatch_request_with_id(target.clone(), resize, id, || {
+                                request(&socket, command)
+                                    .map(|_| ())
+                                    .map_err(|error| match error {
+                                        CommandFailure::NotAdmitted { .. } => {
+                                            RequestFailure::NotAdmitted(format!(
+                                                "Команда не принята: {error}"
+                                            ))
+                                        }
+                                        CommandFailure::OutcomeUnknown(_) => {
+                                            RequestFailure::OutcomeUnknown(format!(
+                                                "Исход команды неизвестен: {error}"
+                                            ))
+                                        }
+                                    })
+                            });
+                        if dispatch != Dispatch::Executed {
+                            publish_worker_notices(&output, &gate);
+                        }
+                        if dispatch == Dispatch::CapacityExceeded {
+                            let mut state = output.lock().unwrap();
+                            state.fail("Слишком много заблокированных сессий команд".into());
+                            state.set_command_notices(gate.notices());
+                        }
+                        let outcome = delivery_outcome(&dispatch);
+                        if !send_worker_receipt(
+                            &receipt_tx,
+                            WorkerReceipt::Request(RequestReceipt {
+                                id,
+                                target,
+                                outcome,
+                            }),
+                        ) {
+                            return;
                         }
                     }
                 }
@@ -280,7 +419,19 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<IpcMessage>, Arc<Mutex<State>>) {
                 Ok(reply) => {
                     let mut state = output.lock().unwrap();
                     match apply_poll(&mut state, reply) {
-                        Ok(_) => (),
+                        Ok(_) => {
+                            let ended_targets = state
+                                .views
+                                .iter()
+                                .filter(|view| confirmed_ended_state(&view.state))
+                                .map(|view| CommandTarget {
+                                    session: view.session.clone(),
+                                    generation: view.generation.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            gate.remove_ended(ended_targets.into_iter());
+                            state.set_command_notices(gate.notices());
+                        }
                         Err(error) => state.fail(error),
                     }
                 }
@@ -291,7 +442,20 @@ fn ipc(socket: PathBuf) -> (mpsc::SyncSender<IpcMessage>, Arc<Mutex<State>>) {
             thread::sleep(Duration::from_millis(50));
         }
     });
-    (tx, shared)
+    (tx, shared, receipt_rx)
+}
+
+fn send_worker_receipt(sender: &mpsc::SyncSender<WorkerReceipt>, receipt: WorkerReceipt) -> bool {
+    sender.send(receipt).is_ok()
+}
+
+fn delivery_outcome(dispatch: &Dispatch) -> DeliveryOutcome {
+    match dispatch {
+        Dispatch::Executed => DeliveryOutcome::Accepted,
+        Dispatch::RejectedKnown => DeliveryOutcome::NotAdmitted,
+        Dispatch::OutcomeUnknown => DeliveryOutcome::Unknown,
+        Dispatch::Dropped | Dispatch::CapacityExceeded => DeliveryOutcome::Dropped,
+    }
 }
 
 #[derive(Clone)]
@@ -330,8 +494,13 @@ impl PointerRoute {
                     // Close a previously reported press at its last encodable
                     // position instead of leaving the CLI's button held.
                     reported_position = self.position;
-                    self.encoder
-                        .release(button, self.position, modifiers, modes)
+                    let mut fallback = self.encoder.clone();
+                    if let Some(bytes) = fallback.release(button, self.position, modifiers, modes) {
+                        self.encoder = fallback;
+                        Some(bytes)
+                    } else {
+                        None
+                    }
                 }
             }
             PointerAction::Motion => self.encoder.motion(position, modifiers, modes),
@@ -373,7 +542,10 @@ struct CanvasApp {
     prefix: bool,
     state: State,
     tx: mpsc::SyncSender<IpcMessage>,
+    receipts: mpsc::Receiver<WorkerReceipt>,
     shared: Arc<Mutex<State>>,
+    mouse_delivery: MouseDelivery,
+    next_request_id: u64,
     panes: Vec<PaneGeometry>,
     text_input: input::TextInput,
     pointer: Option<PointerRoute>,
@@ -395,6 +567,7 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
         tx: mpsc::SyncSender<IpcMessage>,
+        receipts: mpsc::Receiver<WorkerReceipt>,
         shared: Arc<Mutex<State>>,
         diagnostic_preedit_pending: bool,
         diagnostic_selection: bool,
@@ -429,18 +602,30 @@ impl CanvasApp {
                     .await;
                 if weak
                     .update_in(cx, |this, window, cx| {
+                        // Drain worker receipts before state/revision work: a
+                        // worker blocked on this bounded channel must not wait
+                        // for a State revision to change.
+                        let mut receipt_drained = false;
+                        while let Ok(receipt) = this.receipts.try_recv() {
+                            receipt_drained = true;
+                            this.apply_worker_receipt(receipt);
+                        }
+                        if receipt_drained {
+                            cx.notify();
+                        }
                         let next = {
                             let shared = this.shared.lock().unwrap();
                             state_update(&this.state, &shared)
                         };
                         if let Some(next) = next {
-                            if let Some(notice) = next.command_notice.as_ref() {
-                                this.resized.apply_notice(notice);
-                            }
+                            this.resized.apply_notices(&next.command_notices);
                             if let Some(views) = next.views.as_ref() {
-                                this.resized.retain_generations(
-                                    views.iter().map(|view| view.generation.as_str()),
-                                );
+                                this.resized.retain_targets(views.iter().map(|view| {
+                                    CommandTarget {
+                                        session: view.session.clone(),
+                                        generation: view.generation.clone(),
+                                    }
+                                }));
                             }
                             if cursor_target_changed(&this.state, this.selected, &next) {
                                 this.reset_cursor_blink(cx);
@@ -452,6 +637,19 @@ impl CanvasApp {
                             }
                             let views_changed = next.views.is_some();
                             apply_state_update(&mut this.state, next);
+                            let ended_targets = this
+                                .state
+                                .views
+                                .iter()
+                                .filter(|view| confirmed_ended_state(&view.state))
+                                .map(|view| CommandTarget {
+                                    session: view.session.clone(),
+                                    generation: view.generation.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            for target in ended_targets {
+                                this.mouse_delivery.remove_ended(&target);
+                            }
                             this.reconcile_pointer();
                             if this.selection.as_ref().is_some_and(|selection| {
                                 !this
@@ -530,7 +728,10 @@ impl CanvasApp {
             prefix: false,
             state: State::default(),
             tx,
+            receipts,
             shared,
+            mouse_delivery: MouseDelivery::default(),
+            next_request_id: 1,
             panes: Vec::new(),
             text_input: input::TextInput::default(),
             pointer: None,
@@ -558,9 +759,71 @@ impl CanvasApp {
     fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         self.send_to(self.selected, bytes, cx);
     }
+    fn target_can_send(&self, view: &View) -> bool {
+        can_send_to_view(view, &self.state, self.input_error.as_deref())
+            && !self.mouse_delivery.awaiting_cleanup(&CommandTarget {
+                session: view.session.clone(),
+                generation: view.generation.clone(),
+            })
+    }
+
+    fn queue_command(
+        &mut self,
+        target: CommandTarget,
+        value: Value,
+        mouse_after: Option<MouseSnapshot>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.mouse_delivery.has_capacity() {
+            self.input_error = Some("Очередь подтверждений команд заполнена".into());
+            cx.notify();
+            return false;
+        }
+        let Some(next) = self.next_request_id.checked_add(1) else {
+            self.input_error = Some("Исчерпан счетчик запросов; перезапустите приложение".into());
+            cx.notify();
+            return false;
+        };
+        let id = self.next_request_id;
+        self.next_request_id = next;
+        if !self
+            .mouse_delivery
+            .stage(id, target.clone(), mouse_after.clone())
+        {
+            self.input_error = Some("Не удалось зарезервировать подтверждение команды".into());
+            cx.notify();
+            return false;
+        }
+        if self
+            .tx
+            .try_send(IpcMessage::Request {
+                id,
+                target,
+                command: value,
+            })
+            .is_err()
+        {
+            self.mouse_delivery.cancel_stage(id);
+            self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
     /// Admission to the local bounded queue only. The IPC worker never retries
-    /// an ambiguous command; its error freezes further input.
+    /// an ambiguous command; a failure freezes only the command's target.
     fn send_to(&mut self, index: usize, bytes: Vec<u8>, cx: &mut Context<Self>) -> bool {
+        self.send_to_with_mouse(index, bytes, None, cx)
+    }
+
+    fn send_to_with_mouse(
+        &mut self,
+        index: usize,
+        bytes: Vec<u8>,
+        mouse_after: Option<MouseSnapshot>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if bytes.is_empty() {
             return true;
         }
@@ -572,26 +835,140 @@ impl CanvasApp {
         let Some(view) = self.state.views.get(index) else {
             return false;
         };
-        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+        if !self.target_can_send(view) {
             return false;
         }
+        let target = CommandTarget {
+            session: view.session.clone(),
+            generation: view.generation.clone(),
+        };
         let mut value = command(view, "input");
         value["bytes"] = json!(bytes);
-        if self.tx.try_send(IpcMessage::Request(value)).is_err() {
-            self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
-            cx.notify();
+        self.queue_command(target, value, mouse_after, cx)
+    }
+
+    fn mouse_snapshot(route: &PointerRoute, view: &View) -> MouseSnapshot {
+        MouseSnapshot {
+            encoder: route.encoder.clone(),
+            position: route.position,
+            wheel: route.wheel,
+            rows: view.frame.geometry.rows,
+            cols: view.frame.geometry.cols,
+            modes: view.frame.modes,
+        }
+    }
+
+    fn apply_worker_receipt(&mut self, receipt: WorkerReceipt) {
+        match receipt {
+            WorkerReceipt::Request(receipt) => {
+                if let ReceiptEffect::Rollback {
+                    target, confirmed, ..
+                } = self.mouse_delivery.request_receipt(receipt)
+                    && self.pointer.as_ref().is_some_and(|route| {
+                        route.session == target.session && route.generation == target.generation
+                    })
+                {
+                    if let Some(snapshot) = confirmed {
+                        if let Some(route) = self.pointer.as_mut() {
+                            route.encoder = snapshot.encoder;
+                            route.position = snapshot.position;
+                            route.wheel = snapshot.wheel;
+                        }
+                    } else {
+                        self.pointer = None;
+                    }
+                }
+            }
+            WorkerReceipt::Acknowledgement {
+                target,
+                token,
+                accepted,
+                cleanup_id,
+            } => self
+                .mouse_delivery
+                .finish_ack(&target, token, cleanup_id, accepted),
+        }
+    }
+
+    fn acknowledge_notice(&mut self, target: &CommandTarget, token: u64) -> bool {
+        let Some(notice) = self.state.command_notices.iter().find(|notice| {
+            notice.target == *target && notice.token == token && notice.acknowledgeable
+        }) else {
+            return false;
+        };
+        if !self
+            .mouse_delivery
+            .settled_through(target, notice.last_request_id)
+        {
+            return false;
+        }
+        let mut cleanup = None;
+        if self.mouse_delivery.confirmed_pressed(target) {
+            let Some(view) = self.state.views.iter().find(|view| {
+                view.session == target.session
+                    && view.generation == target.generation
+                    && view.state == "running"
+            }) else {
+                self.input_notice = Some(
+                    "Подтверждение отложено: нет актуальной геометрии для отпускания кнопки".into(),
+                );
+                return false;
+            };
+            let Some(next) = self.next_request_id.checked_add(1) else {
+                self.input_error =
+                    Some("Исчерпан счетчик запросов; перезапустите приложение".into());
+                return false;
+            };
+            let id = self.next_request_id;
+            self.next_request_id = next;
+            let plan = match self.mouse_delivery.prepare_cleanup(
+                target,
+                id,
+                view.frame.geometry.rows,
+                view.frame.geometry.cols,
+                view.frame.modes,
+            ) {
+                Ok(Some(plan)) => plan,
+                Ok(None) => unreachable!("confirmed press must produce a cleanup plan"),
+                Err(()) => {
+                    self.input_notice = Some(
+                        "Подтверждение отложено: текущий режим не кодирует отпускание кнопки"
+                            .into(),
+                    );
+                    return false;
+                }
+            };
+            if !self.mouse_delivery.reserve_cleanup(
+                target.clone(),
+                token,
+                id,
+                plan.mouse_after.clone(),
+            ) {
+                return false;
+            }
+            cleanup = Some(plan);
+        }
+        if self
+            .tx
+            .try_send(IpcMessage::AcknowledgeKnownRejection {
+                target: target.clone(),
+                token,
+                cleanup: cleanup.clone(),
+            })
+            .is_err()
+        {
+            if let Some(cleanup) = cleanup {
+                self.mouse_delivery.cancel_cleanup(target, cleanup.id);
+            }
+            self.input_error = Some("Очередь команд заполнена; подтверждение не принято".into());
             return false;
         }
         true
     }
     fn pointer_index(&self, route: &PointerRoute) -> Option<usize> {
-        route.index(&self.state).filter(|&index| {
-            can_send_to_view(
-                &self.state.views[index],
-                &self.state,
-                self.input_error.as_deref(),
-            )
-        })
+        route
+            .index(&self.state)
+            .filter(|&index| self.target_can_send(&self.state.views[index]))
     }
     fn reconcile_pointer(&mut self) {
         // A stopped/replaced generation must never receive an old drag release.
@@ -622,8 +999,19 @@ impl CanvasApp {
         let bytes = route
             .encoder
             .release_all(route.position, mouse::Modifiers::default(), modes);
-        if bytes.is_none_or(|bytes| self.send_to(index, bytes, cx)) {
-            self.pointer = None;
+        let snapshot = Self::mouse_snapshot(&route, &self.state.views[index]);
+        match bytes {
+            Some(bytes) => {
+                if self.send_to_with_mouse(index, bytes, Some(snapshot), cx) {
+                    self.pointer = None;
+                }
+            }
+            None => {
+                self.input_notice = Some(
+                    "Кнопка мыши не отпущена: текущий режим не кодирует событие release".into(),
+                );
+                cx.notify();
+            }
         }
     }
     fn pointer_hit(&self, point: Point<Pixels>) -> Option<(usize, mouse::Position)> {
@@ -663,7 +1051,7 @@ impl CanvasApp {
         };
         let Some((index, position)) = hit else { return };
         let view = &self.state.views[index];
-        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+        if !self.target_can_send(view) {
             return;
         }
         let mut route = self
@@ -682,7 +1070,8 @@ impl CanvasApp {
         let bytes = route.event(action, position, modifiers, modes);
         // Rejected local admission cannot consume a button transition. A single
         // queued command binds bytes and state to the same process generation.
-        if bytes.is_none_or(|bytes| self.send_to(index, bytes, cx)) {
+        let snapshot = Self::mouse_snapshot(&route, &self.state.views[index]);
+        if bytes.is_none_or(|bytes| self.send_to_with_mouse(index, bytes, Some(snapshot), cx)) {
             self.pointer = Some(route);
         }
     }
@@ -859,7 +1248,7 @@ impl CanvasApp {
             return;
         };
         let view = &self.state.views[index];
-        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+        if !self.target_can_send(view) {
             return;
         }
         if self.pointer.as_ref().is_some_and(|route| {
@@ -899,7 +1288,8 @@ impl CanvasApp {
         if !bytes.is_empty() {
             route.position = position;
         }
-        if self.send_to(index, bytes, cx) {
+        let snapshot = (!bytes.is_empty()).then(|| Self::mouse_snapshot(&route, view));
+        if self.send_to_with_mouse(index, bytes, snapshot, cx) {
             self.pointer = Some(route);
             cx.stop_propagation();
         }
@@ -926,7 +1316,7 @@ impl CanvasApp {
         let Some(view) = self.state.views.get(self.selected) else {
             return;
         };
-        if !can_send_to_view(view, &self.state, self.input_error.as_deref()) {
+        if !self.target_can_send(view) {
             return;
         }
         let target = (view.session.clone(), view.generation.clone());
@@ -967,7 +1357,11 @@ impl CanvasApp {
         .detach();
     }
     fn error(&self) -> Option<String> {
-        let notice = self.state.command_notice.as_ref();
+        let notice = self
+            .state
+            .views
+            .get(self.selected)
+            .and_then(|view| self.state.notice_for(view));
         let command_error = notice.map(|notice| {
             let message = notice.display_message();
             match self.state.error.as_deref() {
@@ -979,6 +1373,30 @@ impl CanvasApp {
             .or_else(|| self.state.error.clone())
             .or_else(|| self.input_error.clone())
     }
+
+    fn selected_notice(&self) -> Option<&CommandNotice> {
+        self.state
+            .views
+            .get(self.selected)
+            .and_then(|view| self.state.notice_for(view))
+    }
+
+    fn acknowledge_selected_rejection(&mut self) -> bool {
+        let Some(notice) = self.selected_notice() else {
+            return false;
+        };
+        if !notice.acknowledgeable
+            || !self
+                .mouse_delivery
+                .settled_through(&notice.target, notice.last_request_id)
+        {
+            return false;
+        }
+        let target = notice.target.clone();
+        let token = notice.token;
+        self.acknowledge_notice(&target, token)
+    }
+
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_cursor_blink(cx);
         self.input_notice = None;
@@ -1020,14 +1438,8 @@ impl CanvasApp {
             // Only this explicit acknowledgement clears a local rejected-input error.
             // It never resends a failed or unknown command.
             if k.key == "escape" {
-                let acknowledged = match self.state.command_notice.as_ref() {
-                    None => true,
-                    Some(notice) if notice.acknowledgeable => self
-                        .tx
-                        .try_send(IpcMessage::AcknowledgeKnownRejection(notice.token))
-                        .is_ok(),
-                    Some(_) => false,
-                };
+                let acknowledged =
+                    self.selected_notice().is_none() || self.acknowledge_selected_rejection();
                 if acknowledged {
                     self.input_error = None;
                 }
@@ -1091,31 +1503,45 @@ impl CanvasApp {
         bounds: Bounds<Pixels>,
         cell: Size<Pixels>,
         scale: f32,
+        cx: &mut Context<Self>,
     ) -> Vec<PaneGeometry> {
         self.panes = project_panels(bounds, self.state.views.len(), scale)
             .into_iter()
             .map(|bounds| PaneGeometry::new(bounds, cell, scale))
             .collect();
-        for (view, pane) in self.state.views.iter().zip(&self.panes) {
-            let (rows, cols) = (pane.rows, pane.cols);
-            let resize = ResizeKey {
-                generation: view.generation.clone(),
-                rows,
-                cols,
-            };
-            if self.state.error.is_none()
-                && self.state.command_notice.is_none()
-                && self.input_error.is_none()
-                && view.state == "running"
-                && !self.resized.contains(&resize)
-            {
-                let mut value = command(view, "resize");
-                value["geometry"] = json!({"rows":rows,"cols":cols});
-                if self.tx.try_send(IpcMessage::Request(value)).is_err() {
-                    self.input_error = Some("Очередь resize заполнена; размер не принят".into());
+        let resizes = self
+            .state
+            .views
+            .iter()
+            .zip(&self.panes)
+            .filter_map(|(view, pane)| {
+                let (rows, cols) = (pane.rows, pane.cols);
+                let resize = ResizeKey {
+                    target: CommandTarget {
+                        session: view.session.clone(),
+                        generation: view.generation.clone(),
+                    },
+                    rows,
+                    cols,
+                };
+                if self.state.error.is_none()
+                    && self.input_error.is_none()
+                    && view.state == "running"
+                    && self.state.notice_for(view).is_none()
+                    && !self.mouse_delivery.awaiting_cleanup(&resize.target)
+                    && !self.resized.contains(&resize)
+                {
+                    let mut value = command(view, "resize");
+                    value["geometry"] = json!({"rows":rows,"cols":cols});
+                    Some((resize, value))
                 } else {
-                    self.resized.remember(resize);
+                    None
                 }
+            })
+            .collect::<Vec<_>>();
+        for (resize, value) in resizes {
+            if self.queue_command(resize.target.clone(), value, None, cx) {
+                self.resized.remember(resize);
             }
         }
         self.panes.clone()
@@ -1234,8 +1660,7 @@ impl EntityInputHandler for CanvasApp {
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
         !self.prefix
             && self.state.views.get(self.selected).is_some_and(|view| {
-                can_send_to_view(view, &self.state, self.input_error.as_deref())
-                    && input::protocol_error(view.frame.modes).is_none()
+                self.target_can_send(view) && input::protocol_error(view.frame.modes).is_none()
             })
     }
     fn text_for_range(
@@ -1440,8 +1865,8 @@ impl Render for CanvasApp {
                                 );
                                 let cell = size(width, height);
                                 let scale = window.scale_factor();
-                                let panes =
-                                    entity.update(cx, |this, _| this.geometry(bounds, cell, scale));
+                                let panes = entity
+                                    .update(cx, |this, cx| this.geometry(bounds, cell, scale, cx));
                                 (font, panes)
                             },
                             move |bounds, (font, panes), window, cx| {
@@ -1508,17 +1933,53 @@ impl Render for CanvasApp {
                             .child(warning),
                     );
                 }
+                let acknowledgement = self
+                    .selected_notice()
+                    .filter(|notice| {
+                        notice.acknowledgeable
+                            && self
+                                .mouse_delivery
+                                .settled_through(&notice.target, notice.last_request_id)
+                    })
+                    .map(|notice| (notice.target.clone(), notice.token));
+                let mut status_row = div()
+                    .id("session-status")
+                    .role(Role::Status)
+                    .aria_label(status.clone())
+                    .h(px(24.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .text_color(rgb(0xb0b8c5))
+                    .child(div().flex_1().child(status));
+                if let Some((target, token)) = acknowledgement {
+                    let needs_release = self.mouse_delivery.confirmed_pressed(&target);
+                    let label = if needs_release {
+                        "Подтвердить и отпустить кнопку мыши"
+                    } else {
+                        "Подтвердить"
+                    };
+                    status_row = status_row.child(
+                        div()
+                            .id("acknowledge-command-rejection")
+                            .role(Role::Button)
+                            .aria_label(label)
+                            .px(px(8.))
+                            .child(label)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    if this.acknowledge_notice(&target, token) {
+                                        this.input_error = None;
+                                    }
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    );
+                }
                 footer.child(
-                    div()
-                        .id("session-status")
-                        .role(Role::Status)
-                        .aria_label(status.clone())
-                        .h(px(24.))
-                        .px(px(12.))
-                        .flex()
-                        .items_center()
-                        .text_color(rgb(0xb0b8c5))
-                        .child(div().flex_1().child(status))
+                    status_row
                         .child(
                             div()
                                 .id("copy-selection")
@@ -1977,7 +2438,7 @@ fn main() {
     let diagnostic_selection = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-selection");
-    let (tx, shared) = ipc(socket.into());
+    let (tx, shared, receipts) = ipc(socket.into());
     application().run(move |cx: &mut App| {
         cx.set_reduce_motion(reduced_motion);
         crate::font::install(cx).expect("bundled terminal font profile must load");
@@ -2000,6 +2461,7 @@ fn main() {
                         window,
                         cx,
                         tx,
+                        receipts,
                         shared,
                         diagnostic_preedit,
                         diagnostic_selection,
@@ -2020,6 +2482,7 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    use super::command_worker::{CommandNotice, CommandTarget};
     use super::protocol::{Cell, RecoveryDiagnostics, RecoveryIssue, View};
     use super::{
         CellPaint, PaneGeometry, State, apply_poll, apply_state_update, can_send_to_view,
@@ -2046,6 +2509,37 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn scoped_command_notice_blocks_only_its_exact_session_generation() {
+        let mut blocked = view(None);
+        blocked.session = "noisy-session".into();
+        blocked.generation = "generation-a".into();
+        let mut healthy = view(None);
+        healthy.session = "healthy-session".into();
+        healthy.generation = "generation-b".into();
+        let state = State {
+            command_notices: vec![CommandNotice {
+                token: 1,
+                last_request_id: 0,
+                target: CommandTarget {
+                    session: blocked.session.clone(),
+                    generation: blocked.generation.clone(),
+                },
+                message: "command rejected".into(),
+                unsent: 0,
+                rejected_resizes: Vec::new(),
+                acknowledgeable: true,
+            }],
+            ..State::default()
+        };
+        assert!(!can_send_to_view(&blocked, &state, None));
+        assert!(can_send_to_view(&healthy, &state, None));
+
+        // A later generation under the same session ID is an independent PTY.
+        blocked.generation = "generation-c".into();
+        assert!(can_send_to_view(&blocked, &state, None));
     }
 
     #[test]
@@ -2145,6 +2639,34 @@ mod tests {
         );
         assert!(accepted.encoder.has_pressed());
         assert!(!rejected_release.encoder.has_pressed());
+    }
+
+    #[test]
+    fn unencodable_release_does_not_clear_confirmed_local_button_state() {
+        use super::{
+            PointerAction,
+            mouse::{Button, MOUSE_DRAG, Modifiers, Position, SGR_MOUSE},
+        };
+        let mut route = route();
+        route
+            .event(
+                PointerAction::Press(Button::Left),
+                Position { row: 2, column: 3 },
+                Modifiers::default(),
+                MOUSE_DRAG | SGR_MOUSE,
+            )
+            .unwrap();
+        assert!(
+            route
+                .event(
+                    PointerAction::Release(Button::Left),
+                    Position { row: 2, column: 3 },
+                    Modifiers::default(),
+                    0,
+                )
+                .is_none()
+        );
+        assert!(route.encoder.has_pressed());
     }
 
     #[test]

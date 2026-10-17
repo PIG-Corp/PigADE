@@ -1521,3 +1521,59 @@ Start one reviewed stage-instrumented7200s reproducer and retain actual initial 
 - Files: benchmarks/results/actor-stage-20261017, docs/reports/actor-stage-diagnostics.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
 - Verification: Tool55262 running with frozen610efac4, exactboot/PID/start startupidentity retained; all4 initialREADY snapshots haveavailable v1 stage/reader summaries. Previous30s smokecompletedCRC/fullrecovery. Actual7200s outcome pending, no24h/PERFclaim.
 - Risks / next: Observe finalrunornewboundedtimeoutstage, no duplicate/restart. ContinueindependentWaylandSDKintegrity and per-targetmouse delivery work.
+
+## 2026-10-17T02:34:49+00:00 — /root/terminal_memory_budget
+
+Diagnosed synthetic READY snapshot delay as alternate-screen visibility, not host launch latency
+
+- Files: docs/research/launch-latency-next.md
+- Verification: Bounded frozen 610efac4 host microprobe: launch 16.68ms durable Btrfs / 8.94ms tmpfs for quiet child; exact soak producer on tmpfs launch 13.54ms, child READY PTY write +5.18ms after reply, active-frame READY visible +3795.26ms at seq82/15787 bytes; git diff --check; report evidence assertions passed
+- Risks / next: For future reproducer, gate output/patterns on a published READY frame (as stress-pty.py does), preserving child-ready and frame-publication timestamps separately; no host code change indicated by this finding.
+
+## 2026-10-17T02:39:50+00:00 — /root/terminal_memory_budget
+
+Add bounded single-waiter coalescing wake signal for app integration
+
+- Files: crates/app/src/wake_signal.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/wake_signal.rs; rustc --edition=2024 -D warnings --test crates/app/src/wake_signal.rs -o /tmp/pigade-wake-signal-tests && /tmp/pigade-wake-signal-tests (6 passed)
+- Risks / next: Root may integrate WakeSignal into app state; module is not wired into main.rs in this slice.
+
+## 2026-10-17T02:40:05+00:00 — recovery_slice_review
+
+Added bounded worker receipts for mouse transitions and explicit release cleanup on known target rejection
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, crates/app/src/mouse_delivery.rs, WORKLOG.md
+- Verification: bash crates/app/bootstrap.sh test --offline (108 passed); bash crates/app/bootstrap.sh clippy --offline --all-targets -- -D warnings (passed); cargo fmt --manifest-path crates/app/Cargo.toml -- --check and git diff --check (passed)
+- Risks / next: Root review/integration; live host/UI mouse rejection scenario not exercised
+
+## 2026-10-17T02:40:33+00:00 — font_render_profile
+
+Add a plan-only private Sway/Fcitx Wayland IME harness and signed tool SDK
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py, scripts/prepare-wayland-ime-sdk.py, scripts/test_prepare_wayland_ime_sdk.py, docs/research/isolated-wayland-v3-plan.md, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py scripts/prepare-wayland-ime-sdk.py scripts/test_prepare_wayland_ime_sdk.py; python3 scripts/test_isolated_ime_wayland.py (10 passed); python3 scripts/test_prepare_wayland_ime_sdk.py (9 passed); python3 scripts/prepare-wayland-ime-sdk.py (prepared-not-executed, no unresolved runtime deps); repeated manifest cmp identical SHA256 a22c5a441c07f9c29b242d3158b656473dc9b0fd65fbed428360c54f4d5a17e2; verify_wayland_sdk checked 8 package signatures/181 extracted files and X11 signed inventory 1232 files; default runner plan-only CLI passed; git diff --check scoped files passed. No compositor, app, Fcitx, wtype or input run.
+- Risks / next: Root review harness before any --run. Claims remain one host-ABI profile, and preedit capture requires human visual review.
+
+## 2026-10-17T02:41:41+00:00 — recovery_slice_review
+
+Tightened receipt uncertainty propagation, per-request ACK barrier, and bounded mouse-unknown tracking after review
+
+- Files: crates/app/src/mouse_delivery.rs, WORKLOG.md
+- Verification: bash crates/app/bootstrap.sh test --offline (110 passed); bash crates/app/bootstrap.sh clippy --offline --all-targets -- -D warnings (passed); cargo fmt --manifest-path crates/app/Cargo.toml -- --check and git diff --check (passed)
+- Risks / next: Root review/integration; no live host/UI scenario run
+
+## 2026-10-17T02:42:49+00:00 — recovery_slice_review
+
+Keep accepted mouse state in the UI receipt ledger rather than echoing it through worker receipts
+
+- Files: crates/app/src/mouse_delivery.rs, crates/app/src/main.rs, WORKLOG.md
+- Verification: bash crates/app/bootstrap.sh test --offline (110 passed); bash crates/app/bootstrap.sh clippy --offline --all-targets -- -D warnings (passed); cargo fmt --manifest-path crates/app/Cargo.toml --all; git diff --check
+- Risks / next: Root owns integration of main.rs, command_worker.rs, and mouse_delivery.rs; next local input_error isolation plan is read-only
+
+## 2026-10-17T02:47:06+00:00 — root
+
+Integrate exact-target command gates and bounded mouse admission receipts; retain independent rejection/unknown cleanup contracts
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, crates/app/src/mouse_delivery.rs, docs/reports/app-command-rejection.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root bootstrap test --locked: 110 passed; bootstrap fmt --check passed; agent strict Clippy passed; root strict Clippy launched. Headless only, no saturated native mouse acceptance.
+- Risks / next: Commit verified gate slice; integrate event wake and measure causal cell latency; local input_error remains global.

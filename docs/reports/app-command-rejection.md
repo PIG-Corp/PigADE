@@ -1,30 +1,39 @@
 # UI command rejection recovery — 0.0.1-dev
 
-A proven host queue-full rejection previously became a permanent shared UI
-error. The management Escape action only cleared local errors, so it could not
-reopen input. Resize geometry was also cached at local queue admission and
-never invalidated after rejection. Additionally, the IPC worker continued
-sending later queued commands after the first command's unknown outcome.
+A proven host rejection closes the exact `(session, generation)` command gate
+before the worker takes another request. Later requests for that target are
+counted and discarded without resending input. Other targets remain usable.
+Only explicit `exited`/`history` host states retire a gate; absence from a poll,
+an unknown state or a different UUID does not establish that a process ended.
 
-The worker now closes a tested dispatch gate before handling another queued
-request. It drops and counts later unsubmitted requests without retaining or
-replaying their input. A known rejection exposes a notice; explicit
-Ctrl+Shift+Space then Escape acknowledges the exact observed notice token and
-permits new work. Unknown outcomes remain locked after acknowledgement. A stale
-acknowledgement cannot hide newer discarded-command/resize details.
+A known rejection exposes a mouse action and management Escape
+(Ctrl+Shift+Space, then Escape). Acknowledgement requires the exact displayed
+target and globally increasing notice token. Stale acknowledgements do nothing.
+Unknown outcomes remain locked. Gates are capped at32, with fail-closed overflow
+and counter exhaustion. Rejected/unsent resize keys invalidate the exact target's
+cache; rendering still uses acknowledged host geometry.
 
-Known rejected and unsent resize keys invalidate their local request cache;
-geometry may enqueue a fresh resize only after acknowledgement. Previously
-admitted resizes are retained, and rendering uses acknowledged host geometry.
-Cache entries for vanished generations are removed. No failed input is retried,
-no process is restarted and no host output/journal contract changes.
+The bounded32-entry request ledger waits for individual FIFO worker receipts.
+An Accepted receipt means admission to the host's ordered input-writer path,
+not child consumption. Mouse state is speculative until that receipt. Known
+rejections restore the last admitted pressed-button state; later dropped
+receipts cannot clear uncertainty. A failed press never invents a release.
 
-Six pure tests execute the same dispatch closure used around real IPC and cover
-known rejection/explicit acknowledgement/new input, unknown locking, unsent
-counts, stale notice tokens and resize-cache recovery. Native application98
-unit tests and strict Clippy pass; release build/formatting pass. This does not
-prove a native mouse/host-saturation UI path. The current failure gate is global
-to this prototype's IPC worker; independent per-session UI gating, a mouse
-acknowledgement control and rejection-aware drag reconciliation remain required
-before full MVP acceptance. Ordinary management Escape already clears local
-pre-admission errors; the new path extends it to a proven host rejection.
+If an admitted button remains pressed, the explicit acknowledgement action
+prepares one fresh release using that target's current host geometry and modes,
+clamping the last position. The worker validates the acknowledgement and sends
+that cleanup in the same ordered message. It does not retry the rejected input.
+An unencodable release stays visible and retains held state; unknown outcomes
+prohibit cleanup. Pending receipts, held targets, cleanup reservations and
+mouse-uncertainty tracking are bounded. Receipt send may backpressure the worker
+without holding the shared state lock; the UI drains receipts independently of
+state revisions.
+
+Fresh root application tests pass110/110. Tests cover actual gate-dispatch
+closures plus receipt reconciliation, exact/stale ACK cleanup, unknown followed
+by dropped requests, individual receipt barriers, independent targets, bounds,
+resize-cache invalidation and explicit ended-state pruning. Strict Clippy and
+release validation are recorded in WORKLOG. No real saturated-host/native mouse
+injection path is claimed. Local pre-admission `input_error` is still global to
+this prototype and remains a separate fairness/usability gap. No host protocol,
+output journal, launch or replay contract changed.

@@ -54,3 +54,5 @@ This section describes development work; it is not a release announcement.
 - Known host queue rejection now has token-bound explicit acknowledgement; unknown outcomes stay locked and later unsubmitted requests are counted. Rejected resize caches recover without resending input. Per-session UI failure isolation remains open.
 
 - Live host snapshots now expose a separate bounded numeric actor-stage/PTY-reader probe even when frame publication stalls; contention/poison/old-host absence stay explicit. Soak ACK/resize diagnostics retain a validated whitelist, without raw input/output or deadline changes.
+
+- Exact session/generation command rejection gates isolate other sessions; bounded FIFO mouse receipts reconcile speculative buttons and require explicit, token-checked release cleanup. Unknown outcomes stay locked; native saturation acceptance remains open.

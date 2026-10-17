@@ -203,3 +203,11 @@ do not poll/restart them as active jobs. Private source data never belongs in Gi
 Detailed historical observations remain in WORKLOG.md, linked reports, benchmark
 artifacts and Git history. This handoff records current state rather than stale
 running snapshots.
+
+## Input gate integration update
+
+The worker now gates exact session/generation targets and reconciles bounded
+mouse request receipts before explicit ACK cleanup; see
+[report](reports/app-command-rejection.md). Unknown outcomes remain locked.
+Local pre-admission input errors are still global. Native saturated-host mouse
+acceptance and generation-safe IME composition remain open.
