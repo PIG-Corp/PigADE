@@ -21,6 +21,8 @@ mod publication_trace;
 mod selection;
 mod setup_flow;
 mod startup;
+mod template_commands;
+mod template_flow;
 mod text_edit;
 mod tiling;
 mod viewport;
@@ -1010,6 +1012,7 @@ mod focus_placement_tests {
             },
             layout: LayoutDocument::default(),
             layout_templates: Some(vec![]),
+            template_launch_schema: Some(1),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1051,6 +1054,7 @@ struct CanvasApp {
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
     product_launch_unknown: bool,
     catalog_edit: Option<CatalogEdit>,
+    template_flow: template_flow::RunFlow,
     deferred_product_action: Option<product::ProductAction>,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
@@ -1189,6 +1193,7 @@ impl CanvasApp {
                 if weak
                     .update_in(cx, |this, window, cx| {
                         while let Ok(reply) = this.product_rx.try_recv() {
+                            let template_pending=this.template_flow.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let focus_reply = this.focus_queue.matches(match &reply { Ok(reply)=>reply.ui_request, Err(error)=>error.ui_request });
                             let provider_reply = match &reply {
                                 Ok(reply) => reply.providers_request,
@@ -1246,7 +1251,15 @@ impl CanvasApp {
                                         if let Some(edit)=edit {
                                             this.product.notice=Some(edit.notice);
                                             this.product.dialog=if same_dialog {edit.return_to.map(product::Dialog::new)} else {current_dialog};
+                                        } else if template_pending.is_some() {
+                                            this.product.dialog=current_dialog;
                                         }
+                                    }
+                                    if let (Some(run),Some(pending))=(reply.template_run,template_pending) {
+                                        this.receive_template_run(run,pending,cx);
+                                    }
+                                    if let (Some(page),Some(pending))=(reply.template_runs,template_pending) {
+                                        this.receive_template_list(page,pending,cx);
                                     }
                                     if let Some(sessions) = reply.sessions {
                                         if this.pending_launch.is_some_and(|(session,generation)| sessions.iter().any(|view|
@@ -1317,6 +1330,7 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    let template_error=error.message.clone();
                                     if focus_reply {
                                         this.focus_queue.cancel();
                                         this.focus_queue.complete(error.ui_request.expect("matching focus error"),None);
@@ -1346,6 +1360,7 @@ impl CanvasApp {
                                     this.product.notice = Some(if error.providers_request {
                                         this.product.provider_error.clone().unwrap_or(error.message)
                                     } else { error.message });
+                                    if let Some(pending)=template_pending {this.template_request_failed(pending,template_error,cx);}
                                 }
                             }
                             cx.notify();
@@ -1511,6 +1526,7 @@ impl CanvasApp {
             product_rx,
             product_launch_unknown: false,
             catalog_edit: None,
+            template_flow: Default::default(),
             deferred_product_action: None,
             pending_launch: None,
             pending_launch_review: false,
@@ -3032,6 +3048,9 @@ impl CanvasApp {
                 | A::ToggleMemorySection(_)
                 | A::ReloadMemory
                 | A::ToggleContextDelivery
+                | A::SetTemplateRole(_)
+                | A::EditTemplateSlot(_)
+                | A::EditRecipe
         ) && self
             .product
             .dialog
@@ -3061,6 +3080,10 @@ impl CanvasApp {
                 | A::ManageTab(_)
                 | A::OpenLayouts
                 | A::SaveLayout
+                | A::ChoosePreset(_)
+                | A::ConfigureTemplate(_)
+                | A::NewTabFromTemplate(_)
+                | A::OpenTemplateRuns
                 | A::OpenTransfer
                 | A::OpenSessions
         ) {
@@ -3072,6 +3095,23 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::ChoosePreset(_)
+            | A::ConfigureTemplate(_)
+            | A::NewTabFromTemplate(_)
+            | A::EditRecipe
+            | A::EditTemplateSlot(_)
+            | A::SetTemplateProvider(_)
+            | A::SetTemplateRole(_)
+            | A::ToggleTemplateContext
+            | A::ClearTemplateLaunches
+            | A::ConfirmTemplateRun
+            | A::RefreshTemplateRun
+            | A::CancelTemplateRun
+            | A::InspectTemplateRunSlot(_)
+            | A::ReturnTemplateRun
+            | A::OpenTemplateRuns
+            | A::LoadTemplateRuns(_)
+            | A::SelectTemplateRun(_) => self.template_action(action, window, cx),
             A::ManageSelected(kind) => {
                 let action = self
                     .product
@@ -3514,6 +3554,8 @@ impl CanvasApp {
                 }
             }
             A::CloseDialog => {
+                self.template_flow.pause();
+                self.product.run_automatic = false;
                 self.deferred_product_action = None;
                 self.setup_flow = None;
                 self.picker_request = None;
@@ -3762,7 +3804,18 @@ impl CanvasApp {
                     .map(|field| field.text().to_owned())
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
+                if self.submit_template_dialog(kind, &fields, cx) {
+                    self.sync_editor_scope(window, cx);
+                    cx.notify();
+                    return;
+                }
                 match kind {
+                    DialogKind::Recipe
+                    | DialogKind::RecipeSlot
+                    | DialogKind::NewTemplateTab
+                    | DialogKind::TemplateRun
+                    | DialogKind::TemplateRunContext
+                    | DialogKind::TemplateRuns => unreachable!("template dialog handled above"),
                     DialogKind::Rename => {
                         if let Some(target) = &self.product.management_target {
                             match target.rename(field(0)) {
@@ -3789,6 +3842,7 @@ impl CanvasApp {
                                             id: uuid::Uuid::new_v4(),
                                             name: name.into(),
                                             geometry: geometry.clone(),
+                                            launches: None,
                                             revision: 0,
                                         },
                                         expected_revision: None,
@@ -5155,7 +5209,12 @@ impl CanvasApp {
         if self.product.dialog.as_ref().is_some_and(|dialog| {
             matches!(
                 dialog.kind,
-                product::DialogKind::Manage | product::DialogKind::Layouts
+                product::DialogKind::Manage
+                    | product::DialogKind::Layouts
+                    | product::DialogKind::Recipe
+                    | product::DialogKind::TemplateRun
+                    | product::DialogKind::TemplateRunContext
+                    | product::DialogKind::TemplateRuns
             )
         }) {
             if event.is_held && matches!(k.key.as_str(), "enter" | "delete") {
@@ -5170,19 +5229,51 @@ impl CanvasApp {
                 .as_ref()
                 .map_or(0, |dialog| dialog.active_field)
                 .min(count.saturating_sub(1));
-            let action = match k.key.as_str() {
-                "escape" => Some(product::ProductAction::CloseDialog),
-                "enter" => entries.get(selected).map(|(_, action)| action.clone()),
-                "delete" if k.modifiers.shift => {
-                    entries.get(selected).and_then(|(_, action)| match action {
-                        product::ProductAction::ApplyLayout(id) => {
-                            Some(product::ProductAction::DeleteLayout(*id))
-                        }
-                        _ => None,
-                    })
-                }
-                _ => None,
-            };
+            let action =
+                match k.key.as_str() {
+                    "enter"
+                        if (k.modifiers.control || k.modifiers.platform)
+                            && self.product.dialog.as_ref().is_some_and(|dialog| {
+                                dialog.kind == product::DialogKind::Recipe
+                            }) =>
+                    {
+                        Some(product::ProductAction::SubmitDialog)
+                    }
+                    "enter" if k.modifiers.control || k.modifiers.platform => {
+                        entries.get(selected).map(|(_, action)| match action {
+                            product::ProductAction::ApplyLayout(id) => {
+                                product::ProductAction::NewTabFromTemplate(*id)
+                            }
+                            _ => action.clone(),
+                        })
+                    }
+                    "e" if k.modifiers.control || k.modifiers.platform => {
+                        entries.get(selected).and_then(|(_, action)| match action {
+                            product::ProductAction::ApplyLayout(id) => {
+                                Some(product::ProductAction::ConfigureTemplate(*id))
+                            }
+                            _ => None,
+                        })
+                    }
+                    "escape"
+                        if self.product.dialog.as_ref().is_some_and(|dialog| {
+                            dialog.kind == product::DialogKind::TemplateRunContext
+                        }) =>
+                    {
+                        Some(product::ProductAction::ReturnTemplateRun)
+                    }
+                    "escape" => Some(product::ProductAction::CloseDialog),
+                    "enter" => entries.get(selected).map(|(_, action)| action.clone()),
+                    "delete" if k.modifiers.shift => {
+                        entries.get(selected).and_then(|(_, action)| match action {
+                            product::ProductAction::ApplyLayout(id) => {
+                                Some(product::ProductAction::DeleteLayout(*id))
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
             if let Some(action) = action {
                 self.product_action(action, window, cx);
             } else if count > 0 && matches!(k.key.as_str(), "up" | "down" | "tab") {
@@ -5866,6 +5957,8 @@ impl CanvasApp {
                         .and_then(|drag| {
                             pointer_layout::floating_rect(
                                 drag.source,
+                                f64::from(f32::from(drag.start.x)),
+                                f64::from(f32::from(drag.start.y)),
                                 f64::from(f32::from(drag.position.x)),
                                 f64::from(f32::from(drag.position.y)),
                             )

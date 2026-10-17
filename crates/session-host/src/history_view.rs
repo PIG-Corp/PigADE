@@ -259,6 +259,8 @@ fn response(
         generation_selection: None,
         history_view,
         providers: None,
+        template_run: None,
+        template_runs: None,
     }
 }
 

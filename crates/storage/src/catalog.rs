@@ -18,11 +18,13 @@ const MAX_PROJECTS: usize = 256;
 const MAX_WORKSPACES: usize = 4096;
 const MAX_TABS: usize = 16384;
 const MAX_LAYOUT_TEMPLATES: usize = 128;
+const MAX_TEMPLATE_LAUNCHES: usize = 32;
 // Source bytes bound SQLite reads; JSON escaping and entity metadata need their
 // own wire bound. Leave 1 MiB of the host's 8 MiB message cap for its envelope.
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ENCODED_CATALOG_BYTES: usize = 7 * 1024 * 1024;
 const MAX_LAYOUT_BYTES: usize = 1024 * 1024;
+const MAX_TEMPLATE_LAUNCH_BYTES: usize = 3 * 1024 * 1024;
 
 /// Counts serializer output without materializing an encoded catalog buffer.
 struct JsonByteCounter(usize);
@@ -132,7 +134,38 @@ pub struct LayoutTemplate {
     pub id: Uuid,
     pub name: String,
     pub geometry: pigade_layout::GeometryTemplate,
+    #[serde(default)]
+    pub launches: Option<Vec<LaunchSettings>>,
     pub revision: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchSettings {
+    pub provider: String,
+    pub role: String,
+    pub instructions: String,
+    pub deliver_context: bool,
+}
+
+impl LaunchSettings {
+    /// Validate the deliberately small, credential-free launch profile stored
+    /// alongside a reusable geometry template.
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            matches!(
+                self.provider.as_str(),
+                "shell" | "claude" | "codex" | "opencode"
+            ),
+            "unsupported template launch provider"
+        );
+        ensure!(
+            self.role.len() <= 8 * 1024
+                && self.instructions.len() <= 64 * 1024
+                && !self.role.contains('\0')
+                && !self.instructions.contains('\0'),
+            "template launch settings exceed bounds or contain NUL"
+        );
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutTemplateDelete {
@@ -221,6 +254,8 @@ pub struct Catalog {
     pub layout: LayoutDocument,
     #[serde(default)]
     pub layout_templates: Option<Vec<LayoutTemplate>>,
+    #[serde(default)]
+    pub template_launch_schema: Option<u16>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -313,6 +348,11 @@ pub(crate) fn migrate_layout_templates(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn migrate_template_launches(connection: &Connection) -> Result<()> {
+    connection.execute_batch("ALTER TABLE layout_templates ADD COLUMN launches_json TEXT;")?;
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
@@ -322,61 +362,90 @@ impl MetadataStore {
     /// update both tab records in this batch. Source and encoded JSON byte
     /// bounds are checked before commit. No process lifecycle is affected.
     pub fn apply_catalog(&mut self, batch: CatalogBatch) -> Result<Catalog> {
-        ensure!(
-            batch.projects.len() <= MAX_PROJECTS
-                && batch.workspaces.len() <= MAX_WORKSPACES
-                && batch.tabs.len() <= MAX_TABS,
-            "catalog batch exceeds bounded entity capacity"
-        );
-        ensure!(
-            batch.layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
-            "too many layout templates"
-        );
-        ensure!(
-            batch.remove_layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
-            "too many layout template deletions"
-        );
-        unique_ids(batch.layout_templates.iter().map(|write| write.value.id))?;
-        unique_ids(batch.remove_layout_templates.iter().map(|delete| delete.id))?;
-        ensure!(
-            batch.layout_templates.iter().all(|write| !batch
-                .remove_layout_templates
-                .iter()
-                .any(|delete| delete.id == write.value.id)),
-            "template cannot be written and deleted in one batch"
-        );
-        unique_ids(batch.projects.iter().map(|write| write.value.id))?;
-        unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
-        unique_ids(batch.tabs.iter().map(|write| write.value.id))?;
+        self.apply_catalog_internal(batch, None)
+    }
+
+    /// Atomically save catalog/layout changes with the prepared template-run
+    /// record that owns those sessions. Neither half is visible if validation
+    /// or compare-and-swap fails.
+    pub fn apply_catalog_with_template_run(
+        &mut self,
+        batch: CatalogBatch,
+        run: CatalogWrite<crate::StoredTemplateRun>,
+    ) -> Result<Catalog> {
+        self.apply_catalog_internal(batch, Some(run))
+    }
+
+    fn apply_catalog_internal(
+        &mut self,
+        batch: CatalogBatch,
+        run: Option<CatalogWrite<crate::StoredTemplateRun>>,
+    ) -> Result<Catalog> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for write in batch.projects {
-            write_project(&tx, write)?;
-        }
-        for write in batch.workspaces {
-            write_workspace(&tx, write)?;
-        }
-        for write in batch.tabs {
-            write_tab(&tx, write)?;
-        }
-        for write in batch.layout_templates {
-            write_layout_template(&tx, write)?;
-        }
-        for delete in batch.remove_layout_templates {
-            delete_layout_template(&tx, delete)?;
-        }
-        if let Some(write) = batch.selection {
-            write_selection(&tx, write)?;
-        }
-        if let Some(write) = batch.layout {
-            write_layout(&tx, write)?;
-        }
-
-        let catalog = read_catalog(&tx)?;
+        let catalog = apply_catalog_batch(&tx, batch, run)?;
         tx.commit()?;
         Ok(catalog)
     }
+}
+
+fn apply_catalog_batch(
+    tx: &Transaction<'_>,
+    batch: CatalogBatch,
+    run: Option<CatalogWrite<crate::StoredTemplateRun>>,
+) -> Result<Catalog> {
+    ensure!(
+        batch.projects.len() <= MAX_PROJECTS
+            && batch.workspaces.len() <= MAX_WORKSPACES
+            && batch.tabs.len() <= MAX_TABS,
+        "catalog batch exceeds bounded entity capacity"
+    );
+    ensure!(
+        batch.layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
+        "too many layout templates"
+    );
+    ensure!(
+        batch.remove_layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
+        "too many layout template deletions"
+    );
+    unique_ids(batch.layout_templates.iter().map(|write| write.value.id))?;
+    unique_ids(batch.remove_layout_templates.iter().map(|delete| delete.id))?;
+    ensure!(
+        batch.layout_templates.iter().all(|write| !batch
+            .remove_layout_templates
+            .iter()
+            .any(|delete| delete.id == write.value.id)),
+        "template cannot be written and deleted in one batch"
+    );
+    unique_ids(batch.projects.iter().map(|write| write.value.id))?;
+    unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
+    unique_ids(batch.tabs.iter().map(|write| write.value.id))?;
+    for write in batch.projects {
+        write_project(tx, write)?;
+    }
+    for write in batch.workspaces {
+        write_workspace(tx, write)?;
+    }
+    for write in batch.tabs {
+        write_tab(tx, write)?;
+    }
+    for write in batch.layout_templates {
+        write_layout_template(tx, write)?;
+    }
+    for delete in batch.remove_layout_templates {
+        delete_layout_template(tx, delete)?;
+    }
+    if let Some(write) = batch.selection {
+        write_selection(tx, write)?;
+    }
+    if let Some(write) = batch.layout {
+        write_layout(tx, write)?;
+    }
+    if let Some(run) = run {
+        crate::template_run::write_template_run(tx, run)?;
+    }
+    read_catalog(tx)
 }
 
 fn unique_ids(ids: impl Iterator<Item = Uuid>) -> Result<()> {
@@ -392,6 +461,9 @@ fn text(value: &str, maximum: usize, empty: bool) -> Result<()> {
         "catalog text exceeds bounds or is empty"
     );
     Ok(())
+}
+fn validate_launch_settings(settings: &LaunchSettings) -> Result<()> {
+    settings.validate()
 }
 fn absolute_path(path: &Path) -> Result<&str> {
     let value = path.to_str().context("catalog paths require UTF-8")?;
@@ -568,20 +640,42 @@ fn write_layout_template(tx: &Transaction<'_>, write: CatalogWrite<LayoutTemplat
         template.geometry.pane_count() > 0,
         "layout template must contain at least one pane"
     );
+    if let Some(launches) = &template.launches {
+        ensure!(
+            !launches.is_empty()
+                && launches.len() <= MAX_TEMPLATE_LAUNCHES
+                && launches.len() == template.geometry.pane_count(),
+            "template launch settings must match 1..=32 geometry panes"
+        );
+        for settings in launches {
+            validate_launch_settings(settings)?;
+        }
+    }
     let geometry = serde_json::to_string(&template.geometry)?;
     ensure!(
         geometry.len() <= MAX_LAYOUT_BYTES,
         "layout template exceeds byte bound"
     );
+    let launches = template
+        .launches
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    ensure!(
+        launches
+            .as_ref()
+            .is_none_or(|json| json.len() <= MAX_TEMPLATE_LAUNCH_BYTES),
+        "template launch settings exceed byte bound"
+    );
     match write.expected_revision {
         None => {
             tx.execute(
-                "INSERT INTO layout_templates(id,name,geometry_json,revision) VALUES(?1,?2,?3,1)",
-                params![template.id.to_string(), template.name, geometry],
+                "INSERT INTO layout_templates(id,name,geometry_json,launches_json,revision) VALUES(?1,?2,?3,?4,1)",
+                params![template.id.to_string(), template.name, geometry, launches],
             )?;
         }
         Some(expected) => {
-            let changed = tx.execute("UPDATE layout_templates SET name=?2,geometry_json=?3,revision=?4 WHERE id=?1 AND revision=?5", params![template.id.to_string(), template.name, geometry, next, expected as i64])?;
+            let changed = tx.execute("UPDATE layout_templates SET name=?2,geometry_json=?3,launches_json=?4,revision=?5 WHERE id=?1 AND revision=?6", params![template.id.to_string(), template.name, geometry, launches, next, expected as i64])?;
             conflict(changed, "layout template", template.id, expected)?;
         }
     }
@@ -743,7 +837,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(layout_json AS BLOB))) FROM tabs),0)+
       COALESCE((SELECT length(CAST(window_json AS BLOB)) FROM catalog_selection WHERE singleton=1),0)+
       COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)+
-      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))) FROM layout_templates),0)",[],|row|row.get(0))?;
+      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))+COALESCE(length(CAST(launches_json AS BLOB)),0)) FROM layout_templates),0)",[],|row|row.get(0))?;
     ensure!(
         bytes <= MAX_MANIFEST_BYTES,
         "catalog exceeds bounded manifest bytes; load/archive fewer records"
@@ -863,25 +957,42 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         },
     )?;
     let mut layout_templates = Vec::with_capacity(template_count);
-    let mut stmt = connection
-        .prepare("SELECT id,name,geometry_json,revision FROM layout_templates ORDER BY rowid")?;
+    let mut stmt = connection.prepare(
+        "SELECT id,name,geometry_json,launches_json,revision FROM layout_templates ORDER BY rowid",
+    )?;
     for row in stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
-            row.get::<_, u64>(3)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, u64>(4)?,
         ))
     })? {
-        let (id, name, geometry, revision) = row?;
+        let (id, name, geometry, launches, revision) = row?;
         let geometry: pigade_layout::GeometryTemplate =
             serde_json::from_str(&geometry).context("invalid stored layout template")?;
         geometry.validate()?;
         ensure!(geometry.pane_count() > 0, "stored layout template is empty");
+        let launches: Option<Vec<LaunchSettings>> = launches
+            .map(|json| serde_json::from_str(&json).context("invalid stored template launches"))
+            .transpose()?;
+        if let Some(launches) = &launches {
+            ensure!(
+                !launches.is_empty()
+                    && launches.len() <= MAX_TEMPLATE_LAUNCHES
+                    && launches.len() == geometry.pane_count(),
+                "stored template launches do not match geometry panes"
+            );
+            for settings in launches {
+                validate_launch_settings(settings)?;
+            }
+        }
         layout_templates.push(LayoutTemplate {
             id: Uuid::parse_str(&id)?,
             name,
             geometry,
+            launches,
             revision,
         });
     }
@@ -892,6 +1003,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         selection,
         layout,
         layout_templates: Some(layout_templates),
+        template_launch_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -926,6 +1038,7 @@ mod tests {
                     id,
                     name: "Compact".into(),
                     geometry: one_pane_template(),
+                    launches: None,
                     revision: 0,
                 },
                 expected_revision: None,
@@ -985,6 +1098,7 @@ mod tests {
                             id: Uuid::new_v4(),
                             name: "Bad".into(),
                             geometry: invalid,
+                            launches: None,
                             revision: 0
                         },
                         expected_revision: None
@@ -998,6 +1112,7 @@ mod tests {
                 id,
                 name: "Same".into(),
                 geometry: one_pane_template(),
+                launches: None,
                 revision: 0,
             },
             expected_revision: None,
@@ -1011,6 +1126,106 @@ mod tests {
                 .is_err()
         );
         assert!(store.catalog()?.layout_templates.unwrap().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn template_launch_settings_are_additive_bounded_and_match_geometry() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let settings = LaunchSettings {
+            provider: "codex".into(),
+            role: "reviewer".into(),
+            instructions: "Review the implementation".into(),
+            deliver_context: true,
+        };
+        settings.validate()?;
+        let id = Uuid::new_v4();
+        let saved = store.apply_catalog(CatalogBatch {
+            layout_templates: vec![CatalogWrite {
+                value: LayoutTemplate {
+                    id,
+                    name: "Configured".into(),
+                    geometry: one_pane_template(),
+                    launches: Some(vec![settings.clone()]),
+                    revision: 0,
+                },
+                expected_revision: None,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(saved.template_launch_schema, Some(1));
+        assert_eq!(
+            saved.layout_templates.unwrap()[0].launches,
+            Some(vec![settings])
+        );
+
+        for invalid in [
+            LaunchSettings {
+                provider: "other".into(),
+                role: String::new(),
+                instructions: String::new(),
+                deliver_context: false,
+            },
+            LaunchSettings {
+                provider: "shell".into(),
+                role: "x".repeat(8 * 1024 + 1),
+                instructions: String::new(),
+                deliver_context: false,
+            },
+            LaunchSettings {
+                provider: "claude".into(),
+                role: String::new(),
+                instructions: "x".repeat(64 * 1024 + 1),
+                deliver_context: false,
+            },
+            LaunchSettings {
+                provider: "opencode".into(),
+                role: "\0".into(),
+                instructions: String::new(),
+                deliver_context: false,
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+            let result = store.apply_catalog(CatalogBatch {
+                layout_templates: vec![CatalogWrite {
+                    value: LayoutTemplate {
+                        id: Uuid::new_v4(),
+                        name: "invalid".into(),
+                        geometry: one_pane_template(),
+                        launches: Some(vec![invalid]),
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            });
+            assert!(result.is_err());
+        }
+        let result = store.apply_catalog(CatalogBatch {
+            layout_templates: vec![CatalogWrite {
+                value: LayoutTemplate {
+                    id: Uuid::new_v4(),
+                    name: "mismatch".into(),
+                    geometry: one_pane_template(),
+                    launches: Some(vec![
+                        LaunchSettings {
+                            provider: "shell".into(),
+                            role: String::new(),
+                            instructions: String::new(),
+                            deliver_context: false,
+                        };
+                        2
+                    ]),
+                    revision: 0,
+                },
+                expected_revision: None,
+            }],
+            ..CatalogBatch::default()
+        });
+        assert!(result.is_err());
+        assert_eq!(store.catalog()?.layout_templates.unwrap().len(), 1);
         Ok(())
     }
 
@@ -1666,7 +1881,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            8
+            9
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -1761,7 +1976,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                8
+                9
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

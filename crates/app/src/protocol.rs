@@ -201,6 +201,30 @@ struct Response {
     history_view: Option<HistoryViewReply>,
     #[serde(default)]
     providers: Option<Vec<ProviderInfo>>,
+    #[serde(default)]
+    template_run: Option<TemplateRunView>,
+    #[serde(default)]
+    template_runs: Option<pigade_storage::TemplateRunPage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TemplateRunView {
+    pub id: uuid::Uuid,
+    pub tab_id: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub name: String,
+    pub revision: u64,
+    pub status: String,
+    pub can_advance: bool,
+    pub error: Option<String>,
+    pub slots: Vec<TemplateRunSlotView>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TemplateRunSlotView {
+    pub preview: LaunchPreview,
+    pub phase: String,
+    pub placed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -375,6 +399,8 @@ pub struct ProductReply {
     pub context: Option<pigade_storage::ContextDocument>,
     pub history_view: Option<HistoryViewReply>,
     pub history_view_request: bool,
+    pub template_run: Option<TemplateRunView>,
+    pub template_runs: Option<pigade_storage::TemplateRunPage>,
 }
 
 pub struct ProductError {
@@ -505,6 +531,8 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         context: response.context,
         history_view: response.history_view,
         history_view_request,
+        template_run: response.template_run,
+        template_runs: response.template_runs,
     })
 }
 
@@ -873,6 +901,8 @@ mod tests {
             context: None,
             launch_preview: None,
             launch_phase: None,
+            template_run: None,
+            template_runs: None,
             generations: None,
             generation_selection: None,
             history_view: None,

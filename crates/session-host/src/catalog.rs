@@ -164,7 +164,51 @@ pub(crate) fn layout_edit(
     store.apply_catalog(batch)
 }
 
-fn history_write(
+/// Finish a template run and its final normal layout command in one durable
+/// transaction. A geometrically identical template still commits the run CAS.
+pub(crate) fn layout_edit_with_run(
+    store: &mut MetadataStore,
+    expected_revision: u64,
+    command: Command,
+    run: pigade_storage::StoredTemplateRun,
+    expected_run_revision: u64,
+) -> Result<pigade_storage::StoredTemplateRun> {
+    let current = store.catalog()?;
+    ensure_revision(&current.layout, expected_revision)?;
+    let mut model = load_layout(&current)?;
+    let changed = model.apply(command)?;
+    let mut batch = CatalogBatch::default();
+    if changed {
+        ensure_membership(&current, &model)?;
+        batch.layout = Some(history_write(&model, &current.layout)?);
+        for tab in &current.tabs {
+            let layout = &model.state().tabs[&tab.id];
+            let projection = serde_json::to_string(layout)?;
+            if projection != tab.layout_json || layout.focused != tab.active_pane {
+                let mut updated = tab.clone();
+                updated.layout_json = projection;
+                updated.active_pane = layout.focused;
+                batch.tabs.push(CatalogWrite {
+                    value: updated,
+                    expected_revision: Some(tab.revision),
+                });
+            }
+        }
+    }
+    let run_id = run.id;
+    store.apply_catalog_with_template_run(
+        batch,
+        CatalogWrite {
+            value: run,
+            expected_revision: Some(expected_run_revision),
+        },
+    )?;
+    store
+        .template_run(run_id)?
+        .context("template run disappeared after atomic commit")
+}
+
+pub(crate) fn history_write(
     model: &LayoutModel,
     previous: &LayoutDocument,
 ) -> Result<CatalogWrite<LayoutDocument>> {
@@ -207,7 +251,7 @@ fn ensure_revision(document: &LayoutDocument, expected: u64) -> Result<()> {
 
 /// Unknown, invalid or inconsistent saved documents remain untouched. A null
 /// document is only the pristine catalog, never permission to reset existing tabs.
-fn load_layout(catalog: &Catalog) -> Result<LayoutModel> {
+pub(crate) fn load_layout(catalog: &Catalog) -> Result<LayoutModel> {
     let model = if catalog.layout.json.trim() == "null" {
         ensure!(
             catalog.tabs.is_empty(),
@@ -232,7 +276,7 @@ fn load_layout(catalog: &Catalog) -> Result<LayoutModel> {
     Ok(model)
 }
 
-fn ensure_membership(catalog: &Catalog, model: &LayoutModel) -> Result<()> {
+pub(crate) fn ensure_membership(catalog: &Catalog, model: &LayoutModel) -> Result<()> {
     let catalog_tabs: BTreeSet<_> = catalog.tabs.iter().map(|tab| tab.id).collect();
     let layout_tabs: BTreeSet<_> = model.state().tabs.keys().copied().collect();
     ensure!(
@@ -824,6 +868,7 @@ mod tests {
             DROP TABLE context_heads;
             DROP TABLE context_revisions;
             DROP TABLE layout_revisions;
+            DROP TABLE template_runs;
             DROP TABLE layout_templates;
             DROP INDEX launch_session_generation_ordinal;
             ALTER TABLE launch_intents DROP COLUMN generation_ordinal;

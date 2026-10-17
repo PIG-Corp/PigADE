@@ -55,6 +55,7 @@ OPENCODE_PASS = 'pass-private-x11-opencode-mouse-terminal-fixture'
 CONTROLS_PASS = 'pass-private-x11-panel-controls-fixture'
 POINTER_PASS = 'pass-private-x11-pointer-layout-fixture'
 CATALOG_PASS = 'pass-private-x11-catalog-template-fixture'
+RECIPES_PASS = 'pass-private-x11-template-recipes-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -388,7 +389,8 @@ def fixture_status(name):
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
             'history': HISTORY_PASS, 'setup': SETUP_PASS,
             'opencode': OPENCODE_PASS, 'controls': CONTROLS_PASS,
-            'pointer': POINTER_PASS, 'catalog': CATALOG_PASS}[name]
+            'pointer': POINTER_PASS, 'catalog': CATALOG_PASS,
+            'recipes': RECIPES_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False, cwd='/artifacts'):
@@ -958,6 +960,24 @@ def split_ids(node):
     return result
 
 
+def direct_move_sibling_split(node, source, target):
+    """Find the inserted split that directly pairs the moved pane and target."""
+    if not isinstance(node, dict):
+        return None
+    split = node.get('Split')
+    if not isinstance(split, dict):
+        return None
+    children = split.get('children', [])
+    child_ids = [pane_ids(child) for child in children]
+    if (len(child_ids) == 2 and child_ids[0] == [target] and child_ids[1] == [source]):
+        return split.get('axis'), [target, source]
+    for child in children:
+        found = direct_move_sibling_split(child, source, target)
+        if found:
+            return found
+    return None
+
+
 def run_pointer_fixture(config, report, control, app, env, save, tab_id, baseline_generations):
     def catalog_layout():
         catalog = host_request({'command': 'catalog'})['catalog']
@@ -1057,6 +1077,16 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     right_pane = right_layout.get('focused')
     require(right_pane in original_ids and right_pane != left_pane,
             'hover right did not follow the cursor to a different pane')
+    step('pointer-keyboard-away')
+    keyboard_focus = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == left_pane
+                                        else None), time.monotonic() + 5)
+    del keyboard_focus
+    time.sleep(0.35)
+    require(catalog_layout()[1].get('focused') == left_pane,
+            'stationary pointer over right pane overrode keyboard focus')
+    step('pointer-move-right-near')
+    wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == right_pane
+                        else None), time.monotonic() + 5)
     step('pointer-hover-input')
     focused = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == left_pane
                                   else None), time.monotonic() + 5)
@@ -1085,6 +1115,9 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         require(0 < Path('/artifacts/pointer-drag.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
                 'held pointer capture is missing or oversized')
 
+    step('pointer-hover-source')
+    require(catalog_layout()[1].get('focused') == left_pane,
+            'off-center drag start did not select the expected source pane')
     held_stage('pointer-hold-preview', 'HELD', 'CANCEL',
                '/artifacts/pointer-drag.ppm', check_drag_preview)
     wait_until(lambda: catalog_layout()[1].get('root') == before_drag.get('root') and
@@ -1153,10 +1186,12 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     step('pointer-drop')
     dropped = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('root') !=
                                   before_drag.get('root') else None), time.monotonic() + 6)
-    require(set(pane_ids(dropped.get('root'))) == original_ids and
+    move_siblings = direct_move_sibling_split(dropped.get('root'), left_pane, right_pane)
+    require(move_siblings == ('Horizontal', [right_pane, left_pane]) and
+            set(pane_ids(dropped.get('root'))) == original_ids and
             split_ids(dropped.get('root')) != old_split_ids and
             live_unchanged(generations, expected_processes),
-            'pointer drop failed Dwindle reinsert or changed terminal identities')
+            'pointer drop did not insert the source to the right of the exact target or changed terminal identities')
     # Host commit and UI paint are separate receipts; this is capture settling,
     # not an input-to-present latency measurement.
     time.sleep(0.35)
@@ -1175,11 +1210,12 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'four_pane_ids_preserved': sorted(original_ids),
         'process_generations_and_pids_unchanged': True,
         'hover_left_right_left_followed_without_click': True,
+        'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
         'held_drag_preview_did_not_commit_or_resize_ptys': True,
         'escape_cancel_restored_exact_root': True,
         'selection_ime_dialog_and_inactive_focus_suppressed': True,
-        'drop_reinserted_as_dwindle_split_without_swap': True,
+        'drop_inserted_source_to_right_of_expected_target_as_horizontal_sibling': True,
         'prefix_undo_restored_exact_pre_drag_layout': True,
         'captures': ['pointer-hover.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
@@ -1314,6 +1350,270 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     save()
 
 
+
+def recipe_key_action(config, action):
+    stages = {
+        'select-first': 'recipe-select-first',
+        'open-editor': 'recipe-open-editor',
+        'save-editor': 'recipe-save-editor',
+        'new-tab': 'recipe-new-tab',
+        'name-tab': 'recipe-name-tab',
+        'submit-name': 'recipe-submit-name',
+        'confirm-run': 'recipe-confirm-run',
+    }
+    require(action in stages, 'recipe fixture requested an unknown fixed helper stage')
+    helper_call(config, stages[action])
+
+
+def template_runs_request(before=None):
+    return host_request({'command': 'list_template_runs', 'before': before}).get('template_runs')
+
+
+def template_run_request(run_id):
+    result = host_request({'command': 'get_template_run', 'run': run_id}).get('template_run')
+    require(isinstance(result, dict) and result.get('id') == run_id,
+            'host did not return the requested durable template run')
+    return result
+
+
+def template_run_database_record(run_id):
+    connection = sqlite3.connect('file:/artifacts/state/metadata.sqlite?mode=ro', uri=True, timeout=2)
+    try:
+        rows = connection.execute(
+            'SELECT id,workspace_id,tab_id,template_id,name,slots,status,revision '
+            'FROM template_runs WHERE id=?', (run_id,)).fetchall()
+        require(len(rows) == 1, 'template run database record is missing or duplicated')
+        return dict(zip(('id', 'workspace_id', 'tab_id', 'template_id', 'name', 'slots', 'status', 'revision'),
+                        rows[0]))
+    finally:
+        connection.close()
+
+
+def run_recipes_fixture(config, report, env, save, tab_id):
+    report['stage'] = 'template-recipes'
+    save()
+    deactivate_private_fcitx(config, env)
+
+    def current_catalog():
+        return host_request({'command': 'catalog'})['catalog']
+
+    def current_tab_layout(catalog, target_tab):
+        tab = next((item for item in catalog['tabs'] if item['id'] == target_tab), None)
+        require(tab is not None, 'recipe fixture tab disappeared')
+        return json.loads(tab['layout_json'])
+
+    def geometry_only(node):
+        if not isinstance(node, dict):
+            return None
+        if isinstance(node.get('Pane'), dict):
+            return 'Pane'
+        split = node.get('Split')
+        if isinstance(split, dict):
+            return {'Split': {'axis': split['axis'], 'weights': split['weights'],
+                              'children': [geometry_only(child) for child in split['children']]}}
+        raise RuntimeError('recipe fixture encountered an unknown pane node')
+
+    catalog = current_catalog()
+    tab = next((item for item in catalog['tabs'] if item['id'] == tab_id), None)
+    require(tab is not None and catalog['selection'].get('tab_id') == tab_id,
+            'recipe fixture did not start on the four-shell tab')
+    original_layout = current_tab_layout(catalog, tab_id)
+    original_panes = set(pane_ids(original_layout.get('root')))
+    original_generations = fixture_generations()
+    original_identities = sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                                 for view in host_request({'command': 'list'}).get('views', []))
+    require(len(original_panes) == 4 and len(original_generations) == 5 and
+            len(original_identities) == 5 and
+            (report['fixture']['session'], report['fixture']['generation']) in original_generations,
+            'recipe fixture did not begin with four real shells and the unchanged bootstrap generation')
+    active_before = template_runs_request(None)
+    require(isinstance(active_before, dict) and active_before.get('entries') == [],
+            'recipe fixture active-run list was not empty before setup')
+
+    catalog_key_action(config, 'open-library')
+    time.sleep(.2)
+    catalog_key_action(config, 'open-save-dialog')
+    catalog_key_action(config, 'save-template')
+    saved_catalog = wait_until(
+        lambda: (value if (value := current_catalog()).get('layout_templates') and any(
+            item.get('name') == 'Catalog' for item in value['layout_templates']) else None),
+        time.monotonic() + 8)
+    template = next(item for item in saved_catalog['layout_templates'] if item['name'] == 'Catalog')
+    require(template.get('geometry', {}).get('schema') == 1 and
+            template['geometry'].get('root') is not None and
+            template['geometry']['root'] == geometry_only(original_layout.get('root')),
+            'saved geometry template differs from the live four-shell layout')
+    time.sleep(.2)
+    recipe_key_action(config, 'select-first')
+    recipe_key_action(config, 'open-editor')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/recipe-editor.ppm')
+    require(fixture_generations() == original_generations and
+            sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                   for view in host_request({'command': 'list'}).get('views', [])) == original_identities,
+            'opening recipe editor changed existing process identities')
+    recipe_key_action(config, 'save-editor')
+    saved = wait_until(
+        lambda: (value if (value := current_catalog()).get('layout_templates') and any(
+            item.get('id') == template['id'] and item.get('revision', 0) > template.get('revision', 0)
+            and isinstance(item.get('launches'), list) for item in value['layout_templates']) else None),
+        time.monotonic() + 8)
+    template = next(item for item in saved['layout_templates'] if item['id'] == template['id'])
+    require(len(template['launches']) == 4 and all(
+        launch.get('provider') == 'shell' and not launch.get('role') and
+        not launch.get('instructions') and launch.get('deliver_context') is False
+        for launch in template['launches']),
+        'recipe editor did not persist four default shell launch settings')
+    require(fixture_generations() == original_generations and
+            sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                   for view in host_request({'command': 'list'}).get('views', [])) == original_identities,
+            'saving recipe settings launched a process or changed an existing identity')
+
+    recipe_key_action(config, 'select-first')
+    recipe_key_action(config, 'new-tab')
+    time.sleep(.2)
+    recipe_key_action(config, 'name-tab')
+    recipe_key_action(config, 'submit-name')
+    time.sleep(.3)
+    preview = wait_until(
+        lambda: (value if (value := current_catalog()).get('selection', {}).get('workspace_id') else None),
+        time.monotonic() + 4)
+    workspace_id = preview['selection']['workspace_id']
+    # The UI owns creation and confirmation. This read proves there is still no
+    # process or tab before the explicit first Enter in the run preview.
+    prepared_catalog = current_catalog()
+    require(fixture_generations() == original_generations and
+            len(prepared_catalog['tabs']) == len(catalog['tabs']) and
+            sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                   for view in host_request({'command': 'list'}).get('views', [])) == original_identities,
+            'pre-confirm recipe UI created a tab or changed existing process identities')
+    active_prepared = template_runs_request(None)
+    require(isinstance(active_prepared, dict) and len(active_prepared.get('entries', [])) == 1,
+            'UI preparation did not create exactly one active template run')
+    run_id = active_prepared['entries'][0]['id']
+    run = template_run_request(run_id)
+    require(run.get('status') == 'prepared' and run.get('can_advance') is True and
+            run.get('name') == 'Recipe' and run.get('workspace_id') == workspace_id and
+            len(run.get('slots', [])) == 4 and all(slot.get('phase') == 'prepared'
+                                                   and slot.get('placed') is False
+                                                   and slot.get('preview', {}).get('provider') == 'shell'
+                                                   and slot.get('preview', {}).get('can_launch') is True
+                                                   for slot in run['slots']),
+            'run preview differs from the four-shell saved template')
+    helper_call(config, 'capture', '/artifacts/recipe-run-preview.ppm')
+    plans_before = prepared_launches_read_only()
+    for slot in run['slots']:
+        plan_id = slot['preview']['plan_id']
+        require(plan_id in plans_before and plans_before[plan_id]['phase'] == 'prepared',
+                'recipe preview lacks exactly one durable prepared launch plan per slot')
+    require(fixture_generations() == original_generations and
+            len(current_catalog()['tabs']) == len(catalog['tabs']) and
+            template_run_database_record(run_id)['status'] == 'prepared',
+            'pre-confirm run preview changed processes, tabs, or durable run state')
+
+    recipe_key_action(config, 'confirm-run')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-run-after-confirm.ppm')
+    last_revision = run['revision']
+    last_started = 0
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        # GetTemplateRun is a coherent durable snapshot. The UI may acknowledge
+        # several AdvanceTemplateRun calls between polls, so this observer must
+        # not compare its revision delta with independently sampled processes.
+        current = template_run_request(run_id)
+        revision = current.get('revision')
+        require(type(revision) is int and revision >= last_revision,
+                'template run revision regressed during confirmation')
+        started = sum(slot.get('phase') != 'prepared' for slot in current.get('slots', []))
+        require(len(current.get('slots', [])) == 4 and last_started <= started <= 4,
+                'template run slot progress regressed or exceeded the saved recipe')
+        last_revision = revision
+        last_started = started
+        if current.get('status') == 'complete':
+            run = current
+            break
+        require(current.get('error') is None,
+                'template run reported an error before all explicitly confirmed shell slots were added')
+        time.sleep(.04)
+    else:
+        raise RuntimeError('explicit template run did not complete within the bounded fixture window')
+
+    expected_pairs = sorted((slot['preview']['session'], slot['preview']['generation'])
+                            for slot in run['slots'])
+    require(len(expected_pairs) == 4 and len(set(expected_pairs)) == 4,
+            'completed recipe did not create exactly four unique new session generations')
+    require(all(slot.get('phase') == 'not_requested' and slot.get('placed') is True
+                and slot.get('preview', {}).get('provider') == 'shell'
+                for slot in run['slots']),
+            'completed shell slots are not durably confirmed as placed without context delivery')
+    final_catalog = current_catalog()
+    new_tab = next((item for item in final_catalog['tabs'] if item['id'] == run['tab_id']), None)
+    require(new_tab is not None and new_tab.get('name') == 'Recipe' and
+            final_catalog['selection'].get('tab_id') == run['tab_id'] and
+            final_catalog['selection'].get('workspace_id') == workspace_id,
+            'completed recipe did not select the new Recipe tab in its source workspace')
+    final_layout = json.loads(new_tab['layout_json'])
+    require(geometry_only(final_layout.get('root')) == template['geometry']['root'] and
+            set(pane_ids(final_layout.get('root'))) == {slot['preview']['session'] for slot in run['slots']},
+            'new tab geometry or process identities differ from the saved template')
+    final_identities = sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                              for view in host_request({'command': 'list'}).get('views', []))
+    original_pairs = {(session, generation) for session, generation, _ in original_identities}
+    new_identities = [identity for identity in final_identities
+                      if identity[:2] not in original_pairs]
+    require(len(final_identities) == 9 and set(original_identities).issubset(set(final_identities)) and
+            {(session, generation) for session, generation, _ in final_identities} ==
+            set(original_generations + expected_pairs) and
+            sorted((session, generation) for session, generation, _ in new_identities) == expected_pairs and
+            len(new_identities) == 4 and
+            all(type(pid) is int and pid > 0 for _, _, pid in new_identities) and
+            len({pid for _, _, pid in final_identities}) == 9,
+            'recipe completion changed original identities or created unexpected processes')
+    active_after = template_runs_request(None)
+    require(isinstance(active_after, dict) and active_after.get('entries') == [],
+            'completed recipe remains in the active run list')
+    record = template_run_database_record(run_id)
+    require(record['status'] == 'complete' and record['slots'] == 4 and record['tab_id'] == run['tab_id'],
+            'completed template run database record differs from the host view')
+    durable = template_run_request(run_id)
+    require(durable.get('status') == 'complete' and durable.get('revision') == record['revision'],
+            'host GetTemplateRun differs from the completed SQLite record')
+    final_plans = prepared_launches_read_only()
+    final_plan_ids = [slot['preview']['plan_id'] for slot in run['slots']]
+    require(len(final_plan_ids) == 4 and len(set(final_plan_ids)) == 4 and
+            all(slot['preview']['plan_id'] in final_plans and
+                final_plans[slot['preview']['plan_id']]['phase'] == 'not_requested' and
+                final_plans[slot['preview']['plan_id']]['payload'].get('launch', {}).get('session') ==
+                slot['preview']['session'] and
+                final_plans[slot['preview']['plan_id']]['payload'].get('launch', {}).get('generation') ==
+                slot['preview']['generation'] for slot in run['slots']),
+            'completed recipe does not retain one confirmed launch plan per new session')
+    wait_until(lambda: (views if len(views := host_request({'command': 'list'}).get('views', [])) == 9 and
+                        all(any(view.get('session') == slot['preview']['session'] and
+                                view.get('generation') == slot['preview']['generation'] and
+                                view.get('state') == 'running' for view in views)
+                            for slot in run['slots']) else None), time.monotonic() + 8)
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-final-tab.ppm')
+    require(set(pane_ids(current_tab_layout(current_catalog(), tab_id).get('root'))) == original_panes and
+            fixture_generations() == sorted(original_generations + expected_pairs),
+            'final recipe capture occurred before layout and original sessions settled')
+    report['recipes'] = {
+        'saved_template_id': template['id'], 'saved_template_revision': template['revision'],
+        'run_id': run_id, 'run_revision': record['revision'], 'new_tab_id': run['tab_id'],
+        'new_tab_name': new_tab['name'], 'four_unique_new_generations': True,
+        'original_five_process_identities_unchanged': True,
+        'no_process_or_tab_before_explicit_confirm': True,
+        'revision_observer_allows_skipped_acknowledgements': True,
+        'saved_geometry_reused': True, 'all_phases_not_requested_and_placed': True,
+        'active_run_list_empty_after_completion': True,
+        'captures': ['recipe-editor.ppm', 'recipe-run-preview.ppm', 'recipe-final-tab.ppm'],
+    }
+    report.update({'status': RECIPES_PASS, 'stage': 'complete'})
+    save()
+
+
 def run_setup_fixture(config, report, control, app, env, save):
     report['stage'] = 'project-workspace-shell-setup'
     save()
@@ -1428,6 +1728,9 @@ def run_setup_fixture(config, report, control, app, env, save):
     if config.get('fixture') == 'catalog':
         run_catalog_fixture(config, report, control, app, env, save,
                             grid_catalog['tabs'][0]['id'], baseline_generations)
+        return
+    if config.get('fixture') == 'recipes':
+        run_recipes_fixture(config, report, env, save, grid_catalog['tabs'][0]['id'])
         return
     helper_call(config, 'setup-live')
     try:
@@ -2391,7 +2694,7 @@ def inside_run() -> int:
         if config.get('fixture') == 'history':
             run_history_fixture(config, report, control, app_env, save)
             return 0
-        if config.get('fixture') in ('setup', 'controls', 'pointer', 'catalog'):
+        if config.get('fixture') in ('setup', 'controls', 'pointer', 'catalog', 'recipes'):
             run_setup_fixture(config, report, control, app, app_env, save)
             return 0
         if config.get('fixture') == 'opencode':
@@ -2548,6 +2851,9 @@ def outer_run(args) -> dict:
                   'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
                   'catalog-library-deleted.ppm'] if args.fixture == 'catalog' else
+                 ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
+                  'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
+                  'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
@@ -2575,6 +2881,7 @@ def plan(args) -> dict:
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
                   'catalog': 'fixed private four-shell setup; save a geometry template, change layout, apply and undo it, reopen library, and delete it',
+                  'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
                   'arbitrary_text_argument': False},
@@ -2617,7 +2924,7 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer', 'catalog'], default='pinyin',
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer', 'catalog', 'recipes'], default='pinyin',
                         help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pointer layout fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')

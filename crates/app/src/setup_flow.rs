@@ -111,6 +111,7 @@ mod tests {
             },
             layout: LayoutDocument::default(),
             layout_templates: Some(vec![]),
+            template_launch_schema: Some(1),
         }
     }
 

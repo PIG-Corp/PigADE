@@ -14,6 +14,9 @@ use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
+#[path = "template_ui.rs"]
+mod template_ui;
+
 const SIDEBAR_WIDTH: f32 = 220.0;
 const ROW_HEIGHT: f32 = 30.0;
 
@@ -31,6 +34,23 @@ pub(super) enum ProductAction {
     CreateWorkspaceFor(Uuid),
     WorkspaceIsolation(bool),
     CreateTab,
+    ChoosePreset(crate::template_flow::Preset),
+    ConfigureTemplate(Uuid),
+    NewTabFromTemplate(Uuid),
+    EditRecipe,
+    EditTemplateSlot(usize),
+    SetTemplateProvider(String),
+    SetTemplateRole(String),
+    ToggleTemplateContext,
+    ClearTemplateLaunches,
+    ConfirmTemplateRun,
+    RefreshTemplateRun,
+    CancelTemplateRun,
+    InspectTemplateRunSlot(usize),
+    ReturnTemplateRun,
+    OpenTemplateRuns,
+    LoadTemplateRuns(Option<u64>),
+    SelectTemplateRun(Uuid),
     ManageSelected(crate::catalog_flow::EntityKind),
     ManageProject(Uuid),
     ManageWorkspace(Uuid),
@@ -95,6 +115,12 @@ pub(super) enum DialogKind {
     CreateWorkspace,
     Launcher,
     NewTab,
+    Recipe,
+    RecipeSlot,
+    NewTemplateTab,
+    TemplateRun,
+    TemplateRunContext,
+    TemplateRuns,
     Manage,
     Rename,
     Layouts,
@@ -123,6 +149,12 @@ impl DialogKind {
             Self::CreateWorkspace => "Новый воркспейс",
             Self::Launcher => "Добавить агента",
             Self::NewTab => "Новая вкладка",
+            Self::Recipe => "Агенты в шаблоне",
+            Self::RecipeSlot => "Настройки агента",
+            Self::NewTemplateTab => "Вкладка по шаблону",
+            Self::TemplateRun => "Запуск вкладки",
+            Self::TemplateRunContext => "Контекст запуска",
+            Self::TemplateRuns => "Незавершённые вкладки",
             Self::Manage => "Управление",
             Self::Rename => "Переименовать",
             Self::Layouts => "Сохранённые раскладки",
@@ -151,6 +183,9 @@ impl DialogKind {
             Self::CreateWorkspace => &["Название задачи / воркспейса"],
             Self::Launcher => &[],
             Self::NewTab => &["Название вкладки"],
+            Self::RecipeSlot => &["Роль · инструкции агенту", "Дополнительные инструкции"],
+            Self::NewTemplateTab => &["Название вкладки"],
+            Self::Recipe | Self::TemplateRun | Self::TemplateRunContext | Self::TemplateRuns => &[],
             Self::Rename | Self::SaveLayout => &["Название"],
             Self::Manage | Self::Layouts | Self::DeleteLayout => &[],
             Self::Palette => &["Поиск команды"],
@@ -180,6 +215,11 @@ impl DialogKind {
             Self::CreateWorkspace => "Создать воркспейс",
             Self::Launcher => "Закрыть",
             Self::NewTab => "Создать вкладку",
+            Self::Recipe => "Сохранить",
+            Self::RecipeSlot => "Готово",
+            Self::NewTemplateTab => "Проверить запуск",
+            Self::TemplateRun | Self::TemplateRuns => "Закрыть",
+            Self::TemplateRunContext => "Назад",
             Self::Rename | Self::SaveLayout => "Сохранить",
             Self::Manage | Self::Layouts => "Готово",
             Self::DeleteLayout => "Удалить раскладку",
@@ -229,6 +269,13 @@ pub(super) struct ProductUi {
     pub(super) management_target: Option<crate::catalog_flow::ManagedEntity>,
     pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
     pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
+    pub(super) recipe_editor: Option<crate::template_flow::RecipeEditor>,
+    pub(super) template_run: Option<protocol::TemplateRunView>,
+    pub(super) template_runs: Option<pigade_storage::TemplateRunPage>,
+    pub(super) run_busy: bool,
+    pub(super) run_automatic: bool,
+    pub(super) run_unverified: bool,
+    pub(super) run_context_slot: usize,
     pub(super) layout_scroll: gpui::ScrollHandle,
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
@@ -404,6 +451,18 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Сессии", ProductAction::OpenSessions),
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
+        (
+            "Новая вкладка · implementer + reviewer",
+            ProductAction::ChoosePreset(crate::template_flow::Preset::Review),
+        ),
+        (
+            "Новая вкладка · два агента + shell",
+            ProductAction::ChoosePreset(crate::template_flow::Preset::AgentsShell),
+        ),
+        (
+            "Незавершённое создание вкладок",
+            ProductAction::OpenTemplateRuns,
+        ),
         (
             "Управление проектом · переименовать",
             ProductAction::ManageSelected(crate::catalog_flow::EntityKind::Project),
@@ -636,6 +695,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Context => index != 1,
         DialogKind::ProjectContext => true,
         DialogKind::LaunchReview => index == 1,
+        DialogKind::RecipeSlot => true,
         DialogKind::History => index == 1,
         _ => false,
     }
@@ -644,6 +704,12 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
 impl ProductUi {
     pub(super) fn menu_entries(&self) -> Vec<(String, ProductAction)> {
         match self.dialog.as_ref().map(|dialog| dialog.kind) {
+            Some(
+                DialogKind::Recipe
+                | DialogKind::TemplateRun
+                | DialogKind::TemplateRuns
+                | DialogKind::TemplateRunContext,
+            ) => self.recipe_menu_entries(),
             Some(DialogKind::Manage) => match &self.management_target {
                 Some(crate::catalog_flow::ManagedEntity::Project(project)) => vec![
                     ("Переименовать проект".into(), ProductAction::RenameTarget),
@@ -709,6 +775,12 @@ impl ProductUi {
                             ProductAction::ApplyLayout(template.id),
                         )
                     }));
+                }
+                if self.recipe_supported() {
+                    rows.push((
+                        "Незавершённое создание вкладок".into(),
+                        ProductAction::OpenTemplateRuns,
+                    ));
                 }
                 rows
             }
@@ -2334,6 +2406,8 @@ impl ProductUi {
             fields = fields.child(field);
         }
 
+        fields = self.template_dialog_fields(dialog, fields, cx);
+
         if dialog.kind == DialogKind::CreateProject {
             fields = fields.child(self.action_control(
                 "choose-project-parent".into(),
@@ -2624,7 +2698,17 @@ impl ProductUi {
         } else {
             self.action_control(
                 "product-dialog-submit".into(),
-                dialog.kind.submit_label().into(),
+                if dialog.kind == DialogKind::Recipe
+                    && self
+                        .recipe_editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.origin == crate::template_flow::Origin::NewTab)
+                {
+                    "Продолжить"
+                } else {
+                    dialog.kind.submit_label()
+                }
+                .into(),
                 if dialog.kind == DialogKind::Palette {
                     ProductAction::CloseDialog
                 } else {
@@ -2670,11 +2754,20 @@ impl ProductUi {
                     .role(Role::Dialog)
                     .aria_label(dialog.kind.title())
                     .w_full()
-                    .max_w(px(if dialog.kind == DialogKind::Layouts {
-                        560.
-                    } else {
-                        440.
-                    }))
+                    .max_w(px(
+                        if matches!(
+                            dialog.kind,
+                            DialogKind::Layouts
+                                | DialogKind::Recipe
+                                | DialogKind::NewTemplateTab
+                                | DialogKind::TemplateRun
+                                | DialogKind::TemplateRunContext
+                        ) {
+                            560.
+                        } else {
+                            440.
+                        },
+                    ))
                     .mx(px(16.))
                     .flex()
                     .flex_col()
@@ -2821,6 +2914,26 @@ impl ProductUi {
                                 cx.stop_propagation();
                             })),
                     )
+                    .children(self.recipe_supported().then(|| {
+                        self.icon_control(
+                            &format!("configure-template-{id}"),
+                            &format!("Агенты в шаблоне {}", template.name),
+                            "more",
+                            ProductAction::ConfigureTemplate(id),
+                            cx,
+                        )
+                    }))
+                    .children(
+                        (self.recipe_supported() && template.launches.is_some()).then(|| {
+                            self.icon_control(
+                                &format!("instantiate-template-{id}"),
+                                &format!("Новая вкладка по шаблону {}", template.name),
+                                "plus",
+                                ProductAction::NewTabFromTemplate(id),
+                                cx,
+                            )
+                        }),
+                    )
                     .child(self.icon_control(
                         &format!("delete-template-{id}"),
                         &format!("Удалить раскладку {}", template.name),
@@ -2839,9 +2952,22 @@ impl ProductUi {
                     .child("Раскладок пока нет. Сохраните удобное размещение панелей."),
             );
         }
+        if self.recipe_supported() {
+            rows = rows.child(self.action_control(
+                "template-runs-library".into(),
+                "Незавершённое создание вкладок".into(),
+                ProductAction::OpenTemplateRuns,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: dialog.active_field == templates.len() + 1,
+                    compact: false,
+                },
+                cx,
+            ));
+        }
         content.child(rows).child(
             div().text_size(px(11.)).text_color(colors.muted).child(
-                "↑ ↓ — выбрать · Enter — применить · Shift+Delete — удалить · Esc — закрыть",
+                "↑ ↓ — выбрать · Enter — геометрия · Ctrl+Enter — новая вкладка · Ctrl+E — агенты · Shift+Delete — удалить",
             ),
         )
     }

@@ -2769,3 +2769,91 @@ Integrate saved geometry layouts and usable project/workspace/tab management; pr
 - Files: crates/app/src/catalog_flow.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/setup_flow.rs, crates/app/Cargo.lock, README.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0004-durable-layout-transactions.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
 - Verification: Fresh cargo test --workspace:291 passed; app bootstrap test:183 passed; strict workspace/app Clippy, fmt, version and locked release builds pass. Private X11 catalog release02 passed save/resize/apply/exact undo/tab rename/dialog reopen/delete with 4 pane IDs and all 5 session/generation/PID identities preserved; saved/reopened screenshots inspected. Run01 failed before feature actions due fixture helper scope; fixed by reusing shared pane_ids. Root also corrected fixed toolbar coordinates, ASCII capitalization and delete selection in existing helper.
 - Risks / next: Full MVP gates remain open. Templates currently contain geometry only; launch settings remain required. Native proof is one private X11 workflow and dialog reopen, not app restart/Wayland/full accessibility. Existing manual host/CLI left running; older host disables templates. Preserve unrelated working-tree edits and deferred preferences stash.
+
+## 2026-10-17T22:43:56+00:00 — catalog_flow_luna
+
+Added schema 9 launch settings to saved geometry templates and bounded durable template-run persistence, including CAS, active quotas, pagination summaries, and atomic catalog/layout plus run commits.
+
+- Files: crates/storage/src/catalog.rs, crates/storage/src/template_run.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/conversation.rs, crates/storage/src/context.rs
+- Verification: cargo clippy -p pigade-storage --all-targets -- -D warnings passed; cargo test -p pigade-storage -- --nocapture passed 67 tests; git diff --check passed.
+- Risks / next: Host lane is integrating the public DTOs; ensure workspace schema-8 downgrade fixture omits template_runs and launches_json before setting user_version=8.
+
+## 2026-10-17T22:47:13+00:00 — recipe_native_luna
+
+Added bounded private-Xvfb recipes fixture for saved-template configuration and explicit four-shell launch progression
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: py_compile passed; two focused plan-only/catalog unittest cases passed; fixed X11 helper compiled; git diff --check passed; no native app or display run
+- Risks / next: Await integrated app/backend build; recipe run name must honor the custom NewTemplateTab name before fixture execution
+
+## 2026-10-17T22:47:25+00:00 — /root/layout_templates_luna
+
+Implemented durable explicitly advanced template launch runs: frozen prepared plans, exact future tab, bounded run commands/DTOs, one launch per advance, crash-aware reconciliation, atomic final geometry/run completion, and real-shell coverage.
+
+- Files: crates/session-host/src/template_run.rs, crates/session-host/src/prepared.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo check -p pigade-session-host --tests; cargo test -p pigade-session-host --test template_run -- --nocapture (1 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check -- crates/session-host
+- Risks / next: Root owns app integration and workspace verification; host fixture covers prepare/reopen/two explicit advances/final geometry/undo-redo, but no injected unknown-launch crash was exercised.
+
+## 2026-10-17T22:49:52+00:00 — /root/layout_templates_luna
+
+Closed template-run ownership bypasses and durable binding gaps: frozen plans carry a run owner, generic launch routes reject template identities, resume plans are unowned, and persisted run decoding validates unique identities and slot binding before launch. Added deterministic attempting-phase reopen lock coverage.
+
+- Files: crates/session-host/src/prepared.rs, crates/session-host/src/template_run.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/lib.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo test -p pigade-session-host --test template_run -- --nocapture (1 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check -- crates/session-host
+- Risks / next: Root owns final app/whole-workspace verification and integration.
+
+## 2026-10-17T22:51:43+00:00 — /root/layout_templates_luna
+
+Hardened the replay-cache orphan test against parallel test forks: a sibling test briefly inherits the lease flock before CLOEXEC closes it, so nonblocking cleanup correctly preserves the cache. The test now retries collection for a bounded interval after dropping its exact owner lease; production lease and collector behavior is unchanged.
+
+- Files: crates/session-host/src/replay_cache.rs
+- Verification: Reproduced failure with cargo test -p pigade-session-host --lib replay_cache::tests -- --test-threads=16 before change; same focused parallel suite passes 7/7 after change; strict host Clippy and rustfmt/diff checks pass.
+- Risks / next: Root owns full workspace verification; production cleanup remains nonblocking and exact-lease guarded.
+
+## 2026-10-17T22:52:51+00:00 — catalog_flow_luna
+
+Expose shared LaunchSettings validation and reuse it for catalog writes and hydration.
+
+- Files: crates/storage/src/catalog.rs
+- Verification: cargo fmt --all --check; cargo test -p pigade-storage template_launch_settings_are_additive_bounded_and_match_geometry -- --nocapture (1 passed); git diff --check -- crates/storage/src/catalog.rs
+- Risks / next: Storage-only change complete; root should rerun app integration compile.
+
+## 2026-10-17T22:52:53+00:00 — /root/layout_templates_luna
+
+Updated user and developer documentation for schema9 optional template launch settings and durable explicit template runs; kept geometry-only behavior, no-mandatory-form flow, review fields, and historical verification limits clear.
+
+- Files: README.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0004-durable-layout-transactions.md
+- Verification: Read template UI/flow/command sources; rg stale schema8/unimplemented claims; git diff --check -- listed docs
+- Risks / next: Root owns current coherent UI/native/whole-workspace verification; docs intentionally make no new verification claim.
+
+## 2026-10-17T22:53:04+00:00 — recipe_native_luna
+
+Extended the private pointer fixture to prove stationary-cursor keyboard focus, hover restoration, and an off-center source-to-target right-side drag.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Pointer plan-only unittest passed; py_compile passed; git diff --check passed; fixed X11 helper compiled to /tmp. No native fixture or desktop input run.
+- Risks / next: Parent owns release and isolated native execution; inspect pointer-drag.ppm and confirm the fixed geometry yields the asserted right-side insertion.
+
+## 2026-10-17T22:59:07+00:00 — /root/layout_templates_luna
+
+Fixed template-run first advance selection CAS by retaining current selection revision; regression now advances canvas selection before preparing and advancing a real-PTY run.
+
+- Files: crates/session-host/src/template_run.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo test -p pigade-session-host --test template_run -- --nocapture (1 passed); cargo fmt --all --check; cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check
+- Risks / next: Root owns full app/workspace integration and release verification.
+
+## 2026-10-17T22:59:48+00:00 — recipe_native_luna
+
+Made recipe-run observation tolerant of UI ACKs skipped between polls while preserving final generation, original-identity, and durable launch-plan checks.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Recipe plan-only unittest passed; Python compilation passed; git diff --check passed. No native fixture run.
+- Risks / next: Parent may rerun the private recipe fixture after backend release build; validation now uses a coherent run snapshot during progress and exact final host/storage identities.
+
+## 2026-10-17T23:01:21+00:00 — root
+
+Integrate schema9 saved agent configurations and durable template-run UI; retain pointer grab position and verify hover focus, Dwindle drop and exact undo
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/template_flow.rs, crates/app/src/template_ui.rs, crates/app/src/template_commands.rs, crates/app/src/pointer_layout.rs, crates/app/README.md, crates/session-host/src/template_run.rs, crates/session-host/tests/template_run.rs, crates/storage/src/catalog.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, DESIGN.md, SPEC.md, CHANGELOG.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: Workspace298 tests passed, then selection-CAS real-PTY regression and strict host Clippy passed after native-discovered fix; app186 tests,29 harness tests, strict workspace/app Clippy, fmt/version and release builds pass. Private release pointer02 passes hover input routing/stationary-keyboard focus/off-center preview/cancel/exact sibling drop/undo with stable IDs/PIDs and no preview PTY resize; captures inspected. Private recipe05 passes explicit four-shell new-tab flow with five original process identities retained and four durable new generations; editor/review/final captures inspected.
+- Risks / next: Full MVP/platform/provider/performance gates remain open. Header-specific pointer path lacks native coverage. Retain failed native attempts: pointer01 coordinate assumption corrected; recipe01 capitalization corrected;02/03 exposed selection CAS fixed;04 failed closed before input at Xvfb displayfd handshake. Preserve unrelated edits and deferred preferences stash; live user desktop/host/CLI were not restarted.

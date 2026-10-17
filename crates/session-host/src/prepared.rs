@@ -65,8 +65,8 @@ pub struct ResumeSource {
     pub previous_head: Uuid,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
-struct BinaryIdentity {
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct BinaryIdentity {
     device: u64,
     inode: u64,
     length: u64,
@@ -90,142 +90,204 @@ fn binary_identity(path: &Path) -> Result<BinaryIdentity> {
     })
 }
 
-#[derive(Serialize, Deserialize)]
-struct StoredPlan {
-    preview: LaunchPreview,
-    launch: Launch,
-    workspace: Uuid,
-    executable_identity: BinaryIdentity,
-    placement: Option<LayoutCommand>,
-    requested_revision: Uuid,
-    applied_revision: Option<Uuid>,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct StoredPlan {
+    pub(crate) preview: LaunchPreview,
+    pub(crate) launch: Launch,
+    pub(crate) workspace: Uuid,
+    pub(crate) executable_identity: BinaryIdentity,
+    pub(crate) placement: Option<LayoutCommand>,
+    pub(crate) requested_revision: Uuid,
+    pub(crate) applied_revision: Option<Uuid>,
+    /// Template runs own their frozen plans until that explicit run advances.
+    #[serde(default)]
+    pub(crate) template_run: Option<Uuid>,
 }
 
 pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<LaunchPreview> {
     panel_launch::mark_preflight((|| {
         let catalog = catalog::read_metadata(&host.metadata)?;
-        let tab = catalog
-            .tabs
-            .iter()
-            .find(|tab| tab.id == request.tab)
-            .context("target tab is missing")?;
-        let workspace = catalog
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == tab.workspace_id)
-            .context("workspace is missing")?;
-        ensure!(
-            workspace.status == WorkspaceStatus::Ready && workspace.cwd.is_dir(),
-            "workspace is not ready"
-        );
-        let executable = panel_launch::resolve_provider(&request.provider)?;
-        let identity = binary_identity(&executable)?;
-        let info = adapters::inspect(&request.provider, &executable)?;
-        ensure!(
-            identity == binary_identity(&executable)?,
-            "CLI changed during inspection; review again"
-        );
-        let (context, memory) = host.metadata.effective_context_with_memory_selection(
-            workspace.project_id,
-            workspace.id,
-            &workspace.task,
-            workspace.revision,
-            &request.role_override,
-            &request.agent_instructions,
-            request.include_memory,
-            request.memory_selection.as_ref(),
-        )?;
-        let session = Uuid::new_v4();
-        let generation = Uuid::new_v4();
-        let plan_id = Uuid::new_v4();
-        let placement = LayoutCommand::Insert {
-            tab: tab.id,
-            pane: session,
-            target: request.target,
-            side: request.side,
-            split: Uuid::new_v4(),
-        };
-        let model = LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(
-            &catalog.layout.json,
-        )?)?;
-        model.preview(placement.clone())?;
-        let mut unavailable_reason = None;
-        let mut arguments = (Vec::new(), Default::default());
-        let needs_transport = request.deliver_context && !context.text.is_empty();
-        if needs_transport {
-            if info.capabilities.startup_context {
-                match adapters::context_arguments(&info, &context.text) {
-                    Ok(result) => arguments = result,
-                    Err(error) => unavailable_reason = Some(error.to_string()),
-                }
-            } else {
-                unavailable_reason = info.unsupported_reason.clone().or_else(|| Some("Для этой версии CLI доставка контекста не подтверждена. Можно явно выбрать запуск без контекста.".into()));
-            }
-        }
-        let mut warnings = if needs_transport && unavailable_reason.is_none() {
-            vec!["Контекст передаётся через параметры запуска. Подтверждения получения и применения моделью нет.".into(),
-                "Инструкции роли не изменяют права, sandbox или политику CLI.".into()]
-        } else {
-            Vec::new()
-        };
-        if needs_transport && request.provider == "codex" && unavailable_reason.is_none() {
-            warnings.push("Для этого запуска значение developer_instructions задаётся сохранённым снимком. Пользовательские файлы конфигурации не меняются.".into());
-        }
-        let preview = LaunchPreview {
-            plan_id,
-            tab_id: tab.id,
-            side: request.side,
-            target: request.target,
-            session,
-            generation,
-            provider: request.provider,
-            cli_version: info.cli_version,
-            adapter_version: info.adapter_version,
-            delivery_method: if needs_transport {
-                info.delivery_method
-            } else {
-                "none".into()
-            },
-            context,
-            capabilities: info.capabilities,
-            include_memory: request.include_memory,
-            memory: Some(memory),
-            role_override: request.role_override,
-            agent_instructions: request.agent_instructions,
-            deliver_context: request.deliver_context,
-            can_launch: unavailable_reason.is_none(),
-            unavailable_reason,
-            warnings,
-            executable: Some(executable.clone()),
-            cwd: Some(workspace.cwd.clone()),
-            conversation: None,
-            resume: None,
-        };
-        let plan = StoredPlan {
-            requested_revision: preview.context.id,
-            applied_revision: None,
-            preview: preview.clone(),
-            launch: Launch {
-                session,
-                generation,
-                operation: plan_id,
-                executable,
-                args: arguments.0,
-                env: arguments.1,
-                cwd: workspace.cwd.clone(),
-                geometry: pigade_terminal::Geometry::new(36, 120)?,
-            },
-            workspace: workspace.id,
-            executable_identity: identity,
-            placement: Some(placement),
-        };
+        let plan = build_plan(host, &catalog, request)?;
+        let preview = plan.preview.clone();
         host.metadata
-            .save_prepared_launch(plan_id, &serde_json::to_string(&plan)?)?;
+            .save_prepared_launch(preview.plan_id, &serde_json::to_string(&plan)?)?;
         Ok(preview)
     })())
 }
 
+/// Freeze one launch using the supplied catalog snapshot. Template runs pass a
+/// virtual catalog whose tab and placement history contain the fixed prior
+/// insertions; this function still performs the same CLI/context preflight.
+pub(crate) fn build_plan(
+    host: &mut Host,
+    catalog: &Catalog,
+    request: PrepareRequest,
+) -> Result<StoredPlan> {
+    let tab = catalog
+        .tabs
+        .iter()
+        .find(|tab| tab.id == request.tab)
+        .context("target tab is missing")?;
+    let workspace = catalog
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == tab.workspace_id)
+        .context("workspace is missing")?;
+    ensure!(
+        workspace.status == WorkspaceStatus::Ready && workspace.cwd.is_dir(),
+        "workspace is not ready"
+    );
+    let executable = panel_launch::resolve_provider(&request.provider)?;
+    let identity = binary_identity(&executable)?;
+    let info = adapters::inspect(&request.provider, &executable)?;
+    ensure!(
+        identity == binary_identity(&executable)?,
+        "CLI changed during inspection; review again"
+    );
+    let (context, memory) = host.metadata.effective_context_with_memory_selection(
+        workspace.project_id,
+        workspace.id,
+        &workspace.task,
+        workspace.revision,
+        &request.role_override,
+        &request.agent_instructions,
+        request.include_memory,
+        request.memory_selection.as_ref(),
+    )?;
+    let session = Uuid::new_v4();
+    let generation = Uuid::new_v4();
+    let plan_id = Uuid::new_v4();
+    let placement = LayoutCommand::Insert {
+        tab: tab.id,
+        pane: session,
+        target: request.target,
+        side: request.side,
+        split: Uuid::new_v4(),
+    };
+    let model =
+        LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(&catalog.layout.json)?)?;
+    model.preview(placement.clone())?;
+    let mut unavailable_reason = None;
+    let mut arguments = (Vec::new(), Default::default());
+    let needs_transport = request.deliver_context && !context.text.is_empty();
+    if needs_transport {
+        if info.capabilities.startup_context {
+            match adapters::context_arguments(&info, &context.text) {
+                Ok(result) => arguments = result,
+                Err(error) => unavailable_reason = Some(error.to_string()),
+            }
+        } else {
+            unavailable_reason = info.unsupported_reason.clone().or_else(|| Some("Для этой версии CLI доставка контекста не подтверждена. Можно явно выбрать запуск без контекста.".into()));
+        }
+    }
+    let mut warnings = if needs_transport && unavailable_reason.is_none() {
+        vec!["Контекст передаётся через параметры запуска. Подтверждения получения и применения моделью нет.".into(),
+            "Инструкции роли не изменяют права, sandbox или политику CLI.".into()]
+    } else {
+        Vec::new()
+    };
+    if needs_transport && request.provider == "codex" && unavailable_reason.is_none() {
+        warnings.push("Для этого запуска значение developer_instructions задаётся сохранённым снимком. Пользовательские файлы конфигурации не меняются.".into());
+    }
+    let preview = LaunchPreview {
+        plan_id,
+        tab_id: tab.id,
+        side: request.side,
+        target: request.target,
+        session,
+        generation,
+        provider: request.provider,
+        cli_version: info.cli_version,
+        adapter_version: info.adapter_version,
+        delivery_method: if needs_transport {
+            info.delivery_method
+        } else {
+            "none".into()
+        },
+        context,
+        capabilities: info.capabilities,
+        include_memory: request.include_memory,
+        memory: Some(memory),
+        role_override: request.role_override,
+        agent_instructions: request.agent_instructions,
+        deliver_context: request.deliver_context,
+        can_launch: unavailable_reason.is_none(),
+        unavailable_reason,
+        warnings,
+        executable: Some(executable.clone()),
+        cwd: Some(workspace.cwd.clone()),
+        conversation: None,
+        resume: None,
+    };
+    Ok(StoredPlan {
+        requested_revision: preview.context.id,
+        applied_revision: None,
+        preview: preview.clone(),
+        launch: Launch {
+            session,
+            generation,
+            operation: plan_id,
+            executable,
+            args: arguments.0,
+            env: arguments.1,
+            cwd: workspace.cwd.clone(),
+            geometry: pigade_terminal::Geometry::new(36, 120)?,
+        },
+        workspace: workspace.id,
+        executable_identity: identity,
+        placement: Some(placement),
+        template_run: None,
+    })
+}
+
+pub(crate) fn validate_stored_plan(plan: &StoredPlan) -> Result<()> {
+    validate_plan(plan)
+}
+
+/// Raw launch commands must not impersonate a frozen template-owned generation.
+pub(crate) fn guard_direct_launch(
+    host: &Host,
+    operation: Uuid,
+    session: Uuid,
+    generation: Uuid,
+) -> Result<()> {
+    if let Some((payload, _)) = host.metadata.prepared_launch(operation)? {
+        let plan: StoredPlan = serde_json::from_str(&payload)?;
+        ensure!(
+            plan.template_run.is_none(),
+            "launch identity is reserved by a template run"
+        );
+    }
+    if let Some((payload, _)) = host
+        .metadata
+        .prepared_launch_for_generation(session, generation)?
+    {
+        let plan: StoredPlan = serde_json::from_str(&payload)?;
+        ensure!(
+            plan.template_run.is_none(),
+            "session generation is reserved by a template run"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn start(host: &mut Host, plan_id: Uuid) -> Result<(Catalog, LaunchPreview)> {
+    start_owned(host, plan_id, None)
+}
+
+pub(crate) fn start_for_template(
+    host: &mut Host,
+    run_id: Uuid,
+    plan_id: Uuid,
+) -> Result<(Catalog, LaunchPreview)> {
+    start_owned(host, plan_id, Some(run_id))
+}
+
+fn start_owned(
+    host: &mut Host,
+    plan_id: Uuid,
+    expected_template_run: Option<Uuid>,
+) -> Result<(Catalog, LaunchPreview)> {
     host.reconcile_exits()?;
     let (payload, phase) = host
         .metadata
@@ -242,6 +304,10 @@ pub(crate) fn start(host: &mut Host, plan_id: Uuid) -> Result<(Catalog, LaunchPr
         "operation already has a launch record; reconcile it before doing anything else"
     );
     let plan: StoredPlan = serde_json::from_str(&payload)?;
+    ensure!(
+        plan.template_run == expected_template_run,
+        "prepared launch is owned by a template run or has an unexpected owner"
+    );
     let (catalog, _) = panel_launch::mark_preflight((|| -> Result<_> {
         ensure!(
             plan.preview.plan_id == plan_id && plan.launch.operation == plan_id,
@@ -482,6 +548,9 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
         plan.launch.env = args.1;
         plan.executable_identity = identity;
         plan.placement = None;
+        // Explicit PrepareResume is a fresh user action over the validated
+        // source generation; it must not inherit a cancelled template owner.
+        plan.template_run = None;
         validate_plan(&plan)?;
         host.metadata
             .save_prepared_launch(plan.preview.plan_id, &serde_json::to_string(&plan)?)?;

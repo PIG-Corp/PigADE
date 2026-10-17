@@ -115,5 +115,7 @@ pub(crate) fn response(
         generation_selection: None,
         history_view: None,
         providers: None,
+        template_run: None,
+        template_runs: None,
     }
 }

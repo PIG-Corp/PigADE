@@ -12,6 +12,7 @@ pub mod input;
 mod panel_launch;
 mod prepared;
 mod projects;
+mod template_run;
 pub use catalog::LayoutAction;
 mod ipc_server;
 pub mod journal_policy;
@@ -46,6 +47,9 @@ use uuid::Uuid;
 
 pub use adapters::Capabilities as AdapterCapabilities;
 pub use prepared::{LaunchPreview, PrepareRequest, ResumeSource};
+pub use template_run::{
+    TemplateRunRequest, TemplateRunSlotView, TemplateRunSource, TemplateRunView,
+};
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
@@ -152,6 +156,23 @@ pub enum Command {
     },
     PrepareResume {
         session: Uuid,
+    },
+    PrepareTemplateRun {
+        request: TemplateRunRequest,
+    },
+    GetTemplateRun {
+        run: Uuid,
+    },
+    AdvanceTemplateRun {
+        run: Uuid,
+        expected_revision: u64,
+    },
+    CancelTemplateRun {
+        run: Uuid,
+        expected_revision: u64,
+    },
+    ListTemplateRuns {
+        before: Option<u64>,
     },
     GetSessionContext {
         session: Uuid,
@@ -280,6 +301,10 @@ pub struct Response {
     pub history_view: Option<history_view::Reply>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<Vec<ProviderInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_run: Option<TemplateRunView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_runs: Option<pigade_storage::TemplateRunPage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -635,6 +660,8 @@ fn provider_response(
         generation_selection: None,
         history_view: None,
         providers: Some(providers),
+        template_run: None,
+        template_runs: None,
     }
 }
 
@@ -957,6 +984,8 @@ impl Host {
                 generation_selection: None,
                 history_view: None,
                 providers: None,
+                template_run: None,
+                template_runs: None,
             });
         }
         if matches!(
@@ -1001,6 +1030,8 @@ impl Host {
                 generation_selection: None,
                 history_view: None,
                 providers: None,
+                template_run: None,
+                template_runs: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -1024,6 +1055,8 @@ impl Host {
                 generation_selection: None,
                 history_view: None,
                 providers: None,
+                template_run: None,
+                template_runs: None,
             });
         }
         match &command {
@@ -1048,6 +1081,8 @@ impl Host {
                     generation_selection: Some(true),
                     history_view: None,
                     providers: None,
+                    template_run: None,
+                    template_runs: None,
                 });
             }
             Command::SelectGeneration {
@@ -1075,11 +1110,40 @@ impl Host {
                     generation_selection: Some(true),
                     history_view: None,
                     providers: None,
+                    template_run: None,
+                    template_runs: None,
                 });
             }
             Command::PrepareLaunch { request } => {
                 let preview = prepared::prepare(self, request.clone())?;
                 return Ok(self.launch_response(None, preview, None));
+            }
+            Command::PrepareTemplateRun { request } => {
+                let run = template_run::prepare(self, request.clone())?;
+                return Ok(self.template_run_response(Some(run), None, None));
+            }
+            Command::GetTemplateRun { run } => {
+                let view = template_run::get(self, *run)?;
+                return Ok(self.template_run_response(Some(view), None, None));
+            }
+            Command::AdvanceTemplateRun {
+                run,
+                expected_revision,
+            } => {
+                let view = template_run::advance(self, *run, *expected_revision)?;
+                let catalog = catalog::read_metadata(&self.metadata)?;
+                return Ok(self.template_run_response(Some(view), None, Some(catalog)));
+            }
+            Command::CancelTemplateRun {
+                run,
+                expected_revision,
+            } => {
+                let view = template_run::cancel(self, *run, *expected_revision)?;
+                return Ok(self.template_run_response(Some(view), None, None));
+            }
+            Command::ListTemplateRuns { before } => {
+                let runs = template_run::list(self, *before)?;
+                return Ok(self.template_run_response(None, Some(runs), None));
             }
             Command::PrepareResume { session } => {
                 let preview = prepared::prepare_resume(self, *session)?;
@@ -1170,6 +1234,8 @@ impl Host {
                     generation_selection: None,
                     history_view: None,
                     providers: None,
+                    template_run: None,
+                    template_runs: None,
                 });
             }
         };
@@ -1192,6 +1258,8 @@ impl Host {
             generation_selection: Some(true),
             history_view: None,
             providers: None,
+            template_run: None,
+            template_runs: None,
         })
     }
     fn launch_response(
@@ -1219,6 +1287,37 @@ impl Host {
             generation_selection: None,
             history_view: None,
             providers: None,
+            template_run: None,
+            template_runs: None,
+        }
+    }
+    fn template_run_response(
+        &self,
+        template_run: Option<TemplateRunView>,
+        template_runs: Option<pigade_storage::TemplateRunPage>,
+        catalog: Option<pigade_storage::Catalog>,
+    ) -> Response {
+        Response {
+            protocol: PROTOCOL,
+            views: Vec::new(),
+            error: None,
+            rejected_before_admission: None,
+            catalog,
+            selection: None,
+            context: None,
+            launch_preview: None,
+            launch_phase: None,
+            catalog_notice: None,
+            recovery: self.recovery.response(),
+            selected: None,
+            history_chunk: None,
+            change_token: None,
+            generations: None,
+            generation_selection: None,
+            history_view: None,
+            providers: None,
+            template_run,
+            template_runs,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -1340,6 +1439,7 @@ impl Host {
     fn handle(&mut self, command: Command) -> Result<Vec<View>> {
         self.reconcile_exits()?;
         if let Command::Launch { spec } = command {
+            prepared::guard_direct_launch(self, spec.operation, spec.session, spec.generation)?;
             return self.launch(spec);
         }
         if matches!(command, Command::List) {
@@ -2402,6 +2502,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 generation_selection: None,
                 history_view: None,
                 providers: None,
+                template_run: None,
+                template_runs: None,
             },
         };
         let _ = job.reply.try_send(response);

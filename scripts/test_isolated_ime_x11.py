@@ -246,12 +246,16 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
+                      'pointer-hover-source', 'pointer-keyboard-away', 'pointer-move-right-near',
                       'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
         self.assertIn('strcmp(response, "CANCEL\\n")', source)
         self.assertIn('XK_p, XK_i, XK_g, XK_a, XK_d, XK_e', source)
+        self.assertIn('pointer_position(dpy, app, 350, 250)', source)
+        self.assertIn("move_siblings == ('Horizontal', [right_pane, left_pane])",
+                      Path(__file__).with_name('isolated-ime-x11.py').read_text())
         ime_stage = source.split('} else if (!strcmp(a.stage, "pointer-ime-input")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "pointer-ime-cancel")) {', 1)[0]
         self.assertLess(ime_stage.index('nanosleep'), ime_stage.index('capture(dpy, a.output)'))
@@ -283,6 +287,38 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-mutate', 'catalog-rename-tab'):
             self.assertIn(f'\"{stage}\"', helper)
         self.assertIn('session_generation_pid_identities_unchanged', source)
+
+    def test_recipes_mode_is_plan_only_and_uses_only_fixed_input_stages(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'recipes']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'recipes')
+        self.assertEqual(plan['status'], 'plan-only-no-process-no-write')
+        self.assertIn('explicitly confirm', plan['input']['recipes'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        for action in ('select-first', 'open-editor', 'save-editor', 'new-tab', 'name-tab',
+                       'submit-name', 'confirm-run'):
+            self.assertIn(f"'{action}'", source)
+        for evidence in ('original_five_process_identities_unchanged',
+                         'no_process_or_tab_before_explicit_confirm',
+                         'revision_observer_allows_skipped_acknowledgements',
+                         'active_run_list_empty_after_completion'):
+            self.assertIn(evidence, source)
+        observer = source.split("recipe_key_action(config, 'confirm-run')", 1)[1].split(
+            "expected_pairs =", 1)[0]
+        self.assertNotIn('fixture_generations()', observer)
+        self.assertNotIn('added_identities', observer)
+        self.assertIn('set(original_identities).issubset(set(final_identities))', source)
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for stage in ('recipe-select-first', 'recipe-open-editor', 'recipe-save-editor', 'recipe-new-tab',
+                      'recipe-name-tab', 'recipe-submit-name', 'recipe-confirm-run'):
+            self.assertIn(f'"{stage}"', helper)
+        self.assertNotIn('--text', helper)
+        self.assertNotIn('--coordinates', helper)
 
     def run_raw_fixture(self, expected, delivered):
         with tempfile.TemporaryDirectory() as temporary:

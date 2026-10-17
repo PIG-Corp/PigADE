@@ -2,12 +2,21 @@
 
 ## 0.0.1-dev — in development
 
+- Refine pointer dragging to retain the original relative grab point, including header/edge grabs; extend the private native fixture with stationary-pointer keyboard focus and exact Dwindle sibling insertion assertions.
+
 - Project/workspace/tab management menus, revision-checked rename, workspace
   archive/restore without stopping CLI, and archived checkout identity checks.
 - Saved geometry layouts with native thumbnails, keyboard navigation, CAS
   save/delete and single-step undoable application to existing stable panes.
-  SQLite schema8 backs up existing metadata before migration. Launch settings
-  in templates remain unimplemented; no sessions are created by applying geometry.
+  SQLite schema9 adds optional per-slot launch settings and durable template-run
+  records, with a backed-up v8 migration. Four new-tab presets are available;
+  custom launch configuration remains optional. A run first freezes and reviews
+  the workspace, process count, working directory and each slot's context. It
+  creates no tab or process until explicitly advanced, then starts at most one
+  CLI per user action. Applying a saved layout to an existing tab remains an
+  undoable geometry operation and does not launch processes. Geometry-only
+  templates remain valid; older hosts without launch-schema support report the
+  feature unavailable and are not restarted automatically.
 
 - Terminal listener retains only live response FIFO and the final ordered title
   update. Ignored UI/clipboard/bell and replay response events no longer build a

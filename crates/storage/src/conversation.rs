@@ -411,6 +411,7 @@ mod tests {
                  DROP TRIGGER conversation_bindings_no_update;
                  DROP TRIGGER conversation_bindings_no_delete;
                  DROP TABLE conversation_bindings;
+                 DROP TABLE template_runs;
                  DROP TABLE layout_templates;
                  PRAGMA user_version=5;",
             )?;
@@ -421,7 +422,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            8
+            9
         );
         assert_eq!(store.catalog()?.projects[0].name, "Preserved project");
         assert_eq!(store.catalog()?.workspaces[0].id, workspace);
@@ -435,7 +436,7 @@ mod tests {
         assert_eq!(context.content_hash.len(), 64);
         assert_eq!(store.get_launch(operation)?.unwrap().session_id, session);
         let backup_path = store.migration_backup_path().context("v5 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v8."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v9."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(

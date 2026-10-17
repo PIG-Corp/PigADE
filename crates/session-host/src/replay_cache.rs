@@ -440,6 +440,21 @@ mod tests {
         }
     }
 
+    /// Another unit test may fork while this test owns a lease. The child
+    /// briefly inherits the flock open-file description before CLOEXEC closes
+    /// it at exec. Production cleanup must remain nonblocking and preserve the
+    /// cache during that window, so an orphan assertion retries only here.
+    fn collect_released_lease(parent: &Path) -> CleanupReport {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let report = cleanup(parent);
+            if report.collected > 0 || Instant::now() >= deadline {
+                return report;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
     fn current_lease_and_unknown_objects_are_preserved() -> Result<()> {
         let parent = tempfile::tempdir()?;
@@ -604,7 +619,7 @@ mod tests {
         let ReplayCache { _lease, temporary } = cache;
         let retained = temporary.keep();
         drop(_lease);
-        assert_eq!(cleanup(parent.path()).collected, 1);
+        assert_eq!(collect_released_lease(parent.path()).collected, 1);
         assert!(!retained.exists());
         source.profile.push_str(";unknown");
         assert!(ReplayCache::create(parent.path(), &source).is_err());

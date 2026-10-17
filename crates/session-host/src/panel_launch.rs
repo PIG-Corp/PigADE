@@ -46,6 +46,7 @@ pub(crate) fn launch_in_tab(
     target: Option<Uuid>,
 ) -> Result<Catalog> {
     let (executable, cwd, geometry, layout_revision, placement) = mark_preflight((|| {
+        crate::prepared::guard_direct_launch(host, operation, session, generation)?;
         let executable = resolve_provider(&provider)?;
         let catalog_before = catalog::read_metadata(&host.metadata)?;
         let tab = catalog_before

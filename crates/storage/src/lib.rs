@@ -10,6 +10,7 @@ mod journal;
 mod launch;
 mod memory;
 mod prepared_launch;
+mod template_run;
 
 pub use catalog::*;
 pub use context::*;
@@ -17,6 +18,7 @@ pub use conversation::*;
 pub use journal::*;
 pub use launch::*;
 pub use memory::*;
+pub use template_run::*;
 
 use std::{fs::File, os::fd::AsRawFd};
 

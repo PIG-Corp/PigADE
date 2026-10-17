@@ -5,16 +5,29 @@ use std::collections::BTreeMap;
 use pigade_layout::{Command, Direction, LayoutModel, LayoutState, PaneRect, Rect, TabLayout};
 use uuid::Uuid;
 
-/// Return a temporary rectangle centered on the pointer while a tiled pane is dragged.
-pub(crate) fn floating_rect(source: Rect, pointer_x: f64, pointer_y: f64) -> Option<Rect> {
-    if !valid_rect(source) || !pointer_x.is_finite() || !pointer_y.is_finite() {
+/// Map the original grab point onto the temporary, smaller dragged pane.
+/// Grabbing a header or an edge must not jump the pane's center to the cursor.
+pub(crate) fn floating_rect(
+    source: Rect,
+    grab_x: f64,
+    grab_y: f64,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Option<Rect> {
+    if !valid_rect(source)
+        || ![grab_x, grab_y, pointer_x, pointer_y]
+            .into_iter()
+            .all(f64::is_finite)
+    {
         return None;
     }
     let width = source.width * 0.85;
     let height = source.height * 0.85;
+    let grip_x = ((grab_x - source.x) / source.width).clamp(0.0, 1.0);
+    let grip_y = ((grab_y - source.y) / source.height).clamp(0.0, 1.0);
     let rect = Rect {
-        x: pointer_x - width / 2.0,
-        y: pointer_y - height / 2.0,
+        x: pointer_x - width * grip_x,
+        y: pointer_y - height * grip_y,
         width,
         height,
     };
@@ -185,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn floating_geometry_is_centered_and_eighty_five_percent() {
+    fn floating_geometry_preserves_the_grab_point_and_eighty_five_percent() {
         let rect = floating_rect(
             Rect {
                 x: 10.0,
@@ -193,6 +206,8 @@ mod tests {
                 width: 200.0,
                 height: 100.0,
             },
+            60.0,
+            30.0,
             300.0,
             250.0,
         )
@@ -200,11 +215,32 @@ mod tests {
         assert_eq!(rect.width, 170.0);
         assert_eq!(rect.height, 85.0);
         assert_eq!(
-            (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0),
+            (rect.x + rect.width * 0.25, rect.y + rect.height * 0.1),
             (300.0, 250.0)
         );
-        assert!(floating_rect(Rect { width: 0.0, ..rect }, 1.0, 1.0).is_none());
-        assert!(floating_rect(rect, f64::NAN, 1.0).is_none());
+        assert!(floating_rect(Rect { width: 0.0, ..rect }, 1., 1., 1., 1.).is_none());
+        assert!(floating_rect(rect, 1., 1., f64::NAN, 1.).is_none());
+        assert!(floating_rect(rect, f64::NAN, 1., 1., 1.).is_none());
+    }
+
+    #[test]
+    fn floating_motion_is_translation_without_cumulative_drift() {
+        let source = Rect {
+            x: 10.,
+            y: 20.,
+            width: 200.,
+            height: 100.,
+        };
+        // A header grab remains near the top; moving back recovers the exact
+        // initial preview, independently of intermediate samples or repaints.
+        let initial = floating_rect(source, 50., 22., 50., 22.).unwrap();
+        let moved = floating_rect(source, 50., 22., 550., 322.).unwrap();
+        assert_eq!(moved.x - initial.x, 500.);
+        assert_eq!(moved.y - initial.y, 300.);
+        assert_eq!(floating_rect(source, 50., 22., 50., 22.), Some(initial));
+        let edge = floating_rect(source, -100., 500., 400., 300.).unwrap();
+        assert_eq!(edge.x, 400.);
+        assert_eq!(edge.y + edge.height, 300.);
     }
 
     #[test]

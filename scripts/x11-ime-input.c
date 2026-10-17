@@ -1,6 +1,6 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only fixed compose/commit,
- * EN/RU/CLI, workspace-context and generation-history sequences can synthesize input,
+ * EN/RU/CLI, workspace-context, generation-history and template-recipe sequences can synthesize input,
  * after private-server ownership checks. The latency stage uses50 fixed
  * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
@@ -84,7 +84,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-save") &&
         strcmp(a.stage, "catalog-apply") && strcmp(a.stage, "catalog-undo") &&
         strcmp(a.stage, "catalog-delete") && strcmp(a.stage, "catalog-mutate") &&
-        strcmp(a.stage, "catalog-rename-tab") && strcmp(a.stage, "setup-open") &&
+        strcmp(a.stage, "catalog-rename-tab") && strcmp(a.stage, "recipe-select-first") &&
+        strcmp(a.stage, "recipe-open-editor") &&
+        strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
+        strcmp(a.stage, "recipe-name-tab") && strcmp(a.stage, "recipe-submit-name") &&
+        strcmp(a.stage, "recipe-confirm-run") && strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
         strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
@@ -99,6 +103,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled") &&
         strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
+        strcmp(a.stage, "pointer-hover-source") &&
+        strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
         strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
         strcmp(a.stage, "pointer-ime-input") && strcmp(a.stage, "pointer-ime-cancel") &&
@@ -517,10 +523,12 @@ static void pointer_drag_begin(Display *dpy, Window app) {
     KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
     if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
         fail("pointer drag modifier press failed");
-    pointer_position(dpy, app, 485, 250);
+    /* Start left of center so the held capture exposes the original grip offset. */
+    pointer_position(dpy, app, 350, 250);
     if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
         fail("pointer drag button press failed");
-    pointer_position(dpy, app, 1015, 250);
+    /* The detached target spans x755..1280; stay clearly in its right half. */
+    pointer_position(dpy, app, 1100, 250);
     XSync(dpy, False);
 }
 
@@ -860,6 +868,23 @@ int main(int argc, char **argv) {
             setup_prefix(dpy, XK_r, 0); key(dpy, XK_Right); key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-rename-tab")) {
             catalog_rename_tab(dpy, app_window);
+        } else if (!strcmp(a.stage, "recipe-select-first")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "recipe-open-editor")) {
+            modified_key(dpy, XK_Control_L, XK_e);
+        } else if (!strcmp(a.stage, "recipe-save-editor")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-new-tab")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-name-tab")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym name[] = { XK_e, XK_c, XK_i, XK_p, XK_e };
+            for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
+        } else if (!strcmp(a.stage, "recipe-submit-name")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-confirm-run")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "setup-open")) {
             setup_click(dpy, app_window, 885, 435);
         } else if (!strcmp(a.stage, "setup-create")) {
@@ -923,6 +948,12 @@ int main(int argc, char **argv) {
             pointer_hover(dpy, app_window, 1015, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hover-input")) {
             pointer_hover(dpy, app_window, 485, 250, 1);
+        } else if (!strcmp(a.stage, "pointer-hover-source")) {
+            pointer_hover(dpy, app_window, 350, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-keyboard-away")) {
+            setup_prefix(dpy, XK_h, 0);
+        } else if (!strcmp(a.stage, "pointer-move-right-near")) {
+            pointer_hover(dpy, app_window, 1000, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hold-preview")) {
             pointer_drag_begin(dpy, app_window);
             struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
@@ -999,6 +1030,13 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-delete") ? "3" :
                             !strcmp(a.stage, "catalog-mutate") ? "6" :
                             !strcmp(a.stage, "catalog-rename-tab") ? "14" :
+                            !strcmp(a.stage, "recipe-select-first") ? "1" :
+                            !strcmp(a.stage, "recipe-open-editor") ? "2" :
+                            !strcmp(a.stage, "recipe-save-editor") ? "2" :
+                            !strcmp(a.stage, "recipe-new-tab") ? "2" :
+                            !strcmp(a.stage, "recipe-name-tab") ? "7" :
+                            !strcmp(a.stage, "recipe-submit-name") ? "1" :
+                            !strcmp(a.stage, "recipe-confirm-run") ? "1" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

@@ -99,7 +99,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 8,
+            version <= 9,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -108,13 +108,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 8 {
-            Some(backup_before_migration(&connection, path, version, 8)?)
+        let migration_backup = if version > 0 && version < 9 {
+            Some(backup_before_migration(&connection, path, version, 9)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 8 {
+        if version < 9 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -148,7 +148,11 @@ impl MetadataStore {
             if version < 8 {
                 crate::catalog::migrate_layout_templates(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 8)?;
+            if version < 9 {
+                crate::catalog::migrate_template_launches(&tx)?;
+                crate::template_run::migrate_template_runs(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 9)?;
             tx.commit()?;
         }
         File::open(
@@ -573,20 +577,23 @@ mod tests {
         drop(MetadataStore::open(&path)?);
         {
             let connection = Connection::open(&path)?;
-            connection.execute_batch("DROP TABLE layout_templates; PRAGMA user_version=7;")?;
+            connection.execute_batch(
+                "DROP TABLE template_runs; DROP TABLE layout_templates; PRAGMA user_version=7;",
+            )?;
         }
         let store = MetadataStore::open(&path)?;
         assert_eq!(store.catalog()?.layout_templates, Some(Vec::new()));
+        assert_eq!(store.catalog()?.template_launch_schema, Some(1));
         assert_eq!(
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            8
+            9
         );
         let backup = store
             .migration_backup_path()
             .context("schema-7 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v8."));
+        assert!(backup.to_string_lossy().contains(".pre-v9."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -600,6 +607,75 @@ mod tests {
                 |row| row.get(0)
             )?,
             0
+        );
+        Ok(())
+    }
+    #[test]
+    fn schema_v8_migration_adds_launch_templates_and_run_storage_with_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        {
+            let mut store = MetadataStore::open(&path)?;
+            store.apply_catalog(crate::CatalogBatch {
+                layout_templates: vec![crate::CatalogWrite {
+                    value: crate::LayoutTemplate {
+                        id: Uuid::new_v4(),
+                        name: "legacy".into(),
+                        geometry: pigade_layout::GeometryTemplate {
+                            schema: 1,
+                            root: Some(pigade_layout::TemplateNode::Pane),
+                        },
+                        launches: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..crate::CatalogBatch::default()
+            })?;
+        }
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(
+                "ALTER TABLE layout_templates RENAME TO layout_templates_v9;
+                 CREATE TABLE layout_templates (
+                   id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,geometry_json TEXT NOT NULL,
+                   revision INTEGER NOT NULL CHECK(revision>0));
+                 INSERT INTO layout_templates(id,name,geometry_json,revision)
+                   SELECT id,name,geometry_json,revision FROM layout_templates_v9;
+                 DROP TABLE layout_templates_v9;
+                 DROP TABLE template_runs;
+                 PRAGMA user_version=8;",
+            )?;
+        }
+        let store = MetadataStore::open(&path)?;
+        let catalog = store.catalog()?;
+        assert_eq!(catalog.template_launch_schema, Some(1));
+        assert_eq!(catalog.layout_templates.as_ref().unwrap().len(), 1);
+        assert_eq!(catalog.layout_templates.as_ref().unwrap()[0].launches, None);
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            9
+        );
+        assert_eq!(
+            store.connection.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='template_runs'",
+                [],
+                |row| row.get(0),
+            )?,
+            1
+        );
+        let backup_path = store
+            .migration_backup_path()
+            .context("schema-8 backup absent")?;
+        assert!(backup_path.to_string_lossy().contains(".pre-v9."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            8
         );
         Ok(())
     }
@@ -771,7 +847,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            8
+            9
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -782,7 +858,7 @@ mod tests {
             1
         );
         let backup_path = store.migration_backup_path().context("v6 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v8."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v9."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -950,7 +1026,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 9)?;
+        store.connection.pragma_update(None, "user_version", 10)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

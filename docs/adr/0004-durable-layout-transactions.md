@@ -14,7 +14,7 @@ Headless validation covers deterministic invariant sequences, cross-workspace CA
 
 ## Saved geometry layouts — 2026-10-18
 
-Schema8 adds a bounded library (128 records) on the sole catalog writer, with
+Schema8 added a bounded library (128 records) on the sole catalog writer, with
 CAS save/delete and the existing durable migration backup. `GeometryTemplate`
 schema1 stores axes, weights and anonymous leaf slots, omitting pane/split UUIDs,
 PIDs, credentials and conversation identities. Applying it requires an exact
@@ -24,9 +24,30 @@ creates one undo step and preserves other tabs, CLI processes and generations.
 Identical geometry outside focus mode is a no-op. The UI captures geometry when
 opening Save, and never silently replaces an existing named template.
 
-This is the geometry portion of SPEC5.1 templates; launch settings and creating
-new configured sessions from templates remain open requirements. Metadata
-rename/archive is separate from placement undo. Archive changes visibility and
-selection only; restore must retain the archived cwd/mode and pass the host's
-original checkout/Git common-directory check. An older host omits the optional
-template library field; the UI disables template writes rather than restarting it.
+Schema9 extends those records with optional per-slot `LaunchSettings` and adds
+bounded durable template-run records. Missing launch settings are valid and
+preserve geometry-only templates. Four UI presets cover one agent, implementer
+plus reviewer, two agents plus shell, and four panels. Configuration does not
+replace ordinary pane/CLI creation or require a launch form. Existing-tab
+geometry application remains placement-only: it preserves pane/process identity
+and never launches a CLI.
+
+A template run freezes its geometry and launch plans against the selected
+workspace and saved-template revision (or identity-free custom recipe). Prepare
+is review-only: it creates neither a tab nor a process. The review exposes the
+new-process count, workspace and effective working directory, plus each slot's
+provider and frozen context. Context delivery is explicit; memory, credentials,
+provider conversation IDs and user configuration are not copied. Every later
+advance is a user-authorized step and starts at most one CLI. Stored plan IDs,
+generations and run bindings are allocated before persistence and remain fixed.
+Attempting/unknown outcomes stay locked and cannot be retried; reopening does
+not auto-advance. Cancel prevents later advances but does not stop launched
+processes. Final geometry placement and run completion commit atomically through
+the catalog writer; normal placement undo applies. Thus a crash can reconcile
+an already-started generation or refuse to proceed, never spawn it a second time.
+
+Metadata rename/archive is separate from placement undo. Archive changes
+visibility and selection only; restore must retain the archived cwd/mode and
+pass the host's original checkout/Git common-directory check. An older host
+without the optional launch-schema capability reports launch-template support
+unavailable; the UI does not restart it.
