@@ -2569,3 +2569,19 @@ Opened the committed release build for manual user review with a fresh independe
 - Files: WORKLOG.md
 - Verification: Fresh host socket SO_PEERCRED matched PID2540063/current UID; release UI PID2540072 remained alive, app log empty; read-only hyprctl inventory confirms mapped PigADE window675x734. No focus/input/window-size/config automation.
 - Risks / next: Manual review state: /home/afterburner/.local/state/pigade/review-flow-we5dlnw7; socket /tmp/pigade-flow-bl8n1_aq/host.sock; exact identities in manual-review.json. Keep this host/sessions intact. Compact675px layout has not received isolated visual acceptance; full MVP remains open.
+
+## 2026-10-17T17:18:47+00:00 — /root/chrome_assets_luna
+
+Added embedded chrome icons and shared charcoal palette tokens
+
+- Files: crates/app/src/chrome.rs, crates/app/assets/icons, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/chrome.rs passed; Python XML parse and 16-icon count passed; git diff --check scoped to new paths passed. App Cargo checks deferred to root per serialization instruction.
+- Risks / next: Root should add mod chrome and application().with_assets(chrome::Assets), then run the serialized app build.
+
+## 2026-10-17T17:35:37+00:00 — /root
+
+Implemented BridgeMind-inspired native chrome from two built-in imagegen references: charcoal/lavender shared palette, original SVG icons, unified title/tab/action chrome, first-run actions, responsive project rail and real pane focus, floating actionable pane capsules. Kept terminal ANSI/core/grid semantics unchanged. Fixed a real pre-existing two-publisher replica race discovered by four-pane visual acceptance; strict regression validation remains intact.
+
+- Files: DESIGN.md, README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/chrome.rs, crates/app/assets/icons, docs/design, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: App157 tests passed including deterministic periodic/prefetch ordering in both directions; strict all-target Clippy, app fmt, debug and release builds passed. Private actual X11 run07 passes project/agent-review flow, native header split, four real shells and native echo output,675x734 welcome/workspace/four-pane captures and unchanged resize layout; images inspected. Harness22 tests passed. Imagegen generated workspace/welcome references and saved exact prompts. Read-only Luna review confirmed cause and integration.
+- Risks / next: Full light-theme/platform/IME/accessibility/MVP gates remain open; painted header icons use accessible menu/palette equivalents but lack individual AX nodes. Sidebar manual override lasts this window. Retain failed private runs02/03 (counting gap/poll race) and04-06 (fixture readiness/input mistakes). Deferred preferences stash and unrelated stress/IME work preserved; do not touch active user desktop settings or sessions.

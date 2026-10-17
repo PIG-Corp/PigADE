@@ -433,7 +433,8 @@ def prepared_launches_read_only():
 
 
 def fixture_generations():
-    reply = host_request({'command': 'poll', 'known': []})
+    # Poll intentionally selects at most four views; generation invariants need all.
+    reply = host_request({'command': 'list'})
     views = reply.get('views', [])
     require(isinstance(views, list) and len(views) <= 32, 'fixture generation snapshot exceeds bounds')
     return sorted((view['session'], view['generation']) for view in views)
@@ -773,6 +774,11 @@ def run_setup_fixture(config, report, control, env, save):
     require((report['fixture']['session'], report['fixture']['generation']) in baseline_generations,
             'unplaced bootstrap PTY disappeared before setup')
     helper_call(config, 'capture', '/artifacts/welcome.ppm')
+    helper_call(config, 'setup-compact')
+    time.sleep(.6)
+    helper_call(config, 'capture', '/artifacts/welcome-compact.ppm')
+    helper_call(config, 'setup-wide')
+    time.sleep(.6)
     helper_call(config, 'setup-open')
     time.sleep(0.2)
     helper_call(config, 'capture', '/artifacts/new-project.ppm')
@@ -856,12 +862,50 @@ def run_setup_fixture(config, report, control, env, save):
             'AI choice created a process before review confirmation')
     time.sleep(1)
     helper_call(config, 'capture', '/artifacts/agent-review.ppm')
+    helper_call(config, 'setup-close')
+    tree_before = host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json']
+    helper_call(config, 'setup-compact')
+    time.sleep(.8)
+    helper_call(config, 'capture', '/artifacts/workspace-compact.ppm')
+    require(host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json'] == tree_before,
+            'compact resize changed the tiling tree')
+    helper_call(config, 'setup-wide')
+    time.sleep(.5)
+    for index, stage in enumerate(('setup-split-right', 'setup-split-down', 'setup-split-down')):
+        report['stage'] = f'four-pane-layout-{index + 1}'
+        save()
+        if index == 2:
+            helper_call(config, 'setup-focus-left')
+            wait_until(lambda: json.loads(host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json']).get('focused') == session, time.monotonic() + 5)
+        count = len(fixture_generations())
+        helper_call(config, stage)
+        wait_until(lambda: len(fixture_generations()) == count + 1, time.monotonic() + 8)
+        time.sleep(.4)
+    grid_catalog = host_request({'command': 'catalog'})['catalog']
+    focused = json.loads(grid_catalog['tabs'][0]['layout_json'])['focused']
+    report['stage'] = 'four-pane-live-input'
+    save()
+    helper_call(config, 'capture', '/artifacts/four-panels-before-input.ppm')
+    helper_call(config, 'setup-live')
+    try:
+        wait_until(lambda: any(view.get('session') == focused and 'pigadegridlive' in view_text(view) for view in host_request({'command':'list'}).get('views', [])), time.monotonic() + 8)
+    except RuntimeError:
+        helper_call(config, 'capture', '/artifacts/four-panels-input-error.ppm')
+        raise
+    time.sleep(.5)
+    helper_call(config, 'capture', '/artifacts/four-panels.ppm')
+    helper_call(config, 'setup-compact')
+    time.sleep(.8)
+    helper_call(config, 'capture', '/artifacts/four-panels-compact.ppm')
+    require(host_request({'command': 'catalog'})['catalog']['tabs'][0]['layout_json'] == grid_catalog['tabs'][0]['layout_json'],
+            'compact four-pane resize rebuilt the tiling tree')
     report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
         'tab': tab['name'], 'shell_session': session, 'shell_generation': generation,
         'no_automatic_cli': True, 'one_shell_generation': True,
-        'bootstrap_pty_received_no_input': True, 'fake_codex_review_without_launch': True,
+        'bootstrap_pty_received_no_input': True, 'fake_codex_review_without_launch': True, 'four_panes_accept_native_input': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                     'agent-picker.ppm', 'agent-review.ppm']}
+                     'agent-picker.ppm', 'agent-review.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                     'four-panels.ppm', 'four-panels-compact.ppm']}
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
     save()
 def run_context_fixture(config, report, env, save):
@@ -1787,7 +1831,8 @@ def outer_run(args) -> dict:
                  ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
                  ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                  'agent-picker.ppm', 'agent-review.ppm'] if args.fixture == 'setup' else
+                  'agent-picker.ppm', 'agent-review.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                  'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
             'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history fixture only',

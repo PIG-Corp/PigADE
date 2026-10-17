@@ -79,7 +79,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
         strcmp(a.stage, "history-readonly") && strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
-        strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex"))
+        strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
+        strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
+        strcmp(a.stage, "setup-split-right") && strcmp(a.stage, "setup-split-down") &&
+        strcmp(a.stage, "setup-close") && strcmp(a.stage, "setup-focus-left") &&
+        strcmp(a.stage, "setup-live"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -341,6 +345,16 @@ static void resume_open_sequence(Display *dpy) {
     key(dpy, XK_Return);
 }
 
+static void setup_prefix(Display *dpy, KeySym final_key, int shift_final) {
+    KeyCode control=XKeysymToKeycode(dpy,XK_Control_L), shift=XKeysymToKeycode(dpy,XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy,control,True,CurrentTime) ||
+        !XTestFakeKeyEvent(dpy,shift,True,CurrentTime)) fail("setup prefix press failed");
+    key(dpy,XK_space);
+    if (!XTestFakeKeyEvent(dpy,control,False,CurrentTime) ||
+        !XTestFakeKeyEvent(dpy,shift,False,CurrentTime)) fail("setup prefix release failed");
+    if (shift_final) modified_key(dpy,XK_Shift_L,final_key); else key(dpy,final_key);
+}
+
 /* Fixed product coordinates only, after private server/window verification.
  * No arbitrary pointer coordinates are accepted from arguments. */
 static void setup_click(Display *dpy, Window app, int x, int y) {
@@ -522,6 +536,25 @@ static void latency_sequence(const Args *a, Display *dpy, xcb_connection_t *c) {
     puts("]}");
 }
 
+/* Wait for the fixed primary action to be painted, rather than clicking a
+ * coordinate while the previous project-creation modal is still on screen. */
+static void wait_workspace_bar(Display *dpy, Window app) {
+    Window child; int x,y;
+    if (!XTranslateCoordinates(dpy,app,DefaultRootWindow(dpy),1110,55,&x,&y,&child))
+        fail("workspace bar coordinate translation failed");
+    uint64_t deadline=monotonic_ns()+UINT64_C(5000000000);
+    while (monotonic_ns()<deadline) {
+        XImage *image=XGetImage(dpy,DefaultRootWindow(dpy),x,y,1,1,AllPlanes,ZPixmap);
+        if (!image) fail("workspace bar pixel readback failed");
+        unsigned long pixel=XGetPixel(image,0,0);
+        int ready=component(pixel,image->red_mask)==184 && component(pixel,image->green_mask)==166 && component(pixel,image->blue_mask)==239;
+        XDestroyImage(image);
+        if (ready) return;
+        struct timespec pause={.tv_sec=0,.tv_nsec=20000000}; nanosleep(&pause,NULL);
+    }
+    fail("workspace toolbar did not render before fixed click");
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--self-test-proc")) {
         printf("%llu\n", self_process_start());
@@ -604,15 +637,36 @@ int main(int argc, char **argv) {
             key(dpy, XK_BackSpace);
             key(dpy, XK_Tab);
         } else if (!strcmp(a.stage, "setup-open")) {
-            setup_click(dpy, app_window, 585, 506);
+            setup_click(dpy, app_window, 885, 435);
         } else if (!strcmp(a.stage, "setup-create")) {
             setup_create_sequence(dpy);
         } else if (!strcmp(a.stage, "setup-shell")) {
-            setup_click(dpy, app_window, 411, 91);
+            wait_workspace_bar(dpy, app_window);
+            setup_click(dpy, app_window, 1196, 57);
         } else if (!strcmp(a.stage, "setup-launcher")) {
-            setup_click(dpy, app_window, 306, 91);
+            wait_workspace_bar(dpy, app_window);
+            setup_click(dpy, app_window, 1140, 57);
         } else if (!strcmp(a.stage, "setup-codex")) {
             setup_click(dpy, app_window, 490, 177);
+        } else if (!strcmp(a.stage, "setup-compact")) {
+            XResizeWindow(dpy, app_window, 675, 734); XSync(dpy,False);
+        } else if (!strcmp(a.stage, "setup-wide")) {
+            XResizeWindow(dpy, app_window, 1280, 800); XSync(dpy,False);
+        } else if (!strcmp(a.stage, "setup-live")) {
+            const KeySym command[] = { XK_e, XK_c, XK_h, XK_o, XK_space,
+                XK_p, XK_i, XK_g, XK_a, XK_d, XK_e, XK_g, XK_r, XK_i, XK_d, XK_l, XK_i, XK_v, XK_e };
+            for (size_t i = 0; i < sizeof(command) / sizeof(command[0]); ++i)
+                key(dpy, command[i]);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "setup-close")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "setup-focus-left")) {
+            setup_prefix(dpy, XK_h, 0);
+        } else if (!strcmp(a.stage, "setup-split-right")) {
+            wait_workspace_bar(dpy, app_window);
+            setup_click(dpy, app_window, 924, 92);
+        } else if (!strcmp(a.stage, "setup-split-down")) {
+            setup_prefix(dpy, XK_s, 0);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -631,6 +685,7 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "setup-open") ? "1" :
                             !strcmp(a.stage, "setup-create") ? "5" :
                             !strcmp(a.stage, "setup-shell") ? "1" :
+                            !strcmp(a.stage, "setup-live") ? "20" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

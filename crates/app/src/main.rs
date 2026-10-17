@@ -1,5 +1,6 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
 mod cell_style;
+mod chrome;
 mod command_worker;
 mod cursor;
 mod edit_field;
@@ -390,6 +391,8 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
     let (product_results, product_rx) = mpsc::sync_channel(8);
     let product_socket = socket.clone();
     let product_shared = shared.clone();
+    let poll_gate = Arc::new(Mutex::new(()));
+    let product_poll_gate = poll_gate.clone();
     let product_wake = wake.clone();
     thread::spawn(move || {
         let mut next = json!({"command":"catalog"});
@@ -410,29 +413,21 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
                     && let Some(catalog) = &routing_catalog
                 {
                     let panels = catalog_panel_targets(catalog);
-                    let supports = {
+                    {
                         let mut state = product_shared.lock().unwrap();
                         if let Some(supports) = reply.generation_selection {
                             state.supports_generation_selection = supports;
                         }
-                        state.set_visible_panels(panels.clone());
-                        state.supports_generation_selection
-                    };
-                    let result = if supports {
-                        protocol::poll_panels(&product_socket, &[], &panels)
-                    } else {
-                        protocol::poll_visible(
-                            &product_socket,
-                            &[],
-                            &panels.iter().map(|panel| panel.session).collect::<Vec<_>>(),
-                        )
-                    };
-                    if let Ok(result) = result {
-                        let mut state = product_shared.lock().unwrap();
-                        if state.visible_panels.as_ref() == Some(&panels) {
-                            apply_poll_result(&mut state, Ok(result));
-                        }
+                        state.set_visible_panels(panels);
                     }
+                    serialized_poll(
+                        &product_shared,
+                        &product_poll_gate,
+                        true,
+                        |known, visible, supports| {
+                            fetch_replica(&product_socket, known, visible, supports)
+                        },
+                    );
                 }
             }
             product_wake.notify();
@@ -580,7 +575,13 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
             }
         }
     });
-    spawn_poll_worker(socket, Arc::downgrade(&shared), wake.clone(), trace.clone());
+    spawn_poll_worker(
+        socket,
+        Arc::downgrade(&shared),
+        poll_gate,
+        wake.clone(),
+        trace.clone(),
+    );
     WorkerConnection {
         tx,
         shared,
@@ -626,9 +627,64 @@ fn trace_publication(trace: &Trace, stage: TraceStage, state: &State) {
     trace.record(stage, state.revision, &sequences[..count]);
 }
 
+// The periodic poller and product prefetch publish into one replica. Serialize
+// capture → request → apply, so an older in-flight reply cannot overtake a newer
+// frame. The UI-state lock is released throughout I/O, and input/launch/wait
+// connections never take this gate. True host sequence regressions still fail.
+fn serialized_poll(
+    shared: &Mutex<State>,
+    gate: &Mutex<()>,
+    fresh: bool,
+    fetch: impl FnOnce(
+        &[protocol::Known],
+        Option<&[protocol::PanelTarget]>,
+        bool,
+    ) -> Result<(Poll, Option<protocol::ChangeToken>), protocol::PollError>,
+) -> (Option<protocol::ChangeToken>, bool) {
+    let _poll = gate.lock().unwrap();
+    let (known, visible, supports) = {
+        let state = shared.lock().unwrap();
+        (
+            if fresh {
+                Vec::new()
+            } else {
+                state.views.iter().map(View::known).collect()
+            },
+            state.visible_panels.clone(),
+            state.supports_generation_selection,
+        )
+    };
+    let result = fetch(&known, visible.as_deref(), supports);
+    let mut state = shared.lock().unwrap();
+    if state.visible_panels != visible {
+        return (None, false);
+    }
+    let revision = state.revision;
+    let token = apply_poll_result(&mut state, result);
+    (token, revision != state.revision)
+}
+
+fn fetch_replica(
+    socket: &std::path::Path,
+    known: &[protocol::Known],
+    visible: Option<&[protocol::PanelTarget]>,
+    supports: bool,
+) -> Result<(Poll, Option<protocol::ChangeToken>), protocol::PollError> {
+    match visible {
+        Some(panels) if supports => protocol::poll_panels(socket, known, panels),
+        Some(panels) => protocol::poll_visible(
+            socket,
+            known,
+            &panels.iter().map(|panel| panel.session).collect::<Vec<_>>(),
+        ),
+        None => protocol::poll(socket, known),
+    }
+}
+
 fn spawn_poll_worker(
     socket: PathBuf,
     shared: std::sync::Weak<Mutex<State>>,
+    poll_gate: Arc<Mutex<()>>,
     wake: WakeSignal,
     trace: Trace,
 ) {
@@ -656,41 +712,14 @@ fn spawn_poll_worker(
                 thread::sleep(next_poll.saturating_duration_since(Instant::now()));
             }
             let started = Instant::now();
-            let (known, visible, supports_generations) = {
-                let state = shared.lock().unwrap();
-                (
-                    state.views.iter().map(View::known).collect::<Vec<_>>(),
-                    state.visible_panels.clone(),
-                    state.supports_generation_selection,
-                )
-            };
-            let visible_snapshot = visible.clone();
-            let result = if let Some(panels) = visible {
-                if supports_generations {
-                    protocol::poll_panels(&socket, &known, &panels)
-                } else {
-                    protocol::poll_visible(
-                        &socket,
-                        &known,
-                        &panels.iter().map(|panel| panel.session).collect::<Vec<_>>(),
-                    )
-                }
-            } else {
-                protocol::poll(&socket, &known)
-            };
-            let changed = {
-                let mut state = shared.lock().unwrap();
-                let revision = state.revision;
-                if state.visible_panels != visible_snapshot {
-                    token = None;
-                } else {
-                    token = apply_poll_result(&mut state, result);
-                }
-                if revision != state.revision {
-                    trace_publication(&trace, TraceStage::PollApplied, &state);
-                }
-                revision != state.revision
-            };
+            let (next_token, changed) =
+                serialized_poll(&shared, &poll_gate, false, |known, visible, supports| {
+                    fetch_replica(&socket, known, visible, supports)
+                });
+            token = next_token;
+            if changed {
+                trace_publication(&trace, TraceStage::PollApplied, &shared.lock().unwrap());
+            }
             if changed {
                 wake.notify();
             }
@@ -2648,6 +2677,32 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::ToggleSidebar => {
+                self.product.sidebar_override = Some(!self.product.sidebar_compact);
+            }
+            A::FocusPane(id) => {
+                if self.product.busy {
+                    return;
+                }
+                if let Some(index) = self
+                    .state
+                    .views
+                    .iter()
+                    .position(|view| view.session == id.to_string())
+                {
+                    if index != self.selected {
+                        self.finish_pointer(cx);
+                        self.selection = None;
+                        self.selection_dragging = false;
+                        self.text_input.cancel();
+                        self.input_epoch = self.input_epoch.wrapping_add(1);
+                        window.notify_text_input_changed(&self.focus);
+                    }
+                    self.selected = index;
+                    self.persist_focus(cx);
+                    self.canvas_reveal = Some(id);
+                }
+            }
             A::OpenHistory => self.open_history(cx),
             A::HistoryStart => {
                 if self
@@ -3821,6 +3876,21 @@ impl CanvasApp {
                 window.notify_text_input_changed(&self.focus);
             }
             self.focus.focus(window, cx);
+            if event.button == MouseButton::Left
+                && !self.product.busy
+                && let Some((_, action, _)) = pane_header_buttons(self.panes[index])
+                    .into_iter()
+                    .find(|(_, _, bounds)| bounds.contains(&event.position))
+            {
+                let action = if action == "menu" {
+                    product::ProductAction::OpenPaneMenu
+                } else {
+                    product::ProductAction::Layout(action.into())
+                };
+                self.product_action(action, window, cx);
+                cx.stop_propagation();
+                return;
+            }
             if event.button == MouseButton::Left
                 && !self.product.busy
                 && event.position.y < self.panes[index].bounds.top() + px(HEADER)
@@ -5276,8 +5346,18 @@ impl EntityInputHandler for CanvasApp {
     }
 }
 impl Render for CanvasApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar = self.product.sidebar(cx).into_any_element();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = f32::from(window.viewport_size().width);
+        self.product.compact = width < 900.;
+        self.product.sidebar_compact = self.product.sidebar_override.unwrap_or(width < 1100.);
+        let active_pane = self.selected_pane();
+        let header = self.product.header(cx);
+        let sidebar = self.product.sidebar(&self.state.views, active_pane, cx);
+        let has_workspace = self
+            .product
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.selection.workspace_id.is_some());
         let tabbar = self.product.tabbar(cx).into_any_element();
         let toolbar = self.product.toolbar(cx).into_any_element();
         let overlay = self.product.overlay(&self.editor_layouts, cx);
@@ -5362,24 +5442,13 @@ impl Render for CanvasApp {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x17191d))
-            .text_color(rgb(0xf2f4f7))
+            .bg(rgb(chrome::BASE))
+            .text_color(rgb(chrome::TEXT))
             .font_family("Inter")
             .text_size(px(13.))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
-            .child(
-                div()
-                    .id("app-heading")
-                    .role(Role::Heading)
-                    .aria_level(1)
-                    .aria_label("PigADE")
-                    .h(px(40.))
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .child("PigADE"),
-            )
+            .child(header)
             .child(
                 div().flex().flex_1().min_h_0().child(sidebar).child(
                     div()
@@ -5387,8 +5456,20 @@ impl Render for CanvasApp {
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(tabbar)
-                        .child(toolbar)
+                        .when(has_workspace, |column| {
+                            column.child(
+                                div()
+                                    .h(px(36.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .bg(rgb(chrome::BASE))
+                                    .border_b_1()
+                                    .border_color(rgb(chrome::BORDER))
+                                    .child(tabbar)
+                                    .child(toolbar),
+                            )
+                        })
                         .child(
                             div()
                                 .id("terminal-canvas")
@@ -5560,8 +5641,11 @@ impl Render for CanvasApp {
                                 .px(px(12.))
                                 .flex()
                                 .items_center()
-                                .text_color(rgb(0xb0b8c5))
-                                .child(div().flex_1().child(status));
+                                .text_color(rgb(chrome::MUTED))
+                                .text_size(px(10.))
+                                .border_t_1()
+                                .border_color(rgb(chrome::BORDER))
+                                .child(div().flex_1().min_w_0().truncate().child(status));
                             if self.canvas_close_requested {
                                 status_row = status_row.child(
                                     div()
@@ -5817,6 +5901,43 @@ struct PanelState {
     cursor_visible: bool,
 }
 
+fn pane_header_bounds(pane: PaneGeometry) -> Bounds<Pixels> {
+    let width = (pane.bounds.size.width - px(16.)).min(px(520.)).max(px(0.));
+    Bounds::new(
+        point(
+            pane.bounds.left() + (pane.bounds.size.width - width) / 2.,
+            pane.bounds.top() + px(4.),
+        ),
+        size(width, px(24.)),
+    )
+}
+
+fn pane_header_buttons(pane: PaneGeometry) -> [(&'static str, &'static str, Bounds<Pixels>); 4] {
+    let header = pane_header_bounds(pane);
+    [
+        ("split-right", "split_right"),
+        ("split-down", "split_down"),
+        ("focus", "focus"),
+        ("more", "menu"),
+    ]
+    .map(|(icon, action)| {
+        let index = match action {
+            "split_right" => 0.,
+            "split_down" => 1.,
+            "focus" => 2.,
+            _ => 3.,
+        };
+        (
+            icon,
+            action,
+            Bounds::new(
+                point(header.right() - px(98.) + px(index * 24.), header.top()),
+                size(px(24.), px(24.)),
+            ),
+        )
+    })
+}
+
 fn paint_panel(
     pane: PaneGeometry,
     view: Option<&View>,
@@ -5833,50 +5954,121 @@ fn paint_panel(
 ) {
     let bounds = pane.bounds;
     let cell = pane.cell;
-    window.paint_quad(fill(
+    let border = if selected {
+        chrome::ACCENT
+    } else {
+        chrome::BORDER
+    };
+    window.paint_quad(quad(
         bounds,
-        rgb(if selected { 0x7dafff } else { 0x373e49 }),
+        px(7.),
+        rgb(0x111317),
+        px(1.),
+        rgb(border),
+        BorderStyle::Solid,
     ));
-    let inner = Bounds::new(
-        bounds.origin + point(px(1.), px(1.)),
-        bounds.size - size(px(2.), px(2.)),
-    );
-    window.paint_quad(fill(inner, rgb(0x111317)));
-    let title = view
-        .map(|v| {
-            let state = if !attached {
-                "История · связь потеряна"
+    let header = pane_header_bounds(pane);
+    window.paint_quad(quad(
+        header,
+        px(12.),
+        rgb(chrome::RAISED),
+        px(1.),
+        rgb(chrome::BORDER),
+        BorderStyle::Solid,
+    ));
+    let status = view
+        .map(|view| {
+            if !attached {
+                "История · нет связи"
             } else {
-                match v.state.as_str() {
+                match view.state.as_str() {
                     "running" => "Работает",
                     "exited" => "Завершён",
-                    "degraded" => "Ошибка терминала",
-                    "launch_outcome_unknown" => "Исход запуска неизвестен",
+                    "degraded" => "Ошибка",
+                    "launch_outcome_unknown" => "Исход неизвестен",
                     _ => "История",
                 }
-            };
-            format!(
-                "{} · {state} · {}",
-                if v.frame.title.is_empty() {
-                    "Терминал"
-                } else {
-                    &v.frame.title
-                },
-                protocol::generation_label(&v.generation)
-            )
+            }
         })
-        .unwrap_or_else(|| {
-            "Модель выбранного поколения недоступна · режим PigADE, O — поколения".into()
-        });
-    text(
-        title,
-        bounds.origin + point(px(8.), px(5.)),
-        font,
-        rgb(0xb0b8c5).into(),
-        px(HEADER - 8.),
-        window,
-        cx,
+        .unwrap_or("Модель недоступна");
+    let title = view
+        .map(|view| {
+            if view.frame.title.is_empty() {
+                "Терминал"
+            } else {
+                &view.frame.title
+            }
+        })
+        .unwrap_or("Терминал");
+    let title = format!("{title}   {status}");
+    let title_bounds = Bounds::new(
+        header.origin + point(px(28.), px(1.)),
+        size((header.size.width - px(130.)).max(px(0.)), px(22.)),
     );
+    let dot = Bounds::new(
+        header.origin + point(px(12.), px(10.)),
+        size(px(5.), px(5.)),
+    );
+    window.paint_quad(quad(
+        dot,
+        px(3.),
+        rgb(
+            if attached && view.is_some_and(|view| view.state == "running") {
+                chrome::STATUS_GREEN
+            } else {
+                chrome::STATUS_AMBER
+            },
+        ),
+        px(0.),
+        rgb(chrome::BORDER),
+        BorderStyle::Solid,
+    ));
+    window.with_content_mask(
+        Some(ContentMask {
+            bounds: title_bounds,
+        }),
+        |window| {
+            let font = Font {
+                family: "Inter".into(),
+                ..Default::default()
+            };
+            let line = window.text_system().shape_line(
+                title.clone().into(),
+                px(12.),
+                &[TextRun {
+                    len: title.len(),
+                    font,
+                    color: rgb(chrome::TEXT).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let _ = line.paint(
+                title_bounds.origin,
+                px(22.),
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+        },
+    );
+    for (name, _, bounds) in pane_header_buttons(pane) {
+        let icon_bounds = Bounds::new(
+            bounds.origin + point(px(5.), px(5.)),
+            size(px(14.), px(14.)),
+        );
+        let _ = window.paint_svg(
+            icon_bounds,
+            format!("icons/{name}.svg").into(),
+            None,
+            TransformationMatrix::default(),
+            rgb(chrome::MUTED).into(),
+            cx,
+        );
+    }
     let Some(view) = view else {
         return;
     };
@@ -6096,45 +6288,47 @@ fn main() {
         Trace::disabled()
     };
     let connection = ipc(socket, trace);
-    application().run(move |cx: &mut App| {
-        cx.set_reduce_motion(reduced_motion);
-        crate::font::install(cx).expect("bundled terminal font profile must load");
-        cx.on_window_closed(|cx, _window_id| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                app_id: Some("org.pigade.app".into()),
-                ..Default::default()
-            },
-            move |window, cx| {
-                window.set_window_title("PigADE");
-                let view = cx.new(|cx| {
-                    CanvasApp::new(
-                        window,
-                        cx,
-                        connection,
-                        diagnostic_preedit,
-                        diagnostic_selection,
-                    )
-                });
-                view.update(cx, |this, cx| {
-                    this.selected = diagnostic_selected;
-                    cx.notify();
-                });
-                let focus = view.read(cx).focus.clone();
-                focus.focus(window, cx);
-                view
-            },
-        )
-        .unwrap();
-        cx.activate(true);
-    });
+    application()
+        .with_assets(chrome::Assets)
+        .run(move |cx: &mut App| {
+            cx.set_reduce_motion(reduced_motion);
+            crate::font::install(cx).expect("bundled terminal font profile must load");
+            cx.on_window_closed(|cx, _window_id| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    app_id: Some("org.pigade.app".into()),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    window.set_window_title("PigADE · dev 0.0.1");
+                    let view = cx.new(|cx| {
+                        CanvasApp::new(
+                            window,
+                            cx,
+                            connection,
+                            diagnostic_preedit,
+                            diagnostic_selection,
+                        )
+                    });
+                    view.update(cx, |this, cx| {
+                        this.selected = diagnostic_selected;
+                        cx.notify();
+                    });
+                    let focus = view.read(cx).focus.clone();
+                    focus.focus(window, cx);
+                    view
+                },
+            )
+            .unwrap();
+            cx.activate(true);
+        });
 }
 #[cfg(test)]
 mod tests {
@@ -6165,6 +6359,91 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn periodic_poll_and_product_prefetch_cannot_overtake_each_other() {
+        use std::sync::{Arc, Mutex, mpsc};
+        use std::time::Duration;
+        for first_is_prefetch in [false, true] {
+            let shared = Arc::new(Mutex::new(State {
+                views: vec![view(None)],
+                ..Default::default()
+            }));
+            let gate = Arc::new(Mutex::new(()));
+            let (entered, first_entered) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let (attempt, attempted) = mpsc::channel();
+            let (second_enter, second_entered) = mpsc::channel();
+            let first_shared = shared.clone();
+            let first_gate = gate.clone();
+            let first = std::thread::spawn(move || {
+                super::serialized_poll(
+                    &first_shared,
+                    &first_gate,
+                    first_is_prefetch,
+                    |known, _, _| {
+                        assert_eq!(known.len(), usize::from(!first_is_prefetch));
+                        entered.send(()).unwrap();
+                        released.recv_timeout(Duration::from_secs(2)).unwrap();
+                        let mut next = view(None);
+                        next.sequence = 2;
+                        Ok((
+                            super::Poll {
+                                selected: vec![next.known()],
+                                views: vec![next],
+                                recovery: None,
+                            },
+                            None,
+                        ))
+                    },
+                )
+            });
+            first_entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            let second_shared = shared.clone();
+            let second_gate = gate.clone();
+            let second = std::thread::spawn(move || {
+                attempt.send(()).unwrap();
+                super::serialized_poll(
+                    &second_shared,
+                    &second_gate,
+                    !first_is_prefetch,
+                    |known, _, _| {
+                        second_enter.send(()).unwrap();
+                        // The first response was merged before the second capture;
+                        // no shared-state lock is held while fetching a response.
+                        assert_eq!(second_shared.lock().unwrap().views[0].sequence, 2);
+                        if first_is_prefetch {
+                            assert_eq!(known[0].sequence, 2);
+                        } else {
+                            assert!(known.is_empty());
+                        }
+                        let mut next = view(None);
+                        next.sequence = 3;
+                        Ok((
+                            super::Poll {
+                                selected: vec![next.known()],
+                                views: vec![next],
+                                recovery: None,
+                            },
+                            None,
+                        ))
+                    },
+                )
+            });
+            attempted.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                second_entered
+                    .recv_timeout(Duration::from_millis(20))
+                    .is_err()
+            );
+            release.send(()).unwrap();
+            assert!(first.join().unwrap().1);
+            assert!(second.join().unwrap().1);
+            let state = shared.lock().unwrap();
+            assert_eq!(state.views[0].sequence, 3);
+            assert!(state.error.is_none());
+        }
     }
 
     #[test]

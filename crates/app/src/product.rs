@@ -4,20 +4,24 @@
 use crate::edit_field::FieldLayout;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, IntoElement, ParentElement, Role,
-    Stateful, StatefulInteractiveElement, Styled, div, prelude::InteractiveElement, px, rgb,
+    Stateful, StatefulInteractiveElement, Styled, div,
+    prelude::{FluentBuilder, InteractiveElement},
+    px, rgb,
 };
 use pigade_storage::{Catalog, ContextDocument, Tab, Workspace, WorkspaceStatus};
 use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
-use super::{CanvasApp, protocol, text_edit::EditBuffer};
+use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
-const SIDEBAR_WIDTH: f32 = 240.0;
+const SIDEBAR_WIDTH: f32 = 220.0;
 const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
     AddProject,
+    ToggleSidebar,
+    FocusPane(Uuid),
     OpenProjectPath,
     CreateProject,
     ChooseProjectParent,
@@ -183,6 +187,9 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) compact: bool,
+    pub(super) sidebar_compact: bool,
+    pub(super) sidebar_override: Option<bool>,
     pub(super) catalog: Option<Catalog>,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
@@ -239,15 +246,15 @@ struct ControlStyle {
 impl ProductColors {
     fn dark() -> Self {
         Self {
-            base: rgb(0x17191d).into(),
-            sidebar: rgb(0x1d2025).into(),
-            raised: rgb(0x252930).into(),
-            hover: rgb(0x2b3038).into(),
-            selected: rgb(0x293548).into(),
-            border: rgb(0x373e49).into(),
-            text: rgb(0xf2f4f7).into(),
-            muted: rgb(0xb0b8c5).into(),
-            accent: rgb(0x7dafff).into(),
+            base: rgb(chrome::BASE).into(),
+            sidebar: rgb(chrome::SIDEBAR).into(),
+            raised: rgb(chrome::RAISED).into(),
+            hover: rgb(chrome::HOVER).into(),
+            selected: rgb(chrome::SELECTED).into(),
+            border: rgb(chrome::BORDER).into(),
+            text: rgb(chrome::TEXT).into(),
+            muted: rgb(chrome::MUTED).into(),
+            accent: rgb(chrome::ACCENT).into(),
         }
     }
 }
@@ -632,140 +639,292 @@ impl ProductUi {
         }
     }
 
-    pub(super) fn sidebar(&self, cx: &mut Context<CanvasApp>) -> impl IntoElement {
+    pub(super) fn header(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
-        let mut project_tree = div()
+        let location = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| {
+                let project = catalog
+                    .projects
+                    .iter()
+                    .find(|value| Some(value.id) == catalog.selection.project_id)?;
+                let workspace = catalog
+                    .workspaces
+                    .iter()
+                    .find(|value| Some(value.id) == catalog.selection.workspace_id);
+                Some(match workspace {
+                    Some(workspace) => {
+                        format!("{}  /  {}", project.name, workspace_name(workspace))
+                    }
+                    None => project.name.clone(),
+                })
+            })
+            .unwrap_or_default();
+        div()
+            .id("app-heading")
+            .role(Role::Group)
+            .aria_label("PigADE")
+            .h(px(40.))
+            .flex_shrink_0()
+            .w_full()
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .bg(colors.sidebar)
+            .border_b_1()
+            .border_color(colors.border)
+            .child(self.icon_control(
+                "toggle-sidebar",
+                "Свернуть или развернуть проекты",
+                "layers",
+                ProductAction::ToggleSidebar,
+                cx,
+            ))
+            .child(chrome::icon("logo-p", 20., chrome::ACCENT))
+            .child(
+                div()
+                    .id("app-brand")
+                    .role(Role::Heading)
+                    .aria_level(1)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(px(13.))
+                    .child("PigADE"),
+            )
+            .when(!self.compact, |bar| {
+                bar.child(
+                    div()
+                        .text_color(colors.muted)
+                        .text_size(px(10.))
+                        .child("0.0.1-dev"),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .px(px(16.))
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .truncate()
+                    .child(location),
+            )
+            .child(self.icon_control(
+                "header-commands",
+                "Поиск команд (Ctrl+Shift+Space, P)",
+                "search",
+                ProductAction::OpenPalette,
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    pub(super) fn sidebar(
+        &self,
+        views: &[protocol::View],
+        active_pane: Option<Uuid>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = ProductColors::dark();
+        let compact = self.sidebar_compact;
+        let mut tree = div()
             .id("product-project-tree")
             .role(Role::List)
             .aria_label("Проекты и воркспейсы")
             .flex()
             .flex_col()
             .gap_1()
-            .overflow_y_scroll();
-
+            .overflow_y_scroll()
+            .flex_1()
+            .min_h_0();
         if let Some(catalog) = &self.catalog {
-            let active_workspace = selected_workspace(catalog);
             for project in &catalog.projects {
-                let selected_project = catalog.selection.project_id == Some(project.id);
-                let project_row = div()
-                    .id(format!("project-group-{}", project.id))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(self.action_control(
-                        format!("project-{}", project.id),
-                        project.name.clone(),
-                        ProductAction::SelectProject(project.id),
-                        ControlStyle {
-                            role: Role::TreeItem,
-                            selected: selected_project,
-                            compact: false,
-                        },
+                let project_action = ProductAction::SelectProject(project.id);
+                let row = if compact {
+                    self.icon_control(
+                        &format!("project-{}", project.id),
+                        &project.name,
+                        "folder",
+                        project_action,
                         cx,
-                    ))
-                    .child(self.action_control_with_accessible_name(
-                        format!("project-add-workspace-{}", project.id),
-                        "+".into(),
-                        format!("Создать воркспейс в проекте {}", project.name),
-                        ProductAction::CreateWorkspaceFor(project.id),
-                        ControlStyle {
-                            role: Role::Button,
-                            selected: false,
-                            compact: true,
-                        },
-                        cx,
-                    ));
-                project_tree = project_tree.child(project_row);
-
-                let mut has_workspace = false;
+                    )
+                } else {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(self.action_control(
+                            format!("project-{}", project.id),
+                            project.name.clone(),
+                            project_action,
+                            ControlStyle {
+                                role: Role::TreeItem,
+                                selected: false,
+                                compact: false,
+                            },
+                            cx,
+                        ))
+                        .child(self.icon_control(
+                            &format!("project-add-workspace-{}", project.id),
+                            &format!("Новый воркспейс в {}", project.name),
+                            "plus",
+                            ProductAction::CreateWorkspaceFor(project.id),
+                            cx,
+                        ))
+                        .into_any_element()
+                };
+                tree = tree.child(div().mt(px(5.)).child(row));
                 for workspace in catalog
                     .workspaces
                     .iter()
-                    .filter(|workspace| workspace.project_id == project.id)
+                    .filter(|value| value.project_id == project.id)
                 {
-                    has_workspace = true;
-                    project_tree =
-                        project_tree.child(div().pl(px(14.)).child(self.action_control(
+                    let selected = selected_workspace(catalog) == Some(workspace.id);
+                    let title = workspace_name(workspace);
+                    let label = if compact {
+                        title.chars().take(2).collect::<String>()
+                    } else {
+                        title.clone()
+                    };
+                    tree = tree.child(div().pl(px(if compact { 0. } else { 12. })).child(
+                        self.action_control_with_accessible_name(
                             format!("workspace-{}", workspace.id),
-                            workspace_name(workspace),
+                            label,
+                            title,
                             ProductAction::SelectWorkspace(workspace.id),
                             ControlStyle {
                                 role: Role::TreeItem,
-                                selected: active_workspace == Some(workspace.id),
-                                compact: true,
+                                selected,
+                                compact: false,
                             },
                             cx,
-                        )));
-                }
-                if !has_workspace {
-                    project_tree = project_tree.child(
-                        div()
-                            .id(format!("project-empty-{}", project.id))
-                            .pl(px(24.))
-                            .py(px(3.))
-                            .text_size(px(11.))
-                            .text_color(colors.muted)
-                            .child("Нет воркспейсов"),
-                    );
+                        ),
+                    ));
+                    if selected && !compact {
+                        for view in views {
+                            let Ok(id) = view.session.parse::<Uuid>() else {
+                                continue;
+                            };
+                            let title = if view.frame.title.is_empty() {
+                                "Терминал"
+                            } else {
+                                view.frame.title.as_str()
+                            };
+                            let live = view.state == "running";
+                            tree = tree.child(
+                                div().pl(px(28.)).child(
+                                    div()
+                                        .id(format!("sidebar-pane-{id}"))
+                                        .role(Role::Button)
+                                        .aria_label(format!(
+                                            "{title}: {}",
+                                            session_state_label(&view.state)
+                                        ))
+                                        .h(px(26.))
+                                        .px(px(6.))
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .rounded(px(5.))
+                                        .bg(if active_pane == Some(id) {
+                                            colors.raised
+                                        } else {
+                                            colors.sidebar
+                                        })
+                                        .hover(|style| style.bg(colors.hover))
+                                        .child(div().size(px(5.)).rounded_full().bg(rgb(if live {
+                                            chrome::STATUS_GREEN
+                                        } else {
+                                            chrome::MUTED
+                                        })))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(colors.muted)
+                                                .truncate()
+                                                .child(title.to_owned()),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, window, cx| {
+                                                this.product_action(
+                                                    ProductAction::FocusPane(id),
+                                                    window,
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            },
+                                        )),
+                                ),
+                            );
+                        }
+                    }
                 }
             }
-            if catalog.projects.is_empty() {
-                project_tree = project_tree.child(
+            if catalog.projects.is_empty() && !compact {
+                tree = tree.child(
                     div()
-                        .id("empty-project-catalog")
-                        .px(px(8.))
-                        .py(px(10.))
-                        .text_color(colors.muted)
-                        .child("Откройте папку или создайте проект."),
+                        .mt(px(22.))
+                        .px(px(10.))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(chrome::icon("folder", 20., chrome::MUTED))
+                        .child(
+                            div()
+                                .text_color(colors.muted)
+                                .text_size(px(12.))
+                                .child("Пока нет проектов"),
+                        ),
                 );
             }
-        } else {
-            project_tree = project_tree.child(
-                div()
-                    .id("catalog-loading")
-                    .px(px(8.))
-                    .py(px(10.))
-                    .text_color(colors.muted)
-                    .child("Загрузка каталога…"),
-            );
         }
-
-        let mut controls = div()
+        let mut footer = div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(self.action_control(
-                "sidebar-open-project".into(),
-                "Открыть папку…".into(),
+            .pt(px(10.))
+            .border_t_1()
+            .border_color(colors.border);
+        for (id, label, icon, action) in [
+            (
+                "sidebar-open-project",
+                "Открыть папку…",
+                "folder",
                 ProductAction::AddProject,
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: false,
-                },
-                cx,
-            ))
-            .child(self.action_control(
-                "sidebar-create-project".into(),
-                "Создать проект…".into(),
+            ),
+            (
+                "sidebar-create-project",
+                "Создать проект…",
+                "plus",
                 ProductAction::CreateProject,
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: false,
-                },
-                cx,
-            ));
-        if self
-            .catalog
-            .as_ref()
-            .is_some_and(|catalog| catalog.selection.project_id.is_some())
+            ),
+        ] {
+            footer = footer.child(if compact {
+                self.icon_control(id, label, icon, action, cx)
+            } else {
+                self.action_control(
+                    id.into(),
+                    label.into(),
+                    action,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: false,
+                    },
+                    cx,
+                )
+            });
+        }
+        if !compact
+            && self
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.selection.project_id.is_some())
         {
-            controls = controls.child(self.action_control_with_accessible_name(
+            footer = footer.child(self.action_control(
                 "edit-project-context".into(),
                 "Контекст проекта".into(),
-                "Просмотреть контекст выбранного проекта".into(),
                 ProductAction::EditProjectContext,
                 ControlStyle {
                     role: Role::Button,
@@ -780,42 +939,51 @@ impl ProductUi {
             .accessibility_id("product-sidebar")
             .role(Role::Group)
             .aria_label("Проекты")
-            .w(px(SIDEBAR_WIDTH))
-            .min_w(px(180.))
-            .max_w(px(360.))
+            .w(px(if compact { 52. } else { SIDEBAR_WIDTH }))
+            .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
             .bg(colors.sidebar)
             .border_r_1()
             .border_color(colors.border)
-            .px(px(10.))
-            .py(px(12.));
-        sidebar = sidebar.child(
-            div()
-                .h(px(28.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors.muted)
-                .child("ПРОЕКТЫ"),
-        );
-        sidebar = sidebar.child(project_tree.flex_1().min_h_0());
-        sidebar = sidebar.child(div().h(px(1.)).my(px(8.)).bg(colors.border));
-        sidebar = sidebar.child(controls);
-        if self.busy || self.notice.is_some() {
+            .px(px(if compact { 8. } else { 12. }))
+            .py(px(10.));
+        if !compact {
+            sidebar = sidebar.child(
+                div()
+                    .h(px(30.))
+                    .flex()
+                    .items_center()
+                    .px(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(12.))
+                            .text_color(colors.muted)
+                            .child("Проекты"),
+                    )
+                    .child(self.icon_control(
+                        "sidebar-add",
+                        "Открыть проект",
+                        "plus",
+                        ProductAction::AddProject,
+                        cx,
+                    )),
+            );
+        }
+        sidebar = sidebar.child(tree).child(footer);
+        if !compact && (self.busy || self.notice.is_some()) {
             let message = self
                 .notice
                 .clone()
-                .unwrap_or_else(|| "Идёт операция…".to_owned());
+                .unwrap_or_else(|| "Идёт операция…".into());
             sidebar = sidebar.child(
                 div()
                     .id("product-notice")
                     .role(Role::Status)
                     .aria_label(message.clone())
-                    .mt(px(10.))
+                    .mt(px(8.))
                     .px(px(8.))
                     .py(px(6.))
                     .text_size(px(11.))
@@ -823,138 +991,124 @@ impl ProductUi {
                     .child(message),
             );
         }
-        sidebar
+        sidebar.into_any_element()
     }
 
-    pub(super) fn tabbar(&self, cx: &mut Context<CanvasApp>) -> impl IntoElement {
+    pub(super) fn tabbar(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
-        let catalog = self.catalog.as_ref();
-        let workspace_id = catalog.and_then(selected_workspace);
-        let active_tab = catalog.and_then(selected_tab);
         let mut tabs = div()
             .id("product-tabbar")
             .accessibility_id("product-tabbar")
             .role(Role::TabList)
             .aria_label("Вкладки воркспейса")
-            .h(px(32.))
-            .w_full()
+            .h_full()
+            .flex_1()
+            .min_w_0()
             .flex()
             .items_center()
             .gap_1()
             .overflow_x_scroll()
-            .bg(colors.base)
-            .border_b_1()
-            .border_color(colors.border)
-            .px(px(10.));
-
-        if let (Some(catalog), Some(workspace_id)) = (catalog, workspace_id) {
+            .px(px(8.));
+        if let Some(catalog) = &self.catalog {
             for tab in catalog
                 .tabs
                 .iter()
-                .filter(|tab| tab.workspace_id == workspace_id)
+                .filter(|tab| Some(tab.workspace_id) == catalog.selection.workspace_id)
             {
-                tabs = tabs.child(self.tab_control(tab, active_tab == Some(tab.id), cx));
+                tabs =
+                    tabs.child(self.tab_control(tab, catalog.selection.tab_id == Some(tab.id), cx));
             }
-        } else {
-            tabs = tabs.child(
-                div()
-                    .px(px(8.))
-                    .text_size(px(12.))
-                    .text_color(colors.muted)
-                    .child("Выберите воркспейс"),
-            );
         }
-
-        tabs.child(self.action_control(
-            "new-tab".into(),
-            "+ Вкладка".into(),
+        tabs.child(self.icon_control(
+            "new-tab",
+            "Новая вкладка",
+            "plus",
             ProductAction::CreateTab,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
             cx,
         ))
+        .text_color(colors.muted)
+        .into_any_element()
     }
 
-    pub(super) fn toolbar(&self, cx: &mut Context<CanvasApp>) -> impl IntoElement {
+    pub(super) fn toolbar(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
-        let mut toolbar = div()
+        let mut bar = div()
             .id("product-toolbar")
-            .accessibility_id("product-toolbar")
             .role(Role::Toolbar)
             .aria_label("Команды воркспейса")
-            .h(px(40.))
-            .w_full()
+            .h_full()
+            .flex_shrink_0()
             .flex()
             .items_center()
             .gap_1()
-            .bg(colors.base)
-            .border_b_1()
-            .border_color(colors.border)
-            .px(px(10.));
-
-        toolbar = toolbar.child(self.action_control(
-            "open-agent-launcher".into(),
-            "Добавить агента".into(),
-            ProductAction::OpenLauncher,
-            ControlStyle {
-                role: Role::Button,
-                selected: true,
-                compact: true,
-            },
-            cx,
-        ));
-        toolbar = toolbar.child(self.action_control_with_accessible_name(
-            "launch-shell".into(),
-            "Терминал".into(),
-            "Открыть терминал".into(),
-            ProductAction::Launch("shell".into()),
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        ));
-        toolbar = toolbar.child(self.action_control(
-            "edit-context".into(),
-            "Контекст".into(),
-            ProductAction::EditContext,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        ));
-        toolbar = toolbar.child(self.action_control(
-            "pane-menu".into(),
-            "Панели".into(),
-            ProductAction::OpenPaneMenu,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        ));
-
-        toolbar
-            .child(div().flex_1())
-            .child(self.action_control_with_accessible_name(
-                "command-palette".into(),
-                "Команды".into(),
-                "Поиск команд (Ctrl+Shift+Space, затем P)".into(),
-                ProductAction::OpenPalette,
+            .pr(px(8.));
+        bar = bar
+            .child(self.action_control(
+                "open-agent-launcher".into(),
+                "Агент".into(),
+                ProductAction::OpenLauncher,
                 ControlStyle {
                     role: Role::Button,
-                    selected: false,
+                    selected: true,
                     compact: true,
                 },
                 cx,
             ))
+            .child(self.icon_control(
+                "launch-shell",
+                "Открыть терминал",
+                "terminal",
+                ProductAction::Launch("shell".into()),
+                cx,
+            ))
+            .child(self.icon_control(
+                "pane-menu",
+                "Управление панелями",
+                "more",
+                ProductAction::OpenPaneMenu,
+                cx,
+            ));
+        if !self.compact {
+            bar = bar.child(self.icon_control(
+                "edit-context",
+                "Контекст воркспейса",
+                "layers",
+                ProductAction::EditContext,
+                cx,
+            ));
+        }
+        bar.border_l_1()
+            .border_color(colors.border)
+            .into_any_element()
+    }
+
+    fn icon_control(
+        &self,
+        id: &str,
+        label: &str,
+        icon: &'static str,
+        action: ProductAction,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = ProductColors::dark();
+        div()
+            .id(id.to_owned())
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .size(px(28.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .text_color(colors.muted)
+            .hover(|style| style.bg(colors.hover).text_color(colors.text))
+            .child(chrome::icon(icon, 15., chrome::MUTED))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.product_action(action.clone(), window, cx);
+                cx.stop_propagation();
+            }))
+            .into_any_element()
     }
 
     pub(super) fn overlay(
@@ -970,6 +1124,9 @@ impl ProductUi {
         let catalog = self.catalog.as_ref()?;
         let colors = ProductColors::dark();
         let welcome = catalog.projects.is_empty();
+        if welcome {
+            return Some(self.first_run(cx));
+        }
         let state = if welcome {
             Some((
                 "Рабочее место для CLI-агентов",
@@ -1067,11 +1224,7 @@ impl ProductUi {
             .flex()
             .flex_col()
             .items_start()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.raised)
-            .p(px(30.))
+            .p(px(24.))
             .child(
                 div()
                     .id("product-empty-state-title")
@@ -1161,11 +1314,7 @@ impl ProductUi {
             .flex_col()
             .items_start()
             .gap_2()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.raised)
-            .p(px(30.))
+            .p(px(24.))
             .child(
                 div()
                     .id("workspace-welcome-title")
@@ -1217,6 +1366,173 @@ impl ProductUi {
             .justify_center()
             .bg(colors.base)
             .child(card)
+            .into_any_element()
+    }
+
+    fn first_run(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let mut actions = div().w_full().flex().gap_3().mt(px(28.));
+        if self.compact {
+            actions = actions.flex_col();
+        }
+        actions = actions
+            .child(self.start_tile(
+                "welcome-open-folder",
+                ("Открыть папку", "Существующий Git-репозиторий"),
+                "folder",
+                ProductAction::AddProject,
+                true,
+                cx,
+            ))
+            .child(self.start_tile(
+                "welcome-create-project",
+                ("Создать проект", "Новая папка с Git"),
+                "plus",
+                ProductAction::CreateProject,
+                false,
+                cx,
+            ));
+        div()
+            .id("product-empty-state")
+            .accessibility_id("product-empty-state")
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(28.))
+            .child(
+                div()
+                    .id("product-welcome")
+                    .max_w(px(540.))
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(
+                        div()
+                            .mb(px(20.))
+                            .child(chrome::icon("logo-p", 42., chrome::ACCENT)),
+                    )
+                    .child(
+                        div()
+                            .id("welcome-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(if self.compact { 23. } else { 27. }))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Ваше рабочее пространство"),
+                    )
+                    .child(
+                        div()
+                            .mt(px(10.))
+                            .text_size(px(14.))
+                            .text_color(colors.muted)
+                            .child("CLI-агенты и терминалы. В одном проекте."),
+                    )
+                    .child(actions)
+                    .child(
+                        div()
+                            .mt(px(28.))
+                            .pt(px(18.))
+                            .w_full()
+                            .border_t_1()
+                            .border_color(colors.border)
+                            .flex()
+                            .justify_center()
+                            .flex_wrap()
+                            .gap_3()
+                            .children(
+                                ["Claude Code", "Codex", "OpenCode", "Shell"]
+                                    .into_iter()
+                                    .map(|label| {
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(colors.muted)
+                                            .child(label)
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .mt(px(32.))
+                            .text_size(px(10.))
+                            .text_color(colors.muted)
+                            .child("Ctrl+Shift+Space, P   Все команды"),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn start_tile(
+        &self,
+        id: &str,
+        copy: (&str, &str),
+        icon: &'static str,
+        action: ProductAction,
+        primary: bool,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let (label, detail) = copy;
+        let colors = ProductColors::dark();
+        div()
+            .id(id.to_owned())
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .flex_1()
+            .min_w_0()
+            .h(px(86.))
+            .px(px(18.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .rounded(px(9.))
+            .border_1()
+            .border_color(if primary {
+                colors.accent
+            } else {
+                colors.border
+            })
+            .bg(if primary {
+                colors.accent
+            } else {
+                colors.raised
+            })
+            .hover(move |style| {
+                style.bg(if primary {
+                    colors.accent.opacity(0.9)
+                } else {
+                    colors.hover
+                })
+            })
+            .child(chrome::icon(
+                icon,
+                22.,
+                if primary { chrome::BASE } else { chrome::MUTED },
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(px(13.))
+                            .text_color(if primary { colors.base } else { colors.text })
+                            .child(label.to_owned()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(if primary { colors.base } else { colors.muted })
+                            .child(detail.to_owned()),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.product_action(action.clone(), window, cx);
+                cx.stop_propagation();
+            }))
             .into_any_element()
     }
 
@@ -1301,17 +1617,36 @@ impl ProductUi {
     }
 
     fn tab_control(&self, tab: &Tab, selected: bool, cx: &mut Context<CanvasApp>) -> AnyElement {
-        self.action_control(
-            format!("tab-{}", tab.id),
-            tab.name.clone(),
-            ProductAction::SelectTab(tab.id),
-            ControlStyle {
-                role: Role::Tab,
-                selected,
-                compact: false,
-            },
-            cx,
-        )
+        let colors = ProductColors::dark();
+        let id = tab.id;
+        div()
+            .id(format!("tab-{id}"))
+            .role(Role::Tab)
+            .aria_label(tab.name.clone())
+            .aria_selected(selected)
+            .h_full()
+            .max_w(px(180.))
+            .px(px(12.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .border_b_2()
+            .border_color(if selected { colors.accent } else { colors.base })
+            .bg(if selected { colors.raised } else { colors.base })
+            .rounded_t(px(5.))
+            .text_size(px(12.))
+            .text_color(if selected {
+                colors.accent
+            } else {
+                colors.muted
+            })
+            .hover(|style| style.bg(colors.hover))
+            .child(tab.name.clone())
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::SelectTab(id), window, cx);
+                cx.stop_propagation();
+            }))
+            .into_any_element()
     }
 
     fn action_control(
@@ -1352,7 +1687,20 @@ impl ProductUi {
         } else if style.selected {
             colors.selected
         } else {
-            colors.raised
+            colors.base.opacity(0.)
+        };
+        let icon = match &action {
+            ProductAction::AddProject | ProductAction::SelectProject(_) => Some("folder"),
+            ProductAction::CreateProject
+            | ProductAction::OpenLauncher
+            | ProductAction::CreateTab => Some("plus"),
+            ProductAction::SelectWorkspace(_) if self.sidebar_compact => None,
+            ProductAction::SelectWorkspace(_)
+            | ProductAction::CreateWorkspace
+            | ProductAction::CreateWorkspaceFor(_) => Some("branch"),
+            ProductAction::Launch(_) | ProductAction::ReviewShell => Some("terminal"),
+            ProductAction::EditContext | ProductAction::EditProjectContext => Some("layers"),
+            _ => None,
         };
         div()
             .id(id)
@@ -1363,6 +1711,8 @@ impl ProductUi {
             .px(px(if style.compact { 9. } else { 10. }))
             .flex()
             .items_center()
+            .gap_2()
+            .when(!style.compact, |row| row.w_full())
             .rounded(px(6.))
             .bg(background)
             .text_size(px(12.))
@@ -1377,6 +1727,13 @@ impl ProductUi {
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.product_action(action.clone(), window, cx);
                 cx.stop_propagation();
+            }))
+            .children(icon.map(|name| {
+                chrome::icon(
+                    name,
+                    14.,
+                    if primary { chrome::BASE } else { chrome::MUTED },
+                )
             }))
             .child(label)
             .into_any_element()
