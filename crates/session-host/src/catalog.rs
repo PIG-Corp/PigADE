@@ -68,6 +68,26 @@ pub(crate) fn apply_metadata(
         "raw layout history writes are not allowed"
     );
     let current = store.catalog()?;
+    for write in &batch.workspaces {
+        if let Some(previous) = current
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == write.value.id)
+            && previous.status == pigade_storage::WorkspaceStatus::Archived
+            && write.value.status == pigade_storage::WorkspaceStatus::Ready
+        {
+            ensure!(
+                write.value.cwd == previous.cwd && write.value.mode == previous.mode,
+                "cannot restore workspace after changing its checkout path or mode"
+            );
+            let project = current
+                .projects
+                .iter()
+                .find(|project| project.id == previous.project_id)
+                .context("archived workspace project is missing")?;
+            crate::projects::validate_workspace_restore(project, &previous.cwd)?;
+        }
+    }
     let mut model = load_layout(&current)?;
     let mut added = false;
     for write in &mut batch.tabs {
@@ -306,6 +326,181 @@ mod tests {
                 ..CatalogBatch::default()
             },
         )
+    }
+
+    #[test]
+    fn missing_archived_workspace_cannot_be_restored_or_mutated() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let repo = directory.path().join("repo");
+        std::fs::create_dir(&repo)?;
+        let git = |path: &std::path::Path, args: &[&str]| -> Result<()> {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .output()?;
+            anyhow::ensure!(output.status.success(), "test git command failed");
+            Ok(())
+        };
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repo)
+            .output()?;
+        anyhow::ensure!(init.status.success(), "git init failed");
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=PigADE test",
+                "-c",
+                "user.email=pigade-test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "initial",
+            ],
+        )?;
+        let state = directory.path().join("state");
+        std::fs::create_dir(&state)?;
+        let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
+        let catalog = crate::projects::add_project(&mut store, repo.clone())?;
+        let catalog = crate::projects::create_workspace(
+            &mut store,
+            &state,
+            catalog.projects[0].id,
+            "Task".into(),
+            true,
+        )?;
+        let mut workspace = catalog.workspaces[0].clone();
+        workspace.status = WorkspaceStatus::Archived;
+        let archived = apply_metadata(
+            &mut store,
+            CatalogBatch {
+                workspaces: vec![CatalogWrite {
+                    value: workspace.clone(),
+                    expected_revision: Some(workspace.revision),
+                }],
+                ..CatalogBatch::default()
+            },
+        )?;
+        workspace = archived.workspaces[0].clone();
+        let archived_cwd = workspace.cwd.clone();
+        let sibling = directory.path().join("sibling");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "sibling",
+                sibling.to_str().unwrap(),
+            ],
+        )?;
+        workspace.status = WorkspaceStatus::Ready;
+        workspace.cwd = sibling;
+        assert!(
+            apply_metadata(
+                &mut store,
+                CatalogBatch {
+                    workspaces: vec![CatalogWrite {
+                        value: workspace.clone(),
+                        expected_revision: Some(workspace.revision)
+                    }],
+                    ..CatalogBatch::default()
+                }
+            )
+            .is_err()
+        );
+        let after = store.catalog()?;
+        assert_eq!(after.workspaces[0].status, WorkspaceStatus::Archived);
+        assert_eq!(after.workspaces[0].revision, workspace.revision);
+        assert_eq!(after.workspaces[0].cwd, archived_cwd);
+        Ok(())
+    }
+
+    #[test]
+    fn template_layout_edit_is_atomic_and_keeps_pane_identities() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
+        let initial = seed(&mut store)?;
+        let tab_id = id(4);
+        let mut current = layout_edit(
+            &mut store,
+            initial.layout.revision,
+            LayoutAction::Apply {
+                command: pigade_layout::Command::Insert {
+                    tab: tab_id,
+                    pane: id(20),
+                    target: None,
+                    side: Direction::Right,
+                    split: id(30),
+                },
+            },
+        )?;
+        current = layout_edit(
+            &mut store,
+            current.layout.revision,
+            LayoutAction::Apply {
+                command: pigade_layout::Command::Insert {
+                    tab: tab_id,
+                    pane: id(21),
+                    target: Some(id(20)),
+                    side: Direction::Down,
+                    split: id(31),
+                },
+            },
+        )?;
+        let before: TabLayout = serde_json::from_str(
+            &current
+                .tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .layout_json,
+        )?;
+        let original_panes = before.panes();
+        let template = pigade_layout::GeometryTemplate {
+            schema: 1,
+            root: Some(pigade_layout::TemplateNode::Split {
+                axis: pigade_layout::Axis::Horizontal,
+                weights: vec![0.5, 0.5],
+                children: vec![
+                    pigade_layout::TemplateNode::Pane,
+                    pigade_layout::TemplateNode::Pane,
+                ],
+            }),
+        };
+        current = layout_edit(
+            &mut store,
+            current.layout.revision,
+            LayoutAction::Apply {
+                command: pigade_layout::Command::ApplyTemplate {
+                    tab: tab_id,
+                    template,
+                },
+            },
+        )?;
+        let after: TabLayout = serde_json::from_str(
+            &current
+                .tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .layout_json,
+        )?;
+        assert_eq!(after.panes(), original_panes);
+        assert_eq!(current.tabs.len(), 2);
+        assert_eq!(
+            current
+                .tabs
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [id(4), id(5)].into()
+        );
+        Ok(())
     }
     fn edit(store: &mut MetadataStore, action: LayoutAction) -> Result<Catalog> {
         layout_edit(store, store.catalog()?.layout.revision, action)
@@ -629,6 +824,7 @@ mod tests {
             DROP TABLE context_heads;
             DROP TABLE context_revisions;
             DROP TABLE layout_revisions;
+            DROP TABLE layout_templates;
             DROP INDEX launch_session_generation_ordinal;
             ALTER TABLE launch_intents DROP COLUMN generation_ordinal;
             PRAGMA user_version=2; COMMIT;",

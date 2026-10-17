@@ -54,6 +54,7 @@ SETUP_PASS = 'pass-private-x11-project-setup-shell-fixture'
 OPENCODE_PASS = 'pass-private-x11-opencode-mouse-terminal-fixture'
 CONTROLS_PASS = 'pass-private-x11-panel-controls-fixture'
 POINTER_PASS = 'pass-private-x11-pointer-layout-fixture'
+CATALOG_PASS = 'pass-private-x11-catalog-template-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -369,13 +370,25 @@ def deactivate_private_fcitx(config, env):
     return int(expected_state)
 
 
+def pane_ids(node):
+    if not isinstance(node, dict):
+        return []
+    pane = node.get('Pane')
+    if isinstance(pane, dict) and isinstance(pane.get('id'), str):
+        return [pane['id']]
+    split = node.get('Split')
+    if isinstance(split, dict):
+        return [pane_id for child in split.get('children', []) for pane_id in pane_ids(child)]
+    return []
+
+
 def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
             'history': HISTORY_PASS, 'setup': SETUP_PASS,
             'opencode': OPENCODE_PASS, 'controls': CONTROLS_PASS,
-            'pointer': POINTER_PASS}[name]
+            'pointer': POINTER_PASS, 'catalog': CATALOG_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False, cwd='/artifacts'):
@@ -800,16 +813,6 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
         tab = next(item for item in catalog['tabs'] if item['id'] == tab_id)
         return catalog, json.loads(tab['layout_json'])
 
-    def pane_ids(node):
-        if not isinstance(node, dict):
-            return []
-        pane = node.get('Pane')
-        if isinstance(pane, dict) and isinstance(pane.get('id'), str):
-            return [pane['id']]
-        split = node.get('Split')
-        if isinstance(split, dict):
-            return [pane_id for child in split.get('children', []) for pane_id in pane_ids(child)]
-        return []
 
     def same_live_generations(expected):
         current = fixture_generations()
@@ -961,16 +964,6 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         tab = next(item for item in catalog['tabs'] if item['id'] == tab_id)
         return catalog, json.loads(tab['layout_json'])
 
-    def pane_ids(node):
-        if not isinstance(node, dict):
-            return []
-        pane = node.get('Pane')
-        if isinstance(pane, dict) and isinstance(pane.get('id'), str):
-            return [pane['id']]
-        split = node.get('Split')
-        if isinstance(split, dict):
-            return [pane_id for child in split.get('children', []) for pane_id in pane_ids(child)]
-        return []
 
     def process_snapshot():
         views = host_request({'command': 'list'}).get('views', [])
@@ -1195,6 +1188,132 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     save()
 
 
+def run_catalog_fixture(config, report, control, app, env, save, tab_id, baseline_generations):
+    report['stage'] = 'saved-layout-catalog'
+    save()
+    deactivate_private_fcitx(config, env)
+
+    def catalog_layout():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        tab = next(item for item in catalog['tabs'] if item['id'] == tab_id)
+        return catalog, json.loads(tab['layout_json'])
+
+    def geometry_only(node):
+        if not isinstance(node, dict):
+            return None
+        if isinstance(node.get('Pane'), dict):
+            return 'Pane'
+        split = node.get('Split')
+        if isinstance(split, dict):
+            return {'Split': {'axis': split['axis'], 'weights': split['weights'],
+                              'children': [geometry_only(child) for child in split['children']]}}
+        raise RuntimeError('catalog fixture encountered an unknown pane node')
+
+    def process_identities():
+        views = host_request({'command': 'list'}).get('views', [])
+        result = sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                        for view in views)
+        require(len(result) <= 32 and all(isinstance(session, str) and
+                isinstance(generation, str) and type(pid) is int and pid > 0
+                for session, generation, pid in result),
+                'catalog fixture process identity snapshot is invalid')
+        return result
+
+    initial, original_layout = catalog_layout()
+    original_panes = set(pane_ids(original_layout.get('root')))
+    identities = process_identities()
+    current_generations = fixture_generations()
+    require(len(original_panes) == 4 and len(identities) == 5 and
+            len(current_generations) == 5 and
+            (report['fixture']['session'], report['fixture']['generation']) in current_generations,
+            'catalog fixture did not start with four real panes and the bootstrap shell')
+
+    catalog_key_action(config, 'open-library')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/catalog-library-empty.ppm')
+    catalog_key_action(config, 'open-save-dialog')
+    catalog_key_action(config, 'save-template')
+    saved_catalog = wait_until(
+        lambda: (value if (value := host_request({'command': 'catalog'})['catalog']).get(
+            'layout_templates') and any(item.get('name') == 'Catalog'
+                                         for item in value['layout_templates']) else None),
+        time.monotonic() + 8)
+    template = next(item for item in saved_catalog['layout_templates']
+                    if item['name'] == 'Catalog')
+    require(template['geometry'].get('schema') == 1 and
+            template['geometry'].get('root') == geometry_only(original_layout.get('root')),
+            'saved catalog geometry differs from current four-pane tree')
+    helper_call(config, 'capture', '/artifacts/catalog-library-saved.ppm')
+    catalog_key_action(config, 'close-library')
+
+    before_mutation, before_layout = catalog_layout()
+    catalog_key_action(config, 'mutate-layout')
+    changed = wait_until(lambda: (pair if (pair := catalog_layout())[1] != before_layout else None),
+                         time.monotonic() + 8)
+    mutated_wire = next(tab for tab in changed[0]['tabs'] if tab['id'] == tab_id)['layout_json']
+    require(set(pane_ids(changed[1].get('root'))) == original_panes and
+            process_identities() == identities,
+            'native geometry edit changed pane membership or process identities')
+
+    catalog_key_action(config, 'open-library')
+    catalog_key_action(config, 'apply-first-template')
+    applied = wait_until(lambda: (pair if (pair := catalog_layout())[1].get('root') and
+                                  geometry_only(pair[1]['root']) == template['geometry'].get('root')
+                                  else None), time.monotonic() + 8)
+    require(set(pane_ids(applied[1].get('root'))) == original_panes and
+            process_identities() == identities,
+            'applying a saved geometry changed pane IDs or processes')
+
+    catalog_key_action(config, 'undo-layout')
+    undone = wait_until(lambda: (pair if next(
+        tab for tab in pair[0]['tabs'] if tab['id'] == tab_id)['layout_json'] == mutated_wire
+        else None) if (pair := catalog_layout()) else None, time.monotonic() + 8)
+    require(set(pane_ids(undone[1].get('root'))) == original_panes and
+            process_identities() == identities,
+            'catalog template undo failed exact restoration or changed processes')
+
+    catalog_key_action(config, 'rename-tab')
+    renamed = wait_until(
+        lambda: (catalog if next(tab for tab in catalog['tabs'] if tab['id'] == tab_id)
+                 ['name'] == 'Renamed' else None)
+        if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    require(set(pane_ids(catalog_layout()[1].get('root'))) == original_panes and
+            process_identities() == identities,
+            'renaming the tab changed pane membership or process identities')
+    catalog_key_action(config, 'open-library')
+    time.sleep(0.2)
+    reopened = host_request({'command': 'catalog'})['catalog']
+    require(any(item.get('id') == template['id'] and item.get('name') == 'Catalog'
+                for item in reopened['layout_templates']),
+            'saved template did not persist after reopening its UI library')
+    helper_call(config, 'capture', '/artifacts/catalog-library-reopened.ppm')
+    catalog_key_action(config, 'delete-template')
+    wait_until(lambda: value if not (value := host_request({'command': 'catalog'})['catalog']
+                                    ).get('layout_templates') else None,
+               time.monotonic() + 8)
+    require(process_identities() == identities and
+            set(pane_ids(catalog_layout()[1].get('root'))) == original_panes,
+            'deleting a saved template changed the active layout or processes')
+    catalog_key_action(config, 'open-library')
+    time.sleep(0.2)
+    helper_call(config, 'capture', '/artifacts/catalog-library-deleted.ppm')
+    report['catalog'] = {
+        'saved_geometry_schema': template['geometry']['schema'],
+        'saved_template_survived_ui_reopen': True,
+        'persistence_scope': 'layout-library-dialog-reopen-only; app restart not covered',
+        'apply_preserved_all_pane_ids': True,
+        'undo_restored_exact_pre_apply_layout_wire': True,
+        'tab_rename_persisted': renamed is not None,
+        'delete_removed_template': True,
+        'session_generation_pid_identities_unchanged': True,
+        'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
+                     'catalog-library-reopened.ppm', 'catalog-library-deleted.ppm'],
+    }
+    report.update({'status': CATALOG_PASS, 'stage': 'complete'})
+    save()
+
+
 def run_setup_fixture(config, report, control, app, env, save):
     report['stage'] = 'project-workspace-shell-setup'
     save()
@@ -1304,6 +1423,10 @@ def run_setup_fixture(config, report, control, app, env, save):
         return
     if config.get('fixture') == 'pointer':
         run_pointer_fixture(config, report, control, app, env, save,
+                            grid_catalog['tabs'][0]['id'], baseline_generations)
+        return
+    if config.get('fixture') == 'catalog':
+        run_catalog_fixture(config, report, control, app, env, save,
                             grid_catalog['tabs'][0]['id'], baseline_generations)
         return
     helper_call(config, 'setup-live')
@@ -1793,6 +1916,23 @@ def helper_call(config, stage, output=None, timeout=5):
     return json.loads(result.stdout)
 
 
+def catalog_key_action(config, action):
+    """Run one allowlisted sequence through the existing identity-checked helper."""
+    stages = {
+        'open-library': 'catalog-open-library',
+        'close-library': 'catalog-close-library',
+        'open-save-dialog': 'catalog-open-save',
+        'save-template': 'catalog-save',
+        'apply-first-template': 'catalog-apply',
+        'undo-layout': 'catalog-undo',
+        'delete-template': 'catalog-delete',
+        'mutate-layout': 'catalog-mutate',
+        'rename-tab': 'catalog-rename-tab',
+    }
+    require(action in stages, 'catalog fixture requested an unknown fixed helper stage')
+    helper_call(config, stages[action])
+
+
 def _bounded_uint(value, maximum=(1 << 64) - 1):
     return type(value) is int and 0 <= value <= maximum
 
@@ -2251,7 +2391,7 @@ def inside_run() -> int:
         if config.get('fixture') == 'history':
             run_history_fixture(config, report, control, app_env, save)
             return 0
-        if config.get('fixture') in ('setup', 'controls', 'pointer'):
+        if config.get('fixture') in ('setup', 'controls', 'pointer', 'catalog'):
             run_setup_fixture(config, report, control, app, app_env, save)
             return 0
         if config.get('fixture') == 'opencode':
@@ -2404,6 +2544,10 @@ def outer_run(args) -> dict:
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
                   'pointer-undo.ppm'] if args.fixture == 'pointer' else
+                 ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
+                  'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
+                  'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
+                  'catalog-library-deleted.ppm'] if args.fixture == 'catalog' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
@@ -2430,6 +2574,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
+                  'catalog': 'fixed private four-shell setup; save a geometry template, change layout, apply and undo it, reopen library, and delete it',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
                   'arbitrary_text_argument': False},
@@ -2472,7 +2617,7 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer'], default='pinyin',
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer', 'catalog'], default='pinyin',
                         help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pointer layout fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')

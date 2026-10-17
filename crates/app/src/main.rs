@@ -1,5 +1,6 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
 mod block_glyph;
+mod catalog_flow;
 mod cell_style;
 mod chrome;
 mod command_worker;
@@ -1008,6 +1009,7 @@ mod focus_placement_tests {
                 ..Default::default()
             },
             layout: LayoutDocument::default(),
+            layout_templates: Some(vec![]),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1032,6 +1034,13 @@ mod focus_placement_tests {
     }
 }
 
+struct CatalogEdit {
+    request: uuid::Uuid,
+    dialog: Option<uuid::Uuid>,
+    return_to: Option<product::DialogKind>,
+    notice: String,
+}
+
 struct CanvasApp {
     product: product::ProductUi,
     editor_layouts: std::collections::BTreeMap<usize, edit_field::FieldLayout>,
@@ -1041,6 +1050,8 @@ struct CanvasApp {
     product_tx: mpsc::SyncSender<Value>,
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
     product_launch_unknown: bool,
+    catalog_edit: Option<CatalogEdit>,
+    deferred_product_action: Option<product::ProductAction>,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
     pending_direct_launch: Option<DirectLaunch>,
@@ -1218,7 +1229,10 @@ impl CanvasApp {
                                         this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
-                                        let keep_local = focus_reply && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
+                                        let edit = if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==ui_request) {this.catalog_edit.take()} else {None};
+                                        let keep_local = (focus_reply || edit.is_some()) && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
+                                        let same_dialog=edit.as_ref().is_some_and(|edit|edit.dialog == this.product.dialog.as_ref().map(|dialog|dialog.id));
+                                        let current_dialog=this.product.dialog.clone();
                                         if focus_reply {
                                             let saved=catalog.selection.tab_id.and_then(|tab|catalog.tabs.iter().find(|value|value.id==tab).and_then(|value|serde_json::from_str::<pigade_layout::TabLayout>(&value.layout_json).ok()).and_then(|layout|layout.focused.map(|pane|pointer_layout::FocusIntent{tab,pane})));
                                             this.focus_queue.complete(reply.ui_request.expect("matching focus request"),saved);
@@ -1228,6 +1242,10 @@ impl CanvasApp {
                                             this.product.notice = None;
                                             this.product.dialog = None;
                                             this.sync_product_selection(window, cx);
+                                        }
+                                        if let Some(edit)=edit {
+                                            this.product.notice=Some(edit.notice);
+                                            this.product.dialog=if same_dialog {edit.return_to.map(product::Dialog::new)} else {current_dialog};
                                         }
                                     }
                                     if let Some(sessions) = reply.sessions {
@@ -1303,7 +1321,9 @@ impl CanvasApp {
                                         this.focus_queue.cancel();
                                         this.focus_queue.complete(error.ui_request.expect("matching focus error"),None);
                                         this.deferred_placement=None;
+                                        this.deferred_product_action=None;
                                     }
+                                    if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==error.ui_request) {this.catalog_edit=None;}
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
                                     if this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(error.ui_request)) { this.pending_direct_launch=None; }
                                     if error.providers_request { this.product.provider_error=Some("Не удалось проверить CLI. Терминал можно открыть сразу; проверку агентов можно повторить.".into()); }
@@ -1433,6 +1453,10 @@ impl CanvasApp {
                         }
                         this.sync_editor_scope(window,cx);
                         this.flush_focus(cx);
+                        if !this.product.busy && !this.focus_queue.is_saving() && this.focus_queue.pending().is_none()
+                            && let Some(action)=this.deferred_product_action.take() {
+                            this.product_action(action,window,cx);
+                        }
                         this.flush_canvas_offset(cx);
                         if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
                             window.remove_window();
@@ -1486,6 +1510,8 @@ impl CanvasApp {
             product_tx,
             product_rx,
             product_launch_unknown: false,
+            catalog_edit: None,
+            deferred_product_action: None,
             pending_launch: None,
             pending_launch_review: false,
             pending_direct_launch: None,
@@ -1551,6 +1577,8 @@ impl CanvasApp {
     }
     fn try_product_command(&mut self, command: Value, cx: &mut Context<Self>) -> bool {
         if self.product.busy {
+            self.product.notice = Some("Дождитесь завершения текущей операции".into());
+            cx.notify();
             return false;
         }
         let admitted = match self.product_tx.try_send(command) {
@@ -1566,6 +1594,27 @@ impl CanvasApp {
         };
         cx.notify();
         admitted
+    }
+
+    fn edit_catalog(
+        &mut self,
+        batch: pigade_storage::CatalogBatch,
+        notice: &str,
+        return_to: Option<product::DialogKind>,
+        cx: &mut Context<Self>,
+    ) {
+        let request = uuid::Uuid::new_v4();
+        if self.try_product_command(
+            json!({"command":"catalog_apply","batch":batch,"_ui_request":request}),
+            cx,
+        ) {
+            self.catalog_edit = Some(CatalogEdit {
+                request,
+                dialog: self.product.dialog.as_ref().map(|dialog| dialog.id),
+                return_to,
+                notice: notice.into(),
+            });
+        }
     }
 
     fn begin_project_setup(&mut self, mut command: Value, cx: &mut Context<Self>) {
@@ -2955,6 +3004,25 @@ impl CanvasApp {
     ) {
         use product::{Dialog, DialogKind, ProductAction as A};
         self.focus.focus(window, cx);
+        // A real hover may have just queued a focus CAS. Keep one explicit
+        // user action and build its metadata batch only after that ACK.
+        if !matches!(
+            action,
+            A::CloseDialog | A::FocusPane(_) | A::ToggleSidebar | A::ToggleArchived
+        ) {
+            if !self.product.busy && self.focus_queue.pending().is_some() {
+                self.flush_focus(cx);
+            }
+            if self.product.busy && self.focus_queue.is_saving() {
+                if self.deferred_product_action.is_none() {
+                    self.deferred_product_action = Some(action);
+                } else {
+                    self.product.notice = Some("Действие уже ожидает сохранения фокуса".into());
+                }
+                cx.notify();
+                return;
+            }
+        }
         if matches!(
             action,
             A::SubmitDialog
@@ -2987,6 +3055,12 @@ impl CanvasApp {
                 | A::CreateWorkspace
                 | A::CreateWorkspaceFor(_)
                 | A::CreateTab
+                | A::ManageSelected(_)
+                | A::ManageProject(_)
+                | A::ManageWorkspace(_)
+                | A::ManageTab(_)
+                | A::OpenLayouts
+                | A::SaveLayout
                 | A::OpenTransfer
                 | A::OpenSessions
         ) {
@@ -2998,6 +3072,165 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::ManageSelected(kind) => {
+                let action = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| match kind {
+                        catalog_flow::EntityKind::Project => {
+                            catalog.selection.project_id.map(A::ManageProject)
+                        }
+                        catalog_flow::EntityKind::Workspace => {
+                            catalog.selection.workspace_id.map(A::ManageWorkspace)
+                        }
+                        catalog_flow::EntityKind::Tab => catalog.selection.tab_id.map(A::ManageTab),
+                    });
+                if let Some(action) = action {
+                    self.product_action(action, window, cx);
+                } else {
+                    self.product.notice =
+                        Some("Сначала выберите проект, воркспейс или вкладку".into());
+                }
+            }
+            A::ManageProject(id) | A::ManageWorkspace(id) | A::ManageTab(id) => {
+                self.product.management_target =
+                    self.product
+                        .catalog
+                        .as_ref()
+                        .and_then(|catalog| match action {
+                            A::ManageProject(_) => catalog
+                                .projects
+                                .iter()
+                                .find(|value| value.id == id)
+                                .cloned()
+                                .map(catalog_flow::ManagedEntity::Project),
+                            A::ManageWorkspace(_) => catalog
+                                .workspaces
+                                .iter()
+                                .find(|value| value.id == id)
+                                .cloned()
+                                .map(catalog_flow::ManagedEntity::Workspace),
+                            _ => catalog
+                                .tabs
+                                .iter()
+                                .find(|value| value.id == id)
+                                .cloned()
+                                .map(catalog_flow::ManagedEntity::Tab),
+                        });
+                if self.product.management_target.is_some() {
+                    self.product.notice = None;
+                    self.product.dialog = Some(Dialog::new(DialogKind::Manage));
+                }
+            }
+            A::RenameTarget => {
+                if let Some(target) = &self.product.management_target {
+                    let mut dialog = Dialog::new(DialogKind::Rename);
+                    dialog.fields[0] = target.name().into();
+                    dialog.fields[0].select_all();
+                    self.product.dialog = Some(dialog);
+                }
+            }
+            A::ArchiveTarget => {
+                if let (Some(target), Some(catalog)) =
+                    (&self.product.management_target, &self.product.catalog)
+                {
+                    match target.archive(catalog) {
+                        Ok(batch) => self.edit_catalog(
+                            batch,
+                            "Воркспейс обновлён. CLI и файлы сохранены.",
+                            None,
+                            cx,
+                        ),
+                        Err(error) => self.product.notice = Some(error),
+                    }
+                }
+            }
+            A::ToggleArchived => self.product.show_archived = !self.product.show_archived,
+            A::RefreshCatalog => self.product_command(json!({"command":"catalog"}), cx),
+            A::OpenLayouts => {
+                self.product.layout_scroll.scroll_to_item(0);
+                self.product.notice = None;
+                self.product.dialog = Some(Dialog::new(DialogKind::Layouts));
+            }
+            A::SaveLayout => {
+                if self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.layout_templates.as_ref())
+                    .is_none()
+                {
+                    self.product.notice =
+                        Some("Текущий session host не поддерживает сохранение шаблонов".into());
+                } else if let Some((tab, layout)) = self.tab_layout() {
+                    if layout.panes().is_empty() {
+                        self.product.notice =
+                            Some("Откройте хотя бы одну терминальную панель".into());
+                    } else {
+                        match pigade_layout::GeometryTemplate::from_tab(&layout) {
+                            Ok(draft) => {
+                                self.product.template_draft = Some(draft);
+                                let name = self
+                                    .product
+                                    .catalog
+                                    .as_ref()
+                                    .and_then(|catalog| {
+                                        catalog.tabs.iter().find(|value| value.id == tab)
+                                    })
+                                    .map(|tab| tab.name.clone())
+                                    .unwrap_or_else(|| "Раскладка".into());
+                                let mut dialog = Dialog::new(DialogKind::SaveLayout);
+                                dialog.fields[0] = name.into();
+                                dialog.fields[0].select_all();
+                                self.product.notice = None;
+                                self.product.dialog = Some(dialog);
+                            }
+                            Err(error) => self.product.notice = Some(error.to_string()),
+                        }
+                    }
+                } else {
+                    self.product.notice = Some("Сначала выберите вкладку".into());
+                }
+            }
+            A::ApplyLayout(id) => {
+                let template = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.layout_templates.as_ref())
+                    .and_then(|templates| templates.iter().find(|value| value.id == id))
+                    .cloned();
+                if let (Some(template), Some((tab, layout))) = (template, self.tab_layout()) {
+                    if template.geometry.pane_count() != layout.panes().len() {
+                        self.product.notice = Some(format!(
+                            "Для этой раскладки нужно {} панелей; открыто {}",
+                            template.geometry.pane_count(),
+                            layout.panes().len()
+                        ));
+                    } else {
+                        self.layout_command(
+                            pigade_layout::Command::ApplyTemplate {
+                                tab,
+                                template: template.geometry,
+                            },
+                            cx,
+                        );
+                    }
+                }
+            }
+            A::DeleteLayout(id) => {
+                self.product.template_target = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.layout_templates.as_ref())
+                    .and_then(|templates| templates.iter().find(|value| value.id == id))
+                    .cloned();
+                if self.product.template_target.is_some() {
+                    self.product.dialog = Some(Dialog::new(DialogKind::DeleteLayout));
+                }
+            }
             A::OpenControls => {
                 self.prefix = false;
                 self.pane_drag = None;
@@ -3231,7 +3464,18 @@ impl CanvasApp {
             }
             A::ToggleLaunchDetails => self.product.launch_details = !self.product.launch_details,
             A::OpenPaneMenu => self.product.dialog = Some(Dialog::new(DialogKind::PaneMenu)),
-            A::CreateTab => self.product.dialog = Some(Dialog::new(DialogKind::NewTab)),
+            A::CreateTab => {
+                if self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.selection.workspace_id.is_some())
+                {
+                    self.product.dialog = Some(Dialog::new(DialogKind::NewTab));
+                } else {
+                    self.product.notice = Some("Сначала создайте или выберите воркспейс".into());
+                }
+            }
             A::OpenSessions | A::RefreshSessions => {
                 self.product_command(json!({"command":"list"}), cx)
             }
@@ -3270,6 +3514,7 @@ impl CanvasApp {
                 }
             }
             A::CloseDialog => {
+                self.deferred_product_action = None;
                 self.setup_flow = None;
                 self.picker_request = None;
                 self.product.workspace_project = None;
@@ -3463,10 +3708,7 @@ impl CanvasApp {
                 if let Some(catalog) = &self.product.catalog {
                     let mut selection = catalog.selection.clone();
                     selection.project_id = Some(id);
-                    selection.workspace_id = catalog
-                        .workspaces
-                        .iter()
-                        .find(|workspace| workspace.project_id == id)
+                    selection.workspace_id = catalog_flow::first_active_workspace(catalog, id)
                         .map(|workspace| workspace.id);
                     selection.tab_id = catalog
                         .tabs
@@ -3521,6 +3763,67 @@ impl CanvasApp {
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
                 match kind {
+                    DialogKind::Rename => {
+                        if let Some(target) = &self.product.management_target {
+                            match target.rename(field(0)) {
+                                Ok(batch) => {
+                                    self.edit_catalog(batch, "Название сохранено", None, cx)
+                                }
+                                Err(error) => self.product.notice = Some(error),
+                            }
+                        }
+                    }
+                    DialogKind::SaveLayout => {
+                        if let Some(geometry) = &self.product.template_draft {
+                            let name = field(0).trim();
+                            if name.is_empty()
+                                || name.len() > 256
+                                || name.chars().any(char::is_control)
+                            {
+                                self.product.notice =
+                                    Some("Введите название до 256 байт UTF-8".into());
+                            } else {
+                                let batch = pigade_storage::CatalogBatch {
+                                    layout_templates: vec![pigade_storage::CatalogWrite {
+                                        value: pigade_storage::LayoutTemplate {
+                                            id: uuid::Uuid::new_v4(),
+                                            name: name.into(),
+                                            geometry: geometry.clone(),
+                                            revision: 0,
+                                        },
+                                        expected_revision: None,
+                                    }],
+                                    ..Default::default()
+                                };
+                                self.edit_catalog(
+                                    batch,
+                                    "Раскладка сохранена",
+                                    Some(DialogKind::Layouts),
+                                    cx,
+                                );
+                            }
+                        }
+                    }
+                    DialogKind::DeleteLayout => {
+                        if let Some(template) = &self.product.template_target {
+                            let batch = pigade_storage::CatalogBatch {
+                                remove_layout_templates: vec![
+                                    pigade_storage::LayoutTemplateDelete {
+                                        id: template.id,
+                                        expected_revision: template.revision,
+                                    },
+                                ],
+                                ..Default::default()
+                            };
+                            self.edit_catalog(
+                                batch,
+                                "Раскладка удалена",
+                                Some(DialogKind::Layouts),
+                                cx,
+                            );
+                        }
+                    }
+                    DialogKind::Manage | DialogKind::Layouts => self.product.dialog = None,
                     DialogKind::AddProject => self
                         .begin_project_setup(json!({"command":"add_project","path":field(0)}), cx),
                     DialogKind::CreateProject => {
@@ -4843,6 +5146,60 @@ impl CanvasApp {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let k = &event.keystroke;
+        if k.key == "escape" && self.deferred_product_action.take().is_some() {
+            self.product.notice = Some("Ожидающее действие отменено".into());
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if self.product.dialog.as_ref().is_some_and(|dialog| {
+            matches!(
+                dialog.kind,
+                product::DialogKind::Manage | product::DialogKind::Layouts
+            )
+        }) {
+            if event.is_held && matches!(k.key.as_str(), "enter" | "delete") {
+                cx.stop_propagation();
+                return;
+            }
+            let entries = self.product.menu_entries();
+            let count = entries.len();
+            let selected = self
+                .product
+                .dialog
+                .as_ref()
+                .map_or(0, |dialog| dialog.active_field)
+                .min(count.saturating_sub(1));
+            let action = match k.key.as_str() {
+                "escape" => Some(product::ProductAction::CloseDialog),
+                "enter" => entries.get(selected).map(|(_, action)| action.clone()),
+                "delete" if k.modifiers.shift => {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::ApplyLayout(id) => {
+                            Some(product::ProductAction::DeleteLayout(*id))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+            } else if count > 0 && matches!(k.key.as_str(), "up" | "down" | "tab") {
+                let previous = k.key == "up" || k.key == "tab" && k.modifiers.shift;
+                if let Some(dialog) = &mut self.product.dialog {
+                    dialog.active_field = (selected + if previous { count - 1 } else { 1 }) % count;
+                    if dialog.kind == product::DialogKind::Layouts {
+                        self.product
+                            .layout_scroll
+                            .scroll_to_item(dialog.active_field);
+                    }
+                }
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self
             .product
             .dialog
@@ -5267,6 +5624,7 @@ impl CanvasApp {
                 "b" => Some(product::ProductAction::InspectConversation),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
+                "d" => Some(product::ProductAction::OpenLayouts),
                 "enter" => Some(if k.modifiers.shift {
                     product::ProductAction::ReviewLaunch("shell".into())
                 } else {

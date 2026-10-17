@@ -2721,3 +2721,51 @@ Finish hover focus and Dwindle drag integration, callback-safe X11 IME negotiati
 - Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, crates/app/Cargo.toml, crates/app/Cargo.lock, crates/app/bootstrap.sh, crates/app/README.md, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/README.md, crates/app/patches/xim-preedit, scripts/apply-gpui-patches.py, scripts/test_apply_gpui_patches.py, scripts/test_gpui_xim_focus.py, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, SPEC.md, DESIGN.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0010-gpui-x11-ime-focus-lifecycle.md
 - Verification: Fresh app179 tests; actual patched xim transport2 tests through bootstrap test-xim; GPUI12 source-bound tests; layout13 tests; harness27 and applier15 tests; strict app Clippy, fmt, version alignment, diff-check and locked release build pass. Release private pointer07, keyboard03, Pinyin04 and controls01 pass. Drag, final drop, exact Undo and inline preedit captures inspected. Four real shell session/generation/PID identities and preview PTY geometry preserved; keyboard exact31 bytes in no-IC fallback, callback commit exact6 bytes with no precommit/extras. No active-desktop input injection or settings changes.
 - Risks / next: Full platform/MVP and delayed native target/generation barriers remain open; callback-only X11 CJK requires supported server configuration. Five existing dependency warnings remain visible. Capture settling350ms is not a latency metric. Preserve failed runs01-06 and unrelated stress/IME quarantine edits; open new UI on the preserved review host without killing existing UI/CLI.
+
+## 2026-10-17T22:19:42+00:00 — layout_templates_luna
+
+Add identity-free schema-1 geometry templates and atomic template application to existing tab panes.
+
+- Files: crates/layout/src/lib.rs, crates/layout/tests/invariants.rs
+- Verification: cargo fmt -- crates/layout/src/lib.rs crates/layout/tests/invariants.rs; cargo test -p pigade-layout (16 passed); git diff --check
+- Risks / next: Storage and host lanes can persist and route GeometryTemplate; root owns integrated workspace verification.
+
+## 2026-10-17T22:21:36+00:00 — /root/catalog_flow_luna
+
+Added schema-8 saved geometry template storage, CAS writes/deletes, host layout apply coverage, and archived workspace restore validation
+
+- Files: crates/storage/Cargo.toml, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/session-host/src/catalog.rs, crates/session-host/src/projects.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage catalog::tests:: (17 passed); cargo test -p pigade-storage schema_v7_migration_adds_layout_templates (1 passed); cargo test -p pigade-session-host catalog::tests:: (11 passed); rustfmt --edition 2024 on changed Rust files
+- Risks / next: Root should integrate app Catalog literals and verify app/wire integration; template records are geometry-only and host ApplyTemplate remains in LayoutEdit CAS transaction.
+
+## 2026-10-17T22:23:21+00:00 — /root/catalog_flow_luna
+
+Hardened archived workspace restore against checkout substitution
+
+- Files: crates/session-host/src/catalog.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host missing_archived_workspace_cannot_be_restored_or_mutated (1 passed); rustfmt --edition 2024 crates/session-host/src/catalog.rs
+- Risks / next: Root owns remaining integration checks.
+
+## 2026-10-17T22:28:57+00:00 — catalog_flow_luna
+
+Added the bounded private-Xvfb catalog fixture plan and fixed its UI mutation/undo checks; corrected legacy schema downgrades to omit the v8 layout_templates table.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, crates/storage/src/conversation.rs, crates/storage/src/launch.rs, crates/session-host/src/catalog.rs
+- Verification: Python compile and catalog plan-only test passed; cargo test -p pigade-storage passed 61 tests.
+- Risks / next: Parent can run the catalog fixture after release build; UI tab rename and full app persistence across process restart are not yet exercised by this fixture.
+
+## 2026-10-17T22:31:21+00:00 — catalog_flow_luna
+
+Moved catalog fixture input into fixed allowlisted stages in the existing identity-checked C/XTest helper and added a selected-tab rename workflow; removed Python Xlib input path.
+
+- Files: scripts/x11-ime-input.c, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: C helper compiled with -Wall -Wextra -Werror; Python compile and catalog plan-only test passed. Native fixture intentionally not run.
+- Risks / next: Parent owns private Xvfb catalog run; verify fixed selected-tab context click at x=280,y=58 and report library-dialog-only persistence scope.
+
+## 2026-10-17T22:34:18+00:00 — root
+
+Integrate saved geometry layouts and usable project/workspace/tab management; preserve CLI through rename/archive/apply and focus-save admission
+
+- Files: crates/app/src/catalog_flow.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/setup_flow.rs, crates/app/Cargo.lock, README.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0004-durable-layout-transactions.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: Fresh cargo test --workspace:291 passed; app bootstrap test:183 passed; strict workspace/app Clippy, fmt, version and locked release builds pass. Private X11 catalog release02 passed save/resize/apply/exact undo/tab rename/dialog reopen/delete with 4 pane IDs and all 5 session/generation/PID identities preserved; saved/reopened screenshots inspected. Run01 failed before feature actions due fixture helper scope; fixed by reusing shared pane_ids. Root also corrected fixed toolbar coordinates, ASCII capitalization and delete selection in existing helper.
+- Risks / next: Full MVP gates remain open. Templates currently contain geometry only; launch settings remain required. Native proof is one private X11 workflow and dialog reopen, not app restart/Wayland/full accessibility. Existing manual host/CLI left running; older host disables templates. Preserve unrelated working-tree edits and deferred preferences stash.

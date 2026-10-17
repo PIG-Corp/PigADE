@@ -2,6 +2,13 @@
 
 ## 0.0.1-dev — in development
 
+- Project/workspace/tab management menus, revision-checked rename, workspace
+  archive/restore without stopping CLI, and archived checkout identity checks.
+- Saved geometry layouts with native thumbnails, keyboard navigation, CAS
+  save/delete and single-step undoable application to existing stable panes.
+  SQLite schema8 backs up existing metadata before migration. Launch settings
+  in templates remain unimplemented; no sessions are created by applying geometry.
+
 - Terminal listener retains only live response FIFO and the final ordered title
   update. Ignored UI/clipboard/bell and replay response events no longer build a
   transient queue; response bytes and checkpoint continuation are preserved.

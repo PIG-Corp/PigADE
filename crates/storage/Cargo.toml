@@ -9,6 +9,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+pigade-layout = { path = "../layout" }
 crc32fast.workspace = true
 rusqlite.workspace = true
 libc.workspace = true

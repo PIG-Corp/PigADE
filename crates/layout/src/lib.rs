@@ -55,6 +55,95 @@ pub enum Node {
     },
 }
 
+/// A portable pane arrangement. Pane and split identities are intentionally omitted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeometryTemplate {
+    pub schema: u16,
+    pub root: Option<TemplateNode>,
+}
+
+/// Identity-free counterpart to [`Node`] used by saved geometry templates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TemplateNode {
+    Pane,
+    Split {
+        axis: Axis,
+        weights: Vec<f64>,
+        children: Vec<TemplateNode>,
+    },
+}
+
+impl GeometryTemplate {
+    pub fn from_tab(tab: &TabLayout) -> Result<Self> {
+        fn strip(node: &Node) -> TemplateNode {
+            match node {
+                Node::Pane { .. } => TemplateNode::Pane,
+                Node::Split {
+                    axis,
+                    weights,
+                    children,
+                    ..
+                } => TemplateNode::Split {
+                    axis: *axis,
+                    weights: weights.clone(),
+                    children: children.iter().map(strip).collect(),
+                },
+            }
+        }
+        let template = Self {
+            schema: 1,
+            root: tab.root.as_ref().map(strip),
+        };
+        template.validate()?;
+        Ok(template)
+    }
+
+    pub fn pane_count(&self) -> usize {
+        fn count(node: &TemplateNode) -> usize {
+            match node {
+                TemplateNode::Pane => 1,
+                TemplateNode::Split { children, .. } => children.iter().map(count).sum(),
+            }
+        }
+        self.root.as_ref().map(count).unwrap_or_default()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema == 1, "unsupported geometry template schema");
+        fn validate_node(node: &TemplateNode, depth: usize, count: &mut usize) -> Result<()> {
+            ensure!(depth <= MAX_DEPTH, "layout too deep");
+            *count += 1;
+            ensure!(*count <= MAX_NODES, "too many layout nodes");
+            if let TemplateNode::Split {
+                weights, children, ..
+            } = node
+            {
+                ensure!(
+                    children.len() >= 2 && weights.len() == children.len(),
+                    "invalid split arity"
+                );
+                ensure!(
+                    weights.iter().all(|w| w.is_finite() && *w > 0.0),
+                    "invalid split weight"
+                );
+                ensure!(
+                    (weights.iter().sum::<f64>() - 1.0).abs() < 1e-9,
+                    "weights must be normalized"
+                );
+                for child in children {
+                    validate_node(child, depth + 1, count)?;
+                }
+            }
+            Ok(())
+        }
+        let mut count = 0;
+        if let Some(root) = &self.root {
+            validate_node(root, 0, &mut count)?;
+        }
+        Ok(())
+    }
+}
+
 impl Node {
     pub fn pane(id: PaneId) -> Self {
         Self::Pane { id }
@@ -357,6 +446,10 @@ pub enum Command {
     ToggleFocusMode {
         tab: TabId,
     },
+    ApplyTemplate {
+        tab: TabId,
+        template: GeometryTemplate,
+    },
 }
 
 impl Command {
@@ -490,6 +583,77 @@ impl Command {
                 let tab = state.tab_mut(tab)?;
                 ensure!(tab.root.is_some(), "empty tab cannot enter focus mode");
                 tab.focus_mode = !tab.focus_mode;
+            }
+            Self::ApplyTemplate { tab, template } => {
+                template.validate()?;
+                let current = state.tab_mut(tab)?;
+                if !current.focus_mode && GeometryTemplate::from_tab(current)? == template {
+                    return Ok(());
+                }
+                let panes = current.panes();
+                ensure!(
+                    panes.len() == template.pane_count(),
+                    "template pane count does not match tab"
+                );
+                let mut available: BTreeSet<_> = state.tabs.keys().copied().collect();
+                fn collect_ids(node: &Node, ids: &mut BTreeSet<Uuid>) {
+                    match node {
+                        Node::Pane { id } => {
+                            ids.insert(*id);
+                        }
+                        Node::Split { id, children, .. } => {
+                            ids.insert(*id);
+                            for child in children {
+                                collect_ids(child, ids);
+                            }
+                        }
+                    }
+                }
+                for tab in state.tabs.values() {
+                    if let Some(root) = &tab.root {
+                        collect_ids(root, &mut available);
+                    }
+                }
+                let mut pane_iter = panes.into_iter();
+                fn materialize(
+                    node: &TemplateNode,
+                    panes: &mut impl Iterator<Item = PaneId>,
+                    used: &mut BTreeSet<Uuid>,
+                ) -> Node {
+                    match node {
+                        TemplateNode::Pane => {
+                            Node::pane(panes.next().expect("validated pane count"))
+                        }
+                        TemplateNode::Split {
+                            axis,
+                            weights,
+                            children,
+                        } => {
+                            let split = loop {
+                                let candidate = Uuid::new_v4();
+                                if used.insert(candidate) {
+                                    break candidate;
+                                }
+                            };
+                            Node::Split {
+                                id: split,
+                                axis: *axis,
+                                weights: weights.clone(),
+                                children: children
+                                    .iter()
+                                    .map(|child| materialize(child, panes, used))
+                                    .collect(),
+                            }
+                        }
+                    }
+                }
+                let root = template
+                    .root
+                    .as_ref()
+                    .map(|node| materialize(node, &mut pane_iter, &mut available));
+                let target = state.tab_mut(tab)?;
+                target.root = root;
+                target.focus_mode = false;
             }
         }
         Ok(())

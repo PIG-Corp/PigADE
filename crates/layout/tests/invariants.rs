@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use pigade_layout::{
-    Axis, Command, Direction, LayoutModel, LayoutState, Node, Rect, Size, TabLayout,
+    Axis, Command, Direction, GeometryTemplate, LayoutModel, LayoutState, Node, Rect, Size,
+    TabLayout, TemplateNode,
 };
 use uuid::Uuid;
 
@@ -74,6 +75,186 @@ fn split_ids(node: &Node, ids: &mut Vec<Uuid>) {
             split_ids(child, ids);
         }
     }
+}
+
+fn weighted_template() -> GeometryTemplate {
+    GeometryTemplate {
+        schema: 1,
+        root: Some(TemplateNode::Split {
+            axis: Axis::Vertical,
+            weights: vec![0.3, 0.7],
+            children: vec![
+                TemplateNode::Pane,
+                TemplateNode::Split {
+                    axis: Axis::Horizontal,
+                    weights: vec![0.2, 0.8],
+                    children: vec![TemplateNode::Pane, TemplateNode::Pane],
+                },
+            ],
+        }),
+    }
+}
+
+#[test]
+fn geometry_template_roundtrips_without_identity() {
+    let template = GeometryTemplate::from_tab(&TabLayout {
+        root: Some(Node::Split {
+            id: id(100),
+            axis: Axis::Vertical,
+            weights: vec![0.3, 0.7],
+            children: vec![
+                Node::pane(id(10)),
+                Node::Split {
+                    id: id(101),
+                    axis: Axis::Horizontal,
+                    weights: vec![0.2, 0.8],
+                    children: vec![Node::pane(id(11)), Node::pane(id(12))],
+                },
+            ],
+        }),
+        focused: Some(id(12)),
+        focus_mode: true,
+    })
+    .unwrap();
+    assert_eq!(template, weighted_template());
+    assert_eq!(template.pane_count(), 3);
+    let encoded = serde_json::to_string(&template).unwrap();
+    assert!(!encoded.contains(&id(10).to_string()));
+    assert!(!encoded.contains(&id(100).to_string()));
+    assert_eq!(
+        serde_json::from_str::<GeometryTemplate>(&encoded).unwrap(),
+        template
+    );
+}
+
+#[test]
+fn applying_geometry_template_is_atomic_and_one_undoable_placement() {
+    let mut model = model();
+    model.apply(Command::Focus { pane: id(11) }).unwrap();
+    model
+        .apply(Command::ToggleFocusMode { tab: id(1) })
+        .unwrap();
+    let before = model.state().clone();
+    let other_tab = before.tabs[&id(2)].clone();
+
+    let mut mismatch = weighted_template();
+    mismatch.root = Some(TemplateNode::Pane);
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: mismatch,
+            })
+            .is_err()
+    );
+    let mut bad_schema = weighted_template();
+    bad_schema.schema = 2;
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: bad_schema,
+            })
+            .is_err()
+    );
+    let mut bad_weights = weighted_template();
+    if let Some(TemplateNode::Split { weights, .. }) = &mut bad_weights.root {
+        weights[0] = 0.0;
+    }
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: bad_weights,
+            })
+            .is_err()
+    );
+    let mut too_deep = TemplateNode::Pane;
+    for _ in 0..=64 {
+        too_deep = TemplateNode::Split {
+            axis: Axis::Horizontal,
+            weights: vec![0.5, 0.5],
+            children: vec![too_deep, TemplateNode::Pane],
+        };
+    }
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: GeometryTemplate {
+                    schema: 1,
+                    root: Some(too_deep),
+                },
+            })
+            .is_err()
+    );
+    assert_eq!(model.state(), &before);
+
+    let undo_before = model.undo_len();
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: weighted_template(),
+            })
+            .unwrap()
+    );
+    let applied = model.state().clone();
+    assert_eq!(model.undo_len(), undo_before + 1);
+    let tab = &applied.tabs[&id(1)];
+    assert_eq!(tab.panes(), vec![id(10), id(12), id(11)]);
+    assert_eq!(tab.focused, Some(id(11)));
+    assert!(!tab.focus_mode);
+    assert_eq!(applied.tabs[&id(2)], other_tab);
+    let Node::Split {
+        id: outer,
+        children,
+        ..
+    } = tab.root.as_ref().unwrap()
+    else {
+        panic!("expected templated split")
+    };
+    let Node::Split { id: inner, .. } = &children[1] else {
+        panic!("expected nested templated split")
+    };
+    assert_ne!(*outer, id(100));
+    assert_ne!(*inner, id(102));
+    let applied_undo_len = model.undo_len();
+    assert!(
+        !model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: weighted_template(),
+            })
+            .unwrap()
+    );
+    assert_eq!(model.undo_len(), applied_undo_len);
+    assert_eq!(model.state(), &applied);
+    assert!(model.undo());
+    assert_eq!(model.state(), &before);
+    assert!(model.redo());
+    assert_eq!(model.state(), &applied);
+}
+
+#[test]
+fn empty_geometry_is_valid_but_cannot_replace_nonempty_tab() {
+    let empty = GeometryTemplate {
+        schema: 1,
+        root: None,
+    };
+    empty.validate().unwrap();
+    assert_eq!(empty.pane_count(), 0);
+    let mut model = model();
+    let before = model.state().clone();
+    assert!(
+        model
+            .apply(Command::ApplyTemplate {
+                tab: id(1),
+                template: empty,
+            })
+            .is_err()
+    );
+    assert_eq!(model.state(), &before);
 }
 
 #[test]

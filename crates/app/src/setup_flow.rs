@@ -110,6 +110,7 @@ mod tests {
                 ..Default::default()
             },
             layout: LayoutDocument::default(),
+            layout_templates: Some(vec![]),
         }
     }
 

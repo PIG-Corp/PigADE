@@ -9,12 +9,13 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
 | crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
-| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema7, launch locks, catalog CAS and migration backups |
+| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema8, launch locks, catalog CAS and migration backups |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
-| crates/layout | Platform-neutral tiling transactions, geometry/focus projection and schema1 persistent100undo/redo |
+| crates/layout | Platform-neutral tiling transactions, identity-free geometry templates, geometry/focus projection and schema1 persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout command routes |
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
+| crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |
 | crates/app/src/pointer_layout.rs | Pure Dwindle tear-off/drop projection and bounded latest-intent focus persistence helpers; integration in main.rs |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |

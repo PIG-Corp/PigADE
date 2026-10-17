@@ -79,7 +79,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
         strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
-        strcmp(a.stage, "history-readonly") && strcmp(a.stage, "setup-open") &&
+        strcmp(a.stage, "history-readonly") && strcmp(a.stage, "catalog-open-library") &&
+        strcmp(a.stage, "catalog-close-library") && strcmp(a.stage, "catalog-open-save") &&
+        strcmp(a.stage, "catalog-save") &&
+        strcmp(a.stage, "catalog-apply") && strcmp(a.stage, "catalog-undo") &&
+        strcmp(a.stage, "catalog-delete") && strcmp(a.stage, "catalog-mutate") &&
+        strcmp(a.stage, "catalog-rename-tab") && strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
         strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
@@ -376,6 +381,29 @@ static void setup_prefix(Display *dpy, KeySym final_key, int shift_final) {
     if (!XTestFakeKeyEvent(dpy,control,False,CurrentTime) ||
         !XTestFakeKeyEvent(dpy,shift,False,CurrentTime)) fail("setup prefix release failed");
     if (shift_final) modified_key(dpy,XK_Shift_L,final_key); else key(dpy,final_key);
+}
+
+static void catalog_rename_tab(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("catalog rename requires the fixed private 1280x800 app");
+    int root_x = 0, root_y = 0;
+    Window child = None;
+    if (!XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), 280, 58,
+                                &root_x, &root_y, &child) ||
+        !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime) ||
+        !XTestFakeButtonEvent(dpy, 3, True, CurrentTime) ||
+        !XTestFakeButtonEvent(dpy, 3, False, CurrentTime))
+        fail("fixed selected-tab context click failed");
+    XSync(dpy, False);
+    struct timespec menu_settle = { .tv_sec = 0, .tv_nsec = 180000000 };
+    nanosleep(&menu_settle, NULL);
+    key(dpy, XK_Down); key(dpy, XK_Return);
+    modified_key(dpy, XK_Control_L, XK_a);
+    modified_key(dpy, XK_Shift_L, XK_r);
+    const KeySym name[] = { XK_e, XK_n, XK_a, XK_m, XK_e, XK_d };
+    for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
+    key(dpy, XK_Return);
 }
 
 /* Fixed product coordinates only, after private server/window verification.
@@ -710,7 +738,7 @@ static void latency_sequence(const Args *a, Display *dpy, xcb_connection_t *c) {
  * coordinate while the previous project-creation modal is still on screen. */
 static void wait_workspace_bar(Display *dpy, Window app) {
     Window child; int x,y;
-    if (!XTranslateCoordinates(dpy,app,DefaultRootWindow(dpy),1110,55,&x,&y,&child))
+    if (!XTranslateCoordinates(dpy,app,DefaultRootWindow(dpy),1078,55,&x,&y,&child))
         fail("workspace bar coordinate translation failed");
     uint64_t deadline=monotonic_ns()+UINT64_C(5000000000);
     while (monotonic_ns()<deadline) {
@@ -809,16 +837,39 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_c);
             key(dpy, XK_BackSpace);
             key(dpy, XK_Tab);
+        } else if (!strcmp(a.stage, "catalog-open-library")) {
+            setup_prefix(dpy, XK_d, 0);
+        } else if (!strcmp(a.stage, "catalog-close-library")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "catalog-open-save")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-save")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_c);
+            const KeySym name[] = { XK_a, XK_t, XK_a, XK_l, XK_o, XK_g };
+            for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-apply")) {
+            key(dpy, XK_Down); key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-undo")) {
+            setup_prefix(dpy, XK_z, 0);
+        } else if (!strcmp(a.stage, "catalog-delete")) {
+            key(dpy, XK_Down);
+            modified_key(dpy, XK_Shift_L, XK_Delete); key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-mutate")) {
+            setup_prefix(dpy, XK_r, 0); key(dpy, XK_Right); key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-rename-tab")) {
+            catalog_rename_tab(dpy, app_window);
         } else if (!strcmp(a.stage, "setup-open")) {
             setup_click(dpy, app_window, 885, 435);
         } else if (!strcmp(a.stage, "setup-create")) {
             setup_create_sequence(dpy);
         } else if (!strcmp(a.stage, "setup-shell")) {
             wait_workspace_bar(dpy, app_window);
-            setup_click(dpy, app_window, 1196, 57);
+            setup_click(dpy, app_window, 1164, 57);
         } else if (!strcmp(a.stage, "setup-launcher")) {
             wait_workspace_bar(dpy, app_window);
-            setup_click(dpy, app_window, 1140, 57);
+            setup_click(dpy, app_window, 1108, 57);
         } else if (!strcmp(a.stage, "setup-codex")) {
             setup_click(dpy, app_window, 490, 177);
         } else if (!strcmp(a.stage, "setup-compact")) {
@@ -939,6 +990,15 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "setup-create") ? "5" :
                             !strcmp(a.stage, "setup-shell") ? "1" :
                             !strcmp(a.stage, "setup-live") ? "20" :
+                            !strcmp(a.stage, "catalog-open-library") ? "4" :
+                            !strcmp(a.stage, "catalog-close-library") ? "1" :
+                            !strcmp(a.stage, "catalog-open-save") ? "1" :
+                            !strcmp(a.stage, "catalog-save") ? "11" :
+                            !strcmp(a.stage, "catalog-apply") ? "2" :
+                            !strcmp(a.stage, "catalog-undo") ? "4" :
+                            !strcmp(a.stage, "catalog-delete") ? "3" :
+                            !strcmp(a.stage, "catalog-mutate") ? "6" :
+                            !strcmp(a.stage, "catalog-rename-tab") ? "14" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

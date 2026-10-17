@@ -260,6 +260,30 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('--coordinates', source)
         self.assertNotIn('--text', source)
 
+    def test_catalog_mode_is_fixed_plan_only_and_has_bounded_library_sequences(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'catalog']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'catalog')
+        self.assertIn('save a geometry template', plan['input']['catalog'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        for action in ('open-library', 'close-library', 'open-save-dialog', 'save-template',
+                       'apply-first-template', 'undo-layout', 'delete-template',
+                       'mutate-layout', 'rename-tab'):
+            self.assertIn(f"'{action}'", source)
+        self.assertNotIn('from Xlib', source)
+        self.assertIn('tab_rename_persisted', source)
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for stage in ('catalog-open-library', 'catalog-close-library', 'catalog-open-save',
+                      'catalog-save', 'catalog-apply', 'catalog-undo', 'catalog-delete',
+                      'catalog-mutate', 'catalog-rename-tab'):
+            self.assertIn(f'\"{stage}\"', helper)
+        self.assertIn('session_generation_pid_identities_unchanged', source)
+
     def run_raw_fixture(self, expected, delivered):
         with tempfile.TemporaryDirectory() as temporary:
             path = str(Path(temporary) / 'control.sock')

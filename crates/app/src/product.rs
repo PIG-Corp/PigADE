@@ -31,6 +31,18 @@ pub(super) enum ProductAction {
     CreateWorkspaceFor(Uuid),
     WorkspaceIsolation(bool),
     CreateTab,
+    ManageSelected(crate::catalog_flow::EntityKind),
+    ManageProject(Uuid),
+    ManageWorkspace(Uuid),
+    ManageTab(Uuid),
+    RenameTarget,
+    ArchiveTarget,
+    ToggleArchived,
+    OpenLayouts,
+    SaveLayout,
+    ApplyLayout(Uuid),
+    DeleteLayout(Uuid),
+    RefreshCatalog,
     OpenTransfer,
     TransferTo(Uuid),
     OpenSessions,
@@ -83,6 +95,11 @@ pub(super) enum DialogKind {
     CreateWorkspace,
     Launcher,
     NewTab,
+    Manage,
+    Rename,
+    Layouts,
+    SaveLayout,
+    DeleteLayout,
     Palette,
     PaneMenu,
     Context,
@@ -106,6 +123,11 @@ impl DialogKind {
             Self::CreateWorkspace => "Новый воркспейс",
             Self::Launcher => "Добавить агента",
             Self::NewTab => "Новая вкладка",
+            Self::Manage => "Управление",
+            Self::Rename => "Переименовать",
+            Self::Layouts => "Сохранённые раскладки",
+            Self::SaveLayout => "Сохранить раскладку",
+            Self::DeleteLayout => "Удалить сохранённую раскладку?",
             Self::Palette => "Команды PigADE",
             Self::PaneMenu => "Управление панелями",
             Self::Context => "Контекст воркспейса",
@@ -129,6 +151,8 @@ impl DialogKind {
             Self::CreateWorkspace => &["Название задачи / воркспейса"],
             Self::Launcher => &[],
             Self::NewTab => &["Название вкладки"],
+            Self::Rename | Self::SaveLayout => &["Название"],
+            Self::Manage | Self::Layouts | Self::DeleteLayout => &[],
             Self::Palette => &["Поиск команды"],
             Self::PaneMenu => &["Поиск действия панели"],
             Self::Context => &["Инструкции", "Роль", "Память"],
@@ -156,6 +180,9 @@ impl DialogKind {
             Self::CreateWorkspace => "Создать воркспейс",
             Self::Launcher => "Закрыть",
             Self::NewTab => "Создать вкладку",
+            Self::Rename | Self::SaveLayout => "Сохранить",
+            Self::Manage | Self::Layouts => "Готово",
+            Self::DeleteLayout => "Удалить раскладку",
             Self::Palette => "Закрыть",
             Self::PaneMenu => "Закрыть",
             Self::Context => "Сохранить ревизию",
@@ -199,6 +226,11 @@ pub(super) struct ProductUi {
     pub(super) sidebar_compact: bool,
     pub(super) sidebar_override: Option<bool>,
     pub(super) catalog: Option<Catalog>,
+    pub(super) management_target: Option<crate::catalog_flow::ManagedEntity>,
+    pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
+    pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
+    pub(super) layout_scroll: gpui::ScrollHandle,
+    pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
@@ -372,6 +404,25 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Сессии", ProductAction::OpenSessions),
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
+        (
+            "Управление проектом · переименовать",
+            ProductAction::ManageSelected(crate::catalog_flow::EntityKind::Project),
+        ),
+        (
+            "Управление воркспейсом · переименовать / архив",
+            ProductAction::ManageSelected(crate::catalog_flow::EntityKind::Workspace),
+        ),
+        (
+            "Управление вкладкой · переименовать",
+            ProductAction::ManageSelected(crate::catalog_flow::EntityKind::Tab),
+        ),
+        ("Сохранённые раскладки · D", ProductAction::OpenLayouts),
+        ("Сохранить текущую раскладку", ProductAction::SaveLayout),
+        (
+            "Показать / скрыть архив воркспейсов",
+            ProductAction::ToggleArchived,
+        ),
+        ("Обновить каталог проектов", ProductAction::RefreshCatalog),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
         (
             "Настроить запуск терминала",
@@ -438,6 +489,45 @@ fn context_lines(value: &str) -> Div {
             )
         },
     )
+}
+
+fn template_thumbnail(node: &pigade_layout::TemplateNode) -> Div {
+    fn draw(node: &pigade_layout::TemplateNode, depth: usize) -> Div {
+        let tile = div().flex_1().min_w_0().min_h_0().rounded(px(3.));
+        match node {
+            pigade_layout::TemplateNode::Pane => tile
+                .bg(rgb(chrome::ACCENT).opacity(0.36))
+                .border_1()
+                .border_color(rgb(chrome::ACCENT).opacity(0.45)),
+            // A thumbnail has a fixed pixel area. Collapse complex branches
+            // rather than allocating a widget for every possible model node.
+            pigade_layout::TemplateNode::Split { children, .. }
+                if depth >= 3 || children.len() > 4 =>
+            {
+                tile.bg(rgb(chrome::ACCENT).opacity(0.24))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(10.))
+                    .text_color(rgb(chrome::ACCENT))
+                    .child("…")
+            }
+            pigade_layout::TemplateNode::Split {
+                axis,
+                weights,
+                children,
+            } => tile
+                .flex()
+                .gap(px(3.))
+                .when(*axis == pigade_layout::Axis::Vertical, |row| row.flex_col())
+                .children(children.iter().zip(weights).map(|(child, weight)| {
+                    draw(child, depth + 1)
+                        .flex_basis(px(0.))
+                        .flex_grow(*weight as f32)
+                })),
+        }
+    }
+    draw(node, 0)
 }
 
 fn effective_context_blocks(
@@ -552,6 +642,93 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
 }
 
 impl ProductUi {
+    pub(super) fn menu_entries(&self) -> Vec<(String, ProductAction)> {
+        match self.dialog.as_ref().map(|dialog| dialog.kind) {
+            Some(DialogKind::Manage) => match &self.management_target {
+                Some(crate::catalog_flow::ManagedEntity::Project(project)) => vec![
+                    ("Переименовать проект".into(), ProductAction::RenameTarget),
+                    (
+                        "Новый воркспейс".into(),
+                        ProductAction::CreateWorkspaceFor(project.id),
+                    ),
+                ],
+                Some(crate::catalog_flow::ManagedEntity::Workspace(workspace)) => {
+                    let mut rows = vec![
+                        (
+                            "Открыть воркспейс".into(),
+                            ProductAction::SelectWorkspace(workspace.id),
+                        ),
+                        (
+                            "Переименовать воркспейс".into(),
+                            ProductAction::RenameTarget,
+                        ),
+                    ];
+                    if matches!(
+                        workspace.status,
+                        WorkspaceStatus::Ready | WorkspaceStatus::Archived
+                    ) {
+                        rows.push((
+                            (if workspace.status == WorkspaceStatus::Archived {
+                                "Вернуть из архива"
+                            } else {
+                                "В архив"
+                            })
+                            .into(),
+                            ProductAction::ArchiveTarget,
+                        ));
+                    }
+                    rows
+                }
+                Some(crate::catalog_flow::ManagedEntity::Tab(tab)) => vec![
+                    ("Открыть вкладку".into(), ProductAction::SelectTab(tab.id)),
+                    ("Переименовать вкладку".into(), ProductAction::RenameTarget),
+                ],
+                None => vec![],
+            },
+            Some(DialogKind::Layouts) => {
+                if self
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.layout_templates.as_ref())
+                    .is_none()
+                {
+                    return vec![];
+                }
+                let mut rows = vec![(
+                    "Сохранить текущую раскладку…".into(),
+                    ProductAction::SaveLayout,
+                )];
+                if let Some(templates) = self
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.layout_templates.as_ref())
+                {
+                    rows.extend(templates.iter().map(|template| {
+                        (
+                            template.name.clone(),
+                            ProductAction::ApplyLayout(template.id),
+                        )
+                    }));
+                }
+                rows
+            }
+            _ => vec![],
+        }
+    }
+
+    pub(super) fn current_pane_count(&self) -> usize {
+        self.catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .tabs
+                    .iter()
+                    .find(|tab| Some(tab.id) == catalog.selection.tab_id)
+            })
+            .and_then(|tab| serde_json::from_str::<pigade_layout::TabLayout>(&tab.layout_json).ok())
+            .map_or(0, |layout| layout.panes().len())
+    }
+
     pub(super) fn palette_action(&self) -> Option<ProductAction> {
         let dialog = self.dialog.as_ref()?;
         if !matches!(dialog.kind, DialogKind::Palette | DialogKind::PaneMenu) {
@@ -793,7 +970,7 @@ impl ProductUi {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(self.action_control(
+                        .child(div().flex_1().min_w_0().child(self.action_control(
                             format!("project-{}", project.id),
                             project.name.clone(),
                             project_action,
@@ -802,6 +979,13 @@ impl ProductUi {
                                 selected: false,
                                 compact: false,
                             },
+                            cx,
+                        )))
+                        .child(self.icon_control(
+                            &format!("project-manage-{}", project.id),
+                            &format!("Управление проектом {}", project.name),
+                            "more",
+                            ProductAction::ManageProject(project.id),
                             cx,
                         ))
                         .child(self.icon_control(
@@ -814,11 +998,10 @@ impl ProductUi {
                         .into_any_element()
                 };
                 tree = tree.child(div().mt(px(5.)).child(row));
-                for workspace in catalog
-                    .workspaces
-                    .iter()
-                    .filter(|value| value.project_id == project.id)
-                {
+                for workspace in catalog.workspaces.iter().filter(|value| {
+                    value.project_id == project.id
+                        && (self.show_archived || value.status != WorkspaceStatus::Archived)
+                }) {
                     let selected = selected_workspace(catalog) == Some(workspace.id);
                     let title = workspace_name(workspace);
                     let label = if compact {
@@ -826,20 +1009,37 @@ impl ProductUi {
                     } else {
                         title.clone()
                     };
-                    tree = tree.child(div().pl(px(if compact { 0. } else { 12. })).child(
-                        self.action_control_with_accessible_name(
-                            format!("workspace-{}", workspace.id),
-                            label,
-                            title,
-                            ProductAction::SelectWorkspace(workspace.id),
-                            ControlStyle {
-                                role: Role::TreeItem,
-                                selected,
-                                compact: false,
-                            },
+                    let mut workspace_row = div().flex().items_center().min_w_0().child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.action_control_with_accessible_name(
+                                format!("workspace-{}", workspace.id),
+                                label,
+                                title,
+                                ProductAction::SelectWorkspace(workspace.id),
+                                ControlStyle {
+                                    role: Role::TreeItem,
+                                    selected,
+                                    compact: false,
+                                },
+                                cx,
+                            )),
+                    );
+                    if !compact {
+                        workspace_row = workspace_row.child(self.icon_control(
+                            &format!("workspace-manage-{}", workspace.id),
+                            &format!("Управление воркспейсом {}", workspace_name(workspace)),
+                            "more",
+                            ProductAction::ManageWorkspace(workspace.id),
                             cx,
-                        ),
-                    ));
+                        ));
+                    }
+                    tree = tree.child(
+                        div()
+                            .pl(px(if compact { 0. } else { 12. }))
+                            .child(workspace_row),
+                    );
                     if selected && !compact {
                         for view in views {
                             let Ok(id) = view.session.parse::<Uuid>() else {
@@ -949,6 +1149,43 @@ impl ProductUi {
                     ControlStyle {
                         role: Role::Button,
                         selected: false,
+                        compact: false,
+                    },
+                    cx,
+                )
+            });
+        }
+        let archived = self.catalog.as_ref().map_or(0, |catalog| {
+            catalog
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.status == WorkspaceStatus::Archived)
+                .count()
+        });
+        if archived > 0 || self.show_archived {
+            footer = footer.child(if compact {
+                self.icon_control(
+                    "sidebar-archive",
+                    "Показать / скрыть архив воркспейсов",
+                    "branch",
+                    ProductAction::ToggleArchived,
+                    cx,
+                )
+            } else {
+                self.action_control(
+                    "sidebar-archive".into(),
+                    format!(
+                        "{} архив · {archived}",
+                        if self.show_archived {
+                            "Скрыть"
+                        } else {
+                            "Показать"
+                        }
+                    ),
+                    ProductAction::ToggleArchived,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: self.show_archived,
                         compact: false,
                     },
                     cx,
@@ -1098,6 +1335,13 @@ impl ProductUi {
                 "Открыть терминал",
                 "terminal",
                 ProductAction::Launch("shell".into()),
+                cx,
+            ))
+            .child(self.icon_control(
+                "saved-layouts",
+                "Сохранённые раскладки",
+                "split-right",
+                ProductAction::OpenLayouts,
                 cx,
             ))
             .child(self.icon_control(
@@ -1680,11 +1924,28 @@ impl ProductUi {
                 colors.muted
             })
             .hover(|style| style.bg(colors.hover))
-            .child(tab.name.clone())
+            .gap_1()
+            .child(div().min_w_0().truncate().child(tab.name.clone()))
+            .when(selected, |row| {
+                row.child(self.icon_control(
+                    &format!("manage-tab-{id}"),
+                    "Управление вкладкой",
+                    "more",
+                    ProductAction::ManageTab(id),
+                    cx,
+                ))
+            })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.product_action(ProductAction::SelectTab(id), window, cx);
                 cx.stop_propagation();
             }))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    this.product_action(ProductAction::ManageTab(id), window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .into_any_element()
     }
 
@@ -1875,6 +2136,111 @@ impl ProductUi {
                 matches!(preview.provider.as_str(), "codex" | "claude" | "opencode")
             });
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
+        if matches!(dialog.kind, DialogKind::Manage | DialogKind::Rename)
+            && let Some(target) = &self.management_target
+        {
+            let detail = match target {
+                crate::catalog_flow::ManagedEntity::Project(value) => {
+                    value.canonical_path.display().to_string()
+                }
+                crate::catalog_flow::ManagedEntity::Workspace(value) => format!(
+                    "{} · {}",
+                    value.cwd.display(),
+                    if value.mode == pigade_storage::WorkspaceMode::Worktree {
+                        "Worktree"
+                    } else {
+                        "Общая папка проекта"
+                    }
+                ),
+                crate::catalog_flow::ManagedEntity::Tab(_) => {
+                    "Самостоятельная раскладка терминальных панелей".into()
+                }
+            };
+            fields = fields
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(target.name().to_owned()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .whitespace_normal()
+                        .child(detail),
+                );
+            if let crate::catalog_flow::ManagedEntity::Workspace(value) = target {
+                fields = fields.child(div().text_size(px(11.)).text_color(colors.muted).child(
+                    if value.status == WorkspaceStatus::Archived {
+                        "В архиве. CLI и файлы сохранены."
+                    } else {
+                        "Архив скрывает воркспейс. CLI продолжат работу в фоне."
+                    },
+                ));
+            }
+        }
+        if dialog.kind == DialogKind::Manage {
+            for (index, (label, action)) in self.menu_entries().into_iter().enumerate() {
+                fields = fields.child(self.action_control(
+                    format!("manage-action-{index}"),
+                    label,
+                    action,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: dialog.active_field == index,
+                        compact: false,
+                    },
+                    cx,
+                ));
+            }
+            fields = fields.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("↑ ↓ — выбрать · Enter — выполнить · Esc — закрыть"),
+            );
+        }
+        if dialog.kind == DialogKind::SaveLayout
+            && let Some(draft) = &self.template_draft
+        {
+            fields = fields.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(px(96.))
+                            .h(px(56.))
+                            .flex()
+                            .children(draft.root.as_ref().map(template_thumbnail)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(12.))
+                            .text_color(colors.muted)
+                            .whitespace_normal()
+                            .child(format!(
+                                "{} панелей · направления и пропорции разделений",
+                                draft.pane_count()
+                            )),
+                    ),
+            );
+        }
+        if dialog.kind == DialogKind::DeleteLayout
+            && let Some(template) = &self.template_target
+        {
+            fields = fields
+                .child(div().text_size(px(14.)).child(template.name.clone()))
+                .child(div().text_size(px(12.)).text_color(colors.muted).child(
+                    "Будет удалён только шаблон. Открытые панели и их раскладки сохранятся.",
+                ));
+        }
+        if dialog.kind == DialogKind::Layouts {
+            fields = self.layout_library(dialog, fields, cx);
+        }
         if dialog.kind == DialogKind::Conversation
             && let Some(preview) = &self.launch_preview
         {
@@ -2304,7 +2670,11 @@ impl ProductUi {
                     .role(Role::Dialog)
                     .aria_label(dialog.kind.title())
                     .w_full()
-                    .max_w(px(440.))
+                    .max_w(px(if dialog.kind == DialogKind::Layouts {
+                        560.
+                    } else {
+                        440.
+                    }))
                     .mx(px(16.))
                     .flex()
                     .flex_col()
@@ -2337,6 +2707,143 @@ impl ProductUi {
                     ),
             )
             .into_any_element()
+    }
+
+    fn layout_library(
+        &self,
+        dialog: &Dialog,
+        mut content: Div,
+        cx: &mut Context<CanvasApp>,
+    ) -> Div {
+        let colors = ProductColors::dark();
+        let Some(templates) = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.layout_templates.as_ref())
+        else {
+            return content.child(div().id("layout-library-unsupported").role(Role::Status).text_size(px(12.)).text_color(colors.muted).child("Этот session host не поддерживает шаблоны. Они будут доступны при следующем запуске нового host."));
+        };
+        let count = self.current_pane_count();
+        content = content.child(div().text_size(px(12.)).text_color(colors.muted).whitespace_normal().child("Примените сохранённую геометрию к открытым панелям. Отмена раскладки вернёт прежнее размещение."));
+        let mut rows = div()
+            .id("layout-library-rows")
+            .max_h(px(360.))
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .overflow_y_scroll()
+            .track_scroll(&self.layout_scroll)
+            .child(div().flex_shrink_0().child(self.action_control(
+                "layout-library-save".into(),
+                "Сохранить текущую раскладку…".into(),
+                ProductAction::SaveLayout,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: dialog.active_field == 0,
+                    compact: false,
+                },
+                cx,
+            )));
+        for (index, template) in templates.iter().enumerate() {
+            let id = template.id;
+            let needed = template.geometry.pane_count();
+            let selected = dialog.active_field == index + 1;
+            let compatible = needed == count;
+            rows = rows.child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(format!("layout-template-{id}"))
+                            .role(Role::Button)
+                            .aria_label(format!(
+                                "{} · {needed} панелей · {}",
+                                template.name,
+                                if compatible {
+                                    "Применить"
+                                } else {
+                                    "Другое число панелей"
+                                }
+                            ))
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .p(px(10.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(if selected {
+                                colors.accent
+                            } else {
+                                colors.border
+                            })
+                            .bg(if selected {
+                                colors.selected
+                            } else {
+                                colors.base
+                            })
+                            .hover(|style| style.bg(colors.hover))
+                            .child(
+                                div().w(px(86.)).h(px(52.)).flex().children(
+                                    template.geometry.root.as_ref().map(template_thumbnail),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .truncate()
+                                            .child(template.name.clone()),
+                                    )
+                                    .child(
+                                        div().text_size(px(11.)).text_color(colors.muted).child(
+                                            if compatible {
+                                                format!("{needed} панелей · Применить")
+                                            } else {
+                                                format!("Нужно {needed} панелей · открыто {count}")
+                                            },
+                                        ),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.product_action(ProductAction::ApplyLayout(id), window, cx);
+                                cx.stop_propagation();
+                            })),
+                    )
+                    .child(self.icon_control(
+                        &format!("delete-template-{id}"),
+                        &format!("Удалить раскладку {}", template.name),
+                        "close",
+                        ProductAction::DeleteLayout(id),
+                        cx,
+                    )),
+            );
+        }
+        if templates.is_empty() {
+            rows = rows.child(
+                div()
+                    .py(px(16.))
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child("Раскладок пока нет. Сохраните удобное размещение панелей."),
+            );
+        }
+        content.child(rows).child(
+            div().text_size(px(11.)).text_color(colors.muted).child(
+                "↑ ↓ — выбрать · Enter — применить · Shift+Delete — удалить · Esc — закрыть",
+            ),
+        )
     }
 
     fn launcher_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
@@ -4081,6 +4588,32 @@ impl ProductUi {
 #[cfg(test)]
 mod context_edit_tests {
     use super::*;
+
+    #[test]
+    fn legacy_host_catalog_cannot_offer_template_writes() {
+        let mut ui = ProductUi {
+            catalog: Some(
+                serde_json::from_value(serde_json::json!({
+                    "projects":[],"workspaces":[],"tabs":[],
+                    "selection":pigade_storage::Selection::default(),
+                    "layout":pigade_storage::LayoutDocument::default()
+                }))
+                .unwrap(),
+            ),
+            dialog: Some(Dialog::new(DialogKind::Layouts)),
+            ..Default::default()
+        };
+        assert!(ui.catalog.as_ref().unwrap().layout_templates.is_none());
+        assert!(ui.menu_entries().is_empty());
+        ui.catalog.as_mut().unwrap().layout_templates = Some(vec![]);
+        assert_eq!(
+            ui.menu_entries(),
+            vec![(
+                "Сохранить текущую раскладку…".into(),
+                ProductAction::SaveLayout
+            )]
+        );
+    }
 
     fn document() -> ContextDocument {
         ContextDocument {

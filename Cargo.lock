@@ -483,6 +483,7 @@ dependencies = [
  "anyhow",
  "crc32fast",
  "libc",
+ "pigade-layout",
  "rusqlite",
  "serde",
  "serde_json",

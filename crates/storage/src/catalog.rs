@@ -17,6 +17,7 @@ use crate::MetadataStore;
 const MAX_PROJECTS: usize = 256;
 const MAX_WORKSPACES: usize = 4096;
 const MAX_TABS: usize = 16384;
+const MAX_LAYOUT_TEMPLATES: usize = 128;
 // Source bytes bound SQLite reads; JSON escaping and entity metadata need their
 // own wire bound. Leave 1 MiB of the host's 8 MiB message cap for its envelope.
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
@@ -126,6 +127,18 @@ pub struct Tab {
     pub active_pane: Option<Uuid>,
     pub revision: u64,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayoutTemplate {
+    pub id: Uuid,
+    pub name: String,
+    pub geometry: pigade_layout::GeometryTemplate,
+    pub revision: u64,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutTemplateDelete {
+    pub id: Uuid,
+    pub expected_revision: u64,
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct CanvasOffset {
     pub x: f64,
@@ -206,6 +219,8 @@ pub struct Catalog {
     pub tabs: Vec<Tab>,
     pub selection: Selection,
     pub layout: LayoutDocument,
+    #[serde(default)]
+    pub layout_templates: Option<Vec<LayoutTemplate>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -219,6 +234,10 @@ pub struct CatalogBatch {
     pub tabs: Vec<CatalogWrite<Tab>>,
     pub selection: Option<CatalogWrite<Selection>>,
     pub layout: Option<CatalogWrite<LayoutDocument>>,
+    #[serde(default)]
+    pub layout_templates: Vec<CatalogWrite<LayoutTemplate>>,
+    #[serde(default)]
+    pub remove_layout_templates: Vec<LayoutTemplateDelete>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionConflict {
@@ -285,6 +304,15 @@ pub(crate) fn migrate_layout_document(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn migrate_layout_templates(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE layout_templates (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, geometry_json TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision>0));",
+    )?;
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
@@ -300,6 +328,23 @@ impl MetadataStore {
                 && batch.tabs.len() <= MAX_TABS,
             "catalog batch exceeds bounded entity capacity"
         );
+        ensure!(
+            batch.layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
+            "too many layout templates"
+        );
+        ensure!(
+            batch.remove_layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
+            "too many layout template deletions"
+        );
+        unique_ids(batch.layout_templates.iter().map(|write| write.value.id))?;
+        unique_ids(batch.remove_layout_templates.iter().map(|delete| delete.id))?;
+        ensure!(
+            batch.layout_templates.iter().all(|write| !batch
+                .remove_layout_templates
+                .iter()
+                .any(|delete| delete.id == write.value.id)),
+            "template cannot be written and deleted in one batch"
+        );
         unique_ids(batch.projects.iter().map(|write| write.value.id))?;
         unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
         unique_ids(batch.tabs.iter().map(|write| write.value.id))?;
@@ -314,6 +359,12 @@ impl MetadataStore {
         }
         for write in batch.tabs {
             write_tab(&tx, write)?;
+        }
+        for write in batch.layout_templates {
+            write_layout_template(&tx, write)?;
+        }
+        for delete in batch.remove_layout_templates {
+            delete_layout_template(&tx, delete)?;
         }
         if let Some(write) = batch.selection {
             write_selection(&tx, write)?;
@@ -504,6 +555,54 @@ fn write_tab(tx: &Transaction<'_>, write: CatalogWrite<Tab>) -> Result<()> {
     }
     Ok(())
 }
+fn write_layout_template(tx: &Transaction<'_>, write: CatalogWrite<LayoutTemplate>) -> Result<()> {
+    let template = write.value;
+    let next = revision(template.revision, write.expected_revision)?;
+    text(&template.name, 256, false)?;
+    ensure!(
+        template.name.trim() == template.name,
+        "layout template name must not have surrounding whitespace"
+    );
+    template.geometry.validate()?;
+    ensure!(
+        template.geometry.pane_count() > 0,
+        "layout template must contain at least one pane"
+    );
+    let geometry = serde_json::to_string(&template.geometry)?;
+    ensure!(
+        geometry.len() <= MAX_LAYOUT_BYTES,
+        "layout template exceeds byte bound"
+    );
+    match write.expected_revision {
+        None => {
+            tx.execute(
+                "INSERT INTO layout_templates(id,name,geometry_json,revision) VALUES(?1,?2,?3,1)",
+                params![template.id.to_string(), template.name, geometry],
+            )?;
+        }
+        Some(expected) => {
+            let changed = tx.execute("UPDATE layout_templates SET name=?2,geometry_json=?3,revision=?4 WHERE id=?1 AND revision=?5", params![template.id.to_string(), template.name, geometry, next, expected as i64])?;
+            conflict(changed, "layout template", template.id, expected)?;
+        }
+    }
+    Ok(())
+}
+fn delete_layout_template(tx: &Transaction<'_>, delete: LayoutTemplateDelete) -> Result<()> {
+    ensure!(
+        delete.expected_revision > 0 && delete.expected_revision < i64::MAX as u64,
+        "invalid layout template revision"
+    );
+    let changed = tx.execute(
+        "DELETE FROM layout_templates WHERE id=?1 AND revision=?2",
+        params![delete.id.to_string(), delete.expected_revision as i64],
+    )?;
+    conflict(
+        changed,
+        "layout template",
+        delete.id,
+        delete.expected_revision,
+    )
+}
 fn write_selection(tx: &Transaction<'_>, write: CatalogWrite<Selection>) -> Result<()> {
     let s = write.value;
     let expected = write
@@ -629,13 +728,22 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
             && counts.3 <= MAX_PROJECTS * 128,
         "catalog exceeds bounded manifest entity count"
     );
+    let template_count: usize =
+        connection.query_row("SELECT COUNT(*) FROM layout_templates", [], |row| {
+            row.get(0)
+        })?;
+    ensure!(
+        template_count <= MAX_LAYOUT_TEMPLATES,
+        "too many stored layout templates"
+    );
     let bytes:usize=connection.query_row("SELECT
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(canonical_path AS BLOB))+length(CAST(git_common_dir AS BLOB))) FROM projects),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(relative_path AS BLOB))) FROM project_roots),0)+
       COALESCE((SELECT SUM(length(CAST(task AS BLOB))+length(CAST(cwd AS BLOB))+COALESCE(length(CAST(error AS BLOB)),0)) FROM workspaces),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(layout_json AS BLOB))) FROM tabs),0)+
       COALESCE((SELECT length(CAST(window_json AS BLOB)) FROM catalog_selection WHERE singleton=1),0)+
-      COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)",[],|row|row.get(0))?;
+      COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)+
+      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))) FROM layout_templates),0)",[],|row|row.get(0))?;
     ensure!(
         bytes <= MAX_MANIFEST_BYTES,
         "catalog exceeds bounded manifest bytes; load/archive fewer records"
@@ -754,12 +862,36 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
             })
         },
     )?;
+    let mut layout_templates = Vec::with_capacity(template_count);
+    let mut stmt = connection
+        .prepare("SELECT id,name,geometry_json,revision FROM layout_templates ORDER BY rowid")?;
+    for row in stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, u64>(3)?,
+        ))
+    })? {
+        let (id, name, geometry, revision) = row?;
+        let geometry: pigade_layout::GeometryTemplate =
+            serde_json::from_str(&geometry).context("invalid stored layout template")?;
+        geometry.validate()?;
+        ensure!(geometry.pane_count() > 0, "stored layout template is empty");
+        layout_templates.push(LayoutTemplate {
+            id: Uuid::parse_str(&id)?,
+            name,
+            geometry,
+            revision,
+        });
+    }
     let catalog = Catalog {
         projects,
         workspaces,
         tabs,
         selection,
         layout,
+        layout_templates: Some(layout_templates),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -774,6 +906,113 @@ mod tests {
     use super::*;
     use crate::LaunchState;
     use std::os::unix::fs::PermissionsExt;
+
+    fn one_pane_template() -> pigade_layout::GeometryTemplate {
+        pigade_layout::GeometryTemplate {
+            schema: 1,
+            root: Some(pigade_layout::TemplateNode::Pane),
+        }
+    }
+
+    #[test]
+    fn geometry_templates_use_cas_and_atomic_delete() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let id = Uuid::new_v4();
+        let mut saved = store.apply_catalog(CatalogBatch {
+            layout_templates: vec![CatalogWrite {
+                value: LayoutTemplate {
+                    id,
+                    name: "Compact".into(),
+                    geometry: one_pane_template(),
+                    revision: 0,
+                },
+                expected_revision: None,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        let template = saved.layout_templates.as_mut().unwrap().remove(0);
+        assert_eq!(template.revision, 1);
+        let mut update = template.clone();
+        update.name = "Wide".into();
+        saved = store.apply_catalog(CatalogBatch {
+            layout_templates: vec![CatalogWrite {
+                value: LayoutTemplate {
+                    revision: template.revision,
+                    ..update
+                },
+                expected_revision: Some(template.revision),
+            }],
+            ..CatalogBatch::default()
+        })?;
+        let updated = saved.layout_templates.unwrap().remove(0);
+        assert_eq!((updated.name.as_str(), updated.revision), ("Wide", 2));
+        let failed = store.apply_catalog(CatalogBatch {
+            remove_layout_templates: vec![LayoutTemplateDelete {
+                id,
+                expected_revision: 1,
+            }],
+            ..CatalogBatch::default()
+        });
+        assert!(failed.is_err());
+        assert_eq!(store.catalog()?.layout_templates.unwrap().len(), 1);
+        store.apply_catalog(CatalogBatch {
+            remove_layout_templates: vec![LayoutTemplateDelete {
+                id,
+                expected_revision: 2,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert!(store.catalog()?.layout_templates.unwrap().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_or_duplicate_geometry_templates_rollback_batch() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let invalid = pigade_layout::GeometryTemplate {
+            schema: 99,
+            root: Some(pigade_layout::TemplateNode::Pane),
+        };
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    layout_templates: vec![CatalogWrite {
+                        value: LayoutTemplate {
+                            id: Uuid::new_v4(),
+                            name: "Bad".into(),
+                            geometry: invalid,
+                            revision: 0
+                        },
+                        expected_revision: None
+                    }],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        let make = |id| CatalogWrite {
+            value: LayoutTemplate {
+                id,
+                name: "Same".into(),
+                geometry: one_pane_template(),
+                revision: 0,
+            },
+            expected_revision: None,
+        };
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    layout_templates: vec![make(Uuid::new_v4()), make(Uuid::new_v4())],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        assert!(store.catalog()?.layout_templates.unwrap().is_empty());
+        Ok(())
+    }
 
     fn project(id: Uuid, name: &str) -> Project {
         Project {
@@ -846,6 +1085,7 @@ mod tests {
             tabs: vec![new(t)],
             selection: Some(update(selection, 0)),
             layout: None,
+            ..CatalogBatch::default()
         })
     }
     #[test]
@@ -1426,7 +1666,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            7
+            8
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -1521,7 +1761,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                7
+                8
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,
