@@ -1,0 +1,367 @@
+{
+  "captured_monotonic_ns": 29306347763141,
+  "elapsed_seconds": 30.151702269999078,
+  "last_sessions": [
+    {
+      "actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 29300882726747,
+        "reader": {
+          "bytes_enqueued": 103783,
+          "bytes_read": 103799,
+          "enqueued_calls": 511,
+          "last_enqueued_monotonic_ns": 29301334337298,
+          "last_read_bytes": 16,
+          "last_read_monotonic_ns": 29301354439774,
+          "read_calls": 512
+        },
+        "stage": "checkpoint",
+        "stage_age_at_snapshot_completion_ns": 5461863887,
+        "status": "available",
+        "version": 1
+      },
+      "sequence": 410,
+      "snapshot_age_at_diagnostic_ns": 3172507,
+      "snapshot_completed_monotonic_ns": 29306344590634,
+      "snapshot_duration_ns": 5066772,
+      "state": "running",
+      "storage_error": null,
+      "stream": 0,
+      "target_token_visible": false
+    },
+    {
+      "actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 29296506737384,
+        "reader": {
+          "bytes_enqueued": 83668,
+          "bytes_read": 83668,
+          "enqueued_calls": 437,
+          "last_enqueued_monotonic_ns": 29296465295282,
+          "last_read_bytes": 16,
+          "last_read_monotonic_ns": 29296465292456,
+          "read_calls": 437
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 26095502,
+        "status": "available",
+        "version": 1
+      },
+      "sequence": 377,
+      "snapshot_age_at_diagnostic_ns": 9814930255,
+      "snapshot_completed_monotonic_ns": 29296532832886,
+      "snapshot_duration_ns": 9682030,
+      "state": "running",
+      "storage_error": null,
+      "stream": 1,
+      "target_token_visible": null
+    },
+    {
+      "actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 29298688016766,
+        "reader": {
+          "bytes_enqueued": 88819,
+          "bytes_read": 88819,
+          "enqueued_calls": 451,
+          "last_enqueued_monotonic_ns": 29297725519388,
+          "last_read_bytes": 16,
+          "last_read_monotonic_ns": 29297725518496,
+          "read_calls": 451
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 33495568,
+        "status": "available",
+        "version": 1
+      },
+      "sequence": 381,
+      "snapshot_age_at_diagnostic_ns": 7626250807,
+      "snapshot_completed_monotonic_ns": 29298721512334,
+      "snapshot_duration_ns": 5760911,
+      "state": "running",
+      "storage_error": null,
+      "stream": 2,
+      "target_token_visible": null
+    },
+    {
+      "actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 29298756504357,
+        "reader": {
+          "bytes_enqueued": 92961,
+          "bytes_read": 92961,
+          "enqueued_calls": 462,
+          "last_enqueued_monotonic_ns": 29298754251275,
+          "last_read_bytes": 16,
+          "last_read_monotonic_ns": 29298754248840,
+          "read_calls": 462
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 24209104,
+        "status": "available",
+        "version": 1
+      },
+      "sequence": 382,
+      "snapshot_age_at_diagnostic_ns": 7567049680,
+      "snapshot_completed_monotonic_ns": 29298780713461,
+      "snapshot_duration_ns": 5606780,
+      "state": "running",
+      "storage_error": null,
+      "stream": 3,
+      "target_token_visible": null
+    }
+  ],
+  "ping": {
+    "completed_monotonic_ns": 29301345041348,
+    "request_duration_ns": 5805255,
+    "returned_views": 1,
+    "started_monotonic_ns": 29301339236093,
+    "status": "writer_queue_admitted"
+  },
+  "process_wait_diagnostics": {
+    "children": [
+      {
+        "comm": "python3",
+        "pid": 1384992,
+        "start_ticks": 2927584,
+        "state": "S",
+        "stream": 0,
+        "thread_count_captured": 0,
+        "thread_limit": 32,
+        "threads": [],
+        "tid": 1384992,
+        "wchan": "do_select"
+      },
+      {
+        "comm": "python3",
+        "pid": 1384999,
+        "start_ticks": 2927593,
+        "state": "S",
+        "stream": 1,
+        "thread_count_captured": 0,
+        "thread_limit": 32,
+        "threads": [],
+        "tid": 1384999,
+        "wchan": "wait_woken"
+      },
+      {
+        "comm": "python3",
+        "pid": 1385006,
+        "start_ticks": 2927601,
+        "state": "S",
+        "stream": 2,
+        "thread_count_captured": 0,
+        "thread_limit": 32,
+        "threads": [],
+        "tid": 1385006,
+        "wchan": "wait_woken"
+      },
+      {
+        "comm": "python3",
+        "pid": 1385018,
+        "start_ticks": 2927609,
+        "state": "S",
+        "stream": 3,
+        "thread_count_captured": 0,
+        "thread_limit": 32,
+        "threads": [],
+        "tid": 1385018,
+        "wchan": "wait_woken"
+      }
+    ],
+    "diagnostic_errors": [],
+    "host": {
+      "comm": "host-release",
+      "pid": 1384985,
+      "start_ticks": 2927579,
+      "state": "S",
+      "thread_count_captured": 16,
+      "thread_limit": 32,
+      "threads": [
+        {
+          "comm": "host-release",
+          "start_ticks": 2927579,
+          "state": "S",
+          "tid": 1384985,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "pigade-ipc-acce",
+          "start_ticks": 2927579,
+          "state": "S",
+          "tid": 1384986,
+          "wchan": "__skb_wait_for_more_packets"
+        },
+        {
+          "comm": "pigade-history-",
+          "start_ticks": 2927579,
+          "state": "S",
+          "tid": 1384987,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "pigade-history-",
+          "start_ticks": 2927579,
+          "state": "S",
+          "tid": 1384988,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927585,
+          "state": "S",
+          "tid": 1384993,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927585,
+          "state": "S",
+          "tid": 1384994,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927585,
+          "state": "D",
+          "tid": 1384995,
+          "wchan": "wait_log_commit"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927594,
+          "state": "S",
+          "tid": 1385000,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927594,
+          "state": "S",
+          "tid": 1385001,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927594,
+          "state": "S",
+          "tid": 1385002,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927602,
+          "state": "S",
+          "tid": 1385007,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927602,
+          "state": "S",
+          "tid": 1385008,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927602,
+          "state": "S",
+          "tid": 1385009,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927610,
+          "state": "S",
+          "tid": 1385020,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927610,
+          "state": "S",
+          "tid": 1385021,
+          "wchan": "futex_wait"
+        },
+        {
+          "comm": "host-release",
+          "start_ticks": 2927610,
+          "state": "S",
+          "tid": 1385022,
+          "wchan": "futex_wait"
+        }
+      ],
+      "tid": 1384985,
+      "wchan": "futex_wait"
+    }
+  },
+  "producer_milestones": {
+    "ack_write_completed": {
+      "event": "ack_write_completed",
+      "event_sequence": 13,
+      "producer_monotonic_ns": 29301354434113,
+      "stream": 0,
+      "token_index": 4
+    },
+    "ping_received": {
+      "event": "ping_received",
+      "event_sequence": 12,
+      "producer_monotonic_ns": 29301354414536,
+      "stream": 0,
+      "token_index": 4
+    }
+  },
+  "producer_sidechannel": {
+    "counts": {
+      "0:ack_write_completed": 5,
+      "0:ping_received": 5,
+      "0:release_observed": 4,
+      "1:ack_write_completed": 4,
+      "1:ping_received": 4,
+      "1:release_observed": 4,
+      "2:ack_write_completed": 4,
+      "2:ping_received": 4,
+      "2:release_observed": 4,
+      "3:ack_write_completed": 4,
+      "3:ping_received": 4,
+      "3:release_observed": 4
+    },
+    "last_by_stream": {
+      "0": {
+        "event": "ack_write_completed",
+        "event_sequence": 13,
+        "producer_monotonic_ns": 29301354434113,
+        "stream": 0,
+        "token_index": 4
+      },
+      "1": {
+        "event": "release_observed",
+        "event_sequence": 11,
+        "producer_monotonic_ns": 29296533517218,
+        "stream": 1,
+        "token_index": 3
+      },
+      "2": {
+        "event": "release_observed",
+        "event_sequence": 11,
+        "producer_monotonic_ns": 29298722196225,
+        "stream": 2,
+        "token_index": 3
+      },
+      "3": {
+        "event": "release_observed",
+        "event_sequence": 11,
+        "producer_monotonic_ns": 29298781399836,
+        "stream": 3,
+        "token_index": 3
+      }
+    },
+    "records_omitted": 0,
+    "records_written": 50,
+    "sequence_gaps": 0
+  },
+  "schema": 1,
+  "stream": 0,
+  "timeout_seconds": 5,
+  "token_index": 4
+}

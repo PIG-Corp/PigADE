@@ -219,3 +219,12 @@ Clippy/release pass. Private50-key ordered causal-color samples pass exact input
 final p50=95.752ms, p95=96.627ms, p99=111.938ms. Slow/earlier runs are retained.
 This is software X11 diagnosis, not formal echo/input-to-present acceptance.
 Output arriving after a poll can still wait50ms. See reports/input-latency-x11-20261017.md.
+
+## Fresh short diagnostic / READY barrier
+
+Tool44737 exited1: `~/.local/state/pigade/soak/ready-barrier-smoke-20261017`,
+31.730s, ACK SOAK-0-4 timeout. New probe localizes actor stagecheckpoint5.462s;
+child wroteACK and reader has16B not yet enqueued. Final411 replay includes ACK;
+all4 complete recovery comparisons pass, cold0/vacuous, ENDCRC unavailable.
+See reports/checkpoint-stall-20261017.md. Bounded async persistence is in progress;
+no fix/24h claim yet. Startup READY/START barrier works and does not alter active55262.

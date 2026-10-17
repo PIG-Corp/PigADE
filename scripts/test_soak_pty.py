@@ -40,7 +40,14 @@ class SoakAckDiagnosticsTest(unittest.TestCase):
                                      stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self.assertIn(b"READY:0", read_until(master, b"READY:0"))
+                ready = read_until(master, b"READY:0\r\n")
+                self.assertEqual(ready, b"READY:0\r\n")
+                # Until the host observes READY and sends START, no alternate-
+                # screen switch or workload bytes may hide the readiness marker.
+                ready_again, _, _ = select.select([master], [], [], .15)
+                self.assertFalse(ready_again, "producer streamed before START")
+                os.write(master, b"START\n")
+                self.assertIn(b"\x1b[?1049h\x1b[2J", read_until(master, b"\x1b[2J"))
                 os.write(master, b"PING:SOAK-0-42\n")
                 self.assertIn(b"ACK:SOAK-0-42", read_until(master, b"ACK:SOAK-0-42"))
                 os.write(master, b"RELEASE:SOAK-0-42\n")

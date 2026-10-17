@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "status": "failed-ack-timeout",
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/ready-barrier-smoke-20261017",
+  "binary_sha256": "610efac4b817116ed761217a9738485c2b499bf6fb05a30ebce7cb6dbf7e4791",
+  "requested_seconds": 30,
+  "actual_elapsed_seconds": 31.72956124099801,
+  "errors": [
+    "RuntimeError: input ACK timeout: SOAK-0-4"
+  ],
+  "timeout_stream": 0,
+  "candidate_pipeline_stage": "checkpoint",
+  "pipeline_stage_age_ns": 5461863887,
+  "reader_read_minus_enqueued_bytes": 16,
+  "live_sequence_at_timeout": 410,
+  "final_sequence": 411,
+  "final_replay_contains_target_ack": true,
+  "recovery": [
+    {
+      "stream": 0,
+      "returncode": 0,
+      "result": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 411,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 6.62327,
+        "checkpoint_tail_ms": 11.482028,
+        "semantic_checkpoint_bytes": 186759,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.00014000000000000001,
+        "full_journal_bytes_read": 117872,
+        "checkpoint_tail_journal_bytes_read": 2445,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "journal_sha256": "000ed7cc4ff4248f5bce1dd75efe86cd4de4ffd29d7b259477ecd83ae2eb588d"
+    },
+    {
+      "stream": 1,
+      "returncode": 0,
+      "result": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 408,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 6.5438600000000005,
+        "checkpoint_tail_ms": 10.310224,
+        "semantic_checkpoint_bytes": 186759,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.00013,
+        "full_journal_bytes_read": 115974,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "journal_sha256": "b30bbed1a158490fc74c6450f427f27a90966fff09dd8b2171a097c83c71c331"
+    },
+    {
+      "stream": 2,
+      "returncode": 0,
+      "result": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 410,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 6.495609,
+        "checkpoint_tail_ms": 9.821632000000001,
+        "semantic_checkpoint_bytes": 186759,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.000201,
+        "full_journal_bytes_read": 116040,
+        "checkpoint_tail_journal_bytes_read": 21796,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "journal_sha256": "d6ed32490addc04a25b4c3e0fba9c5b0b4801bfbce6bbd12ac19734ee559ce3c"
+    },
+    {
+      "stream": 3,
+      "returncode": 0,
+      "result": {
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "sequence": 410,
+        "recovery_path": "checkpoint-tail",
+        "full_replay_ms": 6.423133,
+        "checkpoint_tail_ms": 9.715461,
+        "semantic_checkpoint_bytes": 186759,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "cold_history_records": 0,
+        "cold_history_equal": true,
+        "archive_comparison_ms": 0.00015,
+        "full_journal_bytes_read": 116040,
+        "checkpoint_tail_journal_bytes_read": 21572,
+        "cold_archive_format": "row2,index1,retirement1"
+      },
+      "journal_sha256": "672724c856c787f19eb28ee0f4b0e998406993247351a67e5681ffb2cc2f148c"
+    }
+  ],
+  "producer_end_crc": "unavailable after aborted run",
+  "precise_blocking_syscall": "not identified; wait_log_commit thread not mapped to actor",
+  "concurrent_work": "builds, other long soak and private input tests; not isolated PERF or24h acceptance"
+}

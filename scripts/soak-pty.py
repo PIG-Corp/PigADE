@@ -103,6 +103,17 @@ def read_commands():
     if stop: break
   elif line==b'FINISH': stop=True
 emit(('READY:%d\r\n'%stream).encode())
+# Do not start workload output until the harness has observed this marker in a
+# published frame for every session. In particular, keep READY on the primary
+# screen instead of immediately switching to the alternate screen.
+started=False
+while not started and not stop:
+ receive_commands(.05)
+ while commands and not started and not stop:
+  line=commands.popleft()
+  if line==b'START': started=True
+  elif line==b'FINISH': stop=True
+  else: raise RuntimeError('unexpected command before START')
 start=time.monotonic_ns(); deadline=start+duration*1000000000
 patterns=[b'\x1b[?1049h\x1b[2J', 'Unicode: Жёлтый 🐖 漢字 e\u0301\r\n'.encode(),
           b'\x1b[?2026hSYNC-UPDATE\x1b[?2026l',
@@ -607,7 +618,10 @@ def run(args):
               "binary_version": subprocess.check_output([str(frozen), "--version"], text=True).strip(),
               "source_sha256": {name: STRESS.digest(ROOT / name) for name in
                                 ("crates/session-host/src/lib.rs", "crates/session-host/src/metrics.rs",
-                            "Cargo.lock", "scripts/soak-pty.py", "scripts/stress-pty.py")},
+                                 "crates/session-host/src/checkpoint.rs", "crates/session-host/src/history.rs",
+                                 "crates/storage/src/lib.rs", "crates/terminal/src/lib.rs",
+                                 "Cargo.lock", "scripts/soak-pty.py", "scripts/stress-pty.py")},
+              "source_snapshot_scope": "repository files at harness start; not proof of supplied frozen binary build lineage",
               "environment": {"os": platform.platform(), "kernel": platform.release(),
                               "logical_cpu_count": os.cpu_count(), "filesystem": filesystem},
               "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
@@ -671,6 +685,14 @@ def run(args):
             # Persist owned identities/session IDs before the long measurement.
             # A running manifest must remain useful after harness interruption.
             save_json(manifest_path, result)
+            # All four producers are now confirmed visible on the primary
+            # screen. Release the startup barrier only after every READY frame
+            # has been observed; the workload clock starts after all START
+            # inputs have been admitted.
+            for spec in specs:
+                STRESS.request(endpoint, {"command": "input", "session": spec["session"],
+                                          "generation": spec["generation"],
+                                          "bytes": list(b"START\n")})
             actual_start = time.monotonic()
             result["measurement_started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             sample_every = args.sample_seconds

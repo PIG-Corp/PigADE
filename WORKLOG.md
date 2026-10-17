@@ -1633,3 +1633,27 @@ Integrate bounded event wake for commands/state/receipts and source-bound causal
 - Files: crates/app/src/main.rs, crates/app/src/wake_signal.rs, crates/app/README.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/reports/input-latency-x11-20261017.md, benchmarks/results/input-latency-x11-20261017, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root bootstrap test116/116, all-target Clippy -D warnings, release build and fmt passed. Four private50-key measurements exact/no extras; final source-bound p50=95.752ms p95=96.627ms p99=111.938ms, reviewed ACK capture. Initial integration slower sample retained. Formal PERF acceptance remains open.
 - Risks / next: Host output-change wake/profiling and isolated physical GPU latency; async checkpoint investigation after reproduced5.46s actor checkpoint stall.
+
+## 2026-10-17T02:54:06+00:00 — font_render_profile
+
+Treat bwrap user namespace info as advisory per pinned 0.11.2 source and preserve precheck diagnostics
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (17 passed); regressions cover omitted/zero/different user info, strict non-user IDs, and failure-report diagnostic retention
+- Risks / next: Root can rerun private Wayland fixture; no compositor/input run by this agent
+
+## 2026-10-17T02:54:40+00:00 — recovery_slice_review
+
+Added bounded asynchronous checkpoint capture and persistence worker with global singleflight permit; synchronous publication shares the exact durable persistence path.
+
+- Files: crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/session-host/Cargo.toml; cargo test --offline -p pigade-session-host checkpoint::tests --lib (4 passed); cargo test --offline -p pigade-session-host --lib (63 passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; git diff --check -- crates/session-host/src/checkpoint.rs passed.
+- Risks / next: Root integrates schedule into lib.rs; verify host checkpoint cadence and end-to-end recovery after integration.
+
+## 2026-10-17T02:57:38+00:00 — root
+
+Integrate READY/START soak barrier; retain failed30s checkpoint-stage ACK diagnostic and exact frozen-host recovery
+
+- Files: scripts/soak-pty.py, scripts/test_soak_pty.py, scripts/test_soak_admission.py, docs/research/launch-latency-next.md, docs/reports/checkpoint-stall-20261017.md, benchmarks/results/checkpoint-stall-20261017, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Root producer5/admission11 tests pass. Real30s attempt failed after31.730s; stagecheckpoint5.462s, final411 includes ACK. All4 complete/frame full-vs-checkpoint-tail recovery pass; cold0/vacuous, producerENDCRC unavailable. Source journals preserved.
+- Risks / next: Finish bounded async checkpoint persistence and blocked-writer/realPTY/fault/recovery tests; no timeout increase or24h claim.

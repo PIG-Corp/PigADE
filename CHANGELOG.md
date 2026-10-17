@@ -58,3 +58,5 @@ This section describes development work; it is not a release announcement.
 - Exact session/generation command rejection gates isolate other sessions; bounded FIFO mouse receipts reconcile speculative buttons and require explicit, token-checked release cleanup. Unknown outcomes stay locked; native saturation acceptance remains open.
 
 - Worker input and UI state/receipt updates now wake on events through bounded coalescing; fixed50-key private X11 latency fixtures retain baseline and changed samples. Formal latency/GPU acceptance remains open.
+
+- Synthetic soak now waits for all four visible READY markers before START; a short run reproduced an ACK timeout at checkpoint stage with complete final recovery retained. Async checkpoint persistence remains under verification.

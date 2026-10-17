@@ -120,6 +120,7 @@ class ProducerCommandQueueTests(unittest.TestCase):
 
         try:
             wait_for(b"READY:0")
+            os.write(master, b"START\n")
             os.write(master, b"PING:first\n")
             wait_for(b"ACK:first")
 
@@ -161,6 +162,7 @@ class ProducerCommandQueueTests(unittest.TestCase):
 
         try:
             wait_for(b"READY:0")
+            os.write(master, b"START\n")
             os.write(master, b"PING:eof\n")
             wait_for(b"ACK:eof")
             os.close(master)
