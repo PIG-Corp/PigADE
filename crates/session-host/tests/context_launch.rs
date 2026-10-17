@@ -233,7 +233,20 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
             },
         },
     )?;
-    let _catalog = response.catalog.context("catalog fixture was not saved")?;
+    let catalog = response.catalog.context("catalog fixture was not saved")?;
+    let offset = pigade_storage::CanvasOffset { x: 120.0, y: 75.0 };
+    let viewport_reply = success(&host.socket(), Command::SetCanvasOffset { tab, offset })?;
+    ensure!(
+        viewport_reply.catalog.is_none() && viewport_reply.views.is_empty(),
+        "saving a viewport must not resend the catalog or terminal cells"
+    );
+    let selection = viewport_reply
+        .selection
+        .context("viewport ACK omitted selection revision")?;
+    ensure!(
+        selection.tab_id == catalog.selection.tab_id
+            && selection.window.canvas_offsets.get(&tab) == Some(&offset)
+    );
     for value in [
         context(project, 0, "OLD_PROJECT_CONTEXT", "", ""),
         context(
@@ -369,6 +382,13 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
     ensure!(recovered_context.launch_phase.as_deref() == Some("delivered_unconfirmed"));
 
     host.restart()?;
+    let reopened_catalog = success(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("reopened catalog missing")?;
+    ensure!(
+        reopened_catalog.selection.window.canvas_offsets.get(&tab) == Some(&offset),
+        "host reopen lost the saved canvas position"
+    );
     let after_restart = success(
         &host.socket(),
         Command::GetSessionContext {

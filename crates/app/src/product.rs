@@ -29,6 +29,8 @@ pub(super) enum ProductAction {
     ToggleMemory,
     ToggleContextDelivery,
     InspectSessionContext,
+    PanCanvas,
+    RevealFocusedPane,
     SelectProject(Uuid),
     SelectWorkspace(Uuid),
     SelectTab(Uuid),
@@ -256,6 +258,11 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Новый воркспейс", ProductAction::CreateWorkspace),
         ("Контекст воркспейса", ProductAction::EditContext),
         ("Контекст проекта", ProductAction::EditProjectContext),
+        ("Прокрутить canvas · G", ProductAction::PanCanvas),
+        (
+            "Показать выбранную панель",
+            ProductAction::RevealFocusedPane,
+        ),
         (
             "Контекст выбранной сессии",
             ProductAction::InspectSessionContext,

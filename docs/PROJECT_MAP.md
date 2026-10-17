@@ -30,6 +30,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/projects.rs, panel_launch.rs | Git repository identity, durable workspace preparation/worktree creation and prevalidated tab-scoped CLI launch |
 | crates/app/src/product.rs | Project/workspace sidebar, tab strip, CLI controls, palette, transfer picker, revisioned context editor and onboarding |
 | crates/app/src/startup.rs | Private local host discovery/startup, version-derived paths, host-lock-mediated stale-endpoint recovery; explicit sockets never auto-start |
+| crates/app/src/viewport.rs | Pure device-aligned canvas translation/reveal, scrollbars and thumb dragging; per-tab offsets persist independently of layout undo |
 | crates/app/src/tiling.rs | Pure split-boundary resize helpers used by keyboard/mouse previews |
 | crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
 | crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; unchanged poll metadata avoids cloning frames/cells |

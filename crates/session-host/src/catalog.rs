@@ -222,11 +222,41 @@ fn ensure_membership(catalog: &Catalog, model: &LayoutModel) -> Result<()> {
     Ok(())
 }
 
+/// Window viewport persistence is independent of placement/undo and never
+/// changes the selected project, tab or terminal process. Read the current
+/// selection on the sole host writer so unrelated UI fields are preserved.
+pub(crate) fn save_canvas_offset(
+    store: &mut MetadataStore,
+    tab: Uuid,
+    offset: pigade_storage::CanvasOffset,
+) -> Result<pigade_storage::Selection> {
+    offset.validate()?;
+    let current = read_metadata(store)?;
+    ensure!(
+        current.tabs.iter().any(|value| value.id == tab),
+        "unknown canvas tab"
+    );
+    let mut selection = current.selection;
+    let revision = selection.revision;
+    if selection.window.canvas_offsets.get(&tab) == Some(&offset) {
+        return Ok(selection);
+    }
+    selection.window.canvas_offsets.insert(tab, offset);
+    let saved = store.apply_catalog(CatalogBatch {
+        selection: Some(CatalogWrite {
+            value: selection,
+            expected_revision: Some(revision),
+        }),
+        ..CatalogBatch::default()
+    })?;
+    Ok(saved.selection)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pigade_layout::Direction;
-    use pigade_storage::{Project, Tab, Workspace, WorkspaceMode, WorkspaceStatus};
+    use pigade_storage::{CanvasOffset, Project, Tab, Workspace, WorkspaceMode, WorkspaceStatus};
 
     fn id(number: u128) -> Uuid {
         Uuid::from_u128(number)
@@ -704,5 +734,56 @@ mod tests {
         assert!(migrate_legacy_layout(&mut reopened).is_err());
         assert_eq!(reopened.catalog()?, before);
         Ok(())
+    }
+
+    #[test]
+    fn canvas_offset_save_preserves_layout_and_selection_and_reopens() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let before = seed(&mut store)?;
+        let tab = before.tabs[0].id;
+        let before_model = load_layout(&before)?;
+        let offset = CanvasOffset {
+            x: 120.5,
+            y: 480.25,
+        };
+
+        let saved = save_canvas_offset(&mut store, tab, offset)?;
+        let after = store.catalog()?;
+        let mut expected_window = before.selection.window.clone();
+        expected_window.canvas_offsets.insert(tab, offset);
+        assert_eq!(saved.window, expected_window);
+        assert_eq!(saved.project_id, before.selection.project_id);
+        assert_eq!(saved.workspace_id, before.selection.workspace_id);
+        assert_eq!(saved.tab_id, before.selection.tab_id);
+        assert_eq!(after.selection, saved);
+        assert_eq!(after.layout, before.layout);
+        assert_eq!(after.tabs, before.tabs);
+        let after_model = load_layout(&after)?;
+        assert_eq!(after_model.undo_len(), before_model.undo_len());
+        assert_eq!(after_model.redo_len(), before_model.redo_len());
+
+        let unchanged = save_canvas_offset(&mut store, tab, offset)?;
+        assert_eq!(unchanged.revision, saved.revision);
+        assert_eq!(store.catalog()?, after);
+        drop(store);
+
+        let mut reopened = MetadataStore::open(&path)?;
+        let restored = store_catalog(&reopened)?;
+        assert_eq!(
+            restored.selection.window.canvas_offsets.get(&tab),
+            Some(&offset)
+        );
+        assert_eq!(restored.layout, before.layout);
+        assert_eq!(restored.tabs, before.tabs);
+        assert!(save_canvas_offset(&mut reopened, id(999), offset).is_err());
+        assert!(save_canvas_offset(&mut reopened, tab, CanvasOffset { x: -1.0, y: 0.0 }).is_err());
+        assert_eq!(store_catalog(&reopened)?, restored);
+        Ok(())
+    }
+
+    fn store_catalog(store: &MetadataStore) -> Result<Catalog> {
+        read_metadata(store)
     }
 }

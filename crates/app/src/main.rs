@@ -13,6 +13,7 @@ mod publication_trace;
 mod selection;
 mod startup;
 mod tiling;
+mod viewport;
 mod wake_signal;
 use command_worker::{
     CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
@@ -732,6 +733,13 @@ fn pointer_modifiers(modifiers: Modifiers) -> mouse::Modifiers {
 enum LayoutMode {
     Swap,
     Resize,
+    Pan,
+}
+
+struct CanvasScrollDrag {
+    bar: viewport::Scrollbar,
+    initial: pigade_storage::CanvasOffset,
+    start: Point<Pixels>,
 }
 
 struct ResizeGesture {
@@ -761,6 +769,19 @@ struct CanvasApp {
     pending_launch_review: bool,
     pending_context_inspection: bool,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
+    canvas_bounds: Option<Bounds<Pixels>>,
+    canvas_bars: Vec<viewport::Scrollbar>,
+    canvas_drag: Option<CanvasScrollDrag>,
+    canvas_offsets: std::collections::BTreeMap<uuid::Uuid, pigade_storage::CanvasOffset>,
+    canvas_dirty: std::collections::BTreeSet<uuid::Uuid>,
+    canvas_save_at: Option<Instant>,
+    canvas_saving: Option<(uuid::Uuid, pigade_storage::CanvasOffset)>,
+    canvas_close_requested: bool,
+    canvas_tab: Option<uuid::Uuid>,
+    canvas_focus_mode: bool,
+    canvas_focus_offset: pigade_storage::CanvasOffset,
+    canvas_layout_revision: Option<u64>,
+    canvas_reveal: Option<uuid::Uuid>,
     layout_mode: Option<LayoutMode>,
     layout_preview: Option<(uuid::Uuid, pigade_layout::TabLayout)>,
     resize_pending: Option<pigade_layout::Command>,
@@ -811,8 +832,25 @@ impl CanvasApp {
         } = connection;
         let ui_trace = trace.clone();
         let focus = cx.focus_handle();
+        let close_target = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            close_target
+                .update(cx, |this, cx| {
+                    if this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
+                        return true;
+                    }
+                    this.canvas_close_requested = true;
+                    this.canvas_drag = None;
+                    this.canvas_save_at = Some(Instant::now());
+                    this.flush_canvas_offset(cx);
+                    cx.notify();
+                    false
+                })
+                .unwrap_or(true)
+        });
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
+                this.canvas_drag = None;
                 this.selection_dragging = false;
                 this.input_epoch = this.input_epoch.wrapping_add(1);
                 this.finish_pointer(cx);
@@ -851,6 +889,17 @@ impl CanvasApp {
                             this.product.busy = false;
                             match reply {
                                 Ok(reply) => {
+                                    if let Some(selection) = reply.selection {
+                                        if let Some(catalog) = &mut this.product.catalog
+                                            && selection.revision >= catalog.selection.revision {
+                                            catalog.selection = selection;
+                                        }
+                                        this.canvas_saving = None;
+                                        // A click/focus key can arrive during the
+                                        // short background save. Persist that
+                                        // local focus once the writer is free.
+                                        this.persist_focus(cx);
+                                    }
                                     if reply.launch_confirmed {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
@@ -908,6 +957,10 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if let Some((tab, _)) = this.canvas_saving.take() {
+                                        this.canvas_dirty.insert(tab);
+                                        this.canvas_save_at = None;
+                                    }
                                     this.pending_launch_review = false;
                                     this.pending_context_inspection = false;
                                     if error.rejected_before_launch {
@@ -1020,6 +1073,11 @@ impl CanvasApp {
                             }
                             cx.notify();
                         }
+                        this.flush_canvas_offset(cx);
+                        if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
+                            window.remove_window();
+                            return;
+                        }
                         let blinking = this.state.error.is_none()
                             && this.state.views.get(this.selected).is_some_and(|view| {
                                 view.state == "running"
@@ -1057,6 +1115,19 @@ impl CanvasApp {
             pending_launch_review: false,
             pending_context_inspection: false,
             layout_geometry: None,
+            canvas_bounds: None,
+            canvas_bars: Vec::new(),
+            canvas_drag: None,
+            canvas_offsets: Default::default(),
+            canvas_dirty: Default::default(),
+            canvas_save_at: None,
+            canvas_saving: None,
+            canvas_close_requested: false,
+            canvas_tab: None,
+            canvas_focus_mode: false,
+            canvas_focus_offset: Default::default(),
+            canvas_layout_revision: None,
+            canvas_reveal: None,
             layout_mode: None,
             layout_preview: None,
             resize_pending: None,
@@ -1100,6 +1171,78 @@ impl CanvasApp {
             }
             Err(_) => self.product.notice = Some("Операция не принята: очередь занята".into()),
         }
+        cx.notify();
+    }
+
+    fn canvas_offset(&self) -> pigade_storage::CanvasOffset {
+        if self.canvas_focus_mode {
+            return self.canvas_focus_offset;
+        }
+        self.canvas_tab
+            .and_then(|tab| self.canvas_offsets.get(&tab).copied())
+            .unwrap_or_default()
+    }
+
+    fn set_canvas_offset(&mut self, offset: pigade_storage::CanvasOffset) {
+        if offset.validate().is_err() || offset == self.canvas_offset() {
+            return;
+        }
+        if self.canvas_focus_mode {
+            self.canvas_focus_offset = offset;
+        } else if let Some(tab) = self.canvas_tab {
+            self.canvas_offsets.insert(tab, offset);
+            self.canvas_dirty.insert(tab);
+            self.canvas_save_at = Some(Instant::now() + Duration::from_millis(250));
+        }
+    }
+
+    fn flush_canvas_offset(&mut self, cx: &mut Context<Self>) {
+        if self.product.busy
+            || self.canvas_drag.is_some()
+            || !self
+                .canvas_save_at
+                .is_some_and(|time| Instant::now() >= time)
+        {
+            return;
+        }
+        let Some(tab) = self.canvas_dirty.first().copied() else {
+            return;
+        };
+        let Some(offset) = self.canvas_offsets.get(&tab).copied() else {
+            return;
+        };
+        if self
+            .product_tx
+            .try_send(json!({"command":"set_canvas_offset","tab":tab,"offset":offset}))
+            .is_ok()
+        {
+            self.canvas_dirty.remove(&tab);
+            self.canvas_saving = Some((tab, offset));
+            self.product.busy = true;
+            cx.notify();
+        }
+    }
+
+    fn pan_canvas(&mut self, dx: f64, dy: f64, cx: &mut Context<Self>) {
+        if self.product.dialog.is_some()
+            || self.resize_gesture.is_some()
+            || self.pane_drag.is_some()
+        {
+            return;
+        }
+        let mut offset = self.canvas_offset();
+        for bar in &self.canvas_bars {
+            match bar.axis {
+                pigade_layout::Axis::Horizontal => {
+                    offset.x = (offset.x + dx).clamp(0., bar.max_offset)
+                }
+                pigade_layout::Axis::Vertical => {
+                    offset.y = (offset.y + dy).clamp(0., bar.max_offset)
+                }
+            }
+        }
+        self.canvas_reveal = None;
+        self.set_canvas_offset(offset);
         cx.notify();
     }
 
@@ -1167,6 +1310,9 @@ impl CanvasApp {
             || f32::from(event.position.y - drag.start.y).abs() > 6.;
         drag.drop = None;
         if drag.moved
+            && self
+                .canvas_bounds
+                .is_some_and(|bounds| bounds.contains(&event.position))
             && let Some(geometry) = &self.layout_geometry
         {
             let x = f64::from(f32::from(event.position.x));
@@ -1268,6 +1414,7 @@ impl CanvasApp {
                 .position(|view| view.session == target.to_string())
             {
                 self.selected = index;
+                self.canvas_reveal = Some(target);
             }
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
@@ -1339,6 +1486,7 @@ impl CanvasApp {
         self.resize_gesture = None;
         self.layout_mode = None;
         self.pane_drag = None;
+        self.canvas_drag = None;
         let Some(catalog) = &self.product.catalog else {
             return;
         };
@@ -1421,6 +1569,15 @@ impl CanvasApp {
             self.pending_context_inspection = false;
         }
         match action {
+            A::PanCanvas => {
+                self.product.dialog = None;
+                self.finish_pointer(cx);
+                self.layout_mode = Some(LayoutMode::Pan);
+            }
+            A::RevealFocusedPane => {
+                self.product.dialog = None;
+                self.canvas_reveal = self.selected_pane();
+            }
             A::AddProject => self.product.dialog = Some(Dialog::new(DialogKind::AddProject)),
             A::CreateWorkspace => {
                 self.product.dialog = Some(Dialog::new(DialogKind::CreateWorkspace))
@@ -2003,6 +2160,12 @@ impl CanvasApp {
         }
     }
     fn pointer_hit(&self, point: Point<Pixels>) -> Option<(usize, mouse::Position)> {
+        if self
+            .canvas_bounds
+            .is_some_and(|bounds| !bounds.contains(&point))
+        {
+            return None;
+        }
         self.panes
             .iter()
             .zip(&self.state.views)
@@ -2136,6 +2299,47 @@ impl CanvasApp {
             return;
         }
         if event.button == MouseButton::Left
+            && let Some(bar) = self
+                .canvas_bars
+                .iter()
+                .find(|bar| layout_rect_contains(bar.track, event.position))
+                .copied()
+        {
+            self.finish_pointer(cx);
+            self.selection_dragging = false;
+            let initial = self.canvas_offset();
+            if layout_rect_contains(bar.thumb, event.position) {
+                self.canvas_drag = Some(CanvasScrollDrag {
+                    bar,
+                    initial,
+                    start: event.position,
+                });
+            } else {
+                let delta = match bar.axis {
+                    pigade_layout::Axis::Horizontal => {
+                        f64::from(f32::from(event.position.x))
+                            - (bar.thumb.x + bar.thumb.width / 2.)
+                    }
+                    pigade_layout::Axis::Vertical => {
+                        f64::from(f32::from(event.position.y))
+                            - (bar.thumb.y + bar.thumb.height / 2.)
+                    }
+                };
+                self.set_canvas_offset(viewport::dragged_offset(bar, initial, delta));
+            }
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self
+            .canvas_bounds
+            .is_some_and(|bounds| !bounds.contains(&event.position))
+        {
+            return;
+        }
+        if event.button == MouseButton::Left
             && !self.product.busy
             && let Some(geometry) = &self.layout_geometry
             && let Some(divider) = geometry
@@ -2246,6 +2450,11 @@ impl CanvasApp {
         }
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if event.button == MouseButton::Left && self.canvas_drag.take().is_some() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if event.button == MouseButton::Left
             && let Some(drag) = self.pane_drag.take()
         {
@@ -2280,6 +2489,24 @@ impl CanvasApp {
         }
     }
     fn pointer_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(drag) = &self.canvas_drag {
+            if event.pressed_button == Some(MouseButton::Left) {
+                let delta = match drag.bar.axis {
+                    pigade_layout::Axis::Horizontal => {
+                        f64::from(f32::from(event.position.x - drag.start.x))
+                    }
+                    pigade_layout::Axis::Vertical => {
+                        f64::from(f32::from(event.position.y - drag.start.y))
+                    }
+                };
+                self.set_canvas_offset(viewport::dragged_offset(drag.bar, drag.initial, delta));
+            } else {
+                self.canvas_drag = None;
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.pane_drag.is_some() {
             self.update_pane_drag(event, cx);
             return;
@@ -2329,7 +2556,43 @@ impl CanvasApp {
         }
         self.pointer_event(PointerAction::Motion, event.position, event.modifiers, cx);
     }
-    fn pointer_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn pointer_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.product.dialog.is_some() {
+            return;
+        }
+        let over_bar = self
+            .canvas_bars
+            .iter()
+            .find(|bar| layout_rect_contains(bar.track, event.position))
+            .map(|bar| bar.axis);
+        let over_canvas = self
+            .canvas_bounds
+            .is_some_and(|bounds| bounds.contains(&event.position));
+        if (over_canvas && (self.prefix || event.modifiers.shift)) || over_bar.is_some() {
+            let (mut dx, mut dy) = match event.delta {
+                ScrollDelta::Lines(delta) => (f64::from(delta.x) * 40., f64::from(delta.y) * 40.),
+                ScrollDelta::Pixels(delta) => {
+                    (f64::from(f32::from(delta.x)), f64::from(f32::from(delta.y)))
+                }
+            };
+            if (event.modifiers.alt || over_bar == Some(pigade_layout::Axis::Horizontal))
+                && dx == 0.
+            {
+                dx = dy;
+                dy = 0.;
+            }
+            self.finish_pointer(cx);
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+            self.pan_canvas(-dx, -dy, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.prefix || event.modifiers.shift {
             return;
         }
@@ -2500,6 +2763,24 @@ impl CanvasApp {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let k = &event.keystroke;
+        if self.canvas_close_requested && k.key == "escape" {
+            if k.modifiers.control && k.modifiers.shift {
+                window.remove_window();
+            } else {
+                self.canvas_close_requested = false;
+            }
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if k.key == "escape"
+            && let Some(drag) = self.canvas_drag.take()
+        {
+            self.set_canvas_offset(drag.initial);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if k.key == "escape" && (self.resize_gesture.is_some() || self.pane_drag.is_some()) {
             self.pane_drag = None;
             self.finish_resize(false, cx);
@@ -2573,6 +2854,34 @@ impl CanvasApp {
             _ => None,
         };
         if let Some(mode) = self.layout_mode {
+            if mode == LayoutMode::Pan {
+                match k.key.as_str() {
+                    "escape" => self.layout_mode = None,
+                    "enter" => {
+                        self.canvas_reveal = self.selected_pane();
+                        self.layout_mode = None;
+                    }
+                    "home" => self.set_canvas_offset(Default::default()),
+                    "end" => self.pan_canvas(1e9, 1e9, cx),
+                    "pageup" => self.pan_canvas(0., -300., cx),
+                    "pagedown" => self.pan_canvas(0., 300., cx),
+                    _ => {
+                        if let Some(direction) = direction {
+                            let step = if k.modifiers.shift { 240. } else { 60. };
+                            let (dx, dy) = match direction {
+                                pigade_layout::Direction::Left => (-step, 0.),
+                                pigade_layout::Direction::Right => (step, 0.),
+                                pigade_layout::Direction::Up => (0., -step),
+                                pigade_layout::Direction::Down => (0., step),
+                            };
+                            self.pan_canvas(dx, dy, cx);
+                        }
+                    }
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
             if k.key == "escape" {
                 self.finish_resize(false, cx);
             } else if mode == LayoutMode::Resize {
@@ -2612,9 +2921,11 @@ impl CanvasApp {
                 cx.stop_propagation();
                 return;
             }
-            if matches!(k.key.as_str(), "w" | "r") {
+            if matches!(k.key.as_str(), "w" | "r" | "g") {
                 self.layout_mode = Some(if k.key == "w" {
                     LayoutMode::Swap
+                } else if k.key == "g" {
+                    LayoutMode::Pan
                 } else {
                     LayoutMode::Resize
                 });
@@ -2727,26 +3038,98 @@ impl CanvasApp {
         scale: f32,
         cx: &mut Context<Self>,
     ) -> Vec<PaneGeometry> {
+        self.canvas_bars.clear();
+        self.canvas_bounds = Some(bounds);
         let projected = self.tab_layout().and_then(|(tab, layout)| {
+            let focus_mode = layout.focus_mode;
+            let focused = layout.focused;
             let state = pigade_layout::LayoutState {
                 tabs: [(tab, layout)].into_iter().collect(),
             };
-            state
-                .project(
-                    tab,
-                    pigade_layout::Rect {
-                        x: f64::from(f32::from(bounds.origin.x)),
-                        y: f64::from(f32::from(bounds.origin.y)),
-                        width: f64::from(f32::from(bounds.size.width)),
-                        height: f64::from(f32::from(bounds.size.height)),
-                    },
-                    pigade_layout::Size {
-                        width: f64::from(f32::from(cell.width) * 40. + 12.),
-                        height: f64::from(f32::from(cell.height) * 8. + HEADER + 12.),
-                    },
-                    f64::from(GAP),
-                )
-                .ok()
+            let outer = pigade_layout::Rect {
+                x: f64::from(f32::from(bounds.origin.x)),
+                y: f64::from(f32::from(bounds.origin.y)),
+                width: f64::from(f32::from(bounds.size.width)).max(1.),
+                height: f64::from(f32::from(bounds.size.height)).max(1.),
+            };
+            let scale = f64::from(valid_scale(scale));
+            let minimum = pigade_layout::Size {
+                width: (f64::from(f32::from(cell.width)) * scale).ceil() / scale * 40.
+                    + 16.
+                    + 2. / scale,
+                height: (f64::from(f32::from(cell.height)) * scale).ceil() / scale * 8.
+                    + f64::from(HEADER)
+                    + 16.
+                    + 2. / scale,
+            };
+            let mut content = outer;
+            let mut geometry = state.project(tab, content, minimum, f64::from(GAP)).ok()?;
+            let mut horizontal = false;
+            let mut vertical = false;
+            // Reserving one scrollbar can make the other necessary. At most
+            // two additions reach a stable viewport; no tree mutation occurs.
+            for _ in 0..3 {
+                let next_horizontal = horizontal || geometry.bounds.width > content.width;
+                let next_vertical = vertical || geometry.bounds.height > content.height;
+                if next_horizontal == horizontal && next_vertical == vertical {
+                    break;
+                }
+                horizontal = next_horizontal;
+                vertical = next_vertical;
+                content.width = (outer.width - if vertical { 24. } else { 0. }).max(1.);
+                content.height = (outer.height - if horizontal { 24. } else { 0. }).max(1.);
+                geometry = state.project(tab, content, minimum, f64::from(GAP)).ok()?;
+            }
+            let revision = self
+                .product
+                .catalog
+                .as_ref()
+                .map(|catalog| catalog.layout.revision);
+            let same_mode = self.canvas_tab == Some(tab) && self.canvas_focus_mode == focus_mode;
+            let reveal = self.canvas_reveal.take().or_else(|| {
+                (same_mode
+                    && self.canvas_layout_revision.is_some()
+                    && self.canvas_layout_revision != revision)
+                    .then_some(focused)
+                    .flatten()
+            });
+            if !same_mode {
+                self.canvas_focus_offset = Default::default();
+            }
+            self.canvas_tab = Some(tab);
+            self.canvas_focus_mode = focus_mode;
+            self.canvas_layout_revision = revision;
+            let saved = self
+                .product
+                .catalog
+                .as_ref()
+                .and_then(|catalog| catalog.selection.window.canvas_offsets.get(&tab))
+                .copied()
+                .unwrap_or_default();
+            self.canvas_offsets.entry(tab).or_insert(saved);
+            let extent = geometry.bounds;
+            let (geometry, offset) =
+                viewport::project(geometry, content, self.canvas_offset(), scale, reveal);
+            self.set_canvas_offset(offset);
+            self.canvas_bounds = Some(layout_bounds(content));
+            self.canvas_bars = [
+                viewport::scrollbar(
+                    content,
+                    extent.width,
+                    offset.x,
+                    pigade_layout::Axis::Horizontal,
+                ),
+                viewport::scrollbar(
+                    content,
+                    extent.height,
+                    offset.y,
+                    pigade_layout::Axis::Vertical,
+                ),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            Some(geometry)
         });
         self.layout_geometry = projected.clone();
         self.panes = if let Some(projected) = projected {
@@ -2793,7 +3176,10 @@ impl CanvasApp {
                     rows,
                     cols,
                 };
-                if self.state.error.is_none()
+                if self
+                    .canvas_bounds
+                    .is_none_or(|bounds| pixel_bounds_intersect(bounds, pane.bounds))
+                    && self.state.error.is_none()
                     && self.input_error.is_none()
                     && view.state == "running"
                     && self.state.notice_for(view).is_none()
@@ -2826,6 +3212,37 @@ struct PaneGeometry {
     cell: Size<Pixels>,
     rows: u16,
     cols: u16,
+}
+
+fn layout_bounds(rect: pigade_layout::Rect) -> Bounds<Pixels> {
+    Bounds::new(
+        point(px(rect.x as f32), px(rect.y as f32)),
+        size(px(rect.width as f32), px(rect.height as f32)),
+    )
+}
+
+fn layout_rect_contains(rect: pigade_layout::Rect, position: Point<Pixels>) -> bool {
+    layout_bounds(rect).contains(&position)
+}
+
+fn pixel_bounds_intersect(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
+    a.left() < b.right() && a.right() > b.left() && a.top() < b.bottom() && a.bottom() > b.top()
+}
+
+fn paint_canvas_scrollbar(bar: viewport::Scrollbar, window: &mut Window) {
+    window.paint_quad(fill(layout_bounds(bar.track), rgb(0x1d2025)));
+    let mut thumb = bar.thumb;
+    match bar.axis {
+        pigade_layout::Axis::Horizontal => {
+            thumb.y += 9.;
+            thumb.height = 6.;
+        }
+        pigade_layout::Axis::Vertical => {
+            thumb.x += 9.;
+            thumb.width = 6.;
+        }
+    }
+    window.paint_quad(fill(layout_bounds(thumb), rgb(0x7b8596)));
 }
 fn valid_scale(scale: f32) -> f32 {
     if scale.is_finite() && scale > 0. {
@@ -3124,7 +3541,18 @@ impl Render for CanvasApp {
             Some(LayoutMode::Swap) => {
                 "Обмен панелей: H/J/K/L или стрелки · Escape — отменить".to_owned()
             }
+            Some(LayoutMode::Pan) => {
+                "Canvas: стрелки — прокрутка · Home — начало · Enter — к панели · Escape — выход"
+                    .to_owned()
+            }
             None => status,
+        };
+        let status = if self.canvas_saving.is_some() || !self.canvas_dirty.is_empty() {
+            format!("{status} · Положение canvas не сохранено")
+        } else if !self.canvas_bars.is_empty() && self.layout_mode.is_none() {
+            format!("{status} · Shift+колесо — canvas · Alt — горизонтально")
+        } else {
+            status
         };
         let recovery_warning = recovery_warning(
             self.state.recovery.as_ref(),
@@ -3198,12 +3626,19 @@ impl Render for CanvasApp {
                                             );
                                             let cell = size(width, height);
                                             let scale = window.scale_factor();
-                                            let panes = entity.update(cx, |this, cx| {
-                                                this.geometry(bounds, cell, scale, cx)
-                                            });
-                                            (font, panes)
+                                            let (panes, content, bars) =
+                                                entity.update(cx, |this, cx| {
+                                                    let panes =
+                                                        this.geometry(bounds, cell, scale, cx);
+                                                    (
+                                                        panes,
+                                                        this.canvas_bounds.unwrap_or(bounds),
+                                                        this.canvas_bars.clone(),
+                                                    )
+                                                });
+                                            (font, panes, content, bars)
                                         },
-                                        move |bounds, (font, panes), window, cx| {
+                                        move |bounds, (font, panes, content, bars), window, cx| {
                                             let mut sequences = [0; 4];
                                             let count = views.len().min(sequences.len());
                                             for (sequence, view) in sequences.iter_mut().zip(&views)
@@ -3222,11 +3657,17 @@ impl Render for CanvasApp {
                                                 cx,
                                             );
                                             window.with_content_mask(
-                                                Some(ContentMask { bounds }),
+                                                Some(ContentMask { bounds: content }),
                                                 |window| {
                                                     for (index, pane) in
                                                         panes.into_iter().enumerate()
                                                     {
+                                                        if !pixel_bounds_intersect(
+                                                            content,
+                                                            pane.bounds,
+                                                        ) {
+                                                            continue;
+                                                        }
                                                         paint_panel(
                                                             pane,
                                                             views.get(index),
@@ -3279,6 +3720,14 @@ impl Render for CanvasApp {
                                                     }
                                                 },
                                             );
+                                            window.with_content_mask(
+                                                Some(ContentMask { bounds }),
+                                                |window| {
+                                                    for bar in bars {
+                                                        paint_canvas_scrollbar(bar, window);
+                                                    }
+                                                },
+                                            );
                                         },
                                     )
                                     .size_full(),
@@ -3318,6 +3767,24 @@ impl Render for CanvasApp {
                                 .items_center()
                                 .text_color(rgb(0xb0b8c5))
                                 .child(div().flex_1().child(status));
+                            if self.canvas_close_requested {
+                                status_row = status_row.child(
+                                    div()
+                                        .id("close-without-canvas-position")
+                                        .role(Role::Button)
+                                        .aria_label("Закрыть без сохранения положения canvas")
+                                        .px(px(8.))
+                                        .h(px(24.))
+                                        .child("Закрыть без сохранения · Ctrl+Shift+Esc")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|_, _, window, cx| {
+                                                window.remove_window();
+                                                cx.stop_propagation();
+                                            }),
+                                        ),
+                                );
+                            }
                             if let Some((target, token, needs_release)) = acknowledgement {
                                 let label = if needs_release {
                                     "Подтвердить и отпустить кнопку мыши"
@@ -3899,6 +4366,43 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn scrolling_keeps_terminal_rows_columns_and_pointer_cells_at_fractional_scales() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            let metrics = size(px(8.21), px(19.13));
+            let width = (f32::from(metrics.width) * scale).ceil() / scale * 40. + 16. + 2. / scale;
+            let height = (f32::from(metrics.height) * scale).ceil() / scale * 8.
+                + super::HEADER
+                + 16.
+                + 2. / scale;
+            let original = PaneGeometry::new(
+                Bounds::new(point(px(0.3), px(17.7)), size(px(width), px(height))),
+                metrics,
+                scale,
+            );
+            // A scrollbar moves surfaces by whole device pixels, so even at
+            // fractional scale it cannot resize a grid or change its cells.
+            let shift = point(px(73. / scale), px(51. / scale));
+            let moved = PaneGeometry::new(
+                Bounds::new(original.bounds.origin - shift, original.bounds.size),
+                metrics,
+                scale,
+            );
+            assert_eq!((original.rows, original.cols), (moved.rows, moved.cols));
+            assert!(original.rows >= 8 && original.cols >= 40);
+            let geometry = super::protocol::Geometry {
+                rows: original.rows,
+                cols: original.cols,
+            };
+            let inside =
+                original.origin + point(original.cell.width * 3.5, original.cell.height * 2.5);
+            assert_eq!(
+                original.pointer_position(inside, &geometry, false),
+                moved.pointer_position(inside - shift, &geometry, false)
+            );
+        }
     }
 
     #[test]

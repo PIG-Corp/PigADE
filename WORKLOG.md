@@ -2193,3 +2193,35 @@ Fix launch-review no-context fallback and expose keyboard controls and split des
 - Files: crates/app/src/main.rs, crates/app/src/product.rs
 - Verification: After bounded Luna review: app strict Clippy passes and 132 tests pass; host context integration test passes after saved placement validation; diff/fmt checked
 - Risks / next: Context review remains pending isolated visual acceptance; no active-desktop automation performed.
+
+## 2026-10-17T14:02:21+00:00 — recovery_slice_review
+
+Persist bounded per-tab canvas offsets in window state
+
+- Files: crates/storage/src/catalog.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage --offline --locked catalog::tests (14 passed); rustfmt --edition 2024 --check crates/storage/src/catalog.rs and git diff --check passed
+- Risks / next: Root can expose CanvasOffset through existing catalog wildcard export and wire UI offset persistence.
+
+## 2026-10-17T14:02:54+00:00 — /root/font_render_profile
+
+Added pure tiling canvas viewport projection, minimal pane reveal, pixel-aligned clamping, scrollbar geometry/drag mapping, and focused unit tests.
+
+- Files: crates/app/src/viewport.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/viewport.rs; git diff --check -- crates/app/src/viewport.rs (pass). Unit tests authored but not run; root owns mod integration and app test suite.
+- Risks / next: Root to declare viewport module, integrate canvas offsets/scrollbars, and run app tests/clippy.
+
+## 2026-10-17T14:07:34+00:00 — recovery_slice_review
+
+Test host canvas-offset save preserves catalog and selection state
+
+- Files: crates/session-host/src/catalog.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host --lib canvas_offset_save_preserves_layout_and_selection_and_reopens --offline --locked (1 passed); rustfmt --edition 2024 --check and git diff --check passed
+- Risks / next: Root can run broader host tests and integrate the offset endpoint.
+
+## 2026-10-17T14:13:23+00:00 — /root
+
+Connect minimum-size tiling to scrollable canvas, saved per-tab offsets and keyboard/mouse navigation
+
+- Files: crates/app/src/main.rs, crates/app/src/viewport.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/catalog.rs, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Storage catalog 14 tests and host viewport persistence test pass; app 138 tests then added scrolling/PTy fractional-scale test passes (139 total compiled); workspace/app strict Clippy pass; real-host PTY test verifies viewport selection-only ACK and reopen; final release host and app builds pass; private isolated-render.py render/reopen pass with 4 live PTYs at /tmp/pigade-canvas-ui-20261017-01, screenshot visually inspected; subsequent focus-ACK routing change verified by final lint/build; version/fmt/diff pass
+- Risks / next: Native overflow scrolling/scrollbar interaction and small-window visual acceptance remain open. User desktop untouched. Continue complete context text editing and memory section selection; existing provider/platform/performance/MVP gates remain open.

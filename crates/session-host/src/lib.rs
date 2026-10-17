@@ -156,6 +156,10 @@ pub enum Command {
     CatalogApply {
         batch: pigade_storage::CatalogBatch,
     },
+    SetCanvasOffset {
+        tab: Uuid,
+        offset: pigade_storage::CanvasOffset,
+    },
     LayoutEdit {
         expected_revision: u64,
         action: LayoutAction,
@@ -218,6 +222,8 @@ pub struct Response {
     pub rejected_before_admission: Option<CommandRejection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<pigade_storage::Catalog>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<pigade_storage::Selection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<pigade_storage::ContextDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -665,6 +671,7 @@ impl Host {
                 error: None,
                 rejected_before_admission: None,
                 catalog: None,
+                selection: None,
                 context: None,
                 launch_preview: None,
                 launch_phase: None,
@@ -704,7 +711,27 @@ impl Host {
                 error: None,
                 rejected_before_admission: None,
                 catalog: None,
+                selection: None,
                 context: Some(context),
+                launch_preview: None,
+                launch_phase: None,
+                catalog_notice: None,
+                recovery: None,
+                selected: None,
+                history_chunk: None,
+                change_token: None,
+            });
+        }
+        if let Command::SetCanvasOffset { tab, offset } = &command {
+            let selection = catalog::save_canvas_offset(&mut self.metadata, *tab, *offset)?;
+            return Ok(Response {
+                protocol: PROTOCOL,
+                views: Vec::new(),
+                error: None,
+                rejected_before_admission: None,
+                catalog: None,
+                selection: Some(selection),
+                context: None,
                 launch_preview: None,
                 launch_phase: None,
                 catalog_notice: None,
@@ -769,6 +796,7 @@ impl Host {
                     error: None,
                     rejected_before_admission: None,
                     catalog: None,
+                    selection: None,
                     context: None,
                     launch_preview: None,
                     launch_phase: None,
@@ -786,6 +814,7 @@ impl Host {
             error: None,
             rejected_before_admission: None,
             catalog: Some(catalog),
+            selection: None,
             context: None,
             launch_preview: None,
             launch_phase: None,
@@ -808,6 +837,7 @@ impl Host {
             error: None,
             rejected_before_admission: None,
             catalog,
+            selection: None,
             context: None,
             launch_preview: Some(preview),
             launch_phase: phase,
@@ -1955,6 +1985,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 error: Some(format!("{error:#}")),
                 rejected_before_admission: rejected_before_admission(&error),
                 catalog: None,
+                selection: None,
                 context: None,
                 launch_preview: None,
                 launch_phase: None,

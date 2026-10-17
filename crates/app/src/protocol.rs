@@ -177,6 +177,8 @@ struct Response {
     #[serde(default)]
     catalog: Option<pigade_storage::Catalog>,
     #[serde(default)]
+    selection: Option<pigade_storage::Selection>,
+    #[serde(default)]
     context: Option<pigade_storage::ContextDocument>,
     #[serde(default)]
     launch_preview: Option<LaunchPreview>,
@@ -221,6 +223,7 @@ pub struct ProductReply {
     pub sessions: Option<Vec<View>>,
     pub launch_confirmed: bool,
     pub catalog: Option<pigade_storage::Catalog>,
+    pub selection: Option<pigade_storage::Selection>,
     pub context: Option<pigade_storage::ContextDocument>,
 }
 
@@ -251,6 +254,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         sessions: list_sessions.then_some(response.views),
         launch_confirmed,
         catalog: response.catalog,
+        selection: response.selection,
         context: response.context,
     })
 }
@@ -571,6 +575,7 @@ mod tests {
         Response {
             protocol: 2,
             catalog: None,
+            selection: None,
             context: None,
             launch_preview: None,
             launch_phase: None,

@@ -1,7 +1,7 @@
 //! Product metadata on the existing sole SQLite writer. Git identity/path
 //! validation belongs to the host; this module never invokes Git or a shell.
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt,
     io::{self, Write},
     path::{Component, Path, PathBuf},
@@ -126,6 +126,25 @@ pub struct Tab {
     pub active_pane: Option<Uuid>,
     pub revision: u64,
 }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct CanvasOffset {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl CanvasOffset {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.x.is_finite()
+                && self.y.is_finite()
+                && (0.0..=1.0e9).contains(&self.x)
+                && (0.0..=1.0e9).contains(&self.y),
+            "canvas offset outside bounds"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowState {
     pub x: i32,
@@ -136,6 +155,8 @@ pub struct WindowState {
     pub sidebar_width: u16,
     pub sidebar_collapsed: bool,
     pub monitor: Option<String>,
+    #[serde(default)]
+    pub canvas_offsets: BTreeMap<Uuid, CanvasOffset>,
 }
 impl Default for WindowState {
     fn default() -> Self {
@@ -148,6 +169,7 @@ impl Default for WindowState {
             sidebar_width: 240,
             sidebar_collapsed: false,
             monitor: None,
+            canvas_offsets: BTreeMap::new(),
         }
     }
 }
@@ -500,6 +522,7 @@ fn write_selection(tx: &Transaction<'_>, write: CatalogWrite<Selection>) -> Resu
     if let Some(monitor) = &window.monitor {
         text(monitor, 256, false)?;
     }
+    validate_canvas_offsets(tx, &window.canvas_offsets)?;
     if let Some(project) = s.project_id {
         ensure!(
             tx.query_row(
@@ -536,6 +559,25 @@ fn write_selection(tx: &Transaction<'_>, write: CatalogWrite<Selection>) -> Resu
     }
     let changed=tx.execute("UPDATE catalog_selection SET project_id=?1,workspace_id=?2,tab_id=?3,window_json=?4,revision=revision+1 WHERE singleton=1 AND revision=?5",params![s.project_id.map(|id|id.to_string()),s.workspace_id.map(|id|id.to_string()),s.tab_id.map(|id|id.to_string()),serde_json::to_string(&s.window)?,expected as i64])?;
     conflict(changed, "selection", Uuid::nil(), expected)
+}
+
+fn validate_canvas_offsets(
+    connection: &Connection,
+    offsets: &BTreeMap<Uuid, CanvasOffset>,
+) -> Result<()> {
+    ensure!(offsets.len() <= MAX_TABS, "too many canvas offsets");
+    for (tab, offset) in offsets {
+        offset.validate()?;
+        ensure!(
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tabs WHERE id=?1)",
+                [tab.to_string()],
+                |row| row.get::<_, bool>(0)
+            )?,
+            "canvas offset references a missing tab"
+        );
+    }
+    Ok(())
 }
 
 fn write_layout(tx: &Transaction<'_>, write: CatalogWrite<LayoutDocument>) -> Result<()> {
@@ -682,6 +724,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         window: serde_json::from_str(&selection.3)?,
         revision: selection.4,
     };
+    validate_canvas_offsets(connection, &selection.window.canvas_offsets)?;
     let layout = connection.query_row(
         "SELECT json,revision FROM layout_revisions WHERE singleton=1",
         [],
@@ -802,6 +845,77 @@ mod tests {
         let store = MetadataStore::open(path)?;
         assert_eq!(store.catalog()?, committed);
         assert!(store.migration_backup_path().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn canvas_offsets_are_bounded_tab_scoped_and_survive_reopen() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let seeded = seed(&mut store)?;
+        let tab = seeded.tabs[0].id;
+        let expected_offset = CanvasOffset { x: 42.5, y: 900.0 };
+        let mut selection = seeded.selection.clone();
+        selection.window.canvas_offsets.insert(tab, expected_offset);
+        let committed = store.apply_catalog(CatalogBatch {
+            selection: Some(update(selection, seeded.selection.revision)),
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(
+            committed.selection.window.canvas_offsets.get(&tab),
+            Some(&expected_offset)
+        );
+        drop(store);
+
+        let reopened = MetadataStore::open(path)?;
+        assert_eq!(
+            reopened
+                .catalog()?
+                .selection
+                .window
+                .canvas_offsets
+                .get(&tab),
+            Some(&expected_offset)
+        );
+
+        let legacy: WindowState = serde_json::from_str(
+            r#"{"x":0,"y":0,"width":1280,"height":800,"scale":1.0,"sidebar_width":240,"sidebar_collapsed":false,"monitor":null}"#,
+        )?;
+        assert!(legacy.canvas_offsets.is_empty());
+
+        for invalid in [
+            CanvasOffset { x: -0.1, y: 0.0 },
+            CanvasOffset {
+                x: f64::INFINITY,
+                y: 0.0,
+            },
+            CanvasOffset {
+                x: 1.0e9 + 1.0,
+                y: 0.0,
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+        let mut invalid_selection = reopened.catalog()?.selection;
+        invalid_selection.window.canvas_offsets.insert(
+            tab,
+            CanvasOffset {
+                x: f64::NAN,
+                y: 0.0,
+            },
+        );
+        drop(reopened);
+        let mut writable = MetadataStore::open(root.path().join("state.sqlite"))?;
+        assert!(
+            writable
+                .apply_catalog(CatalogBatch {
+                    selection: Some(update(invalid_selection, committed.selection.revision)),
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
         Ok(())
     }
     #[test]
