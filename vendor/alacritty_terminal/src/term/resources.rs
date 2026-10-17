@@ -1,16 +1,19 @@
-//! Parser-derived resource census for bounded output admission.
+//! Parser-derived resource census inputs for future whole-event admission.
 //!
 //! This reports parser callback counts and selected payload sizes. It is not a
 //! heap measurement or a memory budget. Census uses the pinned VTE processor
 //! on a clone, so it follows the same ANSI, UTF-8, REP and synchronized-update
 //! behavior as normal processing without cloning or mutating a terminal grid.
+//! Grid driver counters describe requested callbacks, not effective work after
+//! terminal geometry/mode clamps. They do not include host resize/reflow or
+//! prove a reservation bound.
 
 use unicode_width::UnicodeWidthChar;
 use vte::ansi::{Handler, Hyperlink, Processor, Timeout};
 
 use crate::grid::{Dimensions, Grid, Row};
-use crate::term::cell::{Cell, CellExtra, Hyperlink as TermHyperlink};
 use crate::term::Term;
+use crate::term::cell::{Cell, CellExtra, Hyperlink as TermHyperlink};
 use std::collections::HashSet;
 use std::mem::size_of;
 
@@ -66,6 +69,67 @@ pub struct ResourceCensus {
     pub clipboard_load_queries: u64,
     /// UTF-8 bytes in OSC 52 clipboard-load terminators.
     pub clipboard_load_terminator_bytes: u64,
+    /// Cursor position-setting callbacks (goto, line, or column).
+    pub cursor_position_callbacks: u64,
+    /// Cursor movement callbacks (including tab movement and restore).
+    pub cursor_movement_callbacks: u64,
+    /// Sum of row arguments supplied to vertical cursor movement callbacks.
+    pub cursor_requested_rows: u64,
+    /// Sum of column arguments supplied to horizontal cursor movement callbacks.
+    pub cursor_requested_columns: u64,
+    /// Linefeed callbacks, which may scroll and retain history rows.
+    pub linefeed_callbacks: u64,
+    /// Newline callbacks, which invoke linefeed in the terminal model.
+    pub newline_callbacks: u64,
+    /// Reverse-index callbacks, which may scroll at the top margin.
+    pub reverse_index_callbacks: u64,
+    /// Scroll-up callback count and sum of requested lines.
+    pub scroll_up_callbacks: u64,
+    pub scroll_up_requested_lines: u64,
+    /// Scroll-down callback count and sum of requested lines.
+    pub scroll_down_callbacks: u64,
+    pub scroll_down_requested_lines: u64,
+    pub insert_blank_line_callbacks: u64,
+    pub insert_blank_lines_requested: u64,
+    pub delete_line_callbacks: u64,
+    pub delete_lines_requested: u64,
+    pub insert_blank_char_callbacks: u64,
+    pub insert_blank_chars_requested: u64,
+    pub delete_char_callbacks: u64,
+    pub delete_chars_requested: u64,
+    pub erase_char_callbacks: u64,
+    pub erase_chars_requested: u64,
+    /// Whole/partial line and screen clearing callbacks.
+    pub clear_line_callbacks: u64,
+    pub clear_screen_callbacks: u64,
+    /// Reset callbacks may reset both grids and several retained stacks.
+    pub reset_state_callbacks: u64,
+    /// Alternate-screen swap-mode callbacks (the parser census cannot know
+    /// whether the model's current mode makes a callback an actual swap).
+    pub alternate_screen_mode_callbacks: u64,
+    /// DECCOLM callbacks may resize/reset grid storage.
+    pub column_mode_callbacks: u64,
+    /// DECALN callbacks clear the active viewport.
+    pub decaln_callbacks: u64,
+    /// SGR attribute callbacks may update cursor-template Arc-backed data.
+    pub terminal_attribute_callbacks: u64,
+    /// Keyboard-mode push/pop callback counts and requested pop count.
+    pub keyboard_mode_pushes: u64,
+    pub keyboard_mode_pop_callbacks: u64,
+    pub keyboard_modes_requested_pop: u64,
+    /// Bell callbacks; the terminal queues a transient listener event per callback.
+    pub bell_callbacks: u64,
+    /// Cursor-style callbacks; the terminal queues a transient listener event per callback.
+    pub cursor_style_callbacks: u64,
+    /// Private-mode callback totals, including modes ignored by the terminal.
+    pub private_mode_set_callbacks: u64,
+    pub private_mode_unset_callbacks: u64,
+    pub private_mode_named_callbacks: u64,
+    pub private_mode_unknown_callbacks: u64,
+    /// OSC 52 store callbacks and encoded source payload bytes.
+    /// The runtime host may disable this effect; these are parser callback counts only.
+    pub clipboard_store_callbacks: u64,
+    pub clipboard_store_source_bytes: u64,
     /// True if any counter saturated at `u64::MAX`.
     pub saturated: bool,
 }
@@ -112,15 +176,328 @@ impl ResourceCensus {
     fn increment(counter: &mut u64, saturated: &mut bool) {
         Self::add_counter(counter, saturated, 1);
     }
+
+    fn record(counter: &mut u64, requested: &mut u64, saturated: &mut bool, amount: usize) {
+        Self::increment(counter, saturated);
+        Self::add_bytes(requested, saturated, amount);
+    }
+
+    fn count_private_mode_kind(mode: crate::vte::ansi::PrivateMode, census: &mut Self) {
+        match mode {
+            crate::vte::ansi::PrivateMode::Named(_) => {
+                Self::increment(
+                    &mut census.private_mode_named_callbacks,
+                    &mut census.saturated,
+                );
+            }
+            crate::vte::ansi::PrivateMode::Unknown(_) => {
+                Self::increment(
+                    &mut census.private_mode_unknown_callbacks,
+                    &mut census.saturated,
+                );
+            }
+        }
+    }
 }
 
 impl Handler for ResourceCensus {
+    fn bell(&mut self) {
+        Self::increment(&mut self.bell_callbacks, &mut self.saturated);
+    }
+
+    fn set_cursor_style(&mut self, _: Option<crate::vte::ansi::CursorStyle>) {
+        Self::increment(&mut self.cursor_style_callbacks, &mut self.saturated);
+    }
+
     fn input(&mut self, c: char) {
         self.input_repeated(c, 1);
     }
 
     fn input_repeated(&mut self, c: char, count: u16) {
         ResourceCensus::input_repeated(self, c, count);
+    }
+
+    fn goto(&mut self, line: i32, col: usize) {
+        Self::increment(&mut self.cursor_position_callbacks, &mut self.saturated);
+        Self::add_bytes(
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            line.unsigned_abs() as usize,
+        );
+        Self::add_bytes(&mut self.cursor_requested_columns, &mut self.saturated, col);
+    }
+
+    fn goto_line(&mut self, line: i32) {
+        Self::increment(&mut self.cursor_position_callbacks, &mut self.saturated);
+        Self::add_bytes(
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            line.unsigned_abs() as usize,
+        );
+    }
+
+    fn goto_col(&mut self, col: usize) {
+        Self::increment(&mut self.cursor_position_callbacks, &mut self.saturated);
+        Self::add_bytes(&mut self.cursor_requested_columns, &mut self.saturated, col);
+    }
+
+    fn move_up(&mut self, rows: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            rows,
+        );
+    }
+
+    fn move_down(&mut self, rows: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            rows,
+        );
+    }
+
+    fn move_up_and_cr(&mut self, rows: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            rows,
+        );
+    }
+
+    fn move_down_and_cr(&mut self, rows: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_rows,
+            &mut self.saturated,
+            rows,
+        );
+    }
+
+    fn move_forward(&mut self, cols: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            cols,
+        );
+    }
+
+    fn move_backward(&mut self, cols: usize) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            cols,
+        );
+    }
+
+    fn put_tab(&mut self, count: u16) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            usize::from(count),
+        );
+    }
+
+    fn move_backward_tabs(&mut self, count: u16) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            usize::from(count),
+        );
+    }
+
+    fn move_forward_tabs(&mut self, count: u16) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            usize::from(count),
+        );
+    }
+
+    fn backspace(&mut self) {
+        Self::record(
+            &mut self.cursor_movement_callbacks,
+            &mut self.cursor_requested_columns,
+            &mut self.saturated,
+            1,
+        );
+    }
+
+    fn restore_cursor_position(&mut self) {
+        Self::increment(&mut self.cursor_movement_callbacks, &mut self.saturated);
+    }
+
+    fn carriage_return(&mut self) {
+        Self::increment(&mut self.cursor_movement_callbacks, &mut self.saturated);
+    }
+
+    fn linefeed(&mut self) {
+        Self::increment(&mut self.linefeed_callbacks, &mut self.saturated);
+    }
+
+    fn newline(&mut self) {
+        Self::increment(&mut self.newline_callbacks, &mut self.saturated);
+    }
+
+    fn reverse_index(&mut self) {
+        Self::increment(&mut self.reverse_index_callbacks, &mut self.saturated);
+    }
+
+    fn scroll_up(&mut self, lines: usize) {
+        Self::record(
+            &mut self.scroll_up_callbacks,
+            &mut self.scroll_up_requested_lines,
+            &mut self.saturated,
+            lines,
+        );
+    }
+
+    fn scroll_down(&mut self, lines: usize) {
+        Self::record(
+            &mut self.scroll_down_callbacks,
+            &mut self.scroll_down_requested_lines,
+            &mut self.saturated,
+            lines,
+        );
+    }
+
+    fn insert_blank_lines(&mut self, lines: usize) {
+        Self::record(
+            &mut self.insert_blank_line_callbacks,
+            &mut self.insert_blank_lines_requested,
+            &mut self.saturated,
+            lines,
+        );
+    }
+
+    fn delete_lines(&mut self, lines: usize) {
+        Self::record(
+            &mut self.delete_line_callbacks,
+            &mut self.delete_lines_requested,
+            &mut self.saturated,
+            lines,
+        );
+    }
+
+    fn insert_blank(&mut self, chars: usize) {
+        Self::record(
+            &mut self.insert_blank_char_callbacks,
+            &mut self.insert_blank_chars_requested,
+            &mut self.saturated,
+            chars,
+        );
+    }
+
+    fn delete_chars(&mut self, chars: usize) {
+        Self::record(
+            &mut self.delete_char_callbacks,
+            &mut self.delete_chars_requested,
+            &mut self.saturated,
+            chars,
+        );
+    }
+
+    fn erase_chars(&mut self, chars: usize) {
+        Self::record(
+            &mut self.erase_char_callbacks,
+            &mut self.erase_chars_requested,
+            &mut self.saturated,
+            chars,
+        );
+    }
+
+    fn clear_line(&mut self, _: crate::vte::ansi::LineClearMode) {
+        Self::increment(&mut self.clear_line_callbacks, &mut self.saturated);
+    }
+
+    fn clear_screen(&mut self, _: crate::vte::ansi::ClearMode) {
+        Self::increment(&mut self.clear_screen_callbacks, &mut self.saturated);
+    }
+
+    fn reset_state(&mut self) {
+        Self::increment(&mut self.reset_state_callbacks, &mut self.saturated);
+    }
+
+    fn decaln(&mut self) {
+        Self::increment(&mut self.decaln_callbacks, &mut self.saturated);
+    }
+
+    fn terminal_attribute(&mut self, _: crate::vte::ansi::Attr) {
+        Self::increment(&mut self.terminal_attribute_callbacks, &mut self.saturated);
+    }
+
+    fn push_keyboard_mode(&mut self, _: crate::vte::ansi::KeyboardModes) {
+        Self::increment(&mut self.keyboard_mode_pushes, &mut self.saturated);
+    }
+
+    fn pop_keyboard_modes(&mut self, count: u16) {
+        Self::record(
+            &mut self.keyboard_mode_pop_callbacks,
+            &mut self.keyboard_modes_requested_pop,
+            &mut self.saturated,
+            usize::from(count),
+        );
+    }
+
+    fn set_private_mode(&mut self, mode: crate::vte::ansi::PrivateMode) {
+        Self::increment(&mut self.private_mode_set_callbacks, &mut self.saturated);
+        Self::count_private_mode_kind(mode, self);
+        if matches!(
+            mode,
+            crate::vte::ansi::PrivateMode::Named(
+                crate::vte::ansi::NamedPrivateMode::SwapScreenAndSetRestoreCursor
+            )
+        ) {
+            Self::increment(
+                &mut self.alternate_screen_mode_callbacks,
+                &mut self.saturated,
+            );
+        }
+        if matches!(
+            mode,
+            crate::vte::ansi::PrivateMode::Named(crate::vte::ansi::NamedPrivateMode::ColumnMode)
+        ) {
+            Self::increment(&mut self.column_mode_callbacks, &mut self.saturated);
+        }
+    }
+
+    fn unset_private_mode(&mut self, mode: crate::vte::ansi::PrivateMode) {
+        Self::increment(&mut self.private_mode_unset_callbacks, &mut self.saturated);
+        Self::count_private_mode_kind(mode, self);
+        if matches!(
+            mode,
+            crate::vte::ansi::PrivateMode::Named(
+                crate::vte::ansi::NamedPrivateMode::SwapScreenAndSetRestoreCursor
+            )
+        ) {
+            Self::increment(
+                &mut self.alternate_screen_mode_callbacks,
+                &mut self.saturated,
+            );
+        }
+        if matches!(
+            mode,
+            crate::vte::ansi::PrivateMode::Named(crate::vte::ansi::NamedPrivateMode::ColumnMode)
+        ) {
+            Self::increment(&mut self.column_mode_callbacks, &mut self.saturated);
+        }
+    }
+
+    fn clipboard_store(&mut self, _: u8, encoded: &[u8]) {
+        Self::increment(&mut self.clipboard_store_callbacks, &mut self.saturated);
+        Self::add_bytes(
+            &mut self.clipboard_store_source_bytes,
+            &mut self.saturated,
+            encoded.len(),
+        );
     }
 
     fn set_title(&mut self, title: Option<String>) {
@@ -849,6 +1226,126 @@ mod tests {
     }
 
     #[test]
+    fn census_counts_event_producing_callbacks_and_all_private_mode_kinds() {
+        let processor = Processor::<TestTimeout>::new();
+        let bytes =
+            b"\x07\x07\x1b[1 q\x1b[2 q\x1b[?1000h\x1b[?9999h\x1b[?9999l\x1b]52;c;aGVsbG8=\x07";
+        let before = state(&processor);
+        let census = census_output(&processor, bytes);
+        assert_eq!(census.bell_callbacks, 2);
+        assert_eq!(census.cursor_style_callbacks, 2);
+        assert_eq!(census.private_mode_set_callbacks, 2);
+        assert_eq!(census.private_mode_unset_callbacks, 1);
+        assert_eq!(census.private_mode_named_callbacks, 1);
+        assert_eq!(census.private_mode_unknown_callbacks, 2);
+        assert_eq!(census.alternate_screen_mode_callbacks, 0);
+        assert_eq!(census.clipboard_store_callbacks, 1);
+        assert_eq!(census.clipboard_store_source_bytes, 8);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
+    fn sync_timeout_census_counts_deferred_event_producing_callbacks() {
+        let mut processor = Processor::<TestTimeout>::new();
+        let mut ignore = ResourceCensus::default();
+        processor.advance(&mut ignore, b"\x1b[?2026h");
+        processor.advance(&mut ignore, b"\x07\x1b[1 q\x1b[?1000h\x1b[?9999l");
+        assert!(processor.sync_timeout().pending_timeout());
+        let before = state(&processor);
+
+        let census = census_sync_timeout(&processor);
+        assert_eq!(census.bell_callbacks, 1);
+        assert_eq!(census.cursor_style_callbacks, 1);
+        assert_eq!(census.private_mode_set_callbacks, 1);
+        // The ordered sync timeout also reports the parser's SyncUpdate mode
+        // exit, in addition to the buffered unknown mode callback.
+        assert_eq!(census.private_mode_unset_callbacks, 2);
+        assert_eq!(census.private_mode_named_callbacks, 2);
+        assert_eq!(census.private_mode_unknown_callbacks, 1);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
+    fn census_counts_grid_drivers_across_partial_csi_continuation() {
+        let mut processor = Processor::<TestTimeout>::new();
+        let mut ignore = ResourceCensus::default();
+        processor.advance(&mut ignore, b"\x1b[2;");
+        let before = state(&processor);
+
+        let census = census_output(
+            &processor,
+            b"4H\x1b[3A\x1b[2B\x1b[5C\x1b[4D\x1b[2S\x1b[3T\x1b[4L\x1b[5M\x1b[6@\x1b[7P\x1b[8X\x1b[K\x1b[2J",
+        );
+        assert_eq!(census.cursor_position_callbacks, 1);
+        assert_eq!(census.cursor_movement_callbacks, 4);
+        assert_eq!(census.cursor_requested_rows, 1 + 3 + 2);
+        assert_eq!(census.cursor_requested_columns, 3 + 5 + 4);
+        assert_eq!(census.scroll_up_callbacks, 1);
+        assert_eq!(census.scroll_up_requested_lines, 2);
+        assert_eq!(census.scroll_down_callbacks, 1);
+        assert_eq!(census.scroll_down_requested_lines, 3);
+        assert_eq!(census.insert_blank_line_callbacks, 1);
+        assert_eq!(census.insert_blank_lines_requested, 4);
+        assert_eq!(census.delete_line_callbacks, 1);
+        assert_eq!(census.delete_lines_requested, 5);
+        assert_eq!(census.insert_blank_char_callbacks, 1);
+        assert_eq!(census.insert_blank_chars_requested, 6);
+        assert_eq!(census.delete_char_callbacks, 1);
+        assert_eq!(census.delete_chars_requested, 7);
+        assert_eq!(census.erase_char_callbacks, 1);
+        assert_eq!(census.erase_chars_requested, 8);
+        assert_eq!(census.clear_line_callbacks, 1);
+        assert_eq!(census.clear_screen_callbacks, 1);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
+    fn census_counts_rep_scroll_clear_reset_and_mode_grid_drivers() {
+        let processor = Processor::<TestTimeout>::new();
+        let census = census_output(
+            &processor,
+            b"A\x1b[65535b\x1b[999S\x1b[999T\x1b[2K\x1b[2J\x1bc\x1bM\x1bE\x1b#8\x1b[?1049h\x1b[?1049l\x1b[?3h\x1b[?3l\x1b[>3u\x1b[<2u",
+        );
+        assert_eq!(census.input_chars, 65_536);
+        assert_eq!(census.scroll_up_callbacks, 1);
+        assert_eq!(census.scroll_up_requested_lines, 999);
+        assert_eq!(census.scroll_down_callbacks, 1); // CSI T; reverse index is separate.
+        assert_eq!(census.scroll_down_requested_lines, 999);
+        assert_eq!(census.clear_line_callbacks, 1);
+        assert_eq!(census.clear_screen_callbacks, 1);
+        assert_eq!(census.reset_state_callbacks, 1);
+        assert_eq!(census.reverse_index_callbacks, 1);
+        // This pinned parser implements ESC E as linefeed + carriage return;
+        // the Handler::newline callback is not dispatched by its grammar.
+        assert_eq!(census.linefeed_callbacks, 1);
+        assert_eq!(census.newline_callbacks, 0);
+        assert_eq!(census.cursor_movement_callbacks, 1); // ESC E's carriage return.
+        assert_eq!(census.decaln_callbacks, 1);
+        assert_eq!(census.alternate_screen_mode_callbacks, 2);
+        assert_eq!(census.column_mode_callbacks, 2);
+        assert_eq!(census.keyboard_mode_pushes, 1);
+        assert_eq!(census.keyboard_mode_pop_callbacks, 1);
+        assert_eq!(census.keyboard_modes_requested_pop, 2);
+    }
+
+    #[test]
+    fn sync_timeout_census_counts_buffered_grid_drivers_without_mutation() {
+        let mut processor = Processor::<TestTimeout>::new();
+        let mut ignore = ResourceCensus::default();
+        processor.advance(&mut ignore, b"\x1b[?2026h\x1b[4S\x1b[3L\x1b[2J");
+        assert!(processor.sync_timeout().pending_timeout());
+        let before = state(&processor);
+
+        let census = census_sync_timeout(&processor);
+        assert_eq!(census.scroll_up_callbacks, 1);
+        assert_eq!(census.scroll_up_requested_lines, 4);
+        assert_eq!(census.insert_blank_line_callbacks, 1);
+        assert_eq!(census.insert_blank_lines_requested, 3);
+        assert_eq!(census.clear_screen_callbacks, 1);
+        assert_eq!(state(&processor), before);
+    }
+
+    #[test]
     fn census_counters_saturate_instead_of_wrapping() {
         let mut census = ResourceCensus {
             input_chars: u64::MAX - 1,
@@ -857,6 +1354,14 @@ mod tests {
         census.input_repeated('A', 2);
         assert_eq!(census.input_chars, u64::MAX);
         assert!(census.saturated);
+
+        let mut requested = ResourceCensus {
+            scroll_up_requested_lines: u64::MAX - 1,
+            ..ResourceCensus::default()
+        };
+        requested.scroll_up(2);
+        assert_eq!(requested.scroll_up_requested_lines, u64::MAX);
+        assert!(requested.saturated);
     }
 
     #[test]

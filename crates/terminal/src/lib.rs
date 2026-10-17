@@ -1,7 +1,7 @@
 //! The host is the sole ANSI parser. A Frame is a render replica, NOT a checkpoint.
 pub mod history;
 pub use alacritty_terminal::term::resources::{
-    AllocationCensus, CensusLimits, GridAllocationCensus,
+    AllocationCensus, CensusLimits, GridAllocationCensus, ResourceCensus,
 };
 pub use alacritty_terminal::vte::ansi::ProcessorBufferUsage;
 pub use alacritty_terminal::{
@@ -247,6 +247,20 @@ impl Terminal {
     /// it is neither a heap limit nor an RSS measurement. Never run per frame.
     pub fn term_allocation_census(&self, limits: CensusLimits) -> AllocationCensus {
         alacritty_terminal::term::resources::census_terminal_allocations(&self.term, limits)
+    }
+
+    /// Count parser callbacks for a candidate output event without advancing
+    /// this model, its ordered timer, response queue or history observer. The
+    /// cloned parser may allocate for its bounded existing OSC/sync buffers.
+    /// Counts are requested work, not effective grid work or a memory bound.
+    pub fn output_resource_census(&self, bytes: &[u8]) -> ResourceCensus {
+        alacritty_terminal::term::resources::census_output(&self.parser, bytes)
+    }
+
+    /// Count callbacks released by the next ordered synchronized-output timeout
+    /// without consuming the pending timeout or publishing buffered cells.
+    pub fn sync_timeout_resource_census(&self) -> ResourceCensus {
+        alacritty_terminal::term::resources::census_sync_timeout(&self.parser)
     }
 
     /// Numeric parser backing storage, separate from the Term census. Inline
@@ -971,5 +985,70 @@ mod tests {
             );
         }
         assert!(*sink.boundaries.lock().unwrap() >= 2);
+    }
+}
+
+#[cfg(test)]
+mod resource_preflight_tests {
+    use super::*;
+
+    #[test]
+    fn output_census_preserves_partial_parser_model_and_pending_live_responses() -> Result<()> {
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, true);
+        terminal.output(b"prefix\x1b[6n\xe7\x95");
+        assert!(
+            !terminal.responses.is_empty(),
+            "fixture must contain a live query response"
+        );
+        let checkpoint = terminal.checkpoint()?;
+        let frame = terminal.frame();
+        let responses = terminal.responses.clone();
+        let payload = b"\x8c\x1b[5b\x1b[3S\x1b[2J\x1b]0;candidate-title\x07\x1b[6n";
+        let census = terminal.output_resource_census(payload);
+        assert_eq!(
+            census.input_chars, 6,
+            "split CJK scalar and REP must follow cloned parser state"
+        );
+        assert_eq!(census.scroll_up_requested_lines, 3);
+        assert_eq!(census.clear_screen_callbacks, 1);
+        assert_eq!(census.title_set_callbacks, 1);
+        assert_eq!(census.device_status_queries, 1);
+        assert!(!census.saturated);
+        assert_eq!(terminal.checkpoint()?, checkpoint);
+        assert_eq!(terminal.frame(), frame);
+        assert_eq!(terminal.responses, responses);
+        assert!(terminal.listener.0.lock().unwrap().events.is_empty());
+        // Actual continuation still produces exactly the historical model from
+        // the untouched checkpoint; preflight must not consume the UTF8 prefix.
+        let mut expected = Terminal::from_checkpoint(&checkpoint, false)?;
+        expected.output(payload);
+        terminal.output(payload);
+        assert_eq!(terminal.checkpoint()?, expected.checkpoint()?);
+        assert_eq!(terminal.frame(), expected.frame());
+        Ok(())
+    }
+
+    #[test]
+    fn timeout_census_does_not_consume_pending_sync_or_publish_buffered_work() -> Result<()> {
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        terminal.output(b"\x1b[?2026habc\x1b[2S\x1b[4L");
+        assert!(terminal.sync_timeout_pending());
+        let checkpoint = terminal.checkpoint()?;
+        let frame = terminal.frame();
+        let census = terminal.sync_timeout_resource_census();
+        assert_eq!(census.input_chars, 3);
+        assert_eq!(census.scroll_up_requested_lines, 2);
+        assert_eq!(census.insert_blank_lines_requested, 4);
+        assert_eq!(terminal.checkpoint()?, checkpoint);
+        assert_eq!(terminal.frame(), frame);
+        assert!(terminal.sync_timeout_pending());
+        assert!(terminal.responses.is_empty());
+        let mut expected = Terminal::from_checkpoint(&checkpoint, false)?;
+        expected.sync_timeout();
+        terminal.sync_timeout();
+        assert_eq!(terminal.checkpoint()?, expected.checkpoint()?);
+        assert_eq!(terminal.frame(), expected.frame());
+        assert!(!terminal.sync_timeout_pending());
+        Ok(())
     }
 }

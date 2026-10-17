@@ -117,3 +117,63 @@ Frame interning also replaces duplicate owned `(id,uri)` map keys with shallow
 Hyperlink handles. Equal contents in distinct model allocations still produce
 one wire-pool entry, verified before and after the repair. No numeric RSS claim
 is attached to that local copy removal.
+
+## Read-only whole-event driver preflight
+
+The terminal wrapper now exposes the cloned pinned parser census for output
+and ordered sync timeout. It includes cursor/scroll/insert/erase/reset/grid-mode
+and keyboard-stack drivers. Review found omitted listener events: BEL,
+cursor-style and mouse/private-mode updates are now counted too, along with
+OSC52 store requests (disabled by the live profile). The counters saturate
+explicitly. They describe requested callbacks, not geometry-clamped operations,
+allocated bytes or an event reservation. No second ANSI parser is introduced.
+
+The two actual-wrapper regressions preserve exact checkpoints, frames, pending
+responses and timeout/parser state. Continuation after the dry run still matches
+the untouched checkpoint, including split UTF8, partial CSI and buffered sync.
+The vendor suite additionally covers CSI-only operations, maximal REP and
+listener callback storms. ESC E dispatches linefeed plus carriage return in
+this pinned VTE, while its Handler::newline counter remains zero.
+
+Thirty release samples per synthetic fixture are retained with source and binary
+hashes in [resource-preflight-20261017](../../benchmarks/results/resource-preflight-20261017/source.json).
+These measure clone-plus-callback work, with concurrent builds and two soaks.
+
+| Candidate | Input bytes | p95 µs |
+| --- | ---: | ---: |
+| Plain ASCII | 65,536 | 131.580 |
+| CSI scroll/clear/insert/delete, no printable input | 131,072 | 762.297 |
+| BEL/cursor-style/mouse modes, no printable input | 45,056 | 189.309 |
+| Maximal REP | 9 | 0.121 |
+| Split UTF8 continuation | 3 | 0.100 |
+| Partial OSC title and hyperlink | 55 | 0.621 |
+| Ordered timeout flushing buffered sync | 39 including sync start | 0.250 |
+
+Exact candidate lengths are authoritative in the raw results. These are local
+diagnostic costs, without PTY, host durability, UI or GPU, and do not pass PERF.
+The [payload-copy analysis](../research/terminal-payload-copy-bound.md) describes
+why these counters can bound logical copies but cannot alone reserve allocator
+capacity, intermediate frames or aggregate host memory.
+
+## Discarded shared-mark copy repair
+
+`Cell::clear_wide` used to clone a shared combining vector before discarding it.
+It now creates only the retained small extra with empty marks; underline and
+hyperlink sharing remain intact, and the unique-Arc path drops marks in place.
+The [plan](../research/wide-cell-clear-plan.md) and two regression tests preceded
+the repair. Shared siblings, colors, other flags and unique Arc identity retain
+their earlier behavior; checkpoint schema2 is unchanged.
+
+The single-threaded actual-cell allocation diagnostic with262,144 shared marks
+requests56 bytes in one allocation during clearing. Explicitly emulating the
+former make_mut-before-clear algorithm in the **same binary** requests1,048,632
+bytes in two allocations, in all30 samples. The comparison is not an old
+binary run. The saved samples count allocator requests during that operation,
+excluding fixture/JSON creation; they are not peak heap, RSS, total memory or
+a whole-event bound. This removes one known transient amplification without
+closing the global memory gate.
+
+```sh
+cargo run --offline --locked --release -p pigade-terminal --example resource_preflight
+cargo run --offline --locked --release -p pigade-terminal --example wide_clear_allocations
+```

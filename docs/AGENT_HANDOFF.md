@@ -296,3 +296,30 @@ complete preflight resource drivers and aggregate ownership before enablingnew
 launchprofile. See reports/resource-refusal-20261017.md and corrected research
 notes (single durable record, not pending/two-sync). Existing82653/55262 frozen
 soaks continue unchanged.
+
+## Resource driver preflight and discarded-copy repair
+
+The actual Terminal wrapper exposes nonmutating cloned-parser output/timeout
+censuses, including grid-only CSI and BEL/cursor/private-mode effect drivers.
+Root wrapper tests retain exact checkpoints/frames/responses and continuation;
+21 vendor resource tests cover counters and saturation. A focused read-only
+review found the listener callback gap, now repaired. These counters are not
+an allocator bound; see research/terminal-payload-copy-bound.md before using
+them in a reservation. Production admission/profile remains disabled.
+
+Shared Cell::clear_wide now retains only underline/link with empty marks rather
+than copying a large Vec and immediately dropping it. Regression passed before
+and after repair; Cell layout/schema2 unchanged. The scoped30-sample actual-cell
+diagnostic requests56B versus1,048,632B when explicitly emulating the old copy
+with262,144 marks in the same binary. This is requested allocation traffic, not
+RSS or a separately built old binary. Source-bound callback timing and allocator
+samples are in benchmarks/results/resource-preflight-20261017; report in
+reports/terminal-memory-census.md.219 workspace tests,184 vendor library and45
+recordings pass, strict workspace Clippy/fmt/release pass. Full vendor Clippy
+needs only the3 known upstream question_mark lints forced to warnings; a
+simple -A cannot override its crate-level deny(clippy::all).
+
+Next remove unnecessary retention of ignored listener events with behavior
+regressions, then complete grid/frame/checkpoint/parser/IPC allocation ownership
+and shared pre-mutation reservation. Existing82653/55262 frozen soaks remain
+independent and active; no24h/PERF/global-memory gate has passed.

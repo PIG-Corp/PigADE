@@ -2,6 +2,12 @@
 
 ## 0.0.1-dev — in development
 
+- Added nonmutating parser resource preflight for grid and listener callbacks,
+  with actual-model continuation checks and source-bound release diagnostics.
+  Removed discarded shared combining-vector copies during wide-cell clearing;
+  terminal schema2 and sibling state remain unchanged. Global memory admission
+  remains in progress.
+
 - Initial SPEC.md and DESIGN.md product contracts preserved.
 - Git repository, mandatory shared agent history, project map, handoff and version policy introduced.
 - Native terminal/PTY/storage foundation, complete-state checkpoint experiments and GPUI cell-replica application under verification. Separate Electron control application removed by user request.

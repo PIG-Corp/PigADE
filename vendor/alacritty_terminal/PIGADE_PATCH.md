@@ -104,6 +104,23 @@ Do not infer the product's 700 MiB/long-history budgets from these fixes.
 
 ## Verification
 
+The runtime-only `term::resources` census follows a cloned pinned VTE
+processor, including partial UTF8/CSI/OSC, REP and synchronized timeout flush.
+It now exposes saturating grid/cursor/scroll/erase/reset/keyboard counters and
+event-producing BEL, cursor-style, private-mode and clipboard-store callbacks.
+These count requested callbacks, not effective grid work or allocation bytes.
+The current parser dispatches ESC E as linefeed plus carriage return; it does
+not dispatch Handler::newline. PigADE's wrapper exposes both output and timeout
+preflight without changing its model, responses, history observer or deadline.
+
+`Cell::clear_wide` no longer clones shared combining marks merely to discard
+them. A shared extra is replaced with an empty-marks extra retaining underline
+and the shallow hyperlink handle; an unshared extra drops its marks in place.
+Cell layout, sibling contents, semantic fields and schema2 remain unchanged.
+The regression ran before and after this repair. See the scoped measurements
+in `docs/reports/terminal-memory-census.md`; neither change establishes global
+admission or an allocator/RSS budget.
+
 From the repository root:
 
 ```sh

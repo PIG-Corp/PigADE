@@ -1,0 +1,190 @@
+{
+  "fixture_marks": 262144,
+  "limitations": "Not RSS, live heap, allocator overhead, whole-event admission, host/UI workload or a separately built historical binary.",
+  "samples": [
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    },
+    {
+      "current_allocation_calls": 1,
+      "current_requested_bytes": 56,
+      "former_copy_emulation_allocation_calls": 2,
+      "former_copy_emulation_requested_bytes": 1048632
+    }
+  ],
+  "schema": 1,
+  "scope": "Requested allocator bytes only during Cell::clear_wide; fixture and JSON allocations excluded. Former path is explicitly emulated in the same binary.",
+  "shared_sibling_unchanged": true,
+  "version": "0.0.1-dev"
+}

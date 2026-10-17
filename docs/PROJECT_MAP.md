@@ -7,6 +7,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | Cargo.toml/Cargo.lock | Host/storage/terminal/layout workspace; locked dependencies; canonical first-party version |
 | crates/terminal | Sole ANSI/core adapter, validated geometry, ordered timers, cell DTOs and full checkpoint envelope |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
+| crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
 | crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema3, launch locks, catalog CAS and migration backups |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, geometry/focus projection and schema1 persistent100undo/redo |
@@ -39,6 +40,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | vendor/alacritty_terminal |0.26.0 explicit Term/Grid export/import, allocation-aware pools, borrowed row export and runtime normal-history retirement notifications |
 | vendor/alacritty_terminal/src/term/checkpoint/borrowed.rs | Validated streaming serializer with exact schema2 pool/ring order; borrowed payloads; owned DTO remains compatibility oracle |
 | docs/research/terminal-admission-plan.md | Remaining whole-event/global allocation work and resource-refusal contracts; not an implemented budget |
+| docs/research/terminal-payload-copy-bound.md | Combining/link/title logical-copy formulas, current COW amplification and missing capacity/aggregate contracts; does not authorize admission |
 | tests/fixtures/terminal | Boundary/UTF8 reproducers; real captured upstream fixtures also live under vendor tests/ref |
 | benchmarks/results | Hardware manifest, component timings, failed-before and current 5s/60s cold-history, host-memory, idle-resource and long-history smoke evidence |
 | scripts/isolated-render.py | Tests actual app inside verified private namespaces, software renderer and private display; no active-desktop access/input injection |

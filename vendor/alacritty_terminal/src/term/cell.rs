@@ -211,7 +211,18 @@ impl Cell {
     pub fn clear_wide(&mut self) {
         self.flags.remove(Flags::WIDE_CHAR);
         if let Some(extra) = self.extra.as_mut() {
-            Arc::make_mut(extra).zerowidth = Vec::new();
+            if let Some(unique) = Arc::get_mut(extra) {
+                unique.zerowidth = Vec::new();
+            } else {
+                // Copy only attributes retained by the cleared cell. Cloning
+                // CellExtra here would copy a potentially large combining Vec
+                // merely to discard that copy immediately afterwards.
+                *extra = Arc::new(CellExtra {
+                    zerowidth: Vec::new(),
+                    underline_color: extra.underline_color,
+                    hyperlink: extra.hyperlink.clone(),
+                });
+            }
         }
         self.c = ' ';
     }
@@ -344,6 +355,86 @@ mod tests {
 
         // Ensure that cell size isn't growing by accident.
         assert!(mem::size_of::<Cell>() <= EXPECTED_CELL_SIZE);
+    }
+
+    #[test]
+    fn clear_wide_preserves_shared_sibling_and_retained_attributes() {
+        let hyperlink = Hyperlink::new(Some("test"), "https://example.test/".into());
+        let mut cell = Cell {
+            c: '界',
+            flags: Flags::WIDE_CHAR | Flags::BOLD | Flags::UNDERLINE,
+            ..Cell::default()
+        };
+        cell.push_zerowidth('\u{301}');
+        // A shared, valid large combining payload must remain in the sibling.
+        Arc::get_mut(cell.extra.as_mut().unwrap())
+            .unwrap()
+            .zerowidth = vec!['\u{301}'; 262_144];
+        cell.set_underline_color(Some(Color::Indexed(17)));
+        cell.set_hyperlink(Some(hyperlink.clone()));
+        let sibling = cell.clone();
+        let expected_sibling = sibling.clone();
+        cell.clear_wide();
+        assert_eq!(sibling, expected_sibling);
+        assert_eq!(sibling.zerowidth().unwrap().len(), 262_144);
+        assert_eq!(cell.c, ' ');
+        assert_eq!(cell.flags, Flags::BOLD | Flags::UNDERLINE);
+        assert_eq!(cell.fg, sibling.fg);
+        assert_eq!(cell.bg, sibling.bg);
+        assert_eq!(cell.zerowidth(), Some([].as_slice()));
+        assert_eq!(cell.extra.as_ref().unwrap().zerowidth.capacity(), 0);
+        assert_eq!(cell.underline_color(), Some(Color::Indexed(17)));
+        assert_eq!(cell.hyperlink(), Some(hyperlink.clone()));
+        assert_eq!(
+            cell.hyperlink().unwrap().allocation_identity(),
+            hyperlink.allocation_identity(),
+        );
+        assert!(!Arc::ptr_eq(
+            cell.extra.as_ref().unwrap(),
+            sibling.extra.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn clear_wide_handles_unique_absent_and_empty_extras() {
+        let mut cell = Cell {
+            c: '界',
+            flags: Flags::WIDE_CHAR,
+            ..Cell::default()
+        };
+        cell.push_zerowidth('\u{301}');
+        let identity = Arc::as_ptr(cell.extra.as_ref().unwrap());
+        cell.clear_wide();
+        assert_eq!(Arc::as_ptr(cell.extra.as_ref().unwrap()), identity);
+        assert_eq!(cell.zerowidth(), Some([].as_slice()));
+        assert_eq!(cell.extra.as_ref().unwrap().zerowidth.capacity(), 0);
+        assert_eq!(
+            cell,
+            Cell {
+                extra: Some(Arc::new(CellExtra::default())),
+                ..Cell::default()
+            }
+        );
+
+        let mut cell = Cell {
+            c: '界',
+            flags: Flags::WIDE_CHAR,
+            ..Cell::default()
+        };
+        cell.clear_wide();
+        assert_eq!(cell, Cell::default());
+
+        let mut cell = Cell {
+            c: '界',
+            flags: Flags::WIDE_CHAR,
+            extra: Some(Arc::new(CellExtra::default())),
+            ..Cell::default()
+        };
+        let sibling = cell.clone();
+        cell.clear_wide();
+        assert_eq!(cell.extra, sibling.extra);
+        assert_eq!(cell.c, ' ');
+        assert!(cell.flags.is_empty());
     }
 
     #[test]

@@ -1881,3 +1881,43 @@ Implement exact-policy durable resource-refusal recovery and protect checkpoint 
 - Files: crates/storage/src/journal.rs, crates/session-host/src/journal_policy.rs, crates/session-host/src/resource_refusal_tests.rs, crates/session-host/src/lib.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/replay_cache.rs, crates/session-host/src/history/tests.rs, crates/session-host/src/history/crash_tests.rs, crates/session-host/examples/benchmark.rs, crates/session-host/examples/history_corpus.rs, crates/session-host/tests/recovery.rs, docs/adr/0013-durable-resource-refusal-event.md, docs/reports/resource-refusal-20261017.md, docs/research/terminal-admission-plan.md, docs/research/durable-resource-refusal-next.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root217-workspace tests/strictClippy/fmt/release pass; extended real-host six-case suffix recovery/readallcoldrecords passes. Newunit compares liveprefix/full/CPtail hiddenstate and every nonzero coldrecord plus continuation. Fixed cacheprofile gate and preserved unsupportedprofile diagnostic after failures. Independentreview checkpointseam fixedviaReceiptkind guards beforecapture/busypermit + sealedJournal/reopen; coldtest assertsno CP/append atrefusal.
 - Risks / next: Only storage/recovery policy enabled, productionlaunches unchangedlegacy. Complete readonly resource driver census and defensible global/persistent/transient admission before any live refusal; nativeIMEgeneration/perf/MVP remainopen.
+
+## 2026-10-17T03:46:19+00:00 — terminal_memory_budget
+
+Extend parser resource census with saturating grid-operation callback counts
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs
+- Verification: rustfmt --edition 2021 vendor/alacritty_terminal/src/term/resources.rs; cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --lib --config patch.crates-io.vte.path=vendor/vte term::resources::tests (19 passed); cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --lib --config patch.crates-io.vte.path=vendor/vte (180 passed); cargo check --manifest-path vendor/alacritty_terminal/Cargo.toml --no-default-features --config patch.crates-io.vte.path=vendor/vte; git diff --check
+- Risks / next: Root can use callback counts as conservative workload inputs, but still needs event preflight/reservation and must account for host resize/reflow, geometry clamps, parser/input state, COW amplification, and omitted model/event-proxy allocations; this census proves no reservation bound.
+
+## 2026-10-17T03:51:24+00:00 — /root/font_render_profile
+
+Add release-mode actual-Term parser resource preflight example with six synthetic fixtures, 30-sample nearest-rank timings, buffer/callback diagnostics, and checkpoint/frame non-mutation assertions.
+
+- Files: crates/terminal/examples/resource_preflight.rs
+- Verification: rustfmt --check --edition 2024 crates/terminal/examples/resource_preflight.rs; cargo run --locked --release -p pigade-terminal --example resource_preflight (exit 0; all six fixtures emitted bounded numeric diagnostics and passed checkpoint/frame/parser-buffer invariance checks)
+- Risks / next: Root will source-bind and retain the exact diagnostic output; no result artifact was created and this slice claims neither heap/RSS bounds nor production admission/performance guarantees.
+
+## 2026-10-17T03:52:24+00:00 — recovery_slice_review
+
+Count omitted terminal listener-effect callbacks in resource census
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 vendor/alacritty_terminal/src/term/resources.rs; cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --offline --locked --config patch.crates-io.vte.path=/home/afterburner/Projects/PigADE/vendor/vte term::resources::tests (21 passed)
+- Risks / next: Host admission remains unimplemented; census is callback evidence, not a memory bound.
+
+## 2026-10-17T03:53:53+00:00 — terminal_memory_budget
+
+Document coarse logical per-event payload copy envelopes and remaining admission gaps
+
+- Files: docs/research/terminal-payload-copy-bound.md
+- Verification: wc -l docs/research/terminal-payload-copy-bound.md (113 lines); relative Markdown links checked with Python; git diff --check -- docs/research/terminal-payload-copy-bound.md
+- Risks / next: Research-only formulas are not an admission policy; root must account capacity rounding, callback ordering/targets, event queues, parser/checkpoint transients, resize/reflow, and define a bounded growth/reservation contract before enabling a profile.
+
+## 2026-10-17T03:55:35+00:00 — root
+
+Integrate read-only event resource census and remove discarded shared wide-cell mark copies
+
+- Files: crates/terminal/src/lib.rs, crates/terminal/examples/resource_preflight.rs, crates/terminal/examples/wide_clear_allocations.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, docs/research/wide-cell-clear-plan.md, docs/research/terminal-admission-plan.md, docs/reports/terminal-memory-census.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md, benchmarks/results/resource-preflight-20261017
+- Verification: 219 workspace tests,184 vendor library tests,45 recordings pass; strict workspace Clippy/fmt/release pass; vendor no-default check passes and Clippy passes with only3 existing upstream question_mark lints forced to warnings. Two wide clear regressions passed before and after repair. Saved30 release samples/source+binary hashes: clear56B versus1048632B explicit former-algorithm emulation; callback p95 plain64KiB131.580us. Fixed accidental own vendorlock registry selection after wrong standalone command; pinned VTE override tests pass.
+- Risks / next: Counters/formulas are not a whole-event allocator or aggregate host bound. Remove unused event retention next; complete grid/frame/checkpoint/IPC ownership and shared pre-mutation reservation. 82653 and55262 frozen soaks remain active; no stage0/MVP/PERF/24h completion claim.

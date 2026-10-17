@@ -48,10 +48,11 @@ versioned in generation policy/profile so replay applies the same contract.
 Contention-dependent admission is an operational refusal, dependent on the
 other live sessions; its durable decision must be retained with the raw event.
 Do not silently change event interpretation under an old journal profile. The
-storage primitive `OutputRejectedResource` exists, but the new journal policy
-suffix/profile gate, host replay and admission ledger are not integrated; live
-launches remain on the legacy profile until the complete estimator/reservation
-path is implemented and tested. Neither these census values nor the selected
+storage primitive `OutputRejectedResource`, exact journal policy suffix/profile
+gate, refused-prefix replay and checkpoint/writer guards are implemented in
+ADR0013. The admission ledger and estimator are not integrated; live launches
+remain on the legacy profile until the complete estimator/reservation path is
+implemented and tested. Neither these census values nor the selected
 event format establish a global memory bound.
 
 The imported shared-extra regression demonstrates why input-byte limits are
