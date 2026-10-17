@@ -271,6 +271,48 @@ def process_wait_diagnostics(host_identity, child_identities, max_threads=32):
     return result
 
 
+def bounded_actor_diagnostic(view, snapshot_completed_ns):
+    """Retain only the typed numeric v1 probe; never copy arbitrary host fields."""
+    raw = None if view is None else view.get('actor_diagnostic')
+    if raw is None:
+        return {'status': 'missing'}
+    if not isinstance(raw, dict) or type(raw.get('version')) is not int:
+        return {'status': 'invalid'}
+    if raw['version'] != 1:
+        return {'status': 'unsupported'}
+    if raw.get('sample_available') is False:
+        return {'status': 'unavailable', 'version': 1}
+    if raw.get('sample_available') is not True:
+        return {'status': 'invalid'}
+    stages = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
+              'history_commit', 'checkpoint', 'frame_build', 'publish', 'query_responses',
+              'degraded', 'exited'}
+    stage = raw.get('stage')
+    if stage is not None and (not isinstance(stage, str) or stage not in stages):
+        return {'status': 'invalid'}
+    def optional_u64(value):
+        return value is None or (type(value) is int and 0 <= value <= (1 << 64) - 1)
+    numbers = ('candidate_sequence', 'entered_monotonic_ns')
+    if any(not optional_u64(raw.get(key)) for key in numbers):
+        return {'status': 'invalid'}
+    reader = raw.get('reader')
+    if not isinstance(reader, dict):
+        return {'status': 'invalid'}
+    counts = ('read_calls', 'bytes_read', 'last_read_bytes', 'enqueued_calls', 'bytes_enqueued')
+    times = ('last_read_monotonic_ns', 'last_enqueued_monotonic_ns')
+    if any(type(reader.get(key)) is not int or not optional_u64(reader[key]) for key in counts):
+        return {'status': 'invalid'}
+    if any(not optional_u64(reader.get(key)) for key in times):
+        return {'status': 'invalid'}
+    entered = raw.get('entered_monotonic_ns')
+    return {'status': 'available', 'version': 1, 'stage': stage,
+            **{key: raw.get(key) for key in numbers},
+            'stage_age_at_snapshot_completion_ns': (
+                snapshot_completed_ns - entered if entered is not None and
+                snapshot_completed_ns is not None and snapshot_completed_ns >= entered else None),
+            'reader': {key: reader.get(key) for key in counts + times}}
+
+
 def ack_timeout_record(*, elapsed, stream, token_index, views, view_durations_ns,
                        view_completed_monotonic_ns,
                        ping_started_ns, ping_completed_ns, ping_status, ping_views_count, sidechannel,
@@ -283,11 +325,13 @@ def ack_timeout_record(*, elapsed, stream, token_index, views, view_durations_ns
                          "storage_error": None if view is None else view.get("storage_error"),
                          "target_token_visible": (None if view is None or index != stream else
                                                    f"ACK:SOAK-{stream}-{token_index}" in STRESS.text(view)),
+                         "actor_diagnostic": bounded_actor_diagnostic(view, view_completed_monotonic_ns[index]),
                          "snapshot_duration_ns": view_durations_ns[index],
                          "snapshot_completed_monotonic_ns": view_completed_monotonic_ns[index],
                          "snapshot_age_at_diagnostic_ns": (None if view_completed_monotonic_ns[index] is None else
                                                             max(0, captured_at_ns - view_completed_monotonic_ns[index]))})
-    return {"schema": 1, "elapsed_seconds": elapsed, "stream": stream,
+    return {"schema": 1, "captured_monotonic_ns": captured_at_ns,
+            "elapsed_seconds": elapsed, "stream": stream,
             "token_index": token_index, "timeout_seconds": ACK_TIMEOUT_SECONDS,
             "ping": {"started_monotonic_ns": ping_started_ns,
                      "completed_monotonic_ns": ping_completed_ns,
@@ -392,6 +436,7 @@ class ResizeAdmissionDiagnostics:
                     record["snapshot"] = {"available": False, "reason": "missing_view"}
                 else:
                     view = views[0]
+                    snapshot_completed_ns = time.monotonic_ns()
                     metrics = view.get("metrics") or {}
                     record["snapshot"] = {
                         "available": True,
@@ -400,6 +445,8 @@ class ResizeAdmissionDiagnostics:
                         "sequence": view.get("sequence"),
                         "storage_error": str(view.get("storage_error"))[:512]
                         if view.get("storage_error") is not None else None,
+                        "snapshot_completed_monotonic_ns": snapshot_completed_ns,
+                        "actor_diagnostic": bounded_actor_diagnostic(view, snapshot_completed_ns),
                         "metrics": {key: metrics[key] for key in self.METRIC_FIELDS
                                     if isinstance(metrics.get(key), (int, float))},
                     }
@@ -559,11 +606,12 @@ def run(args):
               "binary_sha256": frozen_hash,
               "binary_version": subprocess.check_output([str(frozen), "--version"], text=True).strip(),
               "source_sha256": {name: STRESS.digest(ROOT / name) for name in
-                                ("crates/session-host/src/lib.rs", "scripts/soak-pty.py", "scripts/stress-pty.py")},
+                                ("crates/session-host/src/lib.rs", "crates/session-host/src/metrics.rs",
+                            "Cargo.lock", "scripts/soak-pty.py", "scripts/stress-pty.py")},
               "environment": {"os": platform.platform(), "kernel": platform.release(),
                               "logical_cpu_count": os.cpu_count(), "filesystem": filesystem},
               "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
-              "other_open_gates": ["4 sessions x 1 GiB plus 100000 resizes/session", "VM reboot", "UI/GPU and platform acceptance"]}
+              "other_open_gates": ["product-wide long-history memory/performance", "VM provider/layout resume", "UI/GPU and platform acceptance", "actual24h soak"]}
     save_json(manifest_path, result)
     with open(progress_path, "a", buffering=1) as progress, \
             open(samples_path, "a", buffering=1) as samples, \
@@ -610,9 +658,16 @@ def run(args):
                 result["sessions"].append({"stream": index, "session": spec["session"], "generation": spec["generation"],
                                            "pid": view["pid"], "journal": f"{spec['generation']}.journal"})
                 ready_by = time.monotonic() + 20
-                while f"READY:{index}" not in STRESS.text(STRESS.snapshot(endpoint, spec)):
+                while True:
+                    ready_view = STRESS.snapshot(endpoint, spec)
+                    ready_completed_ns = time.monotonic_ns()
+                    if f"READY:{index}" in STRESS.text(ready_view):
+                        break
                     check(time.monotonic() < ready_by, f"producer {index} READY timeout")
                     time.sleep(.05)
+                result["sessions"][-1]["initial_actor_diagnostic"] = bounded_actor_diagnostic(
+                    ready_view, ready_completed_ns)
+                result["sessions"][-1]["initial_snapshot_completed_monotonic_ns"] = ready_completed_ns
             # Persist owned identities/session IDs before the long measurement.
             # A running manifest must remain useful after harness interruption.
             save_json(manifest_path, result)

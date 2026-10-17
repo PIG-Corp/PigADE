@@ -125,6 +125,34 @@ os.write(1,('SEQ:%d'%sidecar_sequence).encode())
                 os.close(master)
                 sidecar.close()
 
+    def test_actor_probe_summary_retains_only_numeric_whitelist_and_explicit_missing(self):
+        raw = {'version': 1, 'sample_available': True, 'stage': 'journal_append',
+               'candidate_sequence': 78, 'entered_monotonic_ns': 900,
+               'SECRET': 'not copied',
+               'reader': {'read_calls': 3, 'bytes_read': 45, 'last_read_bytes': 15,
+                          'enqueued_calls': 3, 'bytes_enqueued': 45,
+                          'last_read_monotonic_ns': 850, 'last_enqueued_monotonic_ns': 860,
+                          'SECRET': 'not copied'}}
+        summary = SOAK.bounded_actor_diagnostic({'actor_diagnostic': raw}, 1000)
+        self.assertEqual(summary['stage'], 'journal_append')
+        self.assertEqual(summary['candidate_sequence'], 78)
+        self.assertEqual(summary['stage_age_at_snapshot_completion_ns'], 100)
+        self.assertNotIn('SECRET', json.dumps(summary))
+        self.assertEqual(SOAK.bounded_actor_diagnostic({}, 1000)['status'], 'missing')
+        self.assertEqual(SOAK.bounded_actor_diagnostic({'actor_diagnostic': {
+            'version': 1, 'sample_available': False, 'reader': raw['reader']}}, 1000),
+            {'status': 'unavailable', 'version': 1})
+        self.assertEqual(SOAK.bounded_actor_diagnostic({'actor_diagnostic': {
+            'version': 2, 'sample_available': True}}, 1000)['status'], 'unsupported')
+        for key, bad in [('stage', 'arbitrary host text'), ('candidate_sequence', True),
+                         ('entered_monotonic_ns', -1)]:
+            with self.subTest(key=key):
+                malformed = {**raw, key: bad}
+                self.assertEqual(SOAK.bounded_actor_diagnostic(
+                    {'actor_diagnostic': malformed}, 1000)['status'], 'invalid')
+        self.assertIsNone(SOAK.bounded_actor_diagnostic(
+            {'actor_diagnostic': raw}, 500)['stage_age_at_snapshot_completion_ns'])
+
     def test_timeout_record_keeps_only_sanitized_frame_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             sidecar = SOAK.AckSidechannel(Path(temp) / "events.jsonl")
@@ -142,6 +170,7 @@ os.write(1,('SEQ:%d'%sidecar_sequence).encode())
             self.assertNotIn("SECRET_FRAME_TEXT", encoded)
             self.assertIn('"target_token_visible": false', encoded)
             self.assertEqual(record["last_sessions"][0]["sequence"], 77)
+            self.assertEqual(record["last_sessions"][0]["actor_diagnostic"], {"status": "missing"})
             self.assertEqual(record["last_sessions"][0]["snapshot_duration_ns"], 1234)
             self.assertIsNone(record["last_sessions"][1]["target_token_visible"])
             self.assertEqual(record["last_sessions"][1]["snapshot_completed_monotonic_ns"], 500)

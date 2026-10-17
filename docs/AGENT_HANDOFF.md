@@ -88,10 +88,10 @@ injection, `--last`, automatic repeated task or silent new conversation.
 
 ## Latest verification
 
-- Root workspace fmt, strict all-target Clippy and180 tests passed (including
+- Root workspace fmt, strict all-target Clippy and185 tests passed (including
   the27-test input target:25 shared pure codec tests and2 real raw-PTY tests).
   Release workspace bins/examples build passed. Native app98 tests, strict
-  all-target Clippy, fmt and debug/release builds passed. Python129 tests and9 explicit pinned XIM state tests passed.
+  all-target Clippy, fmt and debug/release builds passed. Python130 tests and9 explicit pinned XIM state tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
   identities. Root inspected selection/Unicode/child ACKs/footer controls in
@@ -162,6 +162,10 @@ pass (zero cold records); clean producer CRC is unavailable after abort. The
 specific post-write/pre-publication stage is unresolved. No soak is currently
 running; do not restart one until the independent actor/reader stage probe is
 reviewed. No24h or isolated PERF claim.
+
+The independent stage/reader probe is now implemented and headlessly verified;
+fresh30.020s smoke on frozen610efac4… passes all4 CRC/full-recovery checks. The
+probe does not yet localize a real stall. See reports/actor-stage-diagnostics.md.
 
 **Completed VM run:** tool50099 exited successfully,
 `~/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e`.

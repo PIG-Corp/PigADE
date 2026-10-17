@@ -1473,3 +1473,43 @@ Repair native Alt-printable loss and integrate explicit command rejection gate w
 - Files: crates/app/src/input.rs, crates/app/src/main.rs, crates/app/src/command_worker.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, crates/app/evidence/keyboard-20261017, docs/reports/x11-keyboard-20261017.md, docs/reports/app-command-rejection.md, docs/research/ime-generation-barrier-next.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Actual frozen baseline b4d received29/31 bytes, raw synthetic diagnostic isolates missingESCx. Encoder regression red then14 pure input tests green; app98 tests/strictClippy pass from reviewer, root releasebuild/fmt pass. Fixed f9fea release nativekeyboard31exactbytes and Pinyin6exactUTF8bytes pass withnoextra/precommit. Root inspectedACK/preedit/finalPNGs. Python129 tests pass including16 harness and realrawPTY exact/duplicate checks. Reviewed staleack race; matchingnotice token nowrequired.
 - Risks / next: FullMVP stillopen. Follow independent per-session worker gate/mouse acknowledgement/drag reconciliation and native IME endpoint-generation barrier; no active desktop access.
+
+## 2026-10-17T02:27:25+00:00 — recovery_slice_review
+
+Isolate known and ambiguous IPC command failures by session generation, add exact-target acknowledgement control, and bound retained gates
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs crates/app/src/command_worker.rs; crates/app/bootstrap.sh test --locked (99 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root integrates. Mouse drag events remain optimistically reflected after local queue admission; a rejected release can leave remote mouse-button state uncertain. A separate receipt/reconciliation design is needed.
+
+## 2026-10-17T02:27:44+00:00 — recovery_slice_review
+
+Isolate IPC failure gates and acknowledgements by exact session/generation; retain hidden targets, prune only host-confirmed ended/replaced identities, bound failures, and add selected-session acknowledgement control
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs crates/app/src/command_worker.rs; crates/app/bootstrap.sh test --locked (100 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root integrates. Mouse transitions still mutate the local encoder on local queue admission; asynchronous host rejection does not yet reconcile a prior accepted press with a rejected release. Needs a separate receipt/reconciliation slice.
+
+## 2026-10-17T02:28:22+00:00 — /root/font_render_profile
+
+Prepared a signed Sway/wlroots/Fcitx Wayland IME test SDK and documented the isolated text-input-v3 plan
+
+- Files: scripts/prepare-wayland-ime-sdk.py, scripts/test_prepare_wayland_ime_sdk.py, docs/research/isolated-wayland-v3-plan.md
+- Verification: python3 -m py_compile scripts/prepare-wayland-ime-sdk.py scripts/test_prepare_wayland_ime_sdk.py; python3 scripts/test_prepare_wayland_ime_sdk.py (6 passed); python3 scripts/prepare-wayland-ime-sdk.py --plan; python3 scripts/prepare-wayland-ime-sdk.py (prepared-not-executed, 5 package signatures verified, 4 ldd objects resolved); python3 scripts/test_prepare_x11_ime_sdk.py (11 passed); git diff --check
+- Risks / next: No compositor, Fcitx, app, namespace or input execution was performed; root may review and authorize the isolated runtime probe. The SDK uses the current host /usr ABI and the exact separate X11 Fcitx 5.1.23 core/Pinyin profile.
+
+## 2026-10-17T02:29:04+00:00 — recovery_slice_review
+
+Correct lifecycle cleanup for per-target command gates: generation inequality no longer clears a gate and only explicit exited/history states release it
+
+- Files: crates/app/src/main.rs, crates/app/src/command_worker.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/main.rs crates/app/src/command_worker.rs; crates/app/bootstrap.sh test --locked (101 passed); crates/app/bootstrap.sh clippy --locked --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root integrates. Mouse transition receipt/reconciliation remains a separate phase-2 issue.
+
+## 2026-10-17T02:30:32+00:00 — /root
+
+Integrate independent actor/PTYreader stage probe and bounded timeout summaries before further soak diagnosis
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/metrics.rs, crates/session-host/src/poll.rs, scripts/soak-pty.py, scripts/test_soak_pty.py, scripts/test_soak_admission.py, docs/reports/actor-stage-diagnostics.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Fresh185 workspace tests, strictalltargetClippy, fmt, release bins/examples pass. Root adds explicit historybegin/query/exited stages, poison refusal and strict harness whitelist.16 focusedsoaktests pass, pycompile/version/diff checks pass. Frozen610efac4 30.019603s actual4PTYsmoke passesall CRC/fullrecovery. Manualprobe attemptedafterexit gotrefused, notclaimedliveproof; initialREADYprobe retention nowintegrated.
+- Risks / next: Freeze reviewed610efac4 release for one7200s stage-instrumented reproducer after commit; retain failure or final recovery, unchanged5s ACK/10s resize deadlines. FullMVP remainsopen.

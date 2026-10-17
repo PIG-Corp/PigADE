@@ -176,6 +176,7 @@ mod tests {
             history: None,
             recovery_journal_bytes_read: 0,
             metrics: Default::default(),
+            actor_diagnostic: None,
         })
     }
 

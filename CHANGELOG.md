@@ -52,3 +52,5 @@ This section describes development work; it is not a release announcement.
 
 - Fixed lost Alt-printable input and verified an actual release-app EN/RU/Ctrl/Alt/arrow sequence against raw PTY bytes, followed by a native Pinyin regression. Failed baselines, exact source/binary hashes and private captures are retained.
 - Known host queue rejection now has token-bound explicit acknowledgement; unknown outcomes stay locked and later unsubmitted requests are counted. Rejected resize caches recover without resending input. Per-session UI failure isolation remains open.
+
+- Live host snapshots now expose a separate bounded numeric actor-stage/PTY-reader probe even when frame publication stalls; contention/poison/old-host absence stay explicit. Soak ACK/resize diagnostics retain a validated whitelist, without raw input/output or deadline changes.

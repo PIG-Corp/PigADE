@@ -152,6 +152,9 @@ pub struct View {
     pub recovery_journal_bytes_read: u64,
     #[serde(default)]
     pub metrics: metrics::SessionMetrics,
+    /// Live pipeline sample; absent for recovered generations and older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_diagnostic: Option<metrics::ActorDiagnostic>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
@@ -326,11 +329,24 @@ fn private_directory(path: &Path) -> Result<()> {
 
 struct Session {
     view: Arc<Mutex<View>>,
+    actor_probe: Option<Arc<metrics::ActorProbe>>,
     commands: mpsc::SyncSender<Action>,
     input: Option<input::InputWriter>,
     control: mpsc::SyncSender<Control>,
     _history: Option<Arc<history::History>>,
 }
+
+fn snapshot_view(session: &Session) -> View {
+    // Release the published-view lock before sampling the actor's independent
+    // probe. A blocked actor stage never holds either lock while doing work.
+    let mut view = session.view.lock().expect("view lock").clone();
+    view.actor_diagnostic = session
+        .actor_probe
+        .as_ref()
+        .map(|probe| probe.try_snapshot());
+    view
+}
+
 #[derive(Clone)]
 enum Action {
     Wake,
@@ -348,6 +364,7 @@ struct ActorConfig {
     root: PathBuf,
     control: mpsc::Receiver<Control>,
     history: Arc<history::History>,
+    probe: Arc<metrics::ActorProbe>,
 }
 struct Host {
     root: PathBuf,
@@ -520,6 +537,7 @@ fn restore_model(
         history: history.as_ref().map(|h| h.summary()),
         recovery_journal_bytes_read: reader.bytes_read(),
         metrics: metrics::SessionMetrics::default(),
+        actor_diagnostic: None,
     };
     Ok((view, terminal, history))
 }
@@ -625,6 +643,7 @@ impl Host {
                         let (control, _) = mpsc::sync_channel(1);
                         sessions.push(Session {
                             view: Arc::new(Mutex::new(view)),
+                            actor_probe: None,
                             commands: tx,
                             input: None,
                             control,
@@ -696,11 +715,7 @@ impl Host {
             return self.launch(spec);
         }
         if matches!(command, Command::List) {
-            return Ok(self
-                .sessions
-                .iter()
-                .map(|s| s.view.lock().expect("view lock").clone())
-                .collect());
+            return Ok(self.sessions.iter().map(snapshot_view).collect());
         }
         let (id, generation) = match &command {
             Command::Snapshot {
@@ -767,7 +782,7 @@ impl Host {
             }
             _ => (),
         }
-        Ok(vec![session.view.lock().expect("view lock").clone()])
+        Ok(vec![snapshot_view(session)])
     }
     fn launch(&mut self, spec: Launch) -> Result<Vec<View>> {
         Geometry::new(spec.geometry.rows, spec.geometry.cols)?;
@@ -790,8 +805,8 @@ impl Host {
                 "operation identity mismatch"
             );
             let view = self.sessions.iter().find_map(|s| {
-                let v = s.view.lock().expect("view lock");
-                (v.generation == spec.generation).then(|| v.clone())
+                let matches = s.view.lock().expect("view lock").generation == spec.generation;
+                matches.then(|| snapshot_view(s))
             });
             return Ok(vec![view.context(
                 "existing launch has no attachable frame; outcome must be reconciled",
@@ -872,12 +887,16 @@ impl Host {
             history: Some(history.summary()),
             recovery_journal_bytes_read: 0,
             metrics: metrics::SessionMetrics::default(),
+            actor_diagnostic: None,
         }));
+        let actor_probe = Arc::new(metrics::ActorProbe::default());
+        actor_probe.enter(metrics::ActorStage::Waiting, None);
         let (tx, rx) = mpsc::sync_channel(8);
         let mut reader = pair.master.try_clone_reader()?;
         let writer = input::InputWriter::new(pair.master.take_writer()?);
         let (control_tx, control_rx) = mpsc::sync_channel(1);
         let reader_tx = tx.clone();
+        let reader_probe = actor_probe.clone();
         thread::spawn(move || {
             loop {
                 let mut bytes = vec![0; OUTPUT_CHUNK];
@@ -897,9 +916,11 @@ impl Host {
                     }
                     Ok(n) => {
                         bytes.truncate(n);
+                        reader_probe.reader_read(n);
                         if reader_tx.send(Action::Output(bytes)).is_err() {
                             break;
                         }
+                        reader_probe.reader_enqueued(n);
                     }
                 }
             }
@@ -908,6 +929,7 @@ impl Host {
         let actor_root = self.root.clone();
         let actor_writer = writer.clone();
         let actor_history = history.clone();
+        let actor_probe_for_thread = actor_probe.clone();
         thread::spawn(move || {
             actor(
                 rx,
@@ -921,17 +943,21 @@ impl Host {
                     root: actor_root,
                     control: control_rx,
                     history: actor_history,
+                    probe: actor_probe_for_thread,
                 },
             )
         });
         self.sessions.push(Session {
             view: view.clone(),
+            actor_probe: Some(actor_probe),
             commands: tx,
             input: Some(writer),
             control: control_tx,
             _history: Some(history),
         });
-        Ok(vec![view.lock().expect("view lock").clone()])
+        Ok(vec![snapshot_view(
+            self.sessions.last().expect("new session"),
+        )])
     }
 }
 fn pty_size(g: Geometry) -> PtySize {
@@ -1165,6 +1191,7 @@ fn actor(
     view: Arc<Mutex<View>>,
     config: ActorConfig,
 ) {
+    let probe = &config.probe;
     let mut terminal = Terminal::new(config.geometry, true);
     let history = &config.history;
     terminal.set_history_observer(Some(history.clone()));
@@ -1177,8 +1204,12 @@ fn actor(
     let mut query_responses: VecDeque<Vec<u8>> = VecDeque::new();
     let mut query_response_bytes = 0usize;
     loop {
+        probe.enter(metrics::ActorStage::Waiting, None);
         if let Ok(Control::Stop) = config.control.try_recv() {
             let _ = child.kill();
+        }
+        if !query_responses.is_empty() {
+            probe.enter(metrics::ActorStage::QueryResponses, None);
         }
         for _ in 0..QUERY_RESPONSE_BURST {
             let Some(response) = query_responses.front() else {
@@ -1194,6 +1225,7 @@ fn actor(
                 // child reads input while producing no output.
                 Err(input::InputWriteError::Full) => break,
                 Err(error) => {
+                    probe.enter(metrics::ActorStage::Degraded, None);
                     let mut v = view.lock().expect("view lock");
                     v.storage_error = Some(format!("PTY query response failed: {error}"));
                     v.state = "degraded".into();
@@ -1226,6 +1258,7 @@ fn actor(
                         // A quiet terminal still checkpoints its last dirty state
                         // after five seconds; no synthetic model event is needed.
                         let checkpoint_start = Instant::now();
+                        probe.enter(metrics::ActorStage::Checkpoint, None);
                         let checkpoint_result = checkpoints.publish(
                             false,
                             &config.root,
@@ -1238,6 +1271,7 @@ fn actor(
                             view.lock().expect("view lock").metrics = metrics.clone();
                         }
                         if let Err(error) = checkpoint_result {
+                            probe.enter(metrics::ActorStage::Degraded, None);
                             let mut current = view.lock().expect("view lock");
                             current.storage_error =
                                 Some(format!("idle checkpoint failed: {error:#}"));
@@ -1268,6 +1302,7 @@ fn actor(
         // crossing resize, EOF or ordered timers. One next action is retained.
         action = coalesce_output(action, &rx, &mut deferred);
         let pending_action = action.clone();
+        let candidate_sequence = journal.durable_sequence().saturating_add(1);
         let result = (|| -> Result<bool> {
             // Closing all slave descriptors is not proof the process exited.
             // Keep priority Stop serviceable instead of blocking in child.wait().
@@ -1286,13 +1321,17 @@ fn actor(
             };
             // One pending chunk plus the bounded reader queue. On failure no model publication.
             if let Some(g) = resize {
+                probe.enter(metrics::ActorStage::PtyResize, Some(candidate_sequence));
                 master.resize(pty_size(g))?;
             }
             let journal_start = Instant::now();
+            probe.enter(metrics::ActorStage::JournalAppend, Some(candidate_sequence));
             let receipt = journal.append(kind, &payload)?;
             let journal_work = journal_start.elapsed();
+            probe.enter(metrics::ActorStage::HistoryBegin, Some(receipt.sequence));
             history.begin(receipt.sequence)?;
             let model_start = Instant::now();
+            probe.enter(metrics::ActorStage::ModelApply, Some(receipt.sequence));
             match kind {
                 EventKind::Output => terminal.output(&payload),
                 EventKind::SyncTimeout => terminal.sync_timeout(),
@@ -1323,10 +1362,12 @@ fn actor(
             // Derived cells and index reach durability before either the frame
             // or a checkpoint is allowed to reference their committed root.
             let archive_start = Instant::now();
+            probe.enter(metrics::ActorStage::HistoryCommit, Some(receipt.sequence));
             history.commit()?;
             let archive_work = archive_start.elapsed();
             checkpoints.observe(receipt, payload.len(), model_work);
             let checkpoint_start = Instant::now();
+            probe.enter(metrics::ActorStage::Checkpoint, Some(receipt.sequence));
             let checkpointed = checkpoints.publish(
                 kind == EventKind::Exit,
                 &config.root,
@@ -1344,8 +1385,10 @@ fn actor(
                 )?;
             }
             let frame_start = Instant::now();
+            probe.enter(metrics::ActorStage::FrameBuild, Some(receipt.sequence));
             let frame = terminal.frame();
             let history_summary = history.summary();
+            probe.enter(metrics::ActorStage::Publish, Some(receipt.sequence));
             let mut current = view.lock().expect("view lock");
             current.sequence = receipt.sequence;
             current.frame = frame;
@@ -1372,8 +1415,12 @@ fn actor(
         })();
         match result {
             Ok(true) => (),
-            Ok(false) => break,
+            Ok(false) => {
+                probe.enter(metrics::ActorStage::Exited, Some(candidate_sequence));
+                break;
+            }
             Err(error) => {
+                probe.enter(metrics::ActorStage::Degraded, Some(candidate_sequence));
                 let mut current = view.lock().expect("view lock");
                 current.storage_error = Some(format!("{error:#}"));
                 current.state = "degraded".into();
@@ -1636,4 +1683,77 @@ fn verify_recovery_inner(
         checkpoint_tail_journal_bytes_read: fast_view.recovery_journal_bytes_read,
         cold_archive_format: history::ARCHIVE_FORMAT,
     })
+}
+
+#[cfg(test)]
+mod actor_diagnostic_tests {
+    use super::*;
+
+    fn test_view() -> View {
+        let geometry = Geometry::new(4, 12).unwrap();
+        View {
+            session: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            sequence: 0,
+            state: "running".into(),
+            recovery_path: "live".into(),
+            pid: Some(1),
+            storage_error: None,
+            frame: Terminal::new(geometry, false).frame(),
+            history: None,
+            recovery_journal_bytes_read: 0,
+            metrics: metrics::SessionMetrics::default(),
+            actor_diagnostic: None,
+        }
+    }
+
+    #[test]
+    fn blocked_stage_is_visible_while_published_view_remains_unchanged() {
+        let probe = Arc::new(metrics::ActorProbe::default());
+        let view = Arc::new(Mutex::new(test_view()));
+        let (commands, _rx) = mpsc::sync_channel(1);
+        let (control, _control_rx) = mpsc::sync_channel(1);
+        let session = Session {
+            view,
+            actor_probe: Some(probe.clone()),
+            commands,
+            input: None,
+            control,
+            _history: None,
+        };
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let actor_probe = probe.clone();
+        let blocked = thread::spawn(move || {
+            actor_probe.enter(metrics::ActorStage::JournalAppend, Some(1));
+            entered_tx.send(()).unwrap();
+            // Simulates a blocking journal/fsync call after the actor has
+            // released the probe lock; the real snapshot path must stay live.
+            release_rx.recv().unwrap();
+            actor_probe.enter(metrics::ActorStage::ModelApply, Some(1));
+        });
+        entered_rx.recv().unwrap();
+
+        let snapshot = snapshot_view(&session);
+        assert_eq!(snapshot.sequence, 0, "no frame publication occurred");
+        let diagnostic = snapshot.actor_diagnostic.unwrap();
+        assert!(diagnostic.sample_available);
+        assert!(matches!(
+            diagnostic.stage,
+            Some(metrics::ActorStage::JournalAppend)
+        ));
+        assert_eq!(diagnostic.candidate_sequence, Some(1));
+        assert!(diagnostic.entered_monotonic_ns.is_some());
+
+        release_tx.send(()).unwrap();
+        blocked.join().unwrap();
+    }
+
+    #[test]
+    fn older_view_json_without_diagnostic_decodes() {
+        let mut value = serde_json::to_value(test_view()).unwrap();
+        value.as_object_mut().unwrap().remove("actor_diagnostic");
+        let decoded: View = serde_json::from_value(value).unwrap();
+        assert!(decoded.actor_diagnostic.is_none());
+    }
 }

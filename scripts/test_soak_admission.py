@@ -186,6 +186,13 @@ class ResizeAdmissionDiagnosticTests(unittest.TestCase):
                    "geometry": {"rows": 32, "cols": 112}}
         response = [{"generation": "generation-id", "state": "running", "sequence": 9,
                      "storage_error": None,
+                     "actor_diagnostic": {"version": 1, "sample_available": True,
+                         "stage": "history_commit", "candidate_sequence": 10,
+                         "entered_monotonic_ns": 100,
+                         "reader": {"read_calls": 2, "bytes_read": 20, "last_read_bytes": 10,
+                                    "enqueued_calls": 1, "bytes_enqueued": 10,
+                                    "last_read_monotonic_ns": 80, "last_enqueued_monotonic_ns": 70},
+                         "arbitrary_terminal_text": "SENSITIVE PROBE FIELD"},
                      "metrics": {"events": 5, "output_bytes": 500, "checkpoint_ns": 12,
                                  "secret_metric": "hidden"},
                      "frame": {"cells": [{"text": "SENSITIVE FRAME TEXT"}]}}]
@@ -210,6 +217,9 @@ class ResizeAdmissionDiagnosticTests(unittest.TestCase):
         self.assertNotIn("frame", records[-1])
         self.assertNotIn("cells", json.dumps(records))
         self.assertNotIn("SENSITIVE FRAME TEXT", output.getvalue())
+        self.assertNotIn("SENSITIVE PROBE FIELD", output.getvalue())
+        self.assertEqual(records[-1]["snapshot"]["actor_diagnostic"]["stage"], "history_commit")
+        self.assertEqual(records[-1]["snapshot"]["actor_diagnostic"]["candidate_sequence"], 10)
 
     def test_diagnostic_record_cap_and_omitted_counter_are_hard_bounded(self):
         clock = Clock()
