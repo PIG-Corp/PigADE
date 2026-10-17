@@ -1,0 +1,410 @@
+{
+  "status": "pass-private-x11-fixed-input-cell-latency-fixture",
+  "stage": "complete",
+  "latency": {
+    "child_ack_seen": true,
+    "max_ns": 96425283,
+    "p50_ns": 63647094,
+    "p95_ns": 66165494,
+    "p99_ns": 96425283,
+    "pixel": [
+      20,
+      120
+    ],
+    "quantile": "nearest-rank",
+    "sample_count": 50,
+    "sample_interval_poll_sleep_ns": 1000000,
+    "samples_ns": [
+      96425283,
+      66165494,
+      61404086,
+      67200208,
+      60410670,
+      63647094,
+      63155701,
+      64683211,
+      65072199,
+      61171695,
+      49859042,
+      63078836,
+      63578364,
+      63995966,
+      63781629,
+      63058977,
+      63445562,
+      64261420,
+      63384245,
+      63884966,
+      64480285,
+      63264368,
+      64338396,
+      62752145,
+      64470156,
+      63058667,
+      64261180,
+      64129119,
+      63276731,
+      63660509,
+      64722495,
+      62774518,
+      64204742,
+      63473204,
+      63414603,
+      63856632,
+      64347363,
+      64110864,
+      62688414,
+      64513879,
+      63216105,
+      64327345,
+      63817938,
+      63432126,
+      63505234,
+      47963954,
+      64131042,
+      64144728,
+      63472993,
+      63608661
+    ],
+    "scope": "software Xvfb/Lavapipe observed-cell diagnostic; physical input/present gate unclaimed",
+    "stage": "latency"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "bbc1f4f1-fa37-43dc-8ed8-e882f2c4edb6",
+    "ready": true,
+    "session": "2c331654-76d6-4f98-bfec-01f9467ae279",
+    "tty": "raw/no-echo"
+  },
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock",
+      "--diagnostic-publication-trace"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 35,
+    "start_time_ticks": 3190557,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 5783,
+      "stream_sha256": "e8552f38550383593641a21bb7617ce6d42d0f88e5ece5bd278d81508a564e4d",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 7076,
+      "stream_sha256": "4a8b00703dfe0ad0b7ba1a3482fa5daeaed2c1f58d299582907d9b926c351d8e",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "24f1ada180487d48e3e1ae7ad6e9a95f61db5773ce3937265219fe80b5420116",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "private_run": "/home/afterburner/.local/state/pigade/notification-latency-x11-redraw-20261017",
+  "app_sha256": "1f7a858a2d5baea1a0c2c6a3863aceb3a03db7710508c97d9284abdd6c1d8d58",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "harness_sha256": "8d1832721d304722348a0c8678bd733b02fedb0529383413cda7f211be2a44d5",
+  "helper_sha256": "cec087fd8acd2d21a35c10038eee16bb64a22d064384ec27feb94bad82719819",
+  "trace_records": 267,
+  "segments": [
+    {
+      "sequence": 3,
+      "poll_to_ui_ns": 35834901,
+      "ui_to_paint_begin_ns": 8997599
+    },
+    {
+      "sequence": 4,
+      "poll_to_ui_ns": 354312,
+      "ui_to_paint_begin_ns": 15252332
+    },
+    {
+      "sequence": 5,
+      "poll_to_ui_ns": 352439,
+      "ui_to_paint_begin_ns": 12835234
+    },
+    {
+      "sequence": 6,
+      "poll_to_ui_ns": 419416,
+      "ui_to_paint_begin_ns": 14885976
+    },
+    {
+      "sequence": 7,
+      "poll_to_ui_ns": 356667,
+      "ui_to_paint_begin_ns": 10218536
+    },
+    {
+      "sequence": 8,
+      "poll_to_ui_ns": 404357,
+      "ui_to_paint_begin_ns": 14955158
+    },
+    {
+      "sequence": 9,
+      "poll_to_ui_ns": 409648,
+      "ui_to_paint_begin_ns": 14840529
+    },
+    {
+      "sequence": 10,
+      "poll_to_ui_ns": 408125,
+      "ui_to_paint_begin_ns": 15021183
+    },
+    {
+      "sequence": 11,
+      "poll_to_ui_ns": 360034,
+      "ui_to_paint_begin_ns": 14624249
+    },
+    {
+      "sequence": 12,
+      "poll_to_ui_ns": 368409,
+      "ui_to_paint_begin_ns": 12360603
+    },
+    {
+      "sequence": 13,
+      "poll_to_ui_ns": 408034,
+      "ui_to_paint_begin_ns": 380172
+    },
+    {
+      "sequence": 14,
+      "poll_to_ui_ns": 370664,
+      "ui_to_paint_begin_ns": 13931604
+    },
+    {
+      "sequence": 15,
+      "poll_to_ui_ns": 340988,
+      "ui_to_paint_begin_ns": 15042653
+    },
+    {
+      "sequence": 16,
+      "poll_to_ui_ns": 345015,
+      "ui_to_paint_begin_ns": 14813839
+    },
+    {
+      "sequence": 17,
+      "poll_to_ui_ns": 354142,
+      "ui_to_paint_begin_ns": 14489865
+    },
+    {
+      "sequence": 18,
+      "poll_to_ui_ns": 344284,
+      "ui_to_paint_begin_ns": 14605965
+    },
+    {
+      "sequence": 19,
+      "poll_to_ui_ns": 417632,
+      "ui_to_paint_begin_ns": 15509801
+    },
+    {
+      "sequence": 20,
+      "poll_to_ui_ns": 407152,
+      "ui_to_paint_begin_ns": 15789532
+    },
+    {
+      "sequence": 21,
+      "poll_to_ui_ns": 413655,
+      "ui_to_paint_begin_ns": 15233947
+    },
+    {
+      "sequence": 22,
+      "poll_to_ui_ns": 411381,
+      "ui_to_paint_begin_ns": 15302267
+    },
+    {
+      "sequence": 23,
+      "poll_to_ui_ns": 416691,
+      "ui_to_paint_begin_ns": 15196887
+    },
+    {
+      "sequence": 24,
+      "poll_to_ui_ns": 439294,
+      "ui_to_paint_begin_ns": 14544338
+    },
+    {
+      "sequence": 25,
+      "poll_to_ui_ns": 389569,
+      "ui_to_paint_begin_ns": 15273733
+    },
+    {
+      "sequence": 26,
+      "poll_to_ui_ns": 411762,
+      "ui_to_paint_begin_ns": 14611595
+    },
+    {
+      "sequence": 27,
+      "poll_to_ui_ns": 359282,
+      "ui_to_paint_begin_ns": 15552622
+    },
+    {
+      "sequence": 28,
+      "poll_to_ui_ns": 420738,
+      "ui_to_paint_begin_ns": 14938536
+    },
+    {
+      "sequence": 29,
+      "poll_to_ui_ns": 414407,
+      "ui_to_paint_begin_ns": 15980895
+    },
+    {
+      "sequence": 30,
+      "poll_to_ui_ns": 367648,
+      "ui_to_paint_begin_ns": 15179363
+    },
+    {
+      "sequence": 31,
+      "poll_to_ui_ns": 411722,
+      "ui_to_paint_begin_ns": 14944868
+    },
+    {
+      "sequence": 32,
+      "poll_to_ui_ns": 412923,
+      "ui_to_paint_begin_ns": 14805063
+    },
+    {
+      "sequence": 33,
+      "poll_to_ui_ns": 421880,
+      "ui_to_paint_begin_ns": 14762743
+    },
+    {
+      "sequence": 34,
+      "poll_to_ui_ns": 449202,
+      "ui_to_paint_begin_ns": 14529831
+    },
+    {
+      "sequence": 35,
+      "poll_to_ui_ns": 360064,
+      "ui_to_paint_begin_ns": 15640919
+    },
+    {
+      "sequence": 36,
+      "poll_to_ui_ns": 442901,
+      "ui_to_paint_begin_ns": 14294663
+    },
+    {
+      "sequence": 37,
+      "poll_to_ui_ns": 445145,
+      "ui_to_paint_begin_ns": 15338184
+    },
+    {
+      "sequence": 38,
+      "poll_to_ui_ns": 432390,
+      "ui_to_paint_begin_ns": 15363743
+    },
+    {
+      "sequence": 39,
+      "poll_to_ui_ns": 426009,
+      "ui_to_paint_begin_ns": 15737131
+    },
+    {
+      "sequence": 40,
+      "poll_to_ui_ns": 483227,
+      "ui_to_paint_begin_ns": 15043245
+    },
+    {
+      "sequence": 41,
+      "poll_to_ui_ns": 434234,
+      "ui_to_paint_begin_ns": 14875517
+    },
+    {
+      "sequence": 42,
+      "poll_to_ui_ns": 386934,
+      "ui_to_paint_begin_ns": 15597858
+    },
+    {
+      "sequence": 43,
+      "poll_to_ui_ns": 383297,
+      "ui_to_paint_begin_ns": 15438034
+    },
+    {
+      "sequence": 44,
+      "poll_to_ui_ns": 397655,
+      "ui_to_paint_begin_ns": 15922885
+    },
+    {
+      "sequence": 45,
+      "poll_to_ui_ns": 368710,
+      "ui_to_paint_begin_ns": 15210873
+    },
+    {
+      "sequence": 46,
+      "poll_to_ui_ns": 374861,
+      "ui_to_paint_begin_ns": 15228437
+    },
+    {
+      "sequence": 47,
+      "poll_to_ui_ns": 425859,
+      "ui_to_paint_begin_ns": 15774092
+    },
+    {
+      "sequence": 48,
+      "poll_to_ui_ns": 435026,
+      "ui_to_paint_begin_ns": 369812
+    },
+    {
+      "sequence": 49,
+      "poll_to_ui_ns": 446097,
+      "ui_to_paint_begin_ns": 15331702
+    },
+    {
+      "sequence": 50,
+      "poll_to_ui_ns": 466275,
+      "ui_to_paint_begin_ns": 15296976
+    },
+    {
+      "sequence": 51,
+      "poll_to_ui_ns": 431780,
+      "ui_to_paint_begin_ns": 14831943
+    },
+    {
+      "sequence": 52,
+      "poll_to_ui_ns": 461035,
+      "ui_to_paint_begin_ns": 14754577
+    }
+  ],
+  "poll_to_ui": {
+    "p50_ms": 0.411381,
+    "p95_ms": 0.466275,
+    "p99_ms": 35.834901
+  },
+  "ui_to_paint_begin": {
+    "p50_ms": 14.955158,
+    "p95_ms": 15.789532,
+    "p99_ms": 15.980895
+  },
+  "limits": "software private X11 diagnosis, simultaneous builds/soaks, no formal PERF; final trace summary absent after owned cleanup"
+}

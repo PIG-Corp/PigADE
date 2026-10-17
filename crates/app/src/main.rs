@@ -231,6 +231,19 @@ fn recovery_warning(
     (!parts.is_empty()).then(|| short_notice_part(&parts.join(" · "), 160))
 }
 
+/// Only the displayed ACK button and release label depend on receipt bookkeeping.
+fn acknowledgement_presentation(
+    notice: Option<&CommandNotice>,
+    delivery: &MouseDelivery,
+) -> Option<(u64, bool)> {
+    notice
+        .filter(|notice| {
+            notice.acknowledgeable
+                && delivery.settled_through(&notice.target, notice.last_request_id)
+        })
+        .map(|notice| (notice.token, delivery.confirmed_pressed(&notice.target)))
+}
+
 enum IpcMessage {
     Request {
         id: u64,
@@ -730,12 +743,19 @@ impl CanvasApp {
                         // Drain worker receipts before state/revision work: a
                         // worker blocked on this bounded channel must not wait
                         // for a State revision to change.
-                        let mut receipt_drained = false;
+                        let previous_ack = acknowledgement_presentation(
+                            this.selected_notice(),
+                            &this.mouse_delivery,
+                        );
                         while let Ok(receipt) = this.receipts.try_recv() {
-                            receipt_drained = true;
                             this.apply_worker_receipt(receipt);
                         }
-                        if receipt_drained {
+                        if previous_ack
+                            != acknowledgement_presentation(
+                                this.selected_notice(),
+                                &this.mouse_delivery,
+                            )
+                        {
                             cx.notify();
                         }
                         let next = {
@@ -1526,7 +1546,9 @@ impl CanvasApp {
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_cursor_blink(cx);
-        self.input_notice = None;
+        if self.input_notice.take().is_some() {
+            cx.notify();
+        }
         if self.clipboard_pending {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
@@ -1829,9 +1851,12 @@ impl EntityInputHandler for CanvasApp {
         self.text_input.marked()
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let had_preedit = !self.text_input.preedit.is_empty();
         self.text_input.cancel();
         window.notify_text_input_changed(&self.focus);
-        cx.notify();
+        if had_preedit {
+            cx.notify();
+        }
     }
     fn replace_text_in_range(
         &mut self,
@@ -1841,6 +1866,7 @@ impl EntityInputHandler for CanvasApp {
         cx: &mut Context<Self>,
     ) {
         self.reset_cursor_blink(cx);
+        let had_preedit = !self.text_input.preedit.is_empty();
         let modes = self
             .state
             .views
@@ -1849,12 +1875,15 @@ impl EntityInputHandler for CanvasApp {
         if let Some(error) = input::protocol_error(modes) {
             self.text_input.cancel();
             self.input_error = Some(error.into());
+            cx.notify();
         } else {
             let bytes = self.text_input.commit(range, text);
             self.send(bytes, cx);
         }
         window.notify_text_input_changed(&self.focus);
-        cx.notify();
+        if had_preedit {
+            cx.notify();
+        }
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = item.text() {
@@ -2074,15 +2103,10 @@ impl Render for CanvasApp {
                             .child(warning),
                     );
                 }
-                let acknowledgement = self
-                    .selected_notice()
-                    .filter(|notice| {
-                        notice.acknowledgeable
-                            && self
-                                .mouse_delivery
-                                .settled_through(&notice.target, notice.last_request_id)
-                    })
-                    .map(|notice| (notice.target.clone(), notice.token));
+                let acknowledgement = self.selected_notice().and_then(|notice| {
+                    acknowledgement_presentation(Some(notice), &self.mouse_delivery)
+                        .map(|(token, needs_release)| (notice.target.clone(), token, needs_release))
+                });
                 let mut status_row = div()
                     .id("session-status")
                     .role(Role::Status)
@@ -2093,8 +2117,7 @@ impl Render for CanvasApp {
                     .items_center()
                     .text_color(rgb(0xb0b8c5))
                     .child(div().flex_1().child(status));
-                if let Some((target, token)) = acknowledgement {
-                    let needs_release = self.mouse_delivery.confirmed_pressed(&target);
+                if let Some((target, token, needs_release)) = acknowledgement {
                     let label = if needs_release {
                         "Подтвердить и отпустить кнопку мыши"
                     } else {
@@ -3348,5 +3371,116 @@ mod notification_transport_tests {
             .join()
             .map_err(|_| "test host panic")??;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod acknowledgement_presentation_tests {
+    use super::acknowledgement_presentation;
+    use crate::{
+        command_worker::{CommandNotice, CommandTarget},
+        mouse,
+        mouse_delivery::{MouseDelivery, MouseSnapshot, Outcome, RequestReceipt},
+    };
+
+    fn target(name: &str) -> CommandTarget {
+        CommandTarget {
+            session: name.into(),
+            generation: "generation".into(),
+        }
+    }
+    fn notice(target: CommandTarget, last: u64) -> CommandNotice {
+        CommandNotice {
+            target,
+            last_request_id: last,
+            token: 7,
+            message: "rejected".into(),
+            unsent: 0,
+            rejected_resizes: vec![],
+            acknowledgeable: true,
+        }
+    }
+    fn receipt(id: u64, target: &CommandTarget, outcome: Outcome) -> RequestReceipt {
+        RequestReceipt {
+            id,
+            target: target.clone(),
+            outcome,
+        }
+    }
+    #[test]
+    fn known_rejection_button_waits_for_each_receipt_and_ignores_other_targets() {
+        let a = target("a");
+        let b = target("b");
+        let notice = notice(a.clone(), 2);
+        let mut delivery = MouseDelivery::default();
+        assert!(delivery.stage(1, a.clone(), None));
+        assert!(delivery.stage(2, a.clone(), None));
+        assert!(delivery.stage(3, b.clone(), None));
+        assert_eq!(acknowledgement_presentation(Some(&notice), &delivery), None);
+        delivery.request_receipt(receipt(1, &a, Outcome::NotAdmitted));
+        assert_eq!(acknowledgement_presentation(Some(&notice), &delivery), None);
+        delivery.request_receipt(receipt(2, &a, Outcome::Dropped));
+        assert_eq!(
+            acknowledgement_presentation(Some(&notice), &delivery),
+            Some((7, false))
+        );
+        delivery.request_receipt(receipt(3, &b, Outcome::Accepted));
+        assert_eq!(
+            acknowledgement_presentation(Some(&notice), &delivery),
+            Some((7, false))
+        );
+        let mut unknown = notice.clone();
+        unknown.acknowledgeable = false;
+        assert_eq!(
+            acknowledgement_presentation(Some(&unknown), &delivery),
+            None
+        );
+        assert_eq!(acknowledgement_presentation(None, &delivery), None);
+    }
+    #[test]
+    fn rejected_release_keeps_confirmed_press_visible_until_a_new_release_is_admitted() {
+        let a = target("a");
+        let mut delivery = MouseDelivery::default();
+        let mut encoder = mouse::Encoder::default();
+        encoder
+            .press(
+                mouse::Button::Left,
+                mouse::Position { row: 0, column: 0 },
+                mouse::Modifiers::default(),
+                mouse::MOUSE_REPORT_CLICK | mouse::SGR_MOUSE,
+            )
+            .unwrap();
+        let snapshot = MouseSnapshot {
+            encoder,
+            position: mouse::Position { row: 0, column: 0 },
+            wheel: mouse::WheelAccumulator::default(),
+            rows: 10,
+            cols: 20,
+            modes: mouse::MOUSE_REPORT_CLICK | mouse::SGR_MOUSE,
+        };
+        assert!(delivery.stage(1, a.clone(), Some(snapshot.clone())));
+        delivery.request_receipt(receipt(1, &a, Outcome::Accepted));
+        let mut released = snapshot;
+        released
+            .encoder
+            .release_all(
+                released.position,
+                mouse::Modifiers::default(),
+                released.modes,
+            )
+            .unwrap();
+        assert!(delivery.stage(2, a.clone(), Some(released.clone())));
+        delivery.request_receipt(receipt(2, &a, Outcome::NotAdmitted));
+        let notice = notice(a.clone(), 2);
+        assert_eq!(
+            acknowledgement_presentation(Some(&notice), &delivery),
+            Some((7, true))
+        );
+        assert!(delivery.stage(3, a.clone(), Some(released)));
+        delivery.request_receipt(receipt(3, &a, Outcome::Accepted));
+        assert_eq!(
+            acknowledgement_presentation(Some(&notice), &delivery),
+            Some((7, false))
+        );
     }
 }

@@ -275,3 +275,10 @@ discarded. Later exact50key runs pass p95≈97ms. Numeric trace22b762db… finds
 Poll→UI p95≈41.5ms; next testredundant unchanged-frame redraw hypothesis.
 Opt-in trace is bounded/nonblocking/numeric-only; no formal PERF claim.
 Resource refusal protocol remains proposed in research/durable-resource-refusal-next.md.
+
+Redraw follow-up: frozenapp1f7a858a… removes unchanged unmarked-commit/accepted-
+receipt redraws while retaining preedit/error/blink/ACK notifications.127 app
+tests/strictClippy/release pass; native Pinyin exactcommit+clear passes on both
+private X11 and SwayWayland.50-key observed p95=66.165ms, Poll→UI p95=0.466ms
+(previous41.455ms); formal50/80ms gate stillopen and initial1soutlier retained.
+Evidence/report includes full samples/sourcebinding and both IME captures.

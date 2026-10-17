@@ -1,0 +1,243 @@
+{
+  "app": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "focused_via": "private Sway IPC exact PID",
+    "pid": 30,
+    "start_ticks": 3198551,
+    "unique_window_node_id": 5
+  },
+  "bwrap_exit_status": 0,
+  "commit": {
+    "child_ack": "__PIGADE_WAYLAND_CHILD_ACK_20261017__",
+    "child_ack_seen": true,
+    "exact_once": true,
+    "extra_bytes": 0,
+    "payload_sha256": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "received_bytes": 6,
+    "synthetic_payload_hex": "e4bda0e5a5bd"
+  },
+  "composition_check": {
+    "caveat": "preedit requires human review of captured image",
+    "preedit_screenshot": true,
+    "pty_unchanged_before_commit": true,
+    "socket_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3198519
+    }
+  },
+  "dbus": {
+    "activation": "disabled; custom config has no service directories or includes",
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "pid": 3,
+    "private_socket_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 38,
+      "path": "/run/pigade-ime/bus",
+      "peer_gid": 1000,
+      "peer_pid": 3,
+      "peer_uid": 1000,
+      "start_ticks": 3198513
+    },
+    "start_ticks": 3198513
+  },
+  "fcitx": {
+    "active_input_method": "pinyin",
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "fixed_sequence": [
+      "n",
+      "i",
+      "h",
+      "a",
+      "o",
+      "Space"
+    ],
+    "pid": 11,
+    "profile": "fresh private profile",
+    "start_ticks": 3198541
+  },
+  "input_helper": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "control_peer_verified": true,
+    "ldd_bytes": 385,
+    "ldd_libraries": [
+      {
+        "name": "libwayland-client.so.0",
+        "path": "/usr/lib/libwayland-client.so.0.26.0",
+        "sha256": "39c83ae7b73d22f18b4f81da14749c4535c304b7e62910a2f1aae682f279cc9d"
+      },
+      {
+        "name": "libxkbcommon.so.0",
+        "path": "/usr/lib/libxkbcommon.so.0.13.2",
+        "sha256": "e475adbf5abd181b1bdfdeba70ad4d501cb296bbf05b13e8649fd71b3989ee07"
+      },
+      {
+        "name": "libc.so.6",
+        "path": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "name": "libffi.so.8",
+        "path": "/usr/lib/libffi.so.8.5.0",
+        "sha256": "b38bb3a55ba04dfbb5be68e881a72385d6c30010afffb1cf1dfc373b72c2278c"
+      },
+      {
+        "name": "ld-linux-x86-64.so.2",
+        "path": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "ldd_sha256": "f5c6f68ca77e95e55262fd76f967ca2987cbf2103e49cb474fc34ef92a00f49b",
+    "persistent_object": "one virtual keyboard, retained across both stages",
+    "pid": 13,
+    "sha256": "916e71bf2da35bacaf2bb4f385b50a9ae080e3132542e174745b315cbac5d426",
+    "start_ticks": 3198541,
+    "xkb_config_root": "/pigade/fcitx-core/usr/share/xkeyboard-config-2"
+  },
+  "limits": [
+    "one fixed Sway 1.12/Pixman/Fcitx 5.1.23 Pinyin fixture",
+    "fixed virtual-keyboard helper is test-only and uses one persistent protocol object",
+    "preedit is captured, not machine-classified",
+    "no universal Wayland compositor or IME claim",
+    "SDK runtime uses host /usr ABI and is not a portable sysroot"
+  ],
+  "postcommit_capture": {
+    "bytes": 23498,
+    "dimensions": [
+      1280,
+      800
+    ],
+    "path": "/artifacts/committed.png",
+    "sha256": "7850319ec19f94d21b2f1d1ffe5f78559181d0d105937566ee5418dc5161249b",
+    "visual_interpretation": "requires human review"
+  },
+  "preedit_capture": {
+    "bytes": 25464,
+    "dimensions": [
+      1280,
+      800
+    ],
+    "path": "/artifacts/preedit.png",
+    "pty_bytes_before_commit": 0,
+    "sha256": "0ddb176009394bf879f2db48c1017d192172b6bc41d8ec7322cfd07e6837941f",
+    "visual_claim": "image retained for human review; not machine-recognized",
+    "visual_interpretation": "requires human review"
+  },
+  "preflight": {
+    "host_displays_buses_input_and_gpu_absent": true,
+    "interfaces": [
+      "lo"
+    ],
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "app",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "dbus",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 5777,
+      "cap_bytes": 65536,
+      "process": "fcitx",
+      "stream_sha256": "7be6b82eafb7476e860456f8a90188edad1bcb1992136561763c82f953c7bdb7"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "host",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "ime-keyboard",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 4124,
+      "cap_bytes": 65536,
+      "process": "sway",
+      "stream_sha256": "89f74d58e2e25a32f9c6ba5470ad99f3f01415e3625227688d70aa8b70a9d8f2"
+    }
+  ],
+  "protocol_globals": {
+    "query_bytes": 5340,
+    "query_sha256": "f73c6de4260e7530740611e0e68cdebe88766b7305d20697847465d24bd692be",
+    "required": [
+      "zwp_text_input_manager_v3",
+      "zwp_input_method_manager_v2",
+      "zwp_virtual_keyboard_manager_v1"
+    ],
+    "socket_peer_rechecked": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3198519
+    }
+  },
+  "schema": 1,
+  "stage": "complete",
+  "status": "pass-private-wayland-v3-fcitx-pinyin-commit-fixture",
+  "sway": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "config_has_only_fixed_output_and_disables_xwayland": true,
+    "config_sha256": "b3ecbab695df722529186ec5e4a6b93be5a219b374710f648f339e3204d7c8f2",
+    "ipc_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 41,
+      "path": "/run/pigade-ime/sway-ipc.1000.5.sock",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3198519
+    },
+    "output": {
+      "active": true,
+      "name": "HEADLESS-1",
+      "size": [
+        1280,
+        800
+      ]
+    },
+    "pid": 5,
+    "start_ticks": 3198519,
+    "wayland_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3198519
+    }
+  },
+  "private_run": "/home/afterburner/.local/state/pigade/iw-redraw-1017",
+  "app_sha256": "1f7a858a2d5baea1a0c2c6a3863aceb3a03db7710508c97d9284abdd6c1d8d58",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "harness_sha256": "a0c0f834bcf4ce551500391f7bae750971a196b6b6ec4dfdecc31d658002216c",
+  "wayland-preedit.png_sha256": "0ddb176009394bf879f2db48c1017d192172b6bc41d8ec7322cfd07e6837941f",
+  "wayland-committed.png_sha256": "7850319ec19f94d21b2f1d1ffe5f78559181d0d105937566ee5418dc5161249b"
+}

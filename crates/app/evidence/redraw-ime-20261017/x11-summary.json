@@ -1,0 +1,105 @@
+{
+  "status": "pass-private-x11-xim-pinyin-commit-fixture",
+  "stage": "complete",
+  "preedit": {
+    "capture": "preedit.ppm",
+    "capture_bytes": 3072016,
+    "capture_scope": "private Xvfb root window",
+    "host_output_unchanged": true,
+    "pty_bytes_before_commit": 0,
+    "visibility": "captured before commit; requires screenshot review"
+  },
+  "commit": {
+    "capture_settle_seconds": 0.25,
+    "child_ack_seen": true,
+    "exact_once": true,
+    "expected_fixture_hash": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "extra_bytes": 0,
+    "payload_sha256": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "received_bytes": 6
+  },
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 33,
+    "start_time_ticks": 3193617,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "fcitx": {
+    "active_input_method": "pinyin",
+    "input_method": "pinyin",
+    "pid": 12,
+    "private_profile": true,
+    "start_time_ticks": 3193593,
+    "xim_owner_verified_by": "XRes local client PID",
+    "xim_selection": "@server=fcitx"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "387dc38c-d408-4c52-9c8c-015a2cf87ee4",
+    "ready": true,
+    "session": "bb715088-6bba-4242-8277-5bf04c33f376",
+    "tty": "raw/no-echo"
+  },
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 4966,
+      "stream_sha256": "9236c07ae77059a16cf991631fe0ed9a0d2c94ca02c21ef4a7447d1a524f83ac",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5930,
+      "stream_sha256": "d4ba380428142c861d1c7b04757793fe8a3367259a1299a6f0a7847edabd1e62",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "private_run": "/home/afterburner/.local/state/pigade/notification-pinyin-x11-redraw-20261017",
+  "app_sha256": "1f7a858a2d5baea1a0c2c6a3863aceb3a03db7710508c97d9284abdd6c1d8d58",
+  "host_sha256": "477d5f81375b38a15aae177144f8e3515017649100bf0424dfd89d4646b8d4d2",
+  "harness_sha256": "8d1832721d304722348a0c8678bd733b02fedb0529383413cda7f211be2a44d5",
+  "helper_sha256": "cec087fd8acd2d21a35c10038eee16bb64a22d064384ec27feb94bad82719819",
+  "x11-preedit.png_sha256": "e96db6ecb8c583be56ad690e94d25e02568d28f05661f31b51628f8e3fe2275e",
+  "x11-committed.png_sha256": "8a3026658c4bc06a316202b92a1873f3837f5aff407f9630da78420b293cdc21"
+}

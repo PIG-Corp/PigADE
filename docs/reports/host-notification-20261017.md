@@ -25,7 +25,7 @@ scanout, the formal echo harness or isolated PERF acceptance.
 | --- | --- | --- | ---: | ---: | ---: |
 | Initial notification |3eba79d2…|sample deadline, partial distribution unavailable|—|—|>1000 deadline|
 | Diagnostic helper |3eba79d2…|50 exact keys +ACK|95.577|96.876|97.287|
-| Finite publication trace |22b762db…|50 exact keys +ACK|see raw JSON|97.208|see raw JSON|
+| Finite publication trace |22b762db…|50 exact keys +ACK|95.582|97.208|99.322|
 
 The frozen host is477d5f81… throughout. Exact hashes/source bindings, every
 sample, the initial failure, recovery oracle and captures are retained under
@@ -86,3 +86,42 @@ python3 scripts/isolated-ime-x11.py --fixture latency --publication-trace --run 
 The script refuses unverified display/server/window identity. Never substitute
 an active-desktop endpoint. Full platform, memory, native IME target generation,
 formal performance and MVP hierarchy/tiling/context gates remain open.
+
+## Follow-up: redraw only changed presentation
+
+The plan and receipt-presentation regressions were written before the bounded
+redraw change. Normal unmarked commit/unmark no longer invalidates an unchanged
+terminal canvas. Visible preedit removal, protocol/local admission errors,
+cleared notices and cursor blink reset retain their notifications. Receipt
+processing still drains the bounded channel every wake; only a changed visible
+ACK button/release label requests its own redraw. Host frame/notice/recovery
+updates continue to invalidate independently. The actual ACK renderer reuses
+that same tested rule, including individually settled requests, other targets,
+unknown outcomes and confirmed mouse presses after a rejected release.
+
+Frozen app1f7a858a… with the same477d host and same cec087fd… helper completed
+all50 ordered keys and independent ACK. Observed pixel latency was63.647ms p50,
+66.165ms p95 and96.425ms p99/max. The prior traced run had p95=97.208ms. For
+50 matched frames the new Poll→UI figures are0.411/0.466/35.835ms; UI→paint entry
+is14.955/15.790/15.981ms (p50/p95/p99).267 finite trace records are retained,
+versus362 previously. These are two individual software runs with concurrent
+work, not a stable hardware speedup distribution or the50/80ms acceptance gate.
+The earlier1s outlier remains unresolved. No durability, queue/input delivery or
+host parser behavior changed.
+
+Exact source hashes, samples and TSV are in
+[redraw-source.json](../../benchmarks/results/notification-20261017/redraw-source.json),
+[latency-redraw-pass.json](../../benchmarks/results/notification-20261017/latency-redraw-pass.json)
+and [redraw-publication-trace.tsv](../../benchmarks/results/notification-20261017/redraw-publication-trace.tsv).
+All127 app tests, strict Clippy, formatting and release build pass. An independent
+read-only review found no stale-presentation regression.
+
+The same frozen app then passed native Pinyin again on both private X11/Fcitx
+and Sway/Pixman/Fcitx Wayland-v3: zero bytes before Space, exactly six UTF8 bytes
+你好 with no extras, independent child ACK. Root viewed preedit and committed
+captures for both: X11's external candidate popup remains at bottom left;
+Wayland has marked inline preedit/candidate near the cursor; both clear after
+commit and show ACK/exited state. This preserves commit/clear behavior without
+claiming X11 candidate placement, generation-switch barriers or general IME
+support. Captures and exact run metadata are in
+[redraw-ime-20261017](../../crates/app/evidence/redraw-ime-20261017/).

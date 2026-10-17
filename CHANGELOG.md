@@ -68,3 +68,5 @@ This section describes development work; it is not a release announcement.
 - Frozen async-checkpoint host completed1200 actual seconds with four producer CRCs,238 ACKs/396 resizes per stream and exact full/checkpoint-tail recovery; slow resize/journal cases retained. A new actual24h run is active; cold rows in this short run are zero and the24h/resource gates remain open.
 
 - Dedicated bounded host change waits wake cell polling independently of input. Tokens close publication races and survive host restart through fresh epochs; failed service falls back without changing committed launch results. Real host/PTy and app UDS regressions pass. Retained private latency runs still miss formal budgets; finite numeric traces prepare the next redraw fix.
+
+- Redraws now track visible preedit/ACK changes instead of every accepted input receipt.127 app tests and both private native Pinyin regressions pass; one50-key software trace reduces p95 from97.208to66.165ms, still outside formal budgets. Full samples and initial failed run remain retained.
