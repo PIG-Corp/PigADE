@@ -81,3 +81,9 @@ mouse state/host-admission receipt ledger and explicit release-cleanup plans.
 cancellable waiter; IPC state/receipt notifications use it without new parser
 state. Private fixed-key latency samples and their explicit limits live in
 [the input latency report](reports/input-latency-x11-20261017.md).
+
+`session-host/checkpoint.rs` now owns a single-flight snapshot/persistence permit
+and one background writer, shared with synchronous final publication. Actor
+`CheckpointProgress` services bounded completion/busy retries; raw journal and
+history commits remain synchronous. ADR0011 and the async-checkpoint report
+describe metric and recovery limits.

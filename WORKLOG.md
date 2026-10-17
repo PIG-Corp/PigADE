@@ -1657,3 +1657,35 @@ Integrate READY/START soak barrier; retain failed30s checkpoint-stage ACK diagno
 - Files: scripts/soak-pty.py, scripts/test_soak_pty.py, scripts/test_soak_admission.py, docs/research/launch-latency-next.md, docs/reports/checkpoint-stall-20261017.md, benchmarks/results/checkpoint-stall-20261017, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Root producer5/admission11 tests pass. Real30s attempt failed after31.730s; stagecheckpoint5.462s, final411 includes ACK. All4 complete/frame full-vs-checkpoint-tail recovery pass; cold0/vacuous, producerENDCRC unavailable. Source journals preserved.
 - Risks / next: Finish bounded async checkpoint persistence and blocked-writer/realPTY/fault/recovery tests; no timeout increase or24h claim.
+
+## 2026-10-17T02:58:20+00:00 — font_render_profile
+
+Attest the executing private runner through a credentialed Unix socket rather than the bwrap init PID
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/test_isolated_ime_wayland.py (17 passed); headless bwrap handshake probe verified actual Python peer SO_PEERCRED, exact argv/executable, PID ancestry, and all five distinct kernel namespace IDs before intentionally withholding the gate; no GUI/compositor/input ran
+- Risks / next: Root to review and perform final private Wayland run; actual product fixture remains untested by this agent
+
+## 2026-10-17T02:59:06+00:00 — recovery_slice_review
+
+Added actor-level real-PTY regression proving PTY output journal/history/frame progress continues while checkpoint persistence is paused; bounded checkpoint completion error text to 1024 UTF-8 bytes.
+
+- Files: crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/session-host/Cargo.toml; targeted paused-worker actor test passed; cargo test --offline -p pigade-session-host --lib (65 passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; git diff --check passed.
+- Risks / next: Root integrates and owns final whole-workspace verification; checkpoint cadence remains exercised by existing host tests.
+
+## 2026-10-17T03:00:26+00:00 — recovery_slice_review
+
+Hardened paused checkpoint actor-test cleanup with bounded worker resume and test-owned Stop/Wake/join guard; corrected checkpoint cache comment.
+
+- Files: crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo fmt --manifest-path crates/session-host/Cargo.toml; cargo test --offline -p pigade-session-host actor_keeps_committing_pty_output_while_checkpoint_persistence_is_paused --lib passed; cargo test --offline -p pigade-session-host checkpoint::tests --lib (6 passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; git diff --check passed.
+- Risks / next: Root owns final workspace build and integrated actor verification.
+
+## 2026-10-17T03:04:10+00:00 — root
+
+Integrate single-flight background checkpoint persistence without deferring journal/history durability; bounded idle completion and final Exit barriers
+
+- Files: crates/session-host/src/checkpoint.rs, crates/session-host/src/lib.rs, crates/session-host/src/metrics.rs, docs/adr/0011-bounded-background-checkpoint-persistence.md, docs/reports/async-checkpoint-20261017.md, benchmarks/results/async-checkpoint-20261017, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Fresh root191 workspace tests, strict all-target Clippy, fmt and release bins/examples pass. Repeated realPTY pausedworker test passes. Frozen4e4a0fcb30.043s all4 producerCRC/complete recovery pass, cold0/vacuous; sourcehashes revalidated equal beforecommit. New1200s tool89343 pending, old55262 independent.
+- Risks / next: Nonvacuous cold-root growth async capture and write/crash boundaries; observe new1200s result before24h; wholeheap/PERF/platform remainopen.

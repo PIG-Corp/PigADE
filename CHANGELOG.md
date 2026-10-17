@@ -60,3 +60,5 @@ This section describes development work; it is not a release announcement.
 - Worker input and UI state/receipt updates now wake on events through bounded coalescing; fixed50-key private X11 latency fixtures retain baseline and changed samples. Formal latency/GPU acceptance remains open.
 
 - Synthetic soak now waits for all four visible READY markers before START; a short run reproduced an ACK timeout at checkpoint stage with complete final recovery retained. Async checkpoint persistence remains under verification.
+
+- One bounded checkpoint worker persists immutable exact-watermark snapshots; live actors continue durable output while persistence is paused. Exit retains forced checkpoint-tail recovery. Fresh191-test workspace and30s CRC/recovery smoke pass; long soak remains pending.

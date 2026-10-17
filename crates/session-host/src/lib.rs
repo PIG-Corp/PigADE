@@ -1132,6 +1132,9 @@ struct CheckpointProgress {
     events: u32,
     model_work: Duration,
     clock: Instant,
+    pending: Option<checkpoint::Pending>,
+    retry_busy: bool,
+    completed: u64,
 }
 impl Default for CheckpointProgress {
     fn default() -> Self {
@@ -1141,16 +1144,53 @@ impl Default for CheckpointProgress {
             events: 0,
             model_work: Duration::ZERO,
             clock: Instant::now(),
+            pending: None,
+            retry_busy: false,
+            completed: 0,
         }
     }
 }
 impl CheckpointProgress {
     fn observe(&mut self, receipt: pigade_storage::Receipt, payload: usize, work: Duration) {
         self.receipt = Some(receipt);
-        self.bytes += 33 + payload;
-        self.events += 1;
-        self.model_work += work;
+        self.bytes = self.bytes.saturating_add(33).saturating_add(payload);
+        self.events = self.events.saturating_add(1);
+        self.model_work = self.model_work.saturating_add(work);
     }
+    // Completion remains observable on an otherwise quiet terminal. A busy
+    // global slot retries on a bounded timer instead of a zero-timeout spin.
+    fn receive_timeout(&self) -> Option<Duration> {
+        if self.pending.is_some() || self.retry_busy {
+            Some(Duration::from_millis(10))
+        } else if self.events > 0 {
+            Some(Duration::from_secs(5).saturating_sub(self.clock.elapsed()))
+        } else {
+            None
+        }
+    }
+
+    fn complete(&mut self, wait: bool) -> Result<()> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+        if wait {
+            pending.wait()?;
+        } else {
+            match pending.poll() {
+                checkpoint::Completion::Pending => {
+                    self.pending = Some(pending);
+                    return Ok(());
+                }
+                checkpoint::Completion::Succeeded => (),
+                checkpoint::Completion::Failed(message) => {
+                    bail!("checkpoint worker failed: {message}")
+                }
+            }
+        }
+        self.completed = self.completed.saturating_add(1);
+        Ok(())
+    }
+
     fn publish(
         &mut self,
         force: bool,
@@ -1165,20 +1205,130 @@ impl CheckpointProgress {
                 || self.events >= 1024
                 || self.model_work >= Duration::from_millis(125)
                 || self.clock.elapsed() >= Duration::from_secs(5));
-        if due {
+        self.complete(force)?;
+        if !due || self.pending.is_some() {
+            return Ok(false);
+        }
+        let receipt = self.receipt.context("checkpoint lacks durable receipt")?;
+        if force {
+            // Exit retains deterministic final checkpoint-tail recovery. The
+            // synchronous API waits on the same global capture/persist permit.
             checkpoint::publish_with_history(
                 root,
                 header,
-                self.receipt.context("checkpoint lacks durable receipt")?,
+                receipt,
                 terminal,
                 Some(history.checkpoint()?),
             )?;
-            self.bytes = 0;
-            self.events = 0;
-            self.model_work = Duration::ZERO;
-            self.clock = Instant::now();
+            self.completed = self.completed.saturating_add(1);
+        } else {
+            match checkpoint::schedule(
+                root,
+                header,
+                receipt,
+                terminal,
+                Some(history.checkpoint()?),
+            )? {
+                Some(pending) => self.pending = Some(pending),
+                None => {
+                    self.retry_busy = true;
+                    return Ok(false);
+                }
+            }
         }
+        self.bytes = 0;
+        self.events = 0;
+        self.model_work = Duration::ZERO;
+        self.clock = Instant::now();
+        self.retry_busy = false;
         Ok(due)
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_progress_tests {
+    use super::*;
+
+    #[test]
+    fn deferred_due_checkpoint_has_bounded_nonzero_idle_wait() {
+        let mut progress = CheckpointProgress {
+            clock: Instant::now() - Duration::from_secs(60),
+            retry_busy: true,
+            ..Default::default()
+        };
+        let receipt = pigade_storage::Receipt {
+            sequence: 1,
+            end_offset: 100,
+            checksum: 0,
+        };
+        progress.observe(receipt, usize::MAX, Duration::MAX);
+        progress.observe(receipt, 10, Duration::from_secs(1));
+        let timeout = progress
+            .receive_timeout()
+            .expect("dirty deferred work needs retry");
+        assert!(timeout > Duration::ZERO && timeout <= Duration::from_millis(100));
+        assert_eq!(progress.bytes, usize::MAX);
+        assert_eq!(progress.model_work, Duration::MAX);
+        assert!(progress.events > 0, "busy work must stay dirty");
+    }
+
+    #[test]
+    fn worker_failure_is_observable_with_no_new_terminal_events() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let terminal = Terminal::new(Geometry::new(4, 20)?, false);
+        let header = JournalHeader {
+            session_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            profile: CORE_PROFILE.into(),
+            initial_rows: 4,
+            initial_cols: 20,
+        };
+        let receipt = pigade_storage::Receipt {
+            sequence: 0,
+            end_offset: 0,
+            checksum: 0,
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let pending = loop {
+            if let Some(pending) = checkpoint::schedule(
+                &root.path().join("missing"),
+                &header,
+                receipt,
+                &terminal,
+                None,
+            )? {
+                break pending;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "checkpoint worker did not release permit"
+            );
+            thread::sleep(Duration::from_millis(1));
+        };
+        let mut progress = CheckpointProgress {
+            pending: Some(pending),
+            ..Default::default()
+        };
+        assert_eq!(
+            progress.events, 0,
+            "no subsequent PTY event drives completion"
+        );
+        loop {
+            let timeout = progress
+                .receive_timeout()
+                .context("pending result must remain serviceable")?;
+            match progress.complete(false) {
+                Err(error) => {
+                    assert!(error.to_string().contains("checkpoint worker failed"));
+                    assert_eq!(progress.completed, 0);
+                    return Ok(());
+                }
+                Ok(()) => {
+                    ensure!(Instant::now() < deadline, "idle failure was never observed");
+                    thread::sleep(timeout);
+                }
+            }
+        }
     }
 }
 
@@ -1207,6 +1357,20 @@ fn actor(
         probe.enter(metrics::ActorStage::Waiting, None);
         if let Ok(Control::Stop) = config.control.try_recv() {
             let _ = child.kill();
+        }
+        if let Err(error) = checkpoints.complete(false) {
+            probe.enter(metrics::ActorStage::Degraded, None);
+            let mut current = view.lock().expect("view lock");
+            current.storage_error = Some(format!("checkpoint completion failed: {error:#}"));
+            current.state = "degraded".into();
+            drop(current);
+            loop {
+                wait_degraded(&config.control, &mut *child);
+            }
+        }
+        if metrics.checkpoints != checkpoints.completed {
+            metrics.checkpoints = checkpoints.completed;
+            view.lock().expect("view lock").metrics = metrics.clone();
         }
         if !query_responses.is_empty() {
             probe.enter(metrics::ActorStage::QueryResponses, None);
@@ -1244,8 +1408,8 @@ fn actor(
                 rx.recv_timeout(Duration::from_millis(10))
             } else if !query_responses.is_empty() {
                 rx.recv_timeout(QUERY_RESPONSE_RETRY)
-            } else if checkpoints.events > 0 {
-                rx.recv_timeout(Duration::from_secs(5).saturating_sub(checkpoints.clock.elapsed()))
+            } else if let Some(timeout) = checkpoints.receive_timeout() {
+                rx.recv_timeout(timeout)
             } else {
                 rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
             };
@@ -1268,6 +1432,7 @@ fn actor(
                         );
                         if matches!(checkpoint_result, Ok(true)) {
                             metrics.idle_checkpoint(checkpoint_start.elapsed());
+                            metrics.checkpoints = checkpoints.completed;
                             view.lock().expect("view lock").metrics = metrics.clone();
                         }
                         if let Err(error) = checkpoint_result {
@@ -1368,7 +1533,7 @@ fn actor(
             checkpoints.observe(receipt, payload.len(), model_work);
             let checkpoint_start = Instant::now();
             probe.enter(metrics::ActorStage::Checkpoint, Some(receipt.sequence));
-            let checkpointed = checkpoints.publish(
+            checkpoints.publish(
                 kind == EventKind::Exit,
                 &config.root,
                 journal.header(),
@@ -1404,8 +1569,8 @@ fn actor(
                 archive: archive_work,
                 checkpoint: checkpoint_work,
                 frame: frame_start.elapsed(),
-                checkpointed,
             });
+            metrics.checkpoints = checkpoints.completed;
             current.metrics = metrics.clone();
             if kind == EventKind::Exit {
                 current.state = "exited".into();

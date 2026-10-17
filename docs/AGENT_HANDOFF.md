@@ -228,3 +228,14 @@ child wroteACK and reader has16B not yet enqueued. Final411 replay includes ACK;
 all4 complete recovery comparisons pass, cold0/vacuous, ENDCRC unavailable.
 See reports/checkpoint-stall-20261017.md. Bounded async persistence is in progress;
 no fix/24h claim yet. Startup READY/START barrier works and does not alter active55262.
+
+## Bounded background checkpoint integration
+
+ADR0011 is implemented;191 workspace tests, strict Clippy/fmt/release pass.
+Frozen host4e4a0fcb…30.043s smoke passes4 CRC/full-recovery checks, cold0/vacuous.
+Tool89343 runs1200s at `~/.local/state/pigade/soak/async-checkpoint-1200s-20261017`;
+result pending, no duplicate/restart. Old7200s tool55262 stays independently
+active on610efac4…; do not conflate binaries/results.
+Capture remains synchronous, persistence single-flight async, final Exit waits;
+late errors degrade on bounded idle observation. See reports/async-checkpoint-20261017.md.
+No24h, global-memory or PERF acceptance is implied.

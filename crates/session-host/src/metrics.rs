@@ -134,7 +134,6 @@ pub(crate) struct EventCost {
     pub archive: Duration,
     pub checkpoint: Duration,
     pub frame: Duration,
-    pub checkpointed: bool,
 }
 fn nanos(duration: Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
@@ -148,12 +147,8 @@ impl SessionMetrics {
         self.archive_commit_ns = self.archive_commit_ns.saturating_add(nanos(cost.archive));
         self.checkpoint_ns = self.checkpoint_ns.saturating_add(nanos(cost.checkpoint));
         self.frame_publish_ns = self.frame_publish_ns.saturating_add(nanos(cost.frame));
-        self.checkpoints = self
-            .checkpoints
-            .saturating_add(u64::from(cost.checkpointed));
     }
     pub(crate) fn idle_checkpoint(&mut self, elapsed: Duration) {
-        self.checkpoints = self.checkpoints.saturating_add(1);
         self.checkpoint_ns = self.checkpoint_ns.saturating_add(nanos(elapsed));
     }
 }

@@ -1,0 +1,315 @@
+{
+  "status": "completed",
+  "requested_seconds": 30,
+  "actual_elapsed_seconds": 30.043121069000335,
+  "binary_sha256": "4e4a0fcb6f77d082bbebe7470311114d4a470db5aa846816f7fdd31a78593e2a",
+  "filesystem": "btrfs",
+  "errors": [],
+  "input_acknowledged_all_sessions": true,
+  "journal_crc_verified_all_sessions": true,
+  "verify_recovery_passed_all_sessions": true,
+  "checkpoint_age_and_watermark_summary": [
+    {
+      "last_checkpoint_sequence": null,
+      "max_checkpoint_age_seconds": null,
+      "max_sequence_lag": null,
+      "sample_count": 1
+    },
+    {
+      "last_checkpoint_sequence": null,
+      "max_checkpoint_age_seconds": null,
+      "max_sequence_lag": null,
+      "sample_count": 1
+    },
+    {
+      "last_checkpoint_sequence": null,
+      "max_checkpoint_age_seconds": null,
+      "max_sequence_lag": null,
+      "sample_count": 1
+    },
+    {
+      "last_checkpoint_sequence": null,
+      "max_checkpoint_age_seconds": null,
+      "max_sequence_lag": null,
+      "sample_count": 1
+    }
+  ],
+  "resize_admission_retry_summary": [
+    {
+      "attempts": 9,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    },
+    {
+      "attempts": 9,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    },
+    {
+      "attempts": 9,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    },
+    {
+      "attempts": 9,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    }
+  ],
+  "resizes_per_session": [
+    9,
+    9,
+    9,
+    9
+  ],
+  "elapsed_24h_completed": false,
+  "rec08_full_acceptance": false,
+  "sessions": [
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 123932,
+      "event_counts": {
+        "1": 577,
+        "2": 9,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "5e364f8a-dfcd-4a41-bf6c-40ab7e426ada",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30144034585162,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30144032325580,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30144032323476,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 56706790,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30144091291952,
+      "input_ack_count": 5,
+      "journal": "5e364f8a-dfcd-4a41-bf6c-40ab7e426ada.journal",
+      "journal_bytes": 143928,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 124003,
+      "output_crc32": "7852cfee",
+      "pid": 1423801,
+      "producer_body_bytes": 123932,
+      "producer_body_write_seconds": 30.074622335,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30144335990649,
+      "resize_count": 9,
+      "sequence": 587,
+      "session": "2cc0aba9-f27b-42bf-8f73-8143c0480da2",
+      "stream": 0,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.00015,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 10.069382,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 143928,
+        "full_replay_ms": 7.419672,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 234240,
+        "sequence": 587
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 123932,
+      "event_counts": {
+        "1": 576,
+        "2": 9,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "a5b67361-edab-4142-bbb3-e1a5dd29b2f3",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30144118790602,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30144116357211,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30144116354596,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 53541763,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30144172332365,
+      "input_ack_count": 5,
+      "journal": "a5b67361-edab-4142-bbb3-e1a5dd29b2f3.journal",
+      "journal_bytes": 143895,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 124003,
+      "output_crc32": "973b7035",
+      "pid": 1423808,
+      "producer_body_bytes": 123932,
+      "producer_body_write_seconds": 30.074625862,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30144340967330,
+      "resize_count": 9,
+      "sequence": 586,
+      "session": "6493b764-c224-45c0-ace1-19e9aa2c0eea",
+      "stream": 1,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.00011999999999999999,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 11.585405999999999,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 143895,
+        "full_replay_ms": 7.365368,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 234240,
+        "sequence": 586
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 123932,
+      "event_counts": {
+        "1": 574,
+        "2": 9,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "15097b32-b2ac-481c-9511-0c37f929cb4d",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30144201364912,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30144198048938,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30144198046303,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 50906749,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30144252271661,
+      "input_ack_count": 5,
+      "journal": "15097b32-b2ac-481c-9511-0c37f929cb4d.journal",
+      "journal_bytes": 143829,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 124003,
+      "output_crc32": "40145211",
+      "pid": 1423815,
+      "producer_body_bytes": 123932,
+      "producer_body_write_seconds": 30.074626144,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30144346098273,
+      "resize_count": 9,
+      "sequence": 584,
+      "session": "707f03eb-ca55-40be-afff-f1386ef714cb",
+      "stream": 2,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.000191,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 10.696621,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 143829,
+        "full_replay_ms": 7.391688,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 234240,
+        "sequence": 584
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 123932,
+      "event_counts": {
+        "1": 576,
+        "2": 9,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "6afd6967-95d1-4a02-85ba-57c186d8f514",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30144280618699,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30144278388262,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30144278385787,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 52972032,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30144333590731,
+      "input_ack_count": 5,
+      "journal": "6afd6967-95d1-4a02-85ba-57c186d8f514.journal",
+      "journal_bytes": 143895,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 124003,
+      "output_crc32": "29568708",
+      "pid": 1423822,
+      "producer_body_bytes": 123932,
+      "producer_body_write_seconds": 30.094701679,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30144351032384,
+      "resize_count": 9,
+      "sequence": 586,
+      "session": "d3075c21-11c4-4b10-9b0c-04162417a012",
+      "stream": 3,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.00015,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 11.548776,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 143895,
+        "full_replay_ms": 7.343156,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 234240,
+        "sequence": 586
+      }
+    }
+  ],
+  "scope": "30s synthetic four-PTY smoke; zero cold records, no24h/isolated PERF acceptance",
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/async-checkpoint-smoke-20261017"
+}

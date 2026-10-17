@@ -1,0 +1,22 @@
+{
+  "binary_sha256": "4e4a0fcb6f77d082bbebe7470311114d4a470db5aa846816f7fdd31a78593e2a",
+  "parent_commit": "be8fb77eb6aea50992241c29c2e2026aa9f0109a",
+  "source_sha256": {
+    "crates/session-host/src/catalog.rs": "22a35f2732179a796fe543298217aa322eacd431c45ef24ca1b341b29c900147",
+    "crates/session-host/src/checkpoint.rs": "31c7d2b255418108d912cf0461c11fd7386dcdac8495f4b98363120b0d7295d3",
+    "crates/session-host/src/history.rs": "931fffda2de34f7259c18b27b53910cabda12fa774e34f33dbbc37d03e75e66c",
+    "crates/session-host/src/history_read.rs": "88f7b611e12ebfdb41ed12e3a77872692f70f675ed85f59466b5dff2c56fdf3a",
+    "crates/session-host/src/input.rs": "e9e69b52285220d8c1ba5b889f74544f981ad2c496fe4263fa8b25ad43031fd1",
+    "crates/session-host/src/ipc_server.rs": "8bacb8bf4820bd7bd43c752716f8d1ee30f9b4ce2b7aea4f5486c34a62dafa49",
+    "crates/session-host/src/launch_gate.rs": "e3c51981d60cc9d899239386f588e5bcc55f55a45eaca36cb1880d6488e415ae",
+    "crates/session-host/src/lib.rs": "7dcbaa88a6212e6be9c178886a28af60fbd37b591bd38d70ec52d66fad311ec8",
+    "crates/session-host/src/main.rs": "8d948ac12b3e095ec2e8224a169cf1b98f70b2a82c3635b2689ca48390a116a7",
+    "crates/session-host/src/metrics.rs": "68c8806251bc95bfb4637d1aae6da045a5eca82a6a1f1a7d2e1bd4510f1fbc08",
+    "crates/session-host/src/poll.rs": "36b22fb5e6448e92ecf3f40938bc443c5d73061e4cbecb12f16516385da7ddce",
+    "crates/session-host/src/recovery_diagnostics.rs": "79d650a56ea61be587e498488c28fc5bfbb882339ce6097551f3d3f7daf367f4",
+    "crates/session-host/src/recovery_tests.rs": "e301b41c366f01187aa7f9c17dd9066548b8c84422a0d08cc76331cca7d18546",
+    "crates/session-host/src/replay_cache.rs": "9a309aadabceec4de519149fadf69d45d44519c10575c1f0b781fd92742040e0",
+    "crates/session-host/src/request_decode.rs": "75850edcc489e0d760bc2feed6920324e5711be1332b571d3415c839caddcd0d",
+    "Cargo.lock": "178e83403bd9c5410b9ffd09afaca921bb14ec494d6b34726f9627829c220bc3"
+  }
+}

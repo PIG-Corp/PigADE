@@ -3,20 +3,93 @@ use anyhow::{Context, Result, ensure};
 use pigade_storage::{JournalHeader, Receipt};
 use pigade_terminal::Terminal;
 use std::{
+    fmt,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Condvar, Mutex, OnceLock, mpsc},
 };
 use uuid::Uuid;
 const MAGIC: &[u8; 8] = b"PIGCP001";
 const MAGIC_WITH_HISTORY: &[u8; 8] = b"PIGCP002";
 const LIMIT: usize = 128 * 1024 * 1024;
-// Export/import/pruning can temporarily hold a second hot grid. Serialize
-// checkpoint work across actors; bounded PTY queues provide backpressure while
-// a generation waits. This is one part of, not proof of, the total heap budget.
+const COMPLETION_ERROR_LIMIT: usize = 1024;
+// Retention validation/import cache; the separate singleflight permit guards
+// actor-side capture through async persistence. Checkpoint work is bounded, but
+// this cache alone is not proof of the total heap budget.
 static CHECKPOINT_WORK: Mutex<Vec<Validated>> = Mutex::new(Vec::new());
+
+// A checkpoint is captured on the actor thread, but the potentially slow
+// filesystem durability work is performed by one process-wide worker.
+static CHECKPOINT_PERMIT: OnceLock<Mutex<bool>> = OnceLock::new();
+static CHECKPOINT_PERMIT_CHANGED: Condvar = Condvar::new();
+static CHECKPOINT_WORKER: OnceLock<std::result::Result<mpsc::SyncSender<Job>, String>> =
+    OnceLock::new();
+#[cfg(test)]
+type TestPause = (Uuid, mpsc::SyncSender<()>, mpsc::Receiver<()>);
+#[cfg(test)]
+static TEST_PAUSE: OnceLock<Mutex<Option<TestPause>>> = OnceLock::new();
+
+struct Permit;
+impl Drop for Permit {
+    fn drop(&mut self) {
+        if let Ok(mut busy) = permit_lock().lock() {
+            *busy = false;
+            CHECKPOINT_PERMIT_CHANGED.notify_one();
+        }
+    }
+}
+fn permit_lock() -> &'static Mutex<bool> {
+    CHECKPOINT_PERMIT.get_or_init(|| Mutex::new(false))
+}
+fn try_permit() -> Result<Option<Permit>> {
+    let mut busy = permit_lock()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
+    if *busy {
+        return Ok(None);
+    }
+    *busy = true;
+    Ok(Some(Permit))
+}
+fn wait_permit() -> Result<Permit> {
+    let mut busy = permit_lock()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
+    while *busy {
+        busy = CHECKPOINT_PERMIT_CHANGED
+            .wait(busy)
+            .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
+    }
+    *busy = true;
+    Ok(Permit)
+}
+
+struct BoundedError(String);
+impl fmt::Write for BoundedError {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        if self.0.len() + value.len() <= COMPLETION_ERROR_LIMIT {
+            self.0.push_str(value);
+            return Ok(());
+        }
+        let marker = "…";
+        let budget = COMPLETION_ERROR_LIMIT.saturating_sub(marker.len());
+        let room = budget.saturating_sub(self.0.len());
+        let mut end = room.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.0.push_str(&value[..end]);
+        self.0.push_str(marker);
+        Err(fmt::Error)
+    }
+}
+fn bounded_error(error: &anyhow::Error) -> String {
+    let mut bounded = BoundedError(String::with_capacity(COMPLETION_ERROR_LIMIT));
+    let _ = fmt::Write::write_fmt(&mut bounded, format_args!("{error:#}"));
+    bounded.0
+}
 
 #[derive(PartialEq, Eq)]
 struct Stamp {
@@ -98,6 +171,163 @@ pub struct Loaded {
     pub offset: u64,
     pub history: Option<crate::history::Checkpoint>,
 }
+
+struct Job {
+    root: PathBuf,
+    header: JournalHeader,
+    receipt: Receipt,
+    terminal_bytes: Vec<u8>,
+    history: Option<crate::history::Checkpoint>,
+    completion: mpsc::SyncSender<std::result::Result<(), String>>,
+    _permit: Permit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Completion {
+    Pending,
+    Succeeded,
+    Failed(String),
+}
+
+pub struct Pending {
+    completion: mpsc::Receiver<std::result::Result<(), String>>,
+    cached: Mutex<Option<Completion>>,
+}
+
+impl Pending {
+    pub fn poll(&self) -> Completion {
+        let mut cached = match self.cached.lock() {
+            Ok(cached) => cached,
+            Err(_) => return Completion::Failed("checkpoint completion poisoned".into()),
+        };
+        if let Some(result) = cached.as_ref() {
+            return result.clone();
+        }
+        let result = match self.completion.try_recv() {
+            Ok(Ok(())) => Completion::Succeeded,
+            Ok(Err(message)) => Completion::Failed(message),
+            Err(mpsc::TryRecvError::Empty) => return Completion::Pending,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Completion::Failed("checkpoint worker disconnected before completion".into())
+            }
+        };
+        *cached = Some(result.clone());
+        result
+    }
+
+    pub fn wait(self) -> Result<()> {
+        if let Some(result) = self
+            .cached
+            .into_inner()
+            .map_err(|_| anyhow::anyhow!("checkpoint completion poisoned"))?
+        {
+            return completion_result(result);
+        }
+        match self.completion.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(anyhow::anyhow!(message)),
+            Err(_) => Err(anyhow::anyhow!(
+                "checkpoint worker disconnected before completion"
+            )),
+        }
+    }
+}
+
+fn completion_result(completion: Completion) -> Result<()> {
+    match completion {
+        Completion::Pending => unreachable!("pending completion is not cached"),
+        Completion::Succeeded => Ok(()),
+        Completion::Failed(message) => Err(anyhow::anyhow!(message)),
+    }
+}
+
+fn worker_sender() -> Result<&'static mpsc::SyncSender<Job>> {
+    let worker = CHECKPOINT_WORKER.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<Job>(1);
+        match std::thread::Builder::new()
+            .name("pigade-checkpoint-writer".into())
+            .spawn(move || {
+                while let Ok(mut job) = receiver.recv() {
+                    #[cfg(test)]
+                    if let Ok(mut pause) = TEST_PAUSE.get_or_init(|| Mutex::new(None)).lock()
+                        && pause
+                            .as_ref()
+                            .is_some_and(|(generation, _, _)| *generation == job.header.generation)
+                        && let Some((_, started, resume)) = pause.take()
+                    {
+                        let _ = started.send(());
+                        let _ = resume.recv_timeout(std::time::Duration::from_secs(20));
+                    }
+                    let result = persist_snapshot(
+                        &job.root,
+                        &job.header,
+                        job.receipt,
+                        &job.terminal_bytes,
+                        job.history.take(),
+                    )
+                    .map_err(|error| bounded_error(&error));
+                    let completion = job.completion.clone();
+                    // Job field order drops captured bytes before its permit,
+                    // including on unwind. A new capture cannot overlap them.
+                    drop(job);
+                    let _ = completion.send(result);
+                }
+            }) {
+            Ok(_) => Ok(sender),
+            Err(error) => Err(format!("cannot start checkpoint worker: {error}")),
+        }
+    });
+    worker.as_ref().map_err(|message| anyhow::anyhow!(message))
+}
+
+/// Capture an immutable checkpoint after its journal/history receipt is durable,
+/// then persist it on the bounded process-wide checkpoint worker. `None` means
+/// another generation owns the single snapshot/persist permit; no terminal
+/// export or history clone has occurred in that case.
+pub fn schedule(
+    root: &Path,
+    header: &JournalHeader,
+    receipt: Receipt,
+    terminal: &Terminal,
+    history: Option<crate::history::Checkpoint>,
+) -> Result<Option<Pending>> {
+    schedule_with_capture(root, header, receipt, history, || terminal.checkpoint())
+}
+
+fn schedule_with_capture<F>(
+    root: &Path,
+    header: &JournalHeader,
+    receipt: Receipt,
+    history: Option<crate::history::Checkpoint>,
+    capture: F,
+) -> Result<Option<Pending>>
+where
+    F: FnOnce() -> Result<Vec<u8>>,
+{
+    let Some(permit) = try_permit()? else {
+        return Ok(None);
+    };
+    let sender = worker_sender()?;
+    let terminal_bytes = capture()?;
+    validate_history(&history, receipt)?;
+    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+    let job = Job {
+        root: root.to_owned(),
+        header: header.clone(),
+        receipt,
+        terminal_bytes,
+        history,
+        completion: completion_tx,
+        _permit: permit,
+    };
+    sender
+        .try_send(job)
+        .map_err(|error| anyhow::anyhow!("checkpoint worker unavailable: {error}"))?;
+    Ok(Some(Pending {
+        completion: completion_rx,
+        cached: Mutex::new(None),
+    }))
+}
 pub fn publish(
     root: &Path,
     header: &JournalHeader,
@@ -113,21 +343,39 @@ pub fn publish_with_history(
     terminal: &Terminal,
     history: Option<crate::history::Checkpoint>,
 ) -> Result<()> {
-    let mut work = CHECKPOINT_WORK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
+    let _permit = wait_permit()?;
     let bytes = terminal.checkpoint()?;
-    let mut history_bytes = Vec::new();
-    if let Some(history) = &history {
+    persist_snapshot(root, header, receipt, &bytes, history)
+}
+
+fn validate_history(history: &Option<crate::history::Checkpoint>, receipt: Receipt) -> Result<()> {
+    if let Some(history) = history {
         ensure!(
             history.state.applied_sequence == receipt.sequence,
             "history/checkpoint sequence mismatch"
         );
-        let metadata = serde_json::to_vec(history)?;
         ensure!(
-            metadata.len() <= 32768,
+            serde_json::to_vec(history)?.len() <= 32768,
             "history checkpoint metadata exceeds budget"
         );
+    }
+    Ok(())
+}
+
+fn persist_snapshot(
+    root: &Path,
+    header: &JournalHeader,
+    receipt: Receipt,
+    bytes: &[u8],
+    history: Option<crate::history::Checkpoint>,
+) -> Result<()> {
+    validate_history(&history, receipt)?;
+    let mut work = CHECKPOINT_WORK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("checkpoint scheduler poisoned"))?;
+    let mut history_bytes = Vec::new();
+    if let Some(history) = &history {
+        let metadata = serde_json::to_vec(history)?;
         history_bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
         history_bytes.extend_from_slice(&metadata);
     }
@@ -147,7 +395,7 @@ pub fn publish_with_history(
     let mut crc = crc32fast::Hasher::new();
     crc.update(&prefix);
     crc.update(&history_bytes);
-    crc.update(&bytes);
+    crc.update(bytes);
     prefix.extend_from_slice(&crc.finalize().to_le_bytes());
     let temporary = root.join(format!("{}.{}.tmp", header.generation, Uuid::new_v4()));
     let destination = root.join(format!(
@@ -161,7 +409,7 @@ pub fn publish_with_history(
         .open(&temporary)?;
     file.write_all(&prefix)?;
     file.write_all(&history_bytes)?;
-    file.write_all(&bytes)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
     fs::rename(&temporary, &destination)?;
@@ -298,6 +546,376 @@ mod tests {
     use super::*;
     use pigade_storage::{EventKind, Journal};
     use pigade_terminal::{CORE_PROFILE, Geometry};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ASYNC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ActorCleanup {
+        release: Option<mpsc::SyncSender<()>>,
+        control: mpsc::SyncSender<crate::Control>,
+        actions: mpsc::SyncSender<crate::Action>,
+        actor: Option<std::thread::JoinHandle<()>>,
+        reader: Option<std::thread::JoinHandle<()>>,
+        finished: bool,
+    }
+
+    impl ActorCleanup {
+        fn release_worker(&mut self) {
+            if let Some(release) = self.release.take() {
+                let _ = release.send(());
+            }
+        }
+
+        fn join(&mut self) {
+            self.release_worker();
+            if let Some(actor) = self.actor.take() {
+                actor.join().expect("test actor thread panicked");
+            }
+            if let Some(reader) = self.reader.take() {
+                reader.join().expect("test PTY reader thread panicked");
+            }
+            self.finished = true;
+        }
+    }
+
+    impl Drop for ActorCleanup {
+        fn drop(&mut self) {
+            if self.finished {
+                return;
+            }
+            self.release_worker();
+            let _ = self.control.try_send(crate::Control::Stop);
+            let _ = self.actions.try_send(crate::Action::Wake);
+            if let Some(actor) = self.actor.take() {
+                let _ = actor.join();
+            }
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    fn header() -> JournalHeader {
+        JournalHeader {
+            session_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            profile: CORE_PROFILE.into(),
+            initial_rows: 8,
+            initial_cols: 40,
+        }
+    }
+
+    #[test]
+    fn async_capture_is_immutable_and_busy_does_not_capture() -> Result<()> {
+        let _serial = ASYNC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let header = header();
+        let history = crate::history::History::live(root.path(), &header)?;
+        let history_checkpoint = history.checkpoint()?;
+        let mut terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        terminal.output(b"captured");
+        let expected = terminal.checkpoint()?;
+        let receipt = Receipt {
+            sequence: 0,
+            end_offset: 0,
+            checksum: 0,
+        };
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        *TEST_PAUSE.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+            Some((header.generation, started_tx, resume_rx));
+        let pending = loop {
+            if let Some(pending) = schedule(
+                root.path(),
+                &header,
+                receipt,
+                &terminal,
+                Some(history_checkpoint.clone()),
+            )? {
+                break pending;
+            }
+            std::thread::yield_now();
+        };
+        started_rx.recv().unwrap();
+        let captured_on_busy = AtomicBool::new(false);
+        assert!(
+            schedule_with_capture(root.path(), &header, receipt, None, || {
+                captured_on_busy.store(true, Ordering::SeqCst);
+                Ok(Vec::new())
+            })?
+            .is_none()
+        );
+        assert!(!captured_on_busy.load(Ordering::SeqCst));
+        terminal.output(b"changed after capture");
+        assert_eq!(pending.poll(), Completion::Pending);
+        resume_tx.send(()).unwrap();
+        pending.wait()?;
+        let loaded = latest(root.path(), &header, u64::MAX)?.loaded.unwrap();
+        assert_eq!(loaded.sequence, receipt.sequence);
+        assert_eq!(loaded.terminal.checkpoint()?, expected);
+        assert_eq!(loaded.history, Some(history_checkpoint));
+        Ok(())
+    }
+
+    #[test]
+    fn async_failure_is_reported_and_releases_global_permit() -> Result<()> {
+        let _serial = ASYNC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let missing = root.path().join("missing-directory");
+        let header = header();
+        let receipt = Receipt {
+            sequence: 0,
+            end_offset: 0,
+            checksum: 0,
+        };
+        let terminal = Terminal::new(Geometry::new(8, 40)?, false);
+        let first = loop {
+            if let Some(pending) = schedule(&missing, &header, receipt, &terminal, None)? {
+                break pending;
+            }
+            std::thread::yield_now();
+        };
+        let error = first.wait().unwrap_err().to_string();
+        assert!(!error.is_empty());
+        let second = loop {
+            if let Some(pending) = schedule(&missing, &header, receipt, &terminal, None)? {
+                break pending;
+            }
+            std::thread::yield_now();
+        };
+        assert!(second.wait().is_err());
+
+        let pending = Pending {
+            completion: {
+                let (tx, rx) = mpsc::sync_channel(1);
+                drop(tx);
+                rx
+            },
+            cached: Mutex::new(None),
+        };
+        assert!(matches!(pending.poll(), Completion::Failed(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn completion_error_text_is_utf8_bounded() {
+        let error = anyhow::anyhow!("界".repeat(COMPLETION_ERROR_LIMIT));
+        let message = bounded_error(&error);
+        assert!(message.len() <= COMPLETION_ERROR_LIMIT);
+        assert!(message.ends_with('…'));
+        assert!(std::str::from_utf8(message.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn actor_keeps_committing_pty_output_while_checkpoint_persistence_is_paused() -> Result<()> {
+        use crate::{Action, ActorConfig, View, actor};
+        use portable_pty::{CommandBuilder, native_pty_system};
+        use std::{
+            io::Read,
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+
+        let _serial = ASYNC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = tempfile::tempdir()?;
+        let header = header();
+        let geometry = Geometry::new(8, 40)?;
+        let journal_path = root.path().join(format!("{}.journal", header.generation));
+        let journal = Journal::create(&journal_path, header.clone())?;
+        let history = crate::history::History::live(root.path(), journal.header())?;
+        let actor_history = history.clone();
+
+        let pair = native_pty_system().openpty(crate::pty_size(geometry))?;
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'FIRST\\n'; IFS= read -r line; printf 'SECOND\\n'; sleep 0.2",
+        ]);
+        let child = pair.slave.spawn_command(command)?;
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = crate::input::InputWriter::new(pair.master.take_writer()?);
+        let (action_tx, action_rx) = mpsc::sync_channel(8);
+        let reader_tx = action_tx.clone();
+        let reader_thread = std::thread::spawn(move || {
+            loop {
+                let mut bytes = vec![0; crate::OUTPUT_CHUNK];
+                match reader.read(&mut bytes) {
+                    Ok(0) => {
+                        let _ = reader_tx.send(Action::Eof);
+                        break;
+                    }
+                    Ok(count) => {
+                        bytes.truncate(count);
+                        if reader_tx.send(Action::Output(bytes)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        let _ = reader_tx.send(Action::ReadError(error.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+        let view = Arc::new(Mutex::new(View {
+            session: header.session_id,
+            generation: header.generation,
+            sequence: 0,
+            state: "running".into(),
+            recovery_path: "live".into(),
+            pid: None,
+            storage_error: None,
+            frame: Terminal::new(geometry, false).frame(),
+            history: Some(history.summary()),
+            recovery_journal_bytes_read: 0,
+            metrics: crate::metrics::SessionMetrics::default(),
+            actor_diagnostic: None,
+        }));
+        let probe = Arc::new(crate::metrics::ActorProbe::default());
+        let (control_tx, control_rx) = mpsc::sync_channel(1);
+
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        *TEST_PAUSE.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+            Some((header.generation, started_tx, resume_rx));
+
+        let actor_view = view.clone();
+        let actor_probe = probe.clone();
+        let actor_writer = writer.clone();
+        let actor_root = root.path().to_owned();
+        let actor_thread = std::thread::spawn(move || {
+            actor(
+                action_rx,
+                pair.master,
+                actor_writer,
+                child,
+                journal,
+                actor_view,
+                ActorConfig {
+                    geometry,
+                    root: actor_root,
+                    control: control_rx,
+                    history: actor_history,
+                    probe: actor_probe,
+                },
+            );
+        });
+        let mut cleanup = ActorCleanup {
+            release: Some(resume_tx),
+            control: control_tx.clone(),
+            actions: action_tx.clone(),
+            actor: Some(actor_thread),
+            reader: Some(reader_thread),
+            finished: false,
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            let snapshot = view.lock().unwrap().clone();
+            if snapshot.frame.text().contains("FIRST") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "PTY did not publish initial marker: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        started_rx.recv_timeout(Duration::from_secs(8))?;
+        writer
+            .try_write(b"\n".to_vec())
+            .map_err(anyhow::Error::msg)?;
+        let prefix_view = loop {
+            let snapshot = view.lock().unwrap().clone();
+            if snapshot.frame.text().contains("SECOND") {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "PTY output was not published while checkpoint was paused: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            prefix_view.sequence, 2,
+            "first and second output events must both publish"
+        );
+        assert_eq!(history.state().applied_sequence, prefix_view.sequence);
+        let mut reader = pigade_storage::JournalReader::open(&journal_path)?;
+        let mut second_event_offset = None;
+        let mut event_count = 0;
+        while let Some(event) = reader.next_event()? {
+            event_count += 1;
+            if event.kind == EventKind::Output && event.payload.windows(6).any(|w| w == b"SECOND") {
+                second_event_offset = Some(reader.valid_offset());
+            }
+        }
+        assert_eq!(
+            event_count, 2,
+            "output prefix should be durably journaled before shell exit"
+        );
+        let second_event_offset =
+            second_event_offset.context("missing second output journal event")?;
+
+        cleanup.release_worker();
+        loop {
+            let snapshot = view.lock().unwrap().clone();
+            if snapshot.state == "exited" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "actor did not durably process Exit: {snapshot:?}"
+            );
+            if let Some(error) = snapshot.storage_error {
+                anyhow::bail!("actor failed while completing checkpoint: {error}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cleanup.join();
+        drop(writer);
+        drop(control_tx);
+
+        let full = crate::restore_model(&journal_path, false)?;
+        assert_eq!(
+            full.0.sequence, 3,
+            "expected first output, second output, and Exit"
+        );
+        assert_eq!(full.0.state, "history");
+        let full_raw = fs::read(&journal_path)?;
+        let mut full_reader = pigade_storage::JournalReader::open(&journal_path)?;
+        let mut full_event_count = 0;
+        while full_reader.next_event()?.is_some() {
+            full_event_count += 1;
+        }
+        assert_eq!(full_event_count, 3);
+        assert_eq!(full_raw.len() as u64, full_reader.valid_offset());
+
+        // Truncate the final Exit after preserving the complete second output.
+        // Recovery must use the durable checkpoint plus its valid journal tail
+        // to reconstruct the exact published prefix view.
+        let file = OpenOptions::new().write(true).open(&journal_path)?;
+        file.set_len(second_event_offset)?;
+        file.sync_all()?;
+        let recovered = crate::recover_journal(&journal_path)?;
+        assert_eq!(recovered.sequence, prefix_view.sequence);
+        assert_eq!(recovered.recovery_path, "checkpoint-tail");
+        assert_eq!(recovered.frame, prefix_view.frame);
+        assert_eq!(recovered.history, prefix_view.history);
+        assert!(recovered.storage_error.is_some());
+        assert_eq!(
+            fs::read(&journal_path)?,
+            full_raw[..second_event_offset as usize]
+        );
+        Ok(())
+    }
     #[test]
     fn older_valid_checkpoint_survives_newer_watermark_beyond_torn_journal() -> Result<()> {
         use std::io::{Seek, SeekFrom};
