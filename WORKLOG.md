@@ -2617,3 +2617,35 @@ Fixed OpenCode typing lock after transient local queue saturation and rendered s
 - Files: crates/app/src/main.rs, crates/app/src/mouse_delivery.rs, crates/app/src/block_glyph.rs, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
 - Verification: App166 tests passed; strict all-target Clippy, fmt, debug/release builds passed. Harness23 tests passed. Actual private X11 keyboard02 exact31 EN/RU/control bytes and Pinyin01 pass. Real OpenCode1.19.3 native02 passes128 mouse motions plus complete unsent prompt; before/after captures inspected, logo joins and no queue-full footer. Original host2540063/start8039124 and all5 generation IDs preserved; release UI2728317 mapped, log empty.
 - Risks / next: Known local rejected input is reported and never retried; host rejection/unknown locks remain. Shades/ordinary box drawing retain font rendering; full Wayland/platform/MVP gates remain open. Retain keyboard01 obsolete no-pane fixture failure and native01 early UI capture; preserve unrelated stress/IME edits and preferences stash.
+
+## 2026-10-17T19:21:17+00:00 — /root/opencode_glyphs_luna
+
+Added standalone configurable panel modifier mapping and bounded atomic local preference storage.
+
+- Files: crates/app/src/controls.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/controls.rs passed; scoped git diff --check passed. App Cargo tests intentionally deferred to root per serialized-build instruction.
+- Risks / next: Root integrates controls into panel key handling and preference UI, then runs app tests/build.
+
+## 2026-10-17T19:26:07+00:00 — /root/opencode_glyphs_luna
+
+Added a private X11 controls fixture for panel management and modifier persistence.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; python3 scripts/test_isolated_ime_x11.py passed all 24 tests, including fixed helper compilation; scoped git diff --check passed. Live fixture not run by assignment.
+- Risks / next: Root owns the private controls fixture run and visual capture review; current fixed coordinates come from root guidance.
+
+## 2026-10-17T19:26:40+00:00 — /root/opencode_glyphs_luna
+
+Hardened the controls fixture to preserve and compare terminal PIDs across every layout action.
+
+- Files: scripts/isolated-ime-x11.py, WORKLOG.md
+- Verification: After PID identity checks were added, python3 -m py_compile and the complete private X11 harness unit suite passed (24 tests); scoped git diff --check passed. No live fixture run.
+- Risks / next: Root can run --fixture controls in its isolated harness and review the settings capture.
+
+## 2026-10-17T19:34:52+00:00 — /root
+
+Implemented user-selected Hyprland-style held modifier (default Ctrl), native mouse move/resize, optional selector and durable personal preference; preserved CLI shortcuts, IDs and separate panel close/process stop. Updated SPEC/DESIGN for explicit user override of prefix-only defaults.
+
+- Files: SPEC.md, DESIGN.md, README.md, crates/app/README.md, crates/app/src/controls.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/tiling.rs, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: App173 tests, strict all-target Clippy, fmt and debug/release builds passed; harness24 tests passed. Actual private controls05: four shells, focus restore, directional focus, mouse swap, resize commit/cancel, panel-only close, unchanged PID/generation/session IDs, saved Alt/Ctrl/Disabled and Alt+F; sheet capture inspected. Native EN/RU/control keyboard01 exact31bytes passed. Actual user Hyprland bindings read only; review host2540063 and all5 CLI identities preserved while opening repaired release UI.
+- Risks / next: Busy layout operations reject gestures with a visible notice; native helper waits350ms for UI receipt application, not a latency claim. Super can be intercepted by OS; full platform/MVP gates remain open. Retain runs01 baseline bookkeeping failure and02-04 stale-UI-busy drag failures. Final mouse-up coordinates are now recomputed; temporary probe logging removed. Preserve unrelated stress/IME edits and preferences stash.

@@ -83,7 +83,13 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
         strcmp(a.stage, "setup-split-right") && strcmp(a.stage, "setup-split-down") &&
         strcmp(a.stage, "setup-close") && strcmp(a.stage, "setup-focus-left") &&
-        strcmp(a.stage, "setup-live") && strcmp(a.stage, "opencode-input"))
+        strcmp(a.stage, "setup-live") && strcmp(a.stage, "opencode-input") &&
+        strcmp(a.stage, "controls-focus-toggle") && strcmp(a.stage, "controls-focus-right") &&
+        strcmp(a.stage, "controls-alt-focus-toggle") &&
+        strcmp(a.stage, "controls-swap") && strcmp(a.stage, "controls-resize-cancel") &&
+        strcmp(a.stage, "controls-resize-commit") && strcmp(a.stage, "controls-close") &&
+        strcmp(a.stage, "controls-open") && strcmp(a.stage, "controls-select-alt") &&
+        strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -398,6 +404,35 @@ static void opencode_input_sequence(Display *dpy, Window app) {
         key(dpy, prompt[i]);
 }
 
+static void controls_drag(Display *dpy, Window app, int button, int escape) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("controls drag requires the fixed private 1280x800 app");
+    int start_x = button == 1 ? 485 : 720;
+    int start_y = 250;
+    int end_x = button == 1 ? 1015 : 660;
+    int end_y = 250;
+    Window child; int root_x, root_y;
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), start_x, start_y,
+                                            &root_x, &root_y, &child) ||
+        !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
+        fail("controls drag start failed");
+    XSync(dpy, False);
+    if (!XTestFakeButtonEvent(dpy, (unsigned int)button, True, CurrentTime) ||
+        !XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), end_x, end_y,
+                               &root_x, &root_y, &child) ||
+        !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
+        fail("controls drag motion failed");
+    XSync(dpy, False);
+    if (escape) key(dpy, XK_Escape);
+    if (!XTestFakeButtonEvent(dpy, (unsigned int)button, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+        fail("controls drag release failed");
+    XSync(dpy, False);
+}
+
 static void setup_create_sequence(Display *dpy) {
     const KeySym name[] = { XK_d, XK_e, XK_m, XK_o };
     for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
@@ -697,6 +732,28 @@ int main(int argc, char **argv) {
             setup_prefix(dpy, XK_s, 0);
         } else if (!strcmp(a.stage, "opencode-input")) {
             opencode_input_sequence(dpy, app_window);
+        } else if (!strcmp(a.stage, "controls-focus-toggle")) {
+            modified_key(dpy, XK_Control_L, XK_f);
+        } else if (!strcmp(a.stage, "controls-focus-right")) {
+            modified_key(dpy, XK_Control_L, XK_Right);
+        } else if (!strcmp(a.stage, "controls-alt-focus-toggle")) {
+            modified_key(dpy, XK_Alt_L, XK_f);
+        } else if (!strcmp(a.stage, "controls-swap")) {
+            controls_drag(dpy, app_window, 1, 0);
+        } else if (!strcmp(a.stage, "controls-resize-cancel")) {
+            controls_drag(dpy, app_window, 3, 1);
+        } else if (!strcmp(a.stage, "controls-resize-commit")) {
+            controls_drag(dpy, app_window, 3, 0);
+        } else if (!strcmp(a.stage, "controls-close")) {
+            modified_key(dpy, XK_Control_L, XK_q);
+        } else if (!strcmp(a.stage, "controls-open")) {
+            setup_click(dpy, app_window, 1235, 20);
+        } else if (!strcmp(a.stage, "controls-select-alt")) {
+            key(dpy, XK_2);
+        } else if (!strcmp(a.stage, "controls-select-control")) {
+            key(dpy, XK_1);
+        } else if (!strcmp(a.stage, "controls-select-disabled")) {
+            key(dpy, XK_5);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -713,6 +770,16 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "history-search") ? "6" :
                             !strcmp(a.stage, "history-readonly") ? "6" :
                             !strcmp(a.stage, "opencode-input") ? "16" :
+                            !strcmp(a.stage, "controls-focus-toggle") ? "2" :
+                            !strcmp(a.stage, "controls-focus-right") ? "2" :
+                            !strcmp(a.stage, "controls-alt-focus-toggle") ? "2" :
+                            !strcmp(a.stage, "controls-swap") ? "2" :
+                            !strcmp(a.stage, "controls-resize-cancel") ? "2" :
+                            !strcmp(a.stage, "controls-resize-commit") ? "2" :
+                            !strcmp(a.stage, "controls-close") ? "2" :
+                            !strcmp(a.stage, "controls-select-alt") ? "1" :
+                            !strcmp(a.stage, "controls-select-control") ? "1" :
+                            !strcmp(a.stage, "controls-select-disabled") ? "1" :
                             !strcmp(a.stage, "setup-open") ? "1" :
                             !strcmp(a.stage, "setup-create") ? "5" :
                             !strcmp(a.stage, "setup-shell") ? "1" :

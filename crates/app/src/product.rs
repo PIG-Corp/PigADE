@@ -19,6 +19,8 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenControls,
+    SetCommandModifier(crate::controls::Modifier),
     AddProject,
     ToggleSidebar,
     FocusPane(Uuid),
@@ -75,6 +77,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    Controls,
     AddProject,
     CreateProject,
     CreateWorkspace,
@@ -97,6 +100,7 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Controls => "Клавиша управления панелями",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
             Self::CreateWorkspace => "Новый воркспейс",
@@ -119,6 +123,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
             Self::CreateProject => &["Название проекта", "Папка проекта"],
             Self::CreateWorkspace => &["Название задачи / воркспейса"],
@@ -145,6 +150,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::Controls => "Готово",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
             Self::CreateWorkspace => "Создать воркспейс",
@@ -187,6 +193,8 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) command_modifier: crate::controls::Modifier,
+    pub(super) controls_saving: bool,
     pub(super) compact: bool,
     pub(super) sidebar_compact: bool,
     pub(super) sidebar_override: Option<bool>,
@@ -324,6 +332,10 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
+        (
+            "Клавиша управления панелями / горячие клавиши",
+            ProductAction::OpenControls,
+        ),
         ("Открыть папку проекта", ProductAction::AddProject),
         ("Создать проект", ProductAction::CreateProject),
         ("Выбрать путь вручную…", ProductAction::OpenProjectPath),
@@ -730,6 +742,18 @@ impl ProductUi {
                 "Поиск команд (Ctrl+Shift+Space, P)",
                 "search",
                 ProductAction::OpenPalette,
+                cx,
+            ))
+            .child(self.action_control_with_accessible_name(
+                "command-modifier".into(),
+                format!("{} ▾", self.command_modifier.label()),
+                "Выбрать клавишу управления панелями".into(),
+                ProductAction::OpenControls,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
                 cx,
             ))
             .into_any_element()
@@ -1754,6 +1778,63 @@ impl ProductUi {
             .into_any_element()
     }
 
+    fn controls_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let mut choices = div().flex().flex_wrap().gap_2().my(px(16.));
+        for (index, modifier) in crate::controls::Modifier::ALL.into_iter().enumerate() {
+            choices = choices.child(self.action_control(
+                format!("control-choice-{}", modifier.stable_name()),
+                format!(
+                    "{} · {}",
+                    index + 1,
+                    if modifier == crate::controls::Modifier::Disabled {
+                        "Только prefix"
+                    } else {
+                        modifier.label()
+                    }
+                ),
+                ProductAction::SetCommandModifier(modifier),
+                ControlStyle {
+                    role: Role::Button,
+                    selected: self.command_modifier == modifier,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
+        let key = if self.command_modifier == crate::controls::Modifier::Disabled {
+            "Модификатор"
+        } else {
+            self.command_modifier.label()
+        };
+        div().id("controls-overlay").absolute().inset_0().flex().justify_center().items_start()
+            .overflow_y_scroll().py(px(24.)).bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this,_:&ClickEvent,window,cx|this.product_action(ProductAction::CloseDialog,window,cx)))
+            .child(div().id("controls-dialog").role(Role::Dialog).aria_label("Клавиша управления панелями")
+                .w_full().max_w(px(560.)).mx(px(16.)).p(px(22.)).rounded(px(12.))
+                .bg(colors.raised).border_1().border_color(colors.border).text_color(colors.text)
+                .flex().flex_col().gap_2()
+                .on_click(cx.listener(|_,_:&ClickEvent,_,cx|cx.stop_propagation()))
+                .child(div().id("controls-title").role(Role::Heading).aria_level(2).text_size(px(17.)).child("Клавиша управления панелями"))
+                .child(div().text_size(px(12.)).text_color(colors.muted).child("Зажмите выбранную клавишу, как Win в Hyprland. 1–5 — выбрать, Escape — закрыть."))
+                .child(choices)
+                .children([
+                    format!("{key}+Q — закрыть панель; CLI остаётся в фоне"),
+                    format!("{key}+F — развернуть панель / вернуть раскладку"),
+                    format!("{key}+стрелки / [ ] — фокус; Shift+стрелки — обмен"),
+                    format!("{key}+ЛКМ — перетащить; +ПКМ — изменить размер"),
+                    format!("{key}+1…9 — вкладка; +Shift — перенести панель"),
+                    format!("{key}+Tab / +Shift+Tab — следующая / предыдущая вкладка"),
+                    format!("{key}+Enter — терминал; +; / +' — пропорции"),
+                ].into_iter().map(|label|div().text_size(px(12.)).child(label)))
+                .child(div().mt(px(12.)).text_size(px(11.)).text_color(colors.muted)
+                    .child("Эти сочетания получает PigADE, остальные — CLI. Ctrl+C/D/Z/R работают как обычно. Ctrl+F и Ctrl+Q при выборе Ctrl заняты управлением. Super может перехватываться системой. Prefix Ctrl+Shift+Space остаётся доступен."))
+                .children(self.notice.clone().map(|notice|div().id("controls-notice").role(Role::Status).text_size(px(12.)).child(notice)))
+                .when(self.controls_saving,|view|view.child(div().id("controls-saving").role(Role::Status).child("Сохранение…")))
+                .child(self.action_control("controls-close".into(),"Готово".into(),ProductAction::CloseDialog,ControlStyle{role:Role::Button,selected:false,compact:true},cx)))
+            .into_any_element()
+    }
+
     fn dialog_overlay(
         &self,
         dialog: &Dialog,
@@ -1763,6 +1844,9 @@ impl ProductUi {
         let colors = ProductColors::dark();
         if dialog.kind == DialogKind::LaunchReview {
             return self.launch_review_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::Controls {
+            return self.controls_overlay(cx);
         }
         if dialog.kind == DialogKind::ResumeReview {
             return self.resume_review_overlay(dialog, cx);

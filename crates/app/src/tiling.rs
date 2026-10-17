@@ -54,6 +54,39 @@ pub(crate) fn nearest_split(layout: &TabLayout, pane: Uuid, axis: Axis) -> Optio
     nearest_in_node(layout.root.as_ref()?, pane, axis)
 }
 
+/// Only boundaries belonging to the clicked pane's ancestry can be resized.
+/// Prefer the nearest visible divider; no saved tree or axis is inferred anew.
+pub(crate) fn pointer_boundary(
+    layout: &TabLayout,
+    geometry: &CanvasGeometry,
+    pane: Uuid,
+    x: f64,
+    y: f64,
+) -> Option<(pigade_layout::Divider, f64)> {
+    if !x.is_finite() || !y.is_finite() || layout.focus_mode {
+        return None;
+    }
+    [Axis::Horizontal, Axis::Vertical]
+        .into_iter()
+        .filter_map(|axis| {
+            let (split, boundary) = nearest_split(layout, pane, axis)?;
+            let divider = geometry
+                .dividers
+                .iter()
+                .find(|divider| divider.split == split && divider.boundary == boundary)?;
+            let r = divider.rect;
+            let dx = (x - x.clamp(r.x, r.x + r.width)).abs();
+            let dy = (y - y.clamp(r.y, r.y + r.height)).abs();
+            Some((
+                *divider,
+                split_extent(geometry, layout, split)?,
+                dx * dx + dy * dy,
+            ))
+        })
+        .min_by(|left, right| left.2.total_cmp(&right.2))
+        .map(|(divider, extent, _)| (divider, extent))
+}
+
 pub(crate) fn parent_split(layout: &TabLayout, pane: Uuid) -> Option<Uuid> {
     fn visit(node: &Node, pane: Uuid) -> Option<Uuid> {
         let Node::Split { id, children, .. } = node else {
@@ -242,6 +275,64 @@ mod tests {
             nearest_split(&layout, Uuid::new_v4(), Axis::Horizontal),
             None
         );
+    }
+
+    #[test]
+    fn pointer_resize_uses_only_clicked_pane_ancestry_and_preserves_tree() {
+        let (layout, outer, inner, a, b) = fixture();
+        let tab = Uuid::from_u128(20);
+        let model = LayoutState {
+            tabs: BTreeMap::from([(tab, layout.clone())]),
+        };
+        let geometry = model
+            .project(
+                tab,
+                Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 1000.,
+                    height: 800.,
+                },
+                Size {
+                    width: 40.,
+                    height: 80.,
+                },
+                6.,
+            )
+            .unwrap();
+        let nearest = pointer_boundary(&layout, &geometry, b, 990., 390.).unwrap();
+        assert_eq!(nearest.0.split, inner);
+        let nearest = pointer_boundary(&layout, &geometry, b, 605., 110.).unwrap();
+        assert_eq!(nearest.0.split, outer);
+        // The left pane does not own the right subtree's vertical split.
+        assert_eq!(
+            pointer_boundary(&layout, &geometry, a, 590., 390.)
+                .unwrap()
+                .0
+                .split,
+            outer
+        );
+        let command = resize_by_delta(
+            &layout,
+            nearest.0.split,
+            nearest.0.boundary,
+            -50.,
+            nearest.1,
+        )
+        .unwrap();
+        let original = serde_json::to_string(&layout).unwrap();
+        let mut history = pigade_layout::LayoutModel::new(model).unwrap();
+        history.apply(command).unwrap();
+        assert_eq!(history.state().tabs[&tab].panes(), layout.panes());
+        assert!(history.undo());
+        assert_eq!(
+            serde_json::to_string(&history.state().tabs[&tab]).unwrap(),
+            original
+        );
+        let mut focused = layout.clone();
+        focused.focus_mode = true;
+        assert!(pointer_boundary(&focused, &geometry, b, 605., 110.).is_none());
+        assert!(pointer_boundary(&layout, &geometry, b, f64::NAN, 0.).is_none());
     }
 
     #[test]

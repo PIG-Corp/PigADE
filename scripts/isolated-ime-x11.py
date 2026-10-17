@@ -52,6 +52,7 @@ RESUME_PASS = 'pass-private-x11-codex-resume-review-fixture'
 HISTORY_PASS = 'pass-private-x11-readonly-terminal-history-fixture'
 SETUP_PASS = 'pass-private-x11-project-setup-shell-fixture'
 OPENCODE_PASS = 'pass-private-x11-opencode-mouse-terminal-fixture'
+CONTROLS_PASS = 'pass-private-x11-panel-controls-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -358,7 +359,7 @@ def fixture_status(name):
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
             'history': HISTORY_PASS, 'setup': SETUP_PASS,
-            'opencode': OPENCODE_PASS}[name]
+            'opencode': OPENCODE_PASS, 'controls': CONTROLS_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False, cwd='/artifacts'):
@@ -601,6 +602,7 @@ def run_memory_fixture(config, report, env, save):
     save()
     deactivate_private_fcitx(config, env)
     baseline_generations = fixture_generations()
+    report['fixture']['baseline_generations'] = baseline_generations
     baseline_plans = prepared_launches_read_only()
     helper_call(config, 'memory-open')
     initial_plans = wait_until(
@@ -768,7 +770,162 @@ def run_resume_fixture(config, report, env, save):
 
 
 
-def run_setup_fixture(config, report, control, env, save):
+def run_controls_fixture(config, report, control, app, env, save, tab_id, baseline_generations):
+    def step(stage):
+        report['stage'] = stage
+        save()
+        # Host metadata can precede the UI receipt/catalog application.
+        # This fixed software-renderer settle is not a latency measurement.
+        time.sleep(0.35)
+        helper_call(config, stage)
+
+    def catalog_layout():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        tab = next(item for item in catalog['tabs'] if item['id'] == tab_id)
+        return catalog, json.loads(tab['layout_json'])
+
+    def pane_ids(node):
+        if not isinstance(node, dict):
+            return []
+        pane = node.get('Pane')
+        if isinstance(pane, dict) and isinstance(pane.get('id'), str):
+            return [pane['id']]
+        split = node.get('Split')
+        if isinstance(split, dict):
+            return [pane_id for child in split.get('children', []) for pane_id in pane_ids(child)]
+        return []
+
+    def same_live_generations(expected):
+        current = fixture_generations()
+        if current != expected or process_identities() != expected_processes:
+            return False
+        return all(fixture_session_models(session).get(generation, {}).get('state') == 'running'
+                   for session, generation in expected)
+
+    def process_identities():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'controls process identity snapshot exceeds bounds')
+        identities = [(view.get('session'), view.get('generation'), view.get('pid'))
+                      for view in views]
+        require(all(isinstance(session, str) and isinstance(generation, str) and
+                    type(pid) is int and pid > 0 for session, generation, pid in identities),
+                'controls fixture omitted a live process PID')
+        return sorted(identities)
+
+    catalog, initial = catalog_layout()
+    original_root = initial.get('root')
+    original_ids = set(pane_ids(original_root))
+    generations = fixture_generations()
+    expected_processes = process_identities()
+    require(len(original_ids) == 4 and len(generations) == len(baseline_generations) + 4,
+            'controls fixture did not reach exactly four real shell panes')
+    require(same_live_generations(generations), 'a terminal was not running before controls tests')
+
+    step('controls-focus-toggle')
+    wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focus_mode') is True else None),
+               time.monotonic() + 5)
+    step('controls-focus-toggle')
+    wait_until(lambda: catalog_layout()[1] == initial, time.monotonic() + 5)
+    require(same_live_generations(generations), 'focus-mode toggle changed terminal identities')
+
+    step('controls-focus-right')
+    focused_layout = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('focused') != initial.get('focused') else None),
+        time.monotonic() + 5)
+    require(focused_layout.get('root') == original_root and
+            set(pane_ids(focused_layout.get('root'))) == original_ids,
+            'Ctrl+Right changed the tiling tree instead of focus only')
+
+    before_swap = focused_layout
+    step('controls-swap')
+    swapped = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('root') !=
+                                 before_swap.get('root') else None), time.monotonic() + 6)
+    require(set(pane_ids(swapped.get('root'))) == original_ids and
+            same_live_generations(generations),
+            'Ctrl+LMB swap changed pane/session identity or process generations')
+
+    before_cancel = swapped
+    step('controls-resize-cancel')
+    wait_until(lambda: catalog_layout()[1] == before_cancel, time.monotonic() + 5)
+    step('controls-resize-commit')
+    resized = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('root') !=
+                                 before_cancel.get('root') else None), time.monotonic() + 6)
+    require(set(pane_ids(resized.get('root'))) == original_ids and
+            same_live_generations(generations),
+            'Ctrl+RMB resize changed pane/session identity or process generations')
+
+    to_close = resized.get('focused')
+    require(to_close in original_ids, 'focused pane is absent before Ctrl+Q')
+    step('controls-close')
+    closed = wait_until(lambda: (layout if to_close not in set(pane_ids((layout := catalog_layout()[1]).get('root')))
+                                 else None), time.monotonic() + 6)
+    require(set(pane_ids(closed.get('root'))) == original_ids - {to_close} and
+            host_request({'command': 'catalog'})['catalog']['selection'].get('tab_id') == tab_id and
+            same_live_generations(generations) and
+            fixture_session_models(to_close)[next(generation for session, generation in generations
+                                                 if session == to_close)].get('state') == 'running',
+            'Ctrl+Q stopped a CLI or failed to remove only its pane placement')
+
+    step('controls-open')
+    time.sleep(0.3)
+    helper_call(config, 'capture', '/artifacts/controls-settings.ppm')
+    report['controls'] = {'initial_pane_ids': sorted(original_ids), 'generations': generations,
+                          'focus_mode_restored_exact_layout': True, 'focus_right_only': True,
+                          'swap_preserved_ids': True, 'process_pids_unchanged': True,
+                          'resize_escape_restored_exact_layout': True,
+                          'resize_commit_preserved_ids': True, 'close_left_cli_running': True,
+                          'settings_capture': 'controls-settings.ppm'}
+    save()
+
+    config_path = Path('/home/pigade/.config/pigade/controls.json')
+
+    def saved_modifier(name):
+        try:
+            value = json.loads(config_path.read_text())
+            return value.get('version') == 1 and value.get('modifier') == name
+        except (OSError, ValueError):
+            return False
+
+    step('controls-select-alt')
+    wait_until(lambda: saved_modifier('alt'), time.monotonic() + 6)
+    time.sleep(0.5)
+    require(stat.S_IMODE(config_path.stat().st_mode) == 0o600,
+            'private controls preference does not have mode 0600')
+    helper_call(config, 'setup-close')
+    before_alt_focus = catalog_layout()[1]
+    step('controls-alt-focus-toggle')
+    wait_until(lambda: catalog_layout()[1].get('focus_mode') is not before_alt_focus.get('focus_mode'),
+               time.monotonic() + 5)
+    step('controls-alt-focus-toggle')
+    wait_until(lambda: catalog_layout()[1] == before_alt_focus, time.monotonic() + 5)
+    require(same_live_generations(generations), 'Alt+F changed terminal identities')
+
+    step('controls-open')
+    step('controls-select-control')
+    wait_until(lambda: saved_modifier('control'), time.monotonic() + 6)
+    time.sleep(0.5)
+    helper_call(config, 'setup-close')
+    step('controls-open')
+    step('controls-select-disabled')
+    wait_until(lambda: saved_modifier('disabled'), time.monotonic() + 6)
+    time.sleep(0.5)
+    helper_call(config, 'setup-close')
+    disabled_layout = catalog_layout()[1]
+    step('controls-close')
+    time.sleep(0.3)
+    require(catalog_layout()[1] == disabled_layout and same_live_generations(generations),
+            'Disabled modifier still intercepted Ctrl+Q or changed live sessions')
+    report['controls'].update({'modifier_alt_persisted_before_use': True,
+                               'alt_focus_mode_restored_exact_layout': True,
+                               'modifier_control_persisted': True,
+                               'modifier_disabled_persisted': True,
+                               'disabled_mode_ctrl_q_passthrough': True})
+    report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
+    save()
+
+
+def run_setup_fixture(config, report, control, app, env, save):
     report['stage'] = 'project-workspace-shell-setup'
     save()
     deactivate_private_fcitx(config, env)
@@ -872,6 +1029,9 @@ def run_setup_fixture(config, report, control, env, save):
     report['stage'] = 'four-pane-live-input'
     save()
     helper_call(config, 'capture', '/artifacts/four-panels-before-input.ppm')
+    if config.get('fixture') == 'controls':
+        run_controls_fixture(config, report, control, app, env, save, grid_catalog['tabs'][0]['id'], baseline_generations)
+        return
     helper_call(config, 'setup-live')
     try:
         wait_until(lambda: any(view.get('session') == focused and 'pigadegridlive' in view_text(view) for view in host_request({'command':'list'}).get('views', [])), time.monotonic() + 8)
@@ -1810,8 +1970,8 @@ def inside_run() -> int:
         if config.get('fixture') == 'history':
             run_history_fixture(config, report, control, app_env, save)
             return 0
-        if config.get('fixture') == 'setup':
-            run_setup_fixture(config, report, control, app_env, save)
+        if config.get('fixture') in ('setup', 'controls'):
+            run_setup_fixture(config, report, control, app, app_env, save)
             return 0
         if config.get('fixture') == 'opencode':
             run_opencode_fixture(config, report, control, app, app_env, artifacts, save)
@@ -1955,10 +2115,13 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
+                 ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
+                  'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm']
+                 if args.fixture == 'controls' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-        'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode fixture only',
+        'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode/panel-controls fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1979,6 +2142,7 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/swap/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
                   'arbitrary_text_argument': False},
@@ -2021,8 +2185,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode'], default='pinyin',
-                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, or OpenCode fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls'], default='pinyin',
+                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, or panel controls fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

@@ -55,6 +55,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/cursor.rs | Pure typed cursor geometry, wide-cell normalization, blink/reduced-motion and block glyph contrast; native paint/lifecycle in main.rs |
 | crates/app/src/palette.rs | Bounded host-cell color resolver; typed sorted dynamic overrides, truecolor and unchanged default theme; no ANSI parser |
 | crates/app/src/input.rs | Pure keyboard/atomic explicit paste encoding and local UTF16 composition; no ANSI parser or implicit shared-prompt delivery |
+| crates/app/src/controls.rs | Exact held-modifier panel bindings, EN/RU normalization and bounded atomic UI-local controls.json; default Ctrl, optional Alt/Super/Ctrl+Alt/prefix-only |
 | crates/app/src/mouse.rs, selection.rs | Pure mode-aware mouse encoding, bounded wheel accumulation and frame-bound Unicode cell selection; native event/clipboard integration remains in main.rs |
 | docs/reports/ime-composition.md, docs/research/linux-ime-reset.md | Local input/overlay evidence and the unverified native Linux reset boundary |
 | crates/app/src/font.rs, assets/fonts | Embedded unique-family OFL derivatives, exact manifests, disabled liga/calt and fixed JP CJK fallback policy; unsupported platform fallback is unpinned |

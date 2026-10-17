@@ -192,6 +192,27 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('XK_Return', sequence)
         self.assertNotIn('--text', source)
 
+    def test_controls_mode_is_fixed_plan_only_and_contains_only_private_fixed_stages(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'controls']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'controls')
+        self.assertIn('four-shell', plan['input']['controls'])
+        self.assertIn('Alt+F', plan['input']['controls'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-swap',
+                      'controls-resize-cancel', 'controls-resize-commit', 'controls-close',
+                      'controls-open', 'controls-select-alt', 'controls-select-control',
+                      'controls-select-disabled'):
+            self.assertIn(f'"{stage}"', source)
+        self.assertIn('int start_x = button == 1 ? 485 : 720;', source)
+        self.assertIn('int end_x = button == 1 ? 1015 : 660;', source)
+        self.assertNotIn('--coordinates', source)
+
     def run_raw_fixture(self, expected, delivered):
         with tempfile.TemporaryDirectory() as temporary:
             path = str(Path(temporary) / 'control.sock')

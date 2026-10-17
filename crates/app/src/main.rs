@@ -3,6 +3,7 @@ mod block_glyph;
 mod cell_style;
 mod chrome;
 mod command_worker;
+mod controls;
 mod cursor;
 mod edit_field;
 mod font;
@@ -904,6 +905,7 @@ struct CanvasScrollDrag {
 }
 
 struct ResizeGesture {
+    button: MouseButton,
     tab: uuid::Uuid,
     base: pigade_layout::TabLayout,
     split: uuid::Uuid,
@@ -1043,6 +1045,8 @@ impl CanvasApp {
         });
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
+                this.pane_drag = None;
+                this.finish_resize(false, cx);
                 this.canvas_drag = None;
                 this.selection_dragging = false;
                 this.editor_drag = None;
@@ -1056,6 +1060,8 @@ impl CanvasApp {
                 this.reset_cursor_blink(cx);
                 cx.notify();
                 if !window.is_window_active() {
+                    this.pane_drag = None;
+                    this.finish_resize(false, cx);
                     this.selection_dragging = false;
                     this.input_epoch = this.input_epoch.wrapping_add(1);
                     this.finish_pointer(cx);
@@ -1354,8 +1360,19 @@ impl CanvasApp {
             }
         })
         .detach();
+        let product = match controls::load() {
+            Ok(command_modifier) => product::ProductUi {
+                command_modifier,
+                ..Default::default()
+            },
+            Err(error) => product::ProductUi {
+                command_modifier: controls::Modifier::Disabled,
+                notice: Some(format!("Не удалось загрузить клавишу управления: {error}")),
+                ..Default::default()
+            },
+        };
         Self {
-            product: product::ProductUi::default(),
+            product,
             editor_layouts: Default::default(),
             editor_scroll: Default::default(),
             editor_drag: None,
@@ -2440,6 +2457,19 @@ impl CanvasApp {
 
     fn finish_resize(&mut self, commit: bool, cx: &mut Context<Self>) {
         self.layout_preview = None;
+        if !commit
+            && let Some(previous) = self
+                .resize_gesture
+                .as_ref()
+                .and_then(|gesture| gesture.base.focused)
+            && let Some(index) = self
+                .state
+                .views
+                .iter()
+                .position(|view| view.session == previous.to_string())
+        {
+            self.selected = index;
+        }
         self.resize_gesture = None;
         self.layout_mode = None;
         if let Some(command) = self.resize_pending.take().filter(|_| commit) {
@@ -2448,26 +2478,49 @@ impl CanvasApp {
         cx.notify();
     }
 
+    fn resize_at(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(gesture) = &self.resize_gesture else {
+            return;
+        };
+        let delta = match gesture.axis {
+            pigade_layout::Axis::Horizontal => f64::from(f32::from(position.x - gesture.start.x)),
+            pigade_layout::Axis::Vertical => f64::from(f32::from(position.y - gesture.start.y)),
+        };
+        if let Some(command) = tiling::resize_by_delta(
+            &gesture.base,
+            gesture.split,
+            gesture.boundary,
+            delta,
+            gesture.extent,
+        ) {
+            self.preview_layout(gesture.tab, gesture.base.clone(), command, cx);
+        }
+    }
+
     fn update_pane_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
             self.pane_drag = None;
             cx.notify();
             return;
         }
+        self.update_pane_drag_at(event.position, cx);
+    }
+
+    fn update_pane_drag_at(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(drag) = &mut self.pane_drag else {
             return;
         };
-        drag.moved |= f32::from(event.position.x - drag.start.x).abs() > 6.
-            || f32::from(event.position.y - drag.start.y).abs() > 6.;
+        drag.moved |= f32::from(position.x - drag.start.x).abs() > 6.
+            || f32::from(position.y - drag.start.y).abs() > 6.;
         drag.drop = None;
         if drag.moved
             && self
                 .canvas_bounds
-                .is_some_and(|bounds| bounds.contains(&event.position))
+                .is_some_and(|bounds| bounds.contains(&position))
             && let Some(geometry) = &self.layout_geometry
         {
-            let x = f64::from(f32::from(event.position.x));
-            let y = f64::from(f32::from(event.position.y));
+            let x = f64::from(f32::from(position.x));
+            let y = f64::from(f32::from(position.y));
             if let Some(target) = geometry.panes.iter().find(|target| {
                 let r = target.rect;
                 target.pane != drag.pane
@@ -2738,6 +2791,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::CloseDialog
+                | A::OpenControls
                 | A::OpenPalette
                 | A::OpenPaneMenu
                 | A::OpenLauncher
@@ -2758,6 +2812,46 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenControls => {
+                self.prefix = false;
+                self.pane_drag = None;
+                self.finish_resize(false, cx);
+                self.finish_pointer(cx);
+                self.product.dialog = Some(Dialog::new(DialogKind::Controls));
+            }
+            A::SetCommandModifier(modifier) => {
+                if self.product.controls_saving {
+                    return;
+                }
+                self.product.controls_saving = true;
+                self.product.notice = None;
+                let save = cx.background_spawn(async move { controls::save(modifier) });
+                cx.spawn(async move |weak, cx| {
+                    let result = save.await;
+                    let _ = weak.update_in(cx, |this, window, cx| {
+                        this.product.controls_saving = false;
+                        match result {
+                            Ok(()) => {
+                                this.finish_pointer(cx);
+                                this.product.command_modifier = modifier;
+                                this.product.notice = Some(format!(
+                                    "Клавиша управления сохранена: {}",
+                                    modifier.label()
+                                ));
+                                this.text_input.cancel();
+                                window.notify_text_input_changed(&this.focus);
+                            }
+                            Err(error) => {
+                                this.product.notice = Some(format!(
+                                    "Не удалось подтвердить сохранение клавиши: {error}"
+                                ))
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
             A::ToggleSidebar => {
                 self.product.sidebar_override = Some(!self.product.sidebar_compact);
             }
@@ -3324,7 +3418,7 @@ impl CanvasApp {
                         self.confirm_prepared_launch(cx)
                     }
                     DialogKind::History => self.history_search(None, cx),
-                    DialogKind::Launcher => self.product.dialog = None,
+                    DialogKind::Launcher | DialogKind::Controls => self.product.dialog = None,
                     DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
@@ -3477,6 +3571,115 @@ impl CanvasApp {
                 session: view.session.clone(),
                 generation: view.generation.clone(),
             })
+    }
+
+    fn held_modifier(&self, modifiers: Modifiers) -> bool {
+        self.product.command_modifier.matches(input::Modifiers {
+            control: modifiers.control,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            platform: modifiers.platform,
+        }) && !modifiers.shift
+    }
+
+    fn control_action(
+        &mut self,
+        action: controls::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use controls::Action as A;
+        let direction = |value| match value {
+            controls::Direction::Left => pigade_layout::Direction::Left,
+            controls::Direction::Right => pigade_layout::Direction::Right,
+            controls::Direction::Up => pigade_layout::Direction::Up,
+            controls::Direction::Down => pigade_layout::Direction::Down,
+        };
+        self.finish_pointer(cx);
+        self.selection_dragging = false;
+        self.text_input.cancel();
+        window.notify_text_input_changed(&self.focus);
+        match action {
+            A::Close => {
+                self.product_action(product::ProductAction::Layout("hide".into()), window, cx)
+            }
+            A::FocusMode => {
+                self.product_action(product::ProductAction::Layout("focus".into()), window, cx)
+            }
+            A::Focus(value) => self.focus_neighbor(direction(value), false, false, window, cx),
+            A::Swap(value) => self.focus_neighbor(direction(value), false, true, window, cx),
+            A::FocusLeft => {
+                self.focus_neighbor(pigade_layout::Direction::Left, false, false, window, cx)
+            }
+            A::FocusRight => {
+                self.focus_neighbor(pigade_layout::Direction::Right, false, false, window, cx)
+            }
+            A::SelectTab(number) | A::TransferToTab(number) => {
+                let tab = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| {
+                        catalog
+                            .tabs
+                            .iter()
+                            .filter(|tab| Some(tab.workspace_id) == catalog.selection.workspace_id)
+                            .nth(usize::from(number - 1))
+                    })
+                    .map(|tab| tab.id);
+                if let Some(tab) = tab {
+                    self.product_action(
+                        if matches!(action, A::SelectTab(_)) {
+                            product::ProductAction::SelectTab(tab)
+                        } else {
+                            product::ProductAction::TransferTo(tab)
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            A::NextTab | A::PreviousTab => {
+                if let Some(catalog) = &self.product.catalog {
+                    let tabs = catalog
+                        .tabs
+                        .iter()
+                        .filter(|tab| Some(tab.workspace_id) == catalog.selection.workspace_id)
+                        .map(|tab| tab.id)
+                        .collect::<Vec<_>>();
+                    if let Some(current) = tabs
+                        .iter()
+                        .position(|tab| Some(*tab) == catalog.selection.tab_id)
+                    {
+                        let index = if action == A::NextTab {
+                            (current + 1) % tabs.len()
+                        } else {
+                            (current + tabs.len() - 1) % tabs.len()
+                        };
+                        self.product_action(
+                            product::ProductAction::SelectTab(tabs[index]),
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+            A::LaunchShell => {
+                self.product_action(product::ProductAction::Launch("shell".into()), window, cx)
+            }
+            A::ResizeLeft | A::ResizeRight => {
+                self.keyboard_resize(
+                    if action == A::ResizeLeft {
+                        pigade_layout::Direction::Left
+                    } else {
+                        pigade_layout::Direction::Right
+                    },
+                    cx,
+                );
+                self.finish_resize(true, cx);
+            }
+        }
+        cx.notify();
     }
 
     fn queue_command(
@@ -3899,6 +4102,71 @@ impl CanvasApp {
         {
             return;
         }
+        if self.held_modifier(event.modifiers)
+            && matches!(event.button, MouseButton::Left | MouseButton::Right)
+        {
+            if self.product.busy {
+                self.input_notice =
+                    Some("Раскладка обновляется; повторите жест после завершения операции".into());
+                cx.notify();
+            }
+            if !self.product.busy
+                && let Some(index) = self
+                    .panes
+                    .iter()
+                    .position(|pane| pane.bounds.contains(&event.position))
+            {
+                self.finish_pointer(cx);
+                if self
+                    .pointer
+                    .as_ref()
+                    .is_some_and(|route| route.encoder.has_pressed())
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+                self.selected = index;
+                self.selection = None;
+                self.selection_dragging = false;
+                self.text_input.cancel();
+                self.focus.focus(window, cx);
+                window.notify_text_input_changed(&self.focus);
+                if let Some(pane) = self.selected_pane() {
+                    if event.button == MouseButton::Left {
+                        self.pane_drag = Some(PaneDrag {
+                            pane,
+                            split: uuid::Uuid::new_v4(),
+                            start: event.position,
+                            moved: false,
+                            drop: None,
+                        });
+                    } else if let Some((tab, base)) = self.tab_layout()
+                        && let Some(geometry) = &self.layout_geometry
+                        && let Some((divider, extent)) = tiling::pointer_boundary(
+                            &base,
+                            geometry,
+                            pane,
+                            f64::from(f32::from(event.position.x)),
+                            f64::from(f32::from(event.position.y)),
+                        )
+                    {
+                        self.resize_gesture = Some(ResizeGesture {
+                            button: MouseButton::Right,
+                            tab,
+                            base,
+                            split: divider.split,
+                            boundary: divider.boundary,
+                            axis: divider.axis,
+                            start: event.position,
+                            extent,
+                        });
+                    }
+                }
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if event.button == MouseButton::Left
             && !self.product.busy
             && let Some(geometry) = &self.layout_geometry
@@ -3921,6 +4189,7 @@ impl CanvasApp {
             self.finish_pointer(cx);
             self.selection_dragging = false;
             self.resize_gesture = Some(ResizeGesture {
+                button: MouseButton::Left,
                 tab,
                 base,
                 split: divider.split,
@@ -4037,6 +4306,11 @@ impl CanvasApp {
             cx.notify();
             return;
         }
+        if event.button == MouseButton::Left && self.pane_drag.is_some() {
+            // A compositor can coalesce the last motion until after mouse-up.
+            // Commit against the release position, never a stale preview.
+            self.update_pane_drag_at(event.position, cx);
+        }
         if event.button == MouseButton::Left
             && let Some(drag) = self.pane_drag.take()
         {
@@ -4049,7 +4323,12 @@ impl CanvasApp {
             cx.notify();
             return;
         }
-        if event.button == MouseButton::Left && self.resize_gesture.is_some() {
+        if self
+            .resize_gesture
+            .as_ref()
+            .is_some_and(|gesture| event.button == gesture.button)
+        {
+            self.resize_at(event.position, cx);
             self.finish_resize(true, cx);
             cx.stop_propagation();
             return;
@@ -4118,27 +4397,11 @@ impl CanvasApp {
             return;
         }
         if let Some(gesture) = &self.resize_gesture {
-            if event.pressed_button != Some(MouseButton::Left) {
+            if event.pressed_button != Some(gesture.button) {
                 self.finish_resize(false, cx);
                 return;
             }
-            let delta = match gesture.axis {
-                pigade_layout::Axis::Horizontal => {
-                    f64::from(f32::from(event.position.x - gesture.start.x))
-                }
-                pigade_layout::Axis::Vertical => {
-                    f64::from(f32::from(event.position.y - gesture.start.y))
-                }
-            };
-            if let Some(command) = tiling::resize_by_delta(
-                &gesture.base,
-                gesture.split,
-                gesture.boundary,
-                delta,
-                gesture.extent,
-            ) {
-                self.preview_layout(gesture.tab, gesture.base.clone(), command, cx);
-            }
+            self.resize_at(event.position, cx);
             cx.stop_propagation();
             return;
         }
@@ -4367,6 +4630,32 @@ impl CanvasApp {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let k = &event.keystroke;
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::Controls)
+        {
+            if k.key == "escape" || k.key == "enter" {
+                self.product_action(product::ProductAction::CloseDialog, window, cx);
+            } else if !k.modifiers.control
+                && !k.modifiers.alt
+                && !k.modifiers.platform
+                && !event.is_held
+                && let Ok(number) = k.key.parse::<usize>()
+                && let Some(modifier) = number
+                    .checked_sub(1)
+                    .and_then(|index| controls::Modifier::ALL.get(index))
+            {
+                self.product_action(
+                    product::ProductAction::SetCommandModifier(*modifier),
+                    window,
+                    cx,
+                );
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.canvas_close_requested && k.key == "escape" {
             if k.modifiers.control && k.modifiers.shift {
                 window.remove_window();
@@ -4815,6 +5104,33 @@ impl CanvasApp {
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
             cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if !event.prefer_character_input
+            && let Some(action) = controls::classify(
+                self.product.command_modifier,
+                &k.key,
+                input::Modifiers {
+                    control: k.modifiers.control,
+                    alt: k.modifiers.alt,
+                    shift: k.modifiers.shift,
+                    platform: k.modifiers.platform,
+                },
+            )
+        {
+            let repeating = matches!(
+                action,
+                controls::Action::Focus(_)
+                    | controls::Action::Swap(_)
+                    | controls::Action::FocusLeft
+                    | controls::Action::FocusRight
+                    | controls::Action::ResizeLeft
+                    | controls::Action::ResizeRight
+            );
+            if !event.is_held || repeating {
+                self.control_action(action, window, cx);
+            }
             cx.stop_propagation();
             return;
         }
