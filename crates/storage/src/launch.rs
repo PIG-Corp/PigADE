@@ -97,7 +97,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 3,
+            version <= 4,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -106,13 +106,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 3 {
-            Some(backup_before_migration(&connection, path, version)?)
+        let migration_backup = if version > 0 && version < 4 {
+            Some(backup_before_migration(&connection, path, version, 4)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 3 {
+        if version < 4 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -127,8 +127,13 @@ impl MetadataStore {
             if version < 2 {
                 crate::catalog::migrate_catalog(&tx)?;
             }
-            crate::catalog::migrate_layout_document(&tx)?;
-            tx.pragma_update(None, "user_version", 3)?;
+            if version < 3 {
+                crate::catalog::migrate_layout_document(&tx)?;
+            }
+            if version < 4 {
+                crate::context::migrate_context_schema(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 4)?;
             tx.commit()?;
         }
         File::open(
@@ -394,6 +399,7 @@ fn backup_before_migration(
     connection: &Connection,
     path: &Path,
     original_version: u32,
+    target_version: u32,
 ) -> Result<PathBuf> {
     let parent = std::fs::canonicalize(
         path.parent()
@@ -405,8 +411,12 @@ fn backup_before_migration(
         .and_then(|name| name.to_str())
         .context("database filename requires UTF-8")?;
     let nonce = Uuid::new_v4();
-    let destination = parent.join(format!("{name}.pre-v3.{nonce}.backup.sqlite"));
-    let temporary = parent.join(format!("{name}.pre-v3.{nonce}.backup.pending"));
+    let destination = parent.join(format!(
+        "{name}.pre-v{target_version}.{nonce}.backup.sqlite"
+    ));
+    let temporary = parent.join(format!(
+        "{name}.pre-v{target_version}.{nonce}.backup.pending"
+    ));
     let backup = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -597,7 +607,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 4)?;
+        store.connection.pragma_update(None, "user_version", 5)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

@@ -17,7 +17,7 @@ Do not run keyboard/mouse injection (wtype, ydotool, xdotool), change compositor
 1. Read this file, README.md, SPEC.md and DESIGN.md completely before changing product behavior.
 2. Read docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, WORKLOG.md and the latest relevant ADR/report. Inspect `git status --short` and the applicable code before edits.
 3. Current version is **0.0.1-dev** (dev 0.0.1). Read VERSION and docs/VERSIONING.md; keep first-party manifests aligned. Third-party vendor versions retain upstream identities plus documented patch profiles.
-4. Respect SPEC stages and gates. Stage 0 is in progress. A green diagnostic suite with expected negative checkpoint cases does not approve a stack. Do not build broad product chrome to bypass an unresolved terminal/recovery gate.
+4. Current user priority: implement the usable product (projects, workspaces, tabs, tiling, context and CLI workflows). Do not expand diagnostic tooling, benchmarks, research or reports instead of shipping features. Existing terminal/recovery limits remain explicit; they do not block product implementation in parallel. Verify changed behavior and builds without repeatedly running unrelated suites. No new reports unless requested.
 
 ## Mandatory shared history
 
@@ -25,7 +25,7 @@ Do not run keyboard/mouse injection (wtype, ydotool, xdotool), change compositor
 
 Use `python3 scripts/log-change.py --agent <id> --summary '<change>' --files <paths...> --validation '<actual commands/results>' --next '<risks/next step>'`. The helper locks the shared file so concurrent entries cannot overwrite each other. Do not rewrite, truncate or reorder history; corrections are new entries. The lead agent integrates and owns final verification and commits. The repository pre-commit hook requires a newly appended WORKLOG entry and aligned first-party versions; do not bypass it with --no-verify.
 
-Before ending a milestone, the lead updates docs/AGENT_HANDOFF.md and docs/PROJECT_MAP.md when needed, adds a meaningful CHANGELOG.md entry, checks `git diff --check`, and commits a coherent tested slice. Never commit credentials, runtime state, node_modules, target outputs, or diagnostic data from provider authentication/history directories. Do not amend/rewrite commits or undo another agent's changes without a concrete task requirement.
+Keep WORKLOG entries short. Update the project map/handoff only when a change makes them misleading; no milestone report is required. Check `git diff --check` and commit coherent buildable features. Never commit credentials, runtime state, node_modules, target outputs, or diagnostic data from provider authentication/history directories. Do not amend/rewrite commits or undo another agent's changes without a concrete task requirement.
 
 ## Contracts
 

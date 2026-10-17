@@ -102,6 +102,7 @@ pub(crate) fn response(
         error,
         rejected_before_admission: rejection,
         catalog: None,
+        context: None,
         catalog_notice: None,
         recovery: None,
         selected: None,

@@ -6,6 +6,8 @@ pub mod checkpoint;
 pub mod history;
 pub mod history_read;
 pub mod input;
+mod panel_launch;
+mod projects;
 pub use catalog::LayoutAction;
 mod ipc_server;
 pub mod journal_policy;
@@ -102,11 +104,39 @@ pub enum Command {
     Poll {
         known: Vec<poll::Known>,
     },
+    PollVisible {
+        sessions: Vec<Uuid>,
+        known: Vec<poll::Known>,
+    },
     WaitForChange {
         after: changes::Token,
         timeout_ms: u16,
     },
     Catalog,
+    GetContext {
+        scope_id: Uuid,
+    },
+    SaveContext {
+        document: pigade_storage::ContextDocument,
+        expected_revision: u64,
+    },
+    LaunchInTab {
+        tab: Uuid,
+        provider: String,
+        session: Uuid,
+        generation: Uuid,
+        operation: Uuid,
+        side: pigade_layout::Direction,
+        target: Option<Uuid>,
+    },
+    AddProject {
+        path: PathBuf,
+    },
+    CreateWorkspace {
+        project: Uuid,
+        task: String,
+        worktree: bool,
+    },
     CatalogApply {
         batch: pigade_storage::CatalogBatch,
     },
@@ -173,6 +203,8 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<pigade_storage::Catalog>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<pigade_storage::ContextDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_notice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<RecoveryDiagnostics>,
@@ -190,19 +222,26 @@ pub struct Response {
 #[serde(rename_all = "snake_case")]
 pub enum CommandRejection {
     QueueFull,
+    LaunchPreflight,
 }
 
 impl std::fmt::Display for CommandRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QueueFull => f.write_str("command queue full; command was not admitted"),
+            Self::LaunchPreflight => f.write_str("launch rejected before process creation"),
         }
     }
 }
 impl std::error::Error for CommandRejection {}
 
 fn rejected_before_admission(error: &anyhow::Error) -> Option<CommandRejection> {
-    error.downcast_ref::<CommandRejection>().copied()
+    error
+        .downcast_ref::<CommandRejection>()
+        .copied()
+        .or_else(|| {
+            panel_launch::rejected_before_spawn(error).then_some(CommandRejection::LaunchPreflight)
+        })
 }
 
 struct MessageBuffer(Vec<u8>);
@@ -584,19 +623,29 @@ impl Host {
         if matches!(&command, Command::WaitForChange { .. }) {
             bail!("wait_for_change is only available through the IPC notification service");
         }
-        if let Command::Poll { known } = command {
+        if matches!(&command, Command::Poll { .. } | Command::PollVisible { .. }) {
             self.reconcile_exits()?;
-            let result = poll::poll(
-                self.sessions.iter().map(|s| s.view.as_ref()),
-                &known,
-                &self.changes,
-            )?;
+            let result = match command {
+                Command::Poll { known } => poll::poll(
+                    self.sessions.iter().map(|s| s.view.as_ref()),
+                    &known,
+                    &self.changes,
+                )?,
+                Command::PollVisible { sessions, known } => poll::poll_visible(
+                    self.sessions.iter().map(|s| s.view.as_ref()),
+                    &known,
+                    &self.changes,
+                    &sessions,
+                )?,
+                _ => unreachable!(),
+            };
             return Ok(Response {
                 protocol: PROTOCOL,
                 views: result.views,
                 error: None,
                 rejected_before_admission: None,
                 catalog: None,
+                context: None,
                 catalog_notice: self.catalog_notice.clone(),
                 recovery: self.recovery.response(),
                 selected: Some(result.selected),
@@ -604,8 +653,64 @@ impl Host {
                 change_token: result.change_token,
             });
         }
+        if matches!(
+            &command,
+            Command::GetContext { .. } | Command::SaveContext { .. }
+        ) {
+            let scope = match &command {
+                Command::GetContext { scope_id } => *scope_id,
+                Command::SaveContext { document, .. } => document.scope_id,
+                _ => unreachable!(),
+            };
+            let catalog = self.metadata.catalog()?;
+            ensure!(
+                catalog.workspaces.iter().any(|w| w.id == scope)
+                    || catalog.projects.iter().any(|p| p.id == scope),
+                "unknown context owner"
+            );
+            let context = match command {
+                Command::GetContext { scope_id } => self.metadata.context(scope_id)?,
+                Command::SaveContext {
+                    document,
+                    expected_revision,
+                } => self.metadata.save_context(document, expected_revision)?,
+                _ => unreachable!(),
+            };
+            return Ok(Response {
+                protocol: PROTOCOL,
+                views: Vec::new(),
+                error: None,
+                rejected_before_admission: None,
+                catalog: None,
+                context: Some(context),
+                catalog_notice: None,
+                recovery: None,
+                selected: None,
+                history_chunk: None,
+                change_token: None,
+            });
+        }
         let catalog = match command {
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
+            Command::LaunchInTab {
+                tab,
+                provider,
+                session,
+                generation,
+                operation,
+                side,
+                target,
+            } => panel_launch::launch_in_tab(
+                self, tab, provider, session, generation, operation, side, target,
+            )?,
+            Command::AddProject { path } => projects::add_project(&mut self.metadata, path)?,
+            Command::CreateWorkspace {
+                project,
+                task,
+                worktree,
+            } => {
+                projects::create_workspace(&mut self.metadata, &self.root, project, task, worktree)?
+            }
             Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, batch)?,
             Command::LayoutEdit {
                 expected_revision,
@@ -618,6 +723,7 @@ impl Host {
                     error: None,
                     rejected_before_admission: None,
                     catalog: None,
+                    context: None,
                     catalog_notice: None,
                     recovery: self.recovery.response(),
                     selected: None,
@@ -632,6 +738,7 @@ impl Host {
             error: None,
             rejected_before_admission: None,
             catalog: Some(catalog),
+            context: None,
             catalog_notice: self.catalog_notice.clone(),
             recovery: self.recovery.response(),
             selected: None,
@@ -1758,6 +1865,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 error: Some(format!("{error:#}")),
                 rejected_before_admission: rejected_before_admission(&error),
                 catalog: None,
+                context: None,
                 catalog_notice: host.catalog_notice.clone(),
                 recovery: host.recovery.response(),
                 selected: None,

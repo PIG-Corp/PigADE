@@ -1,5 +1,10 @@
 # Handoff — 0.0.1-dev
 
+## Current product priority — 2026-10-17
+
+The user prioritizes usable product implementation over additional diagnostics, benchmarks and reports. Follow AGENTS.md; existing terminal/platform limits remain open, but do not postpone UI work behind them. Native product chrome is now connected to catalog/storage/real PTYs: projects, shared/worktree workspaces, tabs, context revision editing, CLI launch, palette, layout controls and cross-workspace transfer. `product.rs` owns chrome, `tiling.rs` the pure resize helpers; main.rs connects the existing cell canvas. Context delivery/adapters, session reconciliation UI, complete editing/accessibility/theme support and packaging are still pending. Layout operations never spawn a process; uncertain launch remains locked. Do not infer completed MVP from these features.
+
+
 ## Current task and boundaries
 
 Implement the Linux MVP against the complete SPEC.md and DESIGN.md. The user
@@ -180,25 +185,9 @@ do not poll/restart them as active jobs. Private source data never belongs in Gi
 
 ## Next work, in priority order
 
-1. Diagnose/fix sustained resize admission saturation with the instrumented same
-   binary reproducer; retain failures and repeat the necessary recovery checks.
-2. Full-data VM evidence is committed/passed at its documented scope. Repeat actual24h soak only after resolving the producer/host failure above.
-3. Whole-event/global heap admission remains open. Lazy VTE sync storage,
-   width-sensitive spare-row payload targets and shallow frame link interning
-   remove specific copies; they are not a memory bound. Follow
-   [the allocation plan](research/terminal-admission-plan.md), including COW
-   combining/title/REP amplification, frames/checkpoint/reflow/import/export
-   transients and durable whole-event refusal. Never crop ANSI operations.
-4. Complete isolated native input/IME/clipboard/X11/fractional scale/real GPU and
-   accessibility checks, actual CLI conversations and exact native resume.
-   The reviewed Codex conversation harness passed two real native exec turns
-   with exact-ID resume and retained synthetic context. See
-   reports/codex-conversation-20261017.md. Product/interactive TUI binding and
-   automatic resume are still pending; no credential/history copying occurred.
-5. Build stable history viewing/search/copy, then full project/workspace/tab/
-   tiling UI, Git/worktrees, revisioned context/roles/memory and versioned adapters.
-6. Finish packaging, platform build matrix, performance/fault matrix and the
-   end-to-end MVP. Do not mark the goal complete while release blockers remain.
+1. Complete usable product flows: context delivery through capability-checked adapters, session reconciliation and history access, full tiling interaction, editable settings/themes and packaging. Keep necessary build/changed-behavior checks; no new diagnostic tools/reports in place of product work.
+2. Preserve existing long-history, memory, native-input and performance limitations. Current frozen soaks are independent jobs; do not overwrite/restart their binaries or claim success without final evidence.
+3. Finish the remaining SPEC release blockers and the end-to-end MVP before declaring completion. Historical research and failures below remain evidence, not the current instruction to prioritize infrastructure over UI.
 
 Detailed historical observations remain in WORKLOG.md, linked reports, benchmark
 artifacts and Git history. This handoff records current state rather than stale

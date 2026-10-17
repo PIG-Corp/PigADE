@@ -4,10 +4,12 @@
 //! model changes only after obtaining it. Recovery never modifies source bytes.
 pub mod archive;
 mod catalog;
+mod context;
 mod journal;
 mod launch;
 
 pub use catalog::*;
+pub use context::*;
 pub use journal::*;
 pub use launch::*;
 

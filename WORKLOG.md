@@ -1929,3 +1929,131 @@ Remove ignored listener-event retention and coalesce ordered title publication
 - Files: crates/terminal/src/lib.rs, docs/research/terminal-listener-retention-plan.md, docs/reports/terminal-memory-census.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: 2 exact FIFO/title/split/synccheckpoint regressions passed before and after repair;4 total retention tests pass. Full223 workspace tests including real-PTY query backpressure pass; strict workspace Clippy/fmt/release pass. Independent read-only review found no concrete regression. Actual-parser storms retain0 ignored event slots,1 last title for8192 updates; live384queries allretained/exactFIFO, historical0.
 - Risks / next: No global memory or live response reservation claim; continue allocation ownership/admission and fresh four-stream sustained-output validation. Existing82653/55262 frozen long soaks unchanged.
+
+## 2026-10-17T04:00:43+00:00 — /root/font_render_profile
+
+Harden stress PTY teardown with pidfd-pinned identity signaling and retain private journals on failures or explicit request.
+
+- Files: scripts/stress-pty.py, scripts/test_stress_pty_cleanup.py
+- Verification: python3 -m py_compile scripts/stress-pty.py scripts/test_stress_pty_cleanup.py; python3 -m unittest scripts.test_stress_pty_cleanup scripts.test_soak_pty -v (11 passed); python3 scripts/stress-pty.py --help; source scan found no os.kill/killpg; git diff --check
+- Risks / next: No 60-second stress or UI workload was run. Root may rerun with --preserve-state; successful default runs still remove only their own generated temporary directory.
+
+## 2026-10-17T04:01:31+00:00 — /root/font_render_profile
+
+Correct cleanup uncertainty handling: unreadable or malformed /proc identity/state now remains unconfirmed and preserves run evidence.
+
+- Files: scripts/stress-pty.py, scripts/test_stress_pty_cleanup.py
+- Verification: python3 -m py_compile scripts/stress-pty.py scripts/test_stress_pty_cleanup.py; python3 -m unittest scripts.test_stress_pty_cleanup scripts.test_soak_pty -v (13 passed); git diff --check
+- Risks / next: Pidfd cleanup failures are returned as bounded codes so the workload failure remains reportable; no stress workload was run.
+
+## 2026-10-17T04:06:24+00:00 — terminal_memory_budget
+
+Document private hardware-render lane evidence and next checks
+
+- Files: docs/research/private-gpu-lane-next.md, WORKLOG.md
+- Verification: Read-only inspection of harnesses, pinned GPUI source, /proc NVIDIA version and DRM node/sysfs metadata; checked official kernel, Khronos and NVIDIA documentation links; no compositor/UI/GPU workload run
+- Risks / next: Verify exact NVIDIA 610.57.04 Vulkan device-node requirements and adapter attestation in an isolated hardware lane or dedicated-GPU VM
+
+## 2026-10-17T04:15:33+00:00 — /root/font_render_profile
+
+Added Wayland text-input target epochs with proxy/surface callback gating and generated the pinned Wayland target patch.
+
+- Files: crates/app/.upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_linux/src/linux/wayland/client.rs, crates/app/.upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_linux/src/linux/wayland/window.rs, crates/app/patches/gpui-x11-ime/wayland-target.patch
+- Verification: CARGO_HOME=/tmp/pigade-gpui-cargo CARGO_TARGET_DIR=/tmp/pigade-gpui-source-check/target CARGO_BUILD_JOBS=2 cargo check --manifest-path crates/app/Cargo.toml --locked (pass); cargo test --manifest-path crates/app/Cargo.toml --locked (127 passed); cargo clippy --manifest-path crates/app/Cargo.toml --locked --all-targets -- -D warnings (pass); rustfmt --edition 2024 --config skip_children=true --check on both modified Wayland files (pass); scripts/apply-gpui-patches.py parse_patch_paths and temporary exact-preimage patch-application/output-hash check (pass). Standalone gpui_linux unit test attempted but blocked because the upstream workspace lock requires fetching libyuv submodule.
+- Risks / next: Root should update the shared GPUI patch manifest, review the diff, run gpui_linux unit tests when its source cache is available, and use the isolated Wayland IME harness to test same-surface epoch rotation. The v3 protocol has no disable/commit acknowledgment; this code gates old proxy callbacks but makes no compositor-drain guarantee.
+
+## 2026-10-17T12:59:05+00:00 — recovery_slice_review
+
+Add versioned context documents with atomic revision CAS and schema v4 migration
+
+- Files: crates/storage/src/context.rs, crates/storage/src/lib.rs, crates/storage/src/launch.rs, crates/storage/src/catalog.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage --offline --locked context::tests (3 passed); cargo test -p pigade-storage --offline --locked (43 passed); cargo fmt --all --check; git diff --check
+- Risks / next: Root can wire GetContext/SaveContext IPC and UI; review shared migration changes before integration.
+
+## 2026-10-17T12:59:27+00:00 — terminal_memory_budget
+
+Implement Git-backed project discovery and shared/worktree creation in session host
+
+- Files: crates/session-host/src/projects.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host projects::tests -- --nocapture (5 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); rustfmt --edition 2024 --check crates/session-host/src/projects.rs (passed); cargo fmt --all --check reported formatting differences in root-owned lib.rs/poll.rs integration, not changed here
+- Risks / next: Root owns and integrates command routing; no automatic cleanup is attempted after a failed worktree command because the operation may have partially modified Git state
+
+## 2026-10-17T13:01:46+00:00 — terminal_memory_budget
+
+Added tab-scoped CLI launch with prevalidated placement and explicit unplaced-process failure reporting
+
+- Files: crates/session-host/src/panel_launch.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/panel_launch.rs; git diff --check -- crates/session-host/src/panel_launch.rs (passed). Host module is not yet registered in lib.rs, so cargo compilation is pending root integration.
+- Risks / next: Root to register panel_launch and wire LaunchInTab; then run pigade-session-host check and focused product-route verification.
+
+## 2026-10-17T13:02:41+00:00 — /root/font_render_profile
+
+Add native product chrome and context editor module
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs (passed); git diff --check -- crates/app/src/product.rs (passed); cargo check --manifest-path crates/app/Cargo.toml --locked could not start because parent dependency edits require Cargo.lock refresh
+- Risks / next: Root to finish action routing and lockfile wiring, then compile and correct any API errors
+
+## 2026-10-17T13:10:05+00:00 — /root/font_render_profile
+
+Fix product palette containment and toolbar sizing; add catalog-driven empty-canvas onboarding
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs and git diff --check -- crates/app/src/product.rs passed; cargo check --manifest-path crates/app/Cargo.toml --locked passed; cargo clippy --manifest-path crates/app/Cargo.toml --all-targets --locked -- -D warnings blocked by root-owned protocol.rs test initializer missing catalog/context fields
+- Risks / next: Root owns integrating empty_state and keyboard palette dispatch; run strict clippy after repairing protocol test initializer
+
+## 2026-10-17T13:11:08+00:00 — /root/font_render_profile
+
+Add catalog-backed tab transfer picker UI
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs (passed); git diff --check -- crates/app/src/product.rs (passed); cargo check pending root ProductAction routing for OpenTransfer and TransferTo
+- Risks / next: Root to wire transfer target route; then run app check/clippy
+
+## 2026-10-17T13:11:19+00:00 — /root/font_render_profile
+
+Verify product transfer picker after root action wiring
+
+- Files: crates/app/src/product.rs
+- Verification: cargo check --manifest-path crates/app/Cargo.toml --locked passed; rustfmt --edition 2024 --check crates/app/src/product.rs and git diff --check -- crates/app/src/product.rs passed; app check reports only root-owned unused tiling/layout helpers
+- Risks / next: Root owns final app-wide strict clippy and behavior integration
+
+## 2026-10-17T13:11:38+00:00 — terminal_memory_budget
+
+Added real host/PTY regression proving LaunchInTab creates one stable generation and layout move/focus does not relaunch it
+
+- Files: crates/session-host/src/panel_launch.rs
+- Verification: SHELL=/bin/sh cargo test -p pigade-session-host panel_launch::tests::one_shell_generation_stays_in_layout_through_move_and_focus -- --nocapture (passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); rustfmt --edition 2024 crates/session-host/src/panel_launch.rs; git diff --check -- crates/session-host/src/panel_launch.rs (passed)
+- Risks / next: LaunchInTab protocol needs an explicit typed disposition for safe retry; until then, missing explicit pre-admission rejection must be treated as outcome unknown.
+
+## 2026-10-17T13:13:04+00:00 — terminal_memory_budget
+
+Added typed LaunchInTab preflight rejection marker without marking launch or placement failures
+
+- Files: crates/session-host/src/panel_launch.rs
+- Verification: SHELL=/bin/sh cargo test -p pigade-session-host panel_launch::tests -- --nocapture (2 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); cargo check -p pigade-session-host (passed); git diff --check -- crates/session-host/src/panel_launch.rs (passed)
+- Risks / next: Host response mapping now consumes rejected_before_spawn; launch/placement failures remain untyped and must be reconciled.
+
+## 2026-10-17T13:13:05+00:00 — recovery_slice_review
+
+Add pure tiling resize and split geometry helpers
+
+- Files: crates/app/src/tiling.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/tiling.rs; git diff --check -- crates/app/src/tiling.rs passed; app targeted test command started dependency rebuild but was interrupted before tests to release shared build lock for root
+- Risks / next: Root wired mod tiling and should run the focused tiling tests with the workspace app build.
+
+## 2026-10-17T13:14:06+00:00 — /root/font_render_profile
+
+Group action control role and density parameters
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/product.rs passed; git diff --check -- crates/app/src/product.rs passed; no cargo command run per root request
+- Risks / next: Root to rerun strict app clippy and confirm too_many_arguments is resolved
+
+## 2026-10-17T13:18:59+00:00 — /root
+
+Connect native project/workspace/tab UI to durable catalog, real CLI launch, context revisions and tiling interactions
+
+- Files: AGENTS.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, crates/app/Cargo.toml, crates/app/Cargo.lock, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/tiling.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/projects.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/storage/src/context.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, scripts/isolated-render.py
+- Verification: Host workspace strict clippy passed; app 130 tests passed after updating transport fixture for initial catalog read; 13 layout invariants passed; app strict clippy/build passed; private Weston render/reopen passed with 4 unchanged PTY identities and screenshot reviewed. Initial private attempts failed due to legacy fixture lacking catalog placement and a Direction case mismatch; corrected only fixture setup. Versions aligned; diff check passed.
+- Risks / next: Continue product implementation: context delivery/adapters, session reconciliation/history, complete interaction/settings/themes and packaging. Remaining terminal/platform/release gates remain open; no new diagnostic/report work prioritised.

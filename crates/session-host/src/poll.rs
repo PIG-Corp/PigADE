@@ -85,6 +85,28 @@ pub fn poll<'a>(
     known: &[Known],
     changes: &ChangeHub,
 ) -> Result<PollResult> {
+    poll_selected(views, known, changes, None)
+}
+
+/// Poll the active tab's stable panel identities; hidden PTYs remain untouched.
+pub fn poll_visible<'a>(
+    views: impl IntoIterator<Item = &'a Mutex<View>>,
+    known: &[Known],
+    changes: &ChangeHub,
+    sessions: &[Uuid],
+) -> Result<PollResult> {
+    ensure!(sessions.len() <= MAX_VIEWS, "too many visible panels");
+    let unique: HashSet<_> = sessions.iter().collect();
+    ensure!(unique.len() == sessions.len(), "duplicate visible panel");
+    poll_selected(views, known, changes, Some(sessions))
+}
+
+fn poll_selected<'a>(
+    views: impl IntoIterator<Item = &'a Mutex<View>>,
+    known: &[Known],
+    changes: &ChangeHub,
+    sessions: Option<&[Uuid]>,
+) -> Result<PollResult> {
     // Sample before taking any view locks. If publication races this walk, the
     // returned epoch is stale and the next wait immediately observes the bump.
     let change_token = match changes.token() {
@@ -100,7 +122,12 @@ pub fn poll<'a>(
         }
     };
     ensure!(
-        known.len() <= MAX_SELECTED,
+        known.len()
+            <= if sessions.is_some() {
+                MAX_VIEWS
+            } else {
+                MAX_SELECTED
+            },
         "too many known session watermarks"
     );
     let mut known_by_session_generation = std::collections::HashMap::with_capacity(known.len());
@@ -140,10 +167,19 @@ pub fn poll<'a>(
         candidates.push((key.0, key.1, view));
     }
     candidates.sort_unstable_by_key(|(session, generation, _)| (*session, *generation));
+    if let Some(sessions) = sessions {
+        candidates.retain(|(session, _, _)| sessions.contains(session));
+        candidates.sort_by_key(|(session, _, _)| sessions.iter().position(|id| id == session));
+    }
 
-    let mut selected = Vec::with_capacity(candidates.len().min(MAX_SELECTED));
-    let mut changed_views = Vec::with_capacity(MAX_SELECTED);
-    for (_, _, view) in candidates.into_iter().take(MAX_SELECTED) {
+    let limit = if sessions.is_some() {
+        MAX_VIEWS
+    } else {
+        MAX_SELECTED
+    };
+    let mut selected = Vec::with_capacity(candidates.len().min(limit));
+    let mut changed_views = Vec::with_capacity(limit);
+    for (_, _, view) in candidates.into_iter().take(limit) {
         let current = view
             .lock()
             .map_err(|_| anyhow::anyhow!("session view lock poisoned"))?;

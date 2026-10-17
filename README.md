@@ -9,7 +9,7 @@
         └── Панели: Claude Code, Codex, OpenCode, shell и другие CLI
 ```
 
-Текущая версия: **dev 0.0.1** (`0.0.1-dev`, [VERSION](VERSION)). Реализуется **этап 0 — технический прототип**. Готового MVP пока нет; критерии SPEC не ослаблены. В host реализованы каталог проектов/воркспейсов/вкладок и независимая модель tiling с сохранённым undo/redo. Их полный UI, подготовка Git worktree и контекст/адаптеры ещё не завершены. Прототип не является Linux beta.
+Текущая версия: **dev 0.0.1** (`0.0.1-dev`, [VERSION](VERSION)). В native UI доступны Git-проекты, воркспейсы в общей папке или отдельном worktree, вкладки, запуск shell/Claude Code/Codex/OpenCode, палитра команд и редактор версий контекста. Раскладка хранится в host: split, направленный focus/move/swap, перенос между вкладками и воркспейсами, resize с preview, focus mode и undo/redo. Изменение раскладки не запускает новый процесс. Контекст пока сохраняется отдельно и не доставляется автоматически в CLI. Готового MVP и Linux beta пока нет; оставшиеся критерии SPEC не ослаблены.
 
 ## Перед работой
 
@@ -87,5 +87,7 @@ Benchmark требует durable filesystem, отклоняет tmpfs и изм�
 Сырые результаты: [benchmarks/results](benchmarks/results), [CLI matrix](docs/compatibility/CLI.md), [ADR](docs/adr), [отчёты](docs/reports).
 
 Приложение вручную запускается как `crates/app/target/debug/pigade-app /absolute/state/host.sock` после запуска host. Закрытие окна не завершает host. Автоматизация окон/ввода на активном desktop запрещена; platform tests требуют изолированного compositor/VM.
+
+В приложении начните с «Добавить проект», затем создайте воркспейс и запустите CLI кнопкой панели инструментов. `Ctrl+Shift+Space` включает режим PigADE: `P` — команды, `T` — новая вкладка, `1…9` — вкладки, `H/J/K/L` — фокус, `Shift+H/J/K/L` — перемещение, `W` и направление — обмен, `V/S` — split, `R` и стрелки — resize (Enter сохраняет, Escape отменяет), `F` — focus mode, `M` — перенос, `Z/Shift+Z` — undo/redo. Заголовок панели можно перетащить к краю другой для dock или в центр для обмена; границы панелей изменяются мышью. Неизвестный исход запуска блокирует следующий запуск в этом окне, без автоматического retry.
 
 Открыты long-history/24h gates, provider/layout восстановление, полная CLI/platform/accessibility матрица, product-wide performance и сквозной MVP-сценарий. Проверенные результаты, неудачные прогоны и границы каждого измерения находятся в [отчёте cold history](docs/reports/cold-history-integration.md), [отчёте VM reboot](docs/reports/vm-reboot.md), [отчёте runtime/cache](docs/reports/runtime-and-replay-cache.md) и [handoff](docs/AGENT_HANDOFF.md). Синтетический host-тест или работающий accessibility bridge не означают готовность MVP.

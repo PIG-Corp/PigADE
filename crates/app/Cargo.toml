@@ -12,3 +12,6 @@ gpui = { path = ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/g
 gpui_platform = { path = ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_platform", features = ["wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+pigade-storage = { path = "../storage" }
+pigade-layout = { path = "../layout" }
+uuid = { version = "1.18", features = ["v4", "serde"] }

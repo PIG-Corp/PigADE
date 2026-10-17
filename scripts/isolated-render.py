@@ -660,6 +660,37 @@ def inside():
                 'listAndPollDiagnosticsMatch': True,
                 'omitted': initial_reply['recovery'].get('omitted'),
             }
+        # The product canvas renders catalog-owned panes, not every host process.
+        # Place these existing fixture PTYs without launching another generation.
+        project, workspace, tab = (str(uuid.uuid4()) for _ in range(3))
+        catalog = request_response({'command': 'catalog'})['catalog']
+        selection = dict(catalog['selection'], project_id=project,
+                         workspace_id=workspace, tab_id=tab)
+        catalog = request_response({'command': 'catalog_apply', 'batch': {
+            'projects': [{'expected_revision': None, 'value': {
+                'id': project, 'canonical_path': '/artifacts',
+                'git_common_dir': '/artifacts', 'name': 'PigADE', 'roots': [], 'revision': 0}}],
+            'workspaces': [{'expected_revision': None, 'value': {
+                'id': workspace, 'project_id': project, 'task': 'Terminal development',
+                'cwd': '/artifacts', 'mode': 'shared_checkout', 'status': 'ready',
+                'error': None, 'context_revision': None, 'revision': 0}}],
+            'tabs': [{'expected_revision': None, 'value': {
+                'id': tab, 'workspace_id': workspace, 'name': 'Development',
+                'layout_json': 'null', 'active_pane': None, 'revision': 0}}],
+            'selection': {'expected_revision': selection['revision'], 'value': selection},
+            'layout': None}})['catalog']
+        ordered = sorted(specs, key=lambda spec: (spec['session'], spec['generation']))
+        for index, spec in enumerate(ordered):
+            target = None if index == 0 else ordered[0 if index < 3 else 1]['session']
+            side = 'Right' if index == 1 else 'Down'
+            catalog = request_response({'command': 'layout_edit',
+                'expected_revision': catalog['layout']['revision'], 'action': {
+                    'action': 'apply', 'command': {'Insert': {
+                        'tab': tab, 'pane': spec['session'], 'target': target,
+                        'side': side, 'split': str(uuid.uuid4())}}}})['catalog']
+        request_response({'command': 'layout_edit',
+            'expected_revision': catalog['layout']['revision'], 'action': {
+                'action': 'apply', 'command': {'Focus': {'pane': ordered[0]['session']}}}})
         initial_ids = sorted((v['session'], v['generation'], v['pid']) for v in initial)
         first = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False),
                                   config.get('selected_pane', 0), config.get('reduced_motion', False)))

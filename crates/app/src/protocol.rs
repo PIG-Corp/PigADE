@@ -174,6 +174,41 @@ struct Response {
     recovery: Option<RecoveryDiagnostics>,
     #[serde(default)]
     change_token: Option<ChangeToken>,
+    #[serde(default)]
+    catalog: Option<pigade_storage::Catalog>,
+    #[serde(default)]
+    context: Option<pigade_storage::ContextDocument>,
+}
+
+pub struct ProductReply {
+    pub launch_confirmed: bool,
+    pub catalog: Option<pigade_storage::Catalog>,
+    pub context: Option<pigade_storage::ContextDocument>,
+}
+
+pub struct ProductError {
+    pub message: String,
+    pub rejected_before_launch: bool,
+}
+
+pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
+    let launch_confirmed = command.get("command").and_then(Value::as_str) == Some("launch_in_tab");
+    let response = request_response(socket, command).map_err(|message| ProductError {
+        message,
+        rejected_before_launch: false,
+    })?;
+    if let Some(message) = response.error {
+        return Err(ProductError {
+            message,
+            rejected_before_launch: response.rejected_before_admission.as_deref()
+                == Some("launch_preflight"),
+        });
+    }
+    Ok(ProductReply {
+        launch_confirmed,
+        catalog: response.catalog,
+        context: response.context,
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -352,6 +387,19 @@ pub fn poll(socket: &Path, known: &[Known]) -> Result<(Poll, Option<ChangeToken>
     decode_poll(reply)
 }
 
+pub fn poll_visible(
+    socket: &Path,
+    known: &[Known],
+    sessions: &[uuid::Uuid],
+) -> Result<(Poll, Option<ChangeToken>), PollError> {
+    let reply = request_response(
+        socket,
+        json!({"command":"poll_visible", "sessions":sessions, "known":known}),
+    )
+    .map_err(PollError::Failed)?;
+    decode_poll(reply)
+}
+
 /// This read-only wait has no input/launch admission or retry semantics. An old
 /// host omits the Poll token, so callers retain bounded legacy polling instead.
 pub fn wait_for_change(socket: &Path, after: &ChangeToken) -> Result<ChangeToken, String> {
@@ -386,7 +434,7 @@ pub fn merge_poll(
     recovery: &mut Option<RecoveryDiagnostics>,
     reply: Poll,
 ) -> Result<PollChanges, String> {
-    if reply.selected.len() > 4 || reply.views.len() > 4 {
+    if reply.selected.len() > 32 || reply.views.len() > 32 {
         return Err("Too many selected terminal frames".into());
     }
     validate_recovery(reply.recovery.as_ref())?;
@@ -470,6 +518,8 @@ mod tests {
     fn error_response(error: &str, rejection: Option<&str>) -> Response {
         Response {
             protocol: 2,
+            catalog: None,
+            context: None,
             views: Vec::new(),
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),
