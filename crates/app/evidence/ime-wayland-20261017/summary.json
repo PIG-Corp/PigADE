@@ -1,0 +1,429 @@
+{
+  "status": "pass-private-wayland-v3-fcitx-pinyin-commit-fixture",
+  "stage": "complete",
+  "preflight": {
+    "host_displays_buses_input_and_gpu_absent": true,
+    "interfaces": [
+      "lo"
+    ],
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "sway": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "config_has_only_fixed_output_and_disables_xwayland": true,
+    "config_sha256": "b3ecbab695df722529186ec5e4a6b93be5a219b374710f648f339e3204d7c8f2",
+    "ipc_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 41,
+      "path": "/run/pigade-ime/sway-ipc.1000.5.sock",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3072608
+    },
+    "output": {
+      "active": true,
+      "name": "HEADLESS-1",
+      "size": [
+        1280,
+        800
+      ]
+    },
+    "pid": 5,
+    "start_ticks": 3072608,
+    "wayland_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3072608
+    }
+  },
+  "dbus": {
+    "activation": "disabled; custom config has no service directories or includes",
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "pid": 3,
+    "private_socket_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 38,
+      "path": "/run/pigade-ime/bus",
+      "peer_gid": 1000,
+      "peer_pid": 3,
+      "peer_uid": 1000,
+      "start_ticks": 3072602
+    },
+    "start_ticks": 3072602
+  },
+  "protocol_globals": {
+    "query_bytes": 5340,
+    "query_sha256": "f73c6de4260e7530740611e0e68cdebe88766b7305d20697847465d24bd692be",
+    "required": [
+      "zwp_text_input_manager_v3",
+      "zwp_input_method_manager_v2",
+      "zwp_virtual_keyboard_manager_v1"
+    ],
+    "socket_peer_rechecked": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3072608
+    }
+  },
+  "app": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "focused_via": "private Sway IPC exact PID",
+    "pid": 30,
+    "start_ticks": 3072639,
+    "unique_window_node_id": 5
+  },
+  "fcitx": {
+    "active_input_method": "pinyin",
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "fixed_sequence": [
+      "n",
+      "i",
+      "h",
+      "a",
+      "o",
+      "Space"
+    ],
+    "pid": 11,
+    "profile": "fresh private profile",
+    "start_ticks": 3072630
+  },
+  "input_helper": {
+    "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+    "control_peer_verified": true,
+    "ldd_bytes": 385,
+    "ldd_libraries": [
+      {
+        "name": "libwayland-client.so.0",
+        "path": "/usr/lib/libwayland-client.so.0.26.0",
+        "sha256": "39c83ae7b73d22f18b4f81da14749c4535c304b7e62910a2f1aae682f279cc9d"
+      },
+      {
+        "name": "libxkbcommon.so.0",
+        "path": "/usr/lib/libxkbcommon.so.0.13.2",
+        "sha256": "e475adbf5abd181b1bdfdeba70ad4d501cb296bbf05b13e8649fd71b3989ee07"
+      },
+      {
+        "name": "libc.so.6",
+        "path": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "name": "libffi.so.8",
+        "path": "/usr/lib/libffi.so.8.5.0",
+        "sha256": "b38bb3a55ba04dfbb5be68e881a72385d6c30010afffb1cf1dfc373b72c2278c"
+      },
+      {
+        "name": "ld-linux-x86-64.so.2",
+        "path": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "ldd_sha256": "0fceb574e49d74515d8ce9b6cf8c4e273f7ae0e7ef76f27f5bdbb9561d19f3c6",
+    "persistent_object": "one virtual keyboard, retained across both stages",
+    "pid": 13,
+    "sha256": "916e71bf2da35bacaf2bb4f385b50a9ae080e3132542e174745b315cbac5d426",
+    "start_ticks": 3072630,
+    "xkb_config_root": "/pigade/fcitx-core/usr/share/xkeyboard-config-2"
+  },
+  "composition_check": {
+    "caveat": "preedit requires human review of captured image",
+    "preedit_screenshot": true,
+    "pty_unchanged_before_commit": true,
+    "socket_peer": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "inode": 40,
+      "path": "/run/pigade-ime/wayland-1",
+      "peer_gid": 1000,
+      "peer_pid": 5,
+      "peer_uid": 1000,
+      "start_ticks": 3072608
+    }
+  },
+  "commit": {
+    "child_ack": "__PIGADE_WAYLAND_CHILD_ACK_20261017__",
+    "child_ack_seen": true,
+    "exact_once": true,
+    "extra_bytes": 0,
+    "payload_sha256": "670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+    "received_bytes": 6,
+    "synthetic_payload_hex": "e4bda0e5a5bd"
+  },
+  "preedit_capture": {
+    "bytes": 25235,
+    "dimensions": [
+      1280,
+      800
+    ],
+    "path": "/artifacts/preedit.png",
+    "pty_bytes_before_commit": 0,
+    "sha256": "d7bf1353aeda092746e24ac38a8b6c2cd276eafdd6e210d31358bce4cf5a0e02",
+    "visual_claim": "image retained for human review; not machine-recognized",
+    "visual_interpretation": "requires human review"
+  },
+  "postcommit_capture": {
+    "bytes": 23258,
+    "dimensions": [
+      1280,
+      800
+    ],
+    "path": "/artifacts/committed.png",
+    "sha256": "8db7271fde6e5b0557c3ae17240bfe6c641b5ec96c8e80e3cd7bdb15d6ee771c",
+    "visual_interpretation": "requires human review"
+  },
+  "limits": [
+    "one fixed Sway 1.12/Pixman/Fcitx 5.1.23 Pinyin fixture",
+    "fixed virtual-keyboard helper is test-only and uses one persistent protocol object",
+    "preedit is captured, not machine-classified",
+    "no universal Wayland compositor or IME claim",
+    "SDK runtime uses host /usr ABI and is not a portable sysroot"
+  ],
+  "process_logs": [
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "app",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "dbus",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 5777,
+      "cap_bytes": 65536,
+      "process": "fcitx",
+      "stream_sha256": "3db847fc17857f5f8e7fde7e3cfb9a9a929c4b71811ed9dbe5340c972a54c66c"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "host",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 0,
+      "cap_bytes": 65536,
+      "process": "ime-keyboard",
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes_saved": 4124,
+      "cap_bytes": 65536,
+      "process": "sway",
+      "stream_sha256": "3dead45e57f4b90fd816864a86ab5c01a4cf84381a698a53585424e1a15179fb"
+    }
+  ],
+  "schema": 1,
+  "private_run": "/home/afterburner/.local/state/pigade/iw-v3-persist-1017",
+  "app_sha256": "484b1eacdb8df844c422e298470a3bd7736dc7907e8b7af79942cf0681bb9669",
+  "host_sha256": "610efac4b817116ed761217a9738485c2b499bf6fb05a30ebce7cb6dbf7e4791",
+  "harness_sha256": "a0c0f834bcf4ce551500391f7bae750971a196b6b6ec4dfdecc31d658002216c",
+  "font_profile": {
+    "embedded_faces": [
+      {
+        "bytes": 272016,
+        "path": "PigADETerminalMonoV1-Regular.ttf",
+        "sha256": "9eab97106f8af1e0f9c8617a36a8c5fec2b572764be997ae4224f6329ec7a9f8"
+      },
+      {
+        "bytes": 275904,
+        "path": "PigADETerminalMonoV1-Bold.ttf",
+        "sha256": "8eb93d5349b81f004c31118adacc8954f406e8f7ae8816fdd8e91548c8184104"
+      },
+      {
+        "bytes": 274972,
+        "path": "PigADETerminalMonoV1-Italic.ttf",
+        "sha256": "ee764684b2ac7e4c122ee2a7840823463bde9814857b5138b091f5a4fdca4b41"
+      },
+      {
+        "bytes": 277940,
+        "path": "PigADETerminalMonoV1-BoldItalic.ttf",
+        "sha256": "740f80d509a5d5440304680adeddccf4efa21f12ece97fd8e5ed13d3e9cb65f2"
+      },
+      {
+        "bytes": 16424284,
+        "path": "PigADETerminalCJKJPV1-Regular.otf",
+        "sha256": "62eae011b3edc1d1ec57616330b51931a912768fe74dcda3b012ce290fb029f4"
+      }
+    ],
+    "manifest_sha256": "f2a3ad82c22a5be1cf21c431ff04473b31b4cb4919a30c1379f957cb6edd82e3",
+    "profile_id": "pigade-terminal-render-profile-aliases-v1",
+    "scope": "exact font payloads present in selected executable; runtime family registration still tested inside namespace"
+  },
+  "helper_build": {
+    "compiler_sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+    "ldd_bytes": 385,
+    "ldd_libraries": [
+      {
+        "name": "libwayland-client.so.0",
+        "path": "/usr/lib/libwayland-client.so.0.26.0",
+        "sha256": "39c83ae7b73d22f18b4f81da14749c4535c304b7e62910a2f1aae682f279cc9d"
+      },
+      {
+        "name": "libxkbcommon.so.0",
+        "path": "/usr/lib/libxkbcommon.so.0.13.2",
+        "sha256": "e475adbf5abd181b1bdfdeba70ad4d501cb296bbf05b13e8649fd71b3989ee07"
+      },
+      {
+        "name": "libc.so.6",
+        "path": "/usr/lib/libc.so.6",
+        "sha256": "e221b10fee9ee4776d8f0f1701253bc06817f7a4dbe6c5292487277d0bf8ffff"
+      },
+      {
+        "name": "libffi.so.8",
+        "path": "/usr/lib/libffi.so.8.5.0",
+        "sha256": "b38bb3a55ba04dfbb5be68e881a72385d6c30010afffb1cf1dfc373b72c2278c"
+      },
+      {
+        "name": "ld-linux-x86-64.so.2",
+        "path": "/usr/lib/ld-linux-x86-64.so.2",
+        "sha256": "d011113b7054c641c8ca064f58bcc23804fd2654a3dff2444dad06ddeda61bfb"
+      }
+    ],
+    "ldd_sha256": "0fceb574e49d74515d8ce9b6cf8c4e273f7ae0e7ef76f27f5bdbb9561d19f3c6",
+    "path": "/pigade/ime-keyboard",
+    "protocol_source": "atx/wtype v0.4 protocol/virtual-keyboard-unstable-v1.xml",
+    "protocol_xml_sha256": "7ad7870003ecd592cae47dc19d277a609b7f18fd7b7be012623cf3225a7294f5",
+    "scanner_sha256": "ce267015aacab2108ac8a76f273ef5431161603e1b63c7d976847b3f467bef51",
+    "sha256": "916e71bf2da35bacaf2bb4f385b50a9ae080e3132542e174745b315cbac5d426",
+    "source_sha256": "c18a2b89da86b03daa7cfaaaca7fa01851089a4afec5203fa14a3b03e8de08fa",
+    "wtype_license_sha256": "e8bd6bac1b3ba6253625830bceb30c5340f74f4bc898d1bd5450596cbd8224f0",
+    "xkb_config_source": "signed X11/Fcitx SDK payload; verified before private helper startup"
+  },
+  "namespace_attestation": {
+    "bwrap_info": {
+      "bwrap_info_matches_kernel": {
+        "ipc": true,
+        "mnt": true,
+        "net": true,
+        "pid": true,
+        "user": null
+      },
+      "bwrap_info_namespace_ids": {
+        "ipc": 4026533017,
+        "mnt": 4026532954,
+        "net": 4026533022,
+        "pid": 4026533018,
+        "user": null
+      },
+      "kernel_child_namespace_ids": {
+        "ipc": 4026533017,
+        "mnt": 4026532954,
+        "net": 4026533022,
+        "pid": 4026533018,
+        "user": 4026533076
+      },
+      "user_namespace_info_note": "bwrap 0.11.2 omits user ID before user namespace setup completes; kernel handle is authoritative",
+      "user_namespace_info_status": "omitted"
+    },
+    "inside_ancestry": [
+      {
+        "comm": "python3",
+        "pid": 1443670,
+        "ppid": 1443669,
+        "start_ticks": 3072597
+      },
+      {
+        "comm": "bwrap",
+        "pid": 1443669,
+        "ppid": 1443667,
+        "start_ticks": 3072596
+      }
+    ],
+    "inside_identity": {
+      "boot_id": "d639535a-367c-4655-8316-12063ad08144",
+      "pid": 1443670,
+      "start_ticks": 3072597
+    },
+    "inside_namespaces": {
+      "ipc": {
+        "device": 5,
+        "identity": "ipc:[4026533017]",
+        "inode": 4026533017
+      },
+      "mnt": {
+        "device": 5,
+        "identity": "mnt:[4026532954]",
+        "inode": 4026532954
+      },
+      "net": {
+        "device": 5,
+        "identity": "net:[4026533022]",
+        "inode": 4026533022
+      },
+      "pid": {
+        "device": 5,
+        "identity": "pid:[4026533018]",
+        "inode": 4026533018
+      },
+      "user": {
+        "device": 5,
+        "identity": "user:[4026533076]",
+        "inode": 4026533076
+      }
+    },
+    "inside_pid": 1443670,
+    "outer": {
+      "ipc": "ipc:[4026531839]",
+      "mnt": "mnt:[4026531832]",
+      "net": "net:[4026531833]",
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]"
+    },
+    "outer_namespace_handles": {
+      "ipc": {
+        "device": 5,
+        "identity": "ipc:[4026531839]",
+        "inode": 4026531839
+      },
+      "mnt": {
+        "device": 5,
+        "identity": "mnt:[4026531832]",
+        "inode": 4026531832
+      },
+      "net": {
+        "device": 5,
+        "identity": "net:[4026531833]",
+        "inode": 4026531833
+      },
+      "pid": {
+        "device": 5,
+        "identity": "pid:[4026531836]",
+        "inode": 4026531836
+      },
+      "user": {
+        "device": 5,
+        "identity": "user:[4026531837]",
+        "inode": 4026531837
+      }
+    },
+    "schema": 1
+  },
+  "wayland_manifest_sha256": "a22c5a441c07f9c29b242d3158b656473dc9b0fd65fbed428360c54f4d5a17e2",
+  "x11_manifest_sha256": "7a3198632791a7fea235e3d2604ee21c838a5df823588fe2581cf9e506976d6a",
+  "platform_manifest_sha256": "a7426b082a9224227392f964e9da3238066e9c2887201501e69a3fa5f59caa59",
+  "visual_review": "root inspected marked ni hao, first candidate \u4f60\u597d near insertion; postcommit has no preedit/popup and visible unique child ACK",
+  "preedit_png_sha256": "d7bf1353aeda092746e24ac38a8b6c2cd276eafdd6e210d31358bce4cf5a0e02",
+  "committed_png_sha256": "8db7271fde6e5b0557c3ae17240bfe6c641b5ec96c8e80e3cd7bdb15d6ee771c",
+  "app_source_binding": "benchmarks/results/input-latency-x11-20261017/wake-source.json (same frozen484b app)",
+  "host_source_commit": "8b2ecaa (frozen610e host)"
+}

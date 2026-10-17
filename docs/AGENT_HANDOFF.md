@@ -245,3 +245,14 @@ old root survives further commits and full/checkpoint-tail/live equality holds
 for every record. Segmented completion error formatting now stays1024B even
 after an already-full fragment. Active frozen4e4a run predates only that formatter
 fix/new tests; retain its original source/binary identity.
+
+## Private native Wayland IME evidence
+
+One actual Sway1.12/Pixman/Fcitx5.1.23 Pinyin fixture passes on frozen app484b…
+and host610e…:0 PTY bytes before Space, exactly6 UTF8 bytes你好 and childACK.
+Root visually reviewed marked preedit/candidate and cleared popup/ACK captures.
+Signed SDK/namespace attestation/persistent fixed keyboard helper and all earlier
+failed attempts are retained; see reports/wayland-ime-20261017.md.
+This does not resolve native target-generation barriers, hardware GPU, fractional
+scaling, clipboard or all-compositor support. Current builds differ from tested
+frozen binaries; preserve the source/hash binding.

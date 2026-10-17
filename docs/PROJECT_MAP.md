@@ -23,7 +23,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/tests | Real PTY/reconnect/resize/kill/Stop/query-burst and durable placement scenarios |
 | crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
 | crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; unchanged poll metadata avoids cloning frames/cells |
-| crates/app/src/command_worker.rs | Explicit token-bound known-rejection acknowledgement, unknown lock, actual dispatch closure, unsent counts and resize cache; prototype gate is global |
+| crates/app/src/command_worker.rs | Explicit token-bound known-rejection acknowledgement, unknown lock, actual dispatch closure, unsent counts and resize cache; gates are exact session/generation targets |
 | crates/app/src/cell_style.rs | Pure bounded device-pixel underline/strike recipes, wide/hidden/spacer policy and decorated-space foreground admission |
 | crates/app/src/cursor.rs | Pure typed cursor geometry, wide-cell normalization, blink/reduced-motion and block glyph contrast; native paint/lifecycle in main.rs |
 | crates/app/src/palette.rs | Bounded host-cell color resolver; typed sorted dynamic overrides, truecolor and unchanged default theme; no ANSI parser |
@@ -87,3 +87,9 @@ and one background writer, shared with synchronous final publication. Actor
 `CheckpointProgress` services bounded completion/busy retries; raw journal and
 history commits remain synchronous. ADR0011 and the async-checkpoint report
 describe metric and recovery limits.
+
+`scripts/prepare-wayland-ime-sdk.py`, `isolated-ime-wayland.py` and the fixed
+`wayland-ime-input` C helper supply signed test-only Sway/Fcitx payloads and a
+verified private Wayland-v3 fixture. Actual one-fixture success, failed attempts,
+source hashes and visual captures are recorded in
+[the Wayland IME report](reports/wayland-ime-20261017.md).

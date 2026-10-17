@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "attempts": [
+    {
+      "directory": "/home/afterburner/.local/state/pigade/ime-wayland-v3-20261017",
+      "stage_scope": "private fixed fixture diagnostic; no active desktop",
+      "status": "outer validation failed before bwrap/run report",
+      "reason": "font verifier imported from wrong helper module (fixed)"
+    },
+    {
+      "directory": "/home/afterburner/.local/state/pigade/ime-wayland-v3-20261017-font-wiring",
+      "stage_scope": "private fixed fixture diagnostic; no active desktop",
+      "status": "running",
+      "stage": "bwrap-launch",
+      "run_sha256": "eb1def669df08e3e8b8a08800775130fc5c4c824d0e1f167373c4b94c22d8592",
+      "root_correction": "CLI exited1; old report remained running because failure-report/FD cleanup bug, subsequently fixed. Gate not released; no services started."
+    },
+    {
+      "directory": "/home/afterburner/.local/state/pigade/ime-wayland-v3-20261017-kernel-attested",
+      "stage_scope": "private fixed fixture diagnostic; no active desktop",
+      "status": "failed-closed",
+      "failure_reason": "RuntimeError: bwrap info omitted a valid user namespace identity",
+      "failure_stage": "namespace-attestation",
+      "stage": "bwrap-launch",
+      "run_sha256": "dbc9091f12b9b85cd232a9ecb69dfd835fe718e8235bf474a3de2ffd742902c6"
+    },
+    {
+      "directory": "/home/afterburner/.local/state/pigade/ime-wayland-v3-20261017-socket-name",
+      "stage_scope": "private fixed fixture diagnostic; no active desktop",
+      "status": "failed-closed",
+      "failure_reason": "current user namespace differs from parent-verified bwrap child",
+      "failure_stage": "private-namespace",
+      "stage": "private-namespace",
+      "run_sha256": "514439a33c952a60c5134ac21fff1640af7ae2a32ec47ccdf5ed9a24011c171c"
+    },
+    {
+      "directory": "/home/afterburner/.local/state/pigade/iw-v3-1017",
+      "stage_scope": "private fixed fixture diagnostic; no active desktop",
+      "status": "failed-closed",
+      "failure_reason": "private Fcitx did not confirm active Pinyin",
+      "failure_stage": "app-start",
+      "stage": "app-start",
+      "run_sha256": "bd1310885fa9ce3b42b1e97cae3e0655ffba1e29c13adc7825b005d8316c0502"
+    }
+  ]
+}

@@ -1721,3 +1721,75 @@ Verify async checkpoint against growing nonzero cold history and repair segmente
 - Files: crates/session-host/src/checkpoint.rs, docs/reports/async-checkpoint-20261017.md, docs/AGENT_HANDOFF.md
 - Verification: Root checkpoint-focused12 tests and hostlib68 tests pass; strictworkspaceClippy/fmt and release bins/examples pass. Exact live/full/checkpoint-tail comparisons include every nonzero cold record after further appends; source raw bytes unchanged. Root found segmentedwriter overflow and reviewed regressionfix.
 - Risks / next: Active frozen4e4a20min result pending; its lineage predates formatterfix only. Integrate bounded change notification for UI latency.
+
+## 2026-10-17T03:11:27+00:00 — /root/font_render_profile
+
+Hardened isolated Wayland IME helper command sequencing and timing; pinned XKB root to verified signed payload and recorded helper dynamic linkage.
+
+- Files: scripts/wayland-ime-input/ime_input.c, scripts/wayland-ime-input/README.md, scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m unittest scripts.test_isolated_ime_wayland -v (20 tests pass); python3 -m py_compile scripts/isolated-ime-wayland.py scripts/test_isolated_ime_wayland.py; python3 scripts/isolated-ime-wayland.py --help; git diff --check
+- Risks / next: No compositor or input was run. Root may review and perform the isolated private Wayland fixture; GPUI/Fcitx cross-platform behavior remains unverified by this slice.
+
+## 2026-10-17T03:11:42+00:00 — /root/font_render_profile
+
+Corrected helper XKB evidence to the signed X11 SDK and normalized ldd loader naming after final review.
+
+- Files: scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py
+- Verification: python3 -m unittest scripts.test_isolated_ime_wayland -v (20 tests pass); py_compile passes; git diff --check passes
+- Risks / next: No compositor/input was run; hand off to root for private isolated runtime review.
+
+## 2026-10-17T03:13:30+00:00 — terminal_memory_budget
+
+Integrate bounded host change epochs and dedicated IPC wait service for durable view publication
+
+- Files: crates/session-host/src/changes.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/poll.rs, crates/session-host/src/history_read.rs, crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo test --offline -p pigade-session-host (78 unit tests plus all host integration suites passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check on changed Rust files passed; git diff --check on owned files passed
+- Risks / next: Root owns app poller/protocol integration and must run app/workspace validation; change wait is bounded at 1s and old clients can continue conditional polling
+
+## 2026-10-17T03:14:38+00:00 — terminal_memory_budget
+
+Integrate bounded host change epochs and dedicated IPC wait service for durable view publication
+
+- Files: crates/session-host/src/changes.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/poll.rs, crates/session-host/src/history_read.rs, crates/session-host/src/checkpoint.rs, WORKLOG.md
+- Verification: cargo test --offline -p pigade-session-host (79 unit tests and all integration suites passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check on changed Rust files passed; git diff --check on owned files passed
+- Risks / next: Root owns app poller/protocol integration and should run app/workspace validation; token absence preserves timer-based conditional poll fallback
+
+## 2026-10-17T03:16:44+00:00 — terminal_memory_budget
+
+Rate-limit persistent change-hub failure diagnostics to one per hub instance
+
+- Files: crates/session-host/src/changes.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, WORKLOG.md
+- Verification: cargo test --offline -p pigade-session-host --lib (80 passed); cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and git diff --check passed
+- Risks / next: Root owns remaining app-side integration and end-to-end validation
+
+## 2026-10-17T03:19:24+00:00 — terminal_memory_budget
+
+Keep notification failure from changing committed launch outcome
+
+- Files: crates/session-host/src/lib.rs, WORKLOG.md
+- Verification: targeted unavailable-hub regression passed; cargo clippy --offline -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and scoped git diff --check passed
+- Risks / next: Root owns final app/workspace checks and commits; notification absence continues to use existing Poll fallback
+
+## 2026-10-17T03:20:46+00:00 — terminal_memory_budget
+
+Added real-host PTY integration coverage for change notifications, ordinary command service during wait, timeout, and restart epoch recovery
+
+- Files: crates/session-host/tests/change_notifications.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/change_notifications.rs; cargo test --offline -p pigade-session-host --test change_notifications (1 passed); cargo clippy --offline -p pigade-session-host --test change_notifications -- -D warnings; git diff --check
+- Risks / next: Root can integrate app-side conditional wait; test covers current host wire contract and historical restart behavior
+
+## 2026-10-17T03:20:51+00:00 — /root/font_render_profile
+
+Updated Wayland text-input-v3 research plan with passing isolated run, added evidence report, failed-closed history, exact binary/hash identities and remaining limits.
+
+- Files: docs/research/isolated-wayland-v3-plan.md, docs/reports/wayland-ime-20261017.md
+- Verification: Inspected argparse --help and plan-only output; verified SDK manifest/preparer hashes, harness/helper/screenshot hashes and report-local links; confirmed current release binary hashes differ from recorded run; git diff --check passes
+- Risks / next: Root owns integration. Evidence proves one private Sway/Pixman/Fcitx 5.1.23 fixture only; app IME generation/reset barrier and broader platform behavior remain open.
+
+## 2026-10-17T03:21:33+00:00 — root
+
+Retain source-bound private Wayland Pinyin pass and hardened isolated fixture
+
+- Files: scripts/prepare-wayland-ime-sdk.py, scripts/test_prepare_wayland_ime_sdk.py, scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py, scripts/wayland-ime-input, crates/app/evidence/ime-wayland-20261017, docs/research/isolated-wayland-v3-plan.md, docs/reports/wayland-ime-20261017.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Root actual private runtime PASS: zero precommit bytes, exactly6 UTF8 bytes plus child ACK; inspected both captures. Root SDK9 and harness20 tests pass, source and image hashes match. Earlier failed attempts retained.
+- Risks / next: Native target-generation barrier, hardware GPU, fractional scaling and clipboard remain open; notification transport changes separately under verification.

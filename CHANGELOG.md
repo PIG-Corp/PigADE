@@ -62,3 +62,5 @@ This section describes development work; it is not a release announcement.
 - Synthetic soak now waits for all four visible READY markers before START; a short run reproduced an ACK timeout at checkpoint stage with complete final recovery retained. Async checkpoint persistence remains under verification.
 
 - One bounded checkpoint worker persists immutable exact-watermark snapshots; live actors continue durable output while persistence is paused. Exit retains forced checkpoint-tail recovery. Fresh191-test workspace and30s CRC/recovery smoke pass; long soak remains pending.
+
+- One private actual-app Wayland-v3/Fcitx Pinyin fixture passes with exact raw PTY bytes and reviewed preedit/candidate captures. Signed SDK preparation, kernel/peer namespace attestation and a persistent fixed test keyboard are reproducible; target-generation and full platform gates remain open.
