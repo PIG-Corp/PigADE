@@ -1,0 +1,487 @@
+{
+  "ack_output_hold_summary": [
+    {
+      "maximum_observed_ack_to_release_dispatch_seconds": 0.013394427998719038,
+      "note": "Each producer pauses output until token ACK is observed then harness dispatches RELEASE; this is not a latency/rate sample.",
+      "total_observed_ack_to_release_dispatch_seconds": 1.3908484659550595
+    },
+    {
+      "maximum_observed_ack_to_release_dispatch_seconds": 0.011774738999520196,
+      "note": "Each producer pauses output until token ACK is observed then harness dispatches RELEASE; this is not a latency/rate sample.",
+      "total_observed_ack_to_release_dispatch_seconds": 1.3832582739887584
+    },
+    {
+      "maximum_observed_ack_to_release_dispatch_seconds": 0.012827640999603318,
+      "note": "Each producer pauses output until token ACK is observed then harness dispatches RELEASE; this is not a latency/rate sample.",
+      "total_observed_ack_to_release_dispatch_seconds": 1.3828900139851612
+    },
+    {
+      "maximum_observed_ack_to_release_dispatch_seconds": 0.01434623100067256,
+      "note": "Each producer pauses output until token ACK is observed then harness dispatches RELEASE; this is not a latency/rate sample.",
+      "total_observed_ack_to_release_dispatch_seconds": 1.4104481510257756
+    }
+  ],
+  "ack_producer_sidechannel": {
+    "counts": {
+      "0:ack_write_completed": 238,
+      "0:ping_received": 238,
+      "0:release_observed": 238,
+      "1:ack_write_completed": 238,
+      "1:ping_received": 238,
+      "1:release_observed": 238,
+      "2:ack_write_completed": 238,
+      "2:ping_received": 238,
+      "2:release_observed": 238,
+      "3:ack_write_completed": 238,
+      "3:ping_received": 238,
+      "3:release_observed": 238
+    },
+    "last_by_stream": {
+      "0": {
+        "event": "release_observed",
+        "event_sequence": 713,
+        "producer_monotonic_ns": 31393166253276,
+        "stream": 0,
+        "token_index": 237
+      },
+      "1": {
+        "event": "release_observed",
+        "event_sequence": 713,
+        "producer_monotonic_ns": 31393214202011,
+        "stream": 1,
+        "token_index": 237
+      },
+      "2": {
+        "event": "release_observed",
+        "event_sequence": 713,
+        "producer_monotonic_ns": 31393264440305,
+        "stream": 2,
+        "token_index": 237
+      },
+      "3": {
+        "event": "release_observed",
+        "event_sequence": 713,
+        "producer_monotonic_ns": 31393312130769,
+        "stream": 3,
+        "token_index": 237
+      }
+    },
+    "records_omitted": 0,
+    "records_written": 2856,
+    "sequence_gaps": 0
+  },
+  "ack_producer_sidechannel_path": "/home/afterburner/.local/state/pigade/soak/async-checkpoint-1200s-20261017/ack-producer-sidechannel.jsonl",
+  "actual_elapsed_seconds": 1200.0431500620034,
+  "binary_path": "/home/afterburner/.local/state/pigade/soak/async-checkpoint-host-20261017",
+  "binary_sha256": "4e4a0fcb6f77d082bbebe7470311114d4a470db5aa846816f7fdd31a78593e2a",
+  "binary_version": "PigADE 0.0.1-dev (stage-0 prototype)",
+  "checkpoint_age_and_watermark_summary": [
+    {
+      "last_checkpoint_sequence": 20885,
+      "max_checkpoint_age_seconds": 4.750874996185303,
+      "max_sequence_lag": 92,
+      "sample_count": 20
+    },
+    {
+      "last_checkpoint_sequence": 20967,
+      "max_checkpoint_age_seconds": 4.620384931564331,
+      "max_sequence_lag": 88,
+      "sample_count": 20
+    },
+    {
+      "last_checkpoint_sequence": 20856,
+      "max_checkpoint_age_seconds": 4.8899781703948975,
+      "max_sequence_lag": 93,
+      "sample_count": 20
+    },
+    {
+      "last_checkpoint_sequence": 20845,
+      "max_checkpoint_age_seconds": 5.036971807479858,
+      "max_sequence_lag": 90,
+      "sample_count": 20
+    }
+  ],
+  "elapsed_24h_completed": false,
+  "environment": {
+    "filesystem": "btrfs",
+    "kernel": "7.2.2-1-cachyos",
+    "logical_cpu_count": 12,
+    "os": "Linux-7.2.2-1-cachyos-x86_64-with-glibc2.44"
+  },
+  "errors": [],
+  "filesystem": "btrfs",
+  "finished_at": "2026-10-17T03:23:21.138321+00:00",
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    1424976,
+    3019344
+  ],
+  "host_log_tail": "",
+  "host_pid": 1424976,
+  "input_acknowledged_all_sessions": true,
+  "interrupted": false,
+  "journal_crc_verified_all_sessions": true,
+  "measurement_started_at": "2026-10-17T03:03:17.151712+00:00",
+  "other_open_gates": [
+    "product-wide long-history memory/performance",
+    "VM provider/layout resume",
+    "UI/GPU and platform acceptance",
+    "actual24h soak"
+  ],
+  "producers_exited_cleanly": true,
+  "rate_bytes_per_second_per_session": 4096,
+  "real_time_elapsed": true,
+  "real_time_soak_24h_integrity_pass": false,
+  "rec08_full_acceptance": false,
+  "requested_seconds": 1200,
+  "resize_admission_diagnostic_summary": {
+    "last_diagnostic": {
+      "elapsed_monotonic_seconds": 517.7195405300008,
+      "event": "resize_queue_full",
+      "generation": "df863699-8180-4a22-8d21-afac56e277fc",
+      "host_cpu_seconds": 62.51,
+      "host_rss_bytes": 109694976,
+      "retry_count": 120,
+      "session": "8c6ea18f-c96f-4621-8733-ebd243029077",
+      "snapshot": {
+        "actor_diagnostic": {
+          "candidate_sequence": 9482,
+          "entered_monotonic_ns": 30710903010074,
+          "reader": {
+            "bytes_enqueued": 2130135,
+            "bytes_read": 2130136,
+            "enqueued_calls": 11061,
+            "last_enqueued_monotonic_ns": 30711404631996,
+            "last_read_bytes": 1,
+            "last_read_monotonic_ns": 30711467352080,
+            "read_calls": 11062
+          },
+          "stage": "journal_append",
+          "stage_age_at_snapshot_completion_ns": 670307696,
+          "status": "available",
+          "version": 1
+        },
+        "available": true,
+        "generation": "df863699-8180-4a22-8d21-afac56e277fc",
+        "metrics": {
+          "archive_commit_ns": 1908169,
+          "checkpoint_ns": 1603777082,
+          "checkpoints": 102,
+          "events": 9481,
+          "frame_publish_ns": 10807551097,
+          "journal_fsync_ns": 59625321188,
+          "model_apply_ns": 253033010,
+          "output_bytes": 2127822
+        },
+        "sequence": 9481,
+        "snapshot_completed_monotonic_ns": 30711573317770,
+        "state": "running",
+        "storage_error": null
+      },
+      "stream": 0,
+      "target_geometry": {
+        "cols": 128,
+        "rows": 40
+      }
+    },
+    "omitted_records": 0,
+    "record_limit": 1024,
+    "records_written": 5,
+    "sample_interval_seconds": 1.0,
+    "snapshot_timeout_seconds": 0.02
+  },
+  "resize_admission_retry_summary": [
+    {
+      "attempts": 522,
+      "max_wait_seconds": 0.025,
+      "retries": 126,
+      "total_wait_seconds": 3.149999999999993
+    },
+    {
+      "attempts": 396,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    },
+    {
+      "attempts": 397,
+      "max_wait_seconds": 0.025,
+      "retries": 1,
+      "total_wait_seconds": 0.025
+    },
+    {
+      "attempts": 396,
+      "max_wait_seconds": 0.0,
+      "retries": 0,
+      "total_wait_seconds": 0.0
+    }
+  ],
+  "resizes_per_session": [
+    396,
+    396,
+    396,
+    396
+  ],
+  "run_directory": "/home/afterburner/.local/state/pigade/soak/async-checkpoint-1200s-20261017",
+  "scope": "Four synthetic shell/Python PTYs through a frozen release host; no UI, provider, credential or network activity.",
+  "sessions": [
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 4938727,
+      "event_counts": {
+        "1": 21675,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "df863699-8180-4a22-8d21-afac56e277fc",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30193524696485,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30193522311945,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30193522309421,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 57592949,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30193582289434,
+      "input_ack_count": 238,
+      "journal": "df863699-8180-4a22-8d21-afac56e277fc.journal",
+      "journal_bytes": 5676246,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4938802,
+      "output_crc32": "eee8a7b9",
+      "pid": 1424983,
+      "producer_body_bytes": 4938727,
+      "producer_body_write_seconds": 1200.064625899,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30193828136349,
+      "resize_count": 396,
+      "sequence": 22072,
+      "session": "8c6ea18f-c96f-4621-8733-ebd243029077",
+      "stream": 0,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.0008320000000000001,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 54.607321,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 5676246,
+        "full_replay_ms": 605.425927,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 8147503,
+        "sequence": 22072
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 4938727,
+      "event_counts": {
+        "1": 21735,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "822d043d-fc2e-4410-b70d-9cc8bd14711c",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30193610709736,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30193608185001,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30193608182226,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 52141117,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30193662850853,
+      "input_ack_count": 238,
+      "journal": "822d043d-fc2e-4410-b70d-9cc8bd14711c.journal",
+      "journal_bytes": 5678226,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4938802,
+      "output_crc32": "001ccf0d",
+      "pid": 1424990,
+      "producer_body_bytes": 4938727,
+      "producer_body_write_seconds": 1200.084712507,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30193832956875,
+      "resize_count": 396,
+      "sequence": 22132,
+      "session": "b4a5843f-edf6-4d36-b267-9d647e6e0786",
+      "stream": 1,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.000351,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 53.861614,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 5678226,
+        "full_replay_ms": 608.877891,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 8149554,
+        "sequence": 22132
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 4938727,
+      "event_counts": {
+        "1": 21697,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "e81119fe-9b54-4003-a460-c012ff5d0978",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30193691439553,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30193688964593,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30193688962479,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 53681828,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30193745121381,
+      "input_ack_count": 238,
+      "journal": "e81119fe-9b54-4003-a460-c012ff5d0978.journal",
+      "journal_bytes": 5676972,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4938802,
+      "output_crc32": "35d1239f",
+      "pid": 1424997,
+      "producer_body_bytes": 4938727,
+      "producer_body_write_seconds": 1200.084726775,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30193838306013,
+      "resize_count": 396,
+      "sequence": 22094,
+      "session": "39b9e497-6ed3-410a-a06f-b64f988e4344",
+      "stream": 2,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.001182,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 65.888346,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 5676972,
+        "full_replay_ms": 611.359162,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 8148524,
+        "sequence": 22094
+      }
+    },
+    {
+      "core_profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+      "counted_output_bytes_before_trailer": 4938727,
+      "event_counts": {
+        "1": 21655,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "generation": "30a4e15a-7c35-403a-a03a-8e29afe3812a",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 30193772984116,
+        "reader": {
+          "bytes_enqueued": 9,
+          "bytes_read": 9,
+          "enqueued_calls": 1,
+          "last_enqueued_monotonic_ns": 30193770535335,
+          "last_read_bytes": 9,
+          "last_read_monotonic_ns": 30193770531858,
+          "read_calls": 1
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 52844620,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 30193825828736,
+      "input_ack_count": 238,
+      "journal": "30a4e15a-7c35-403a-a03a-8e29afe3812a.journal",
+      "journal_bytes": 5675586,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4938802,
+      "output_crc32": "a6d62e0a",
+      "pid": 1425004,
+      "producer_body_bytes": 4938727,
+      "producer_body_write_seconds": 1200.084709893,
+      "producer_max_schedule_lateness_ms": 0.0,
+      "producer_start_ns": 30193843418402,
+      "resize_count": 396,
+      "sequence": 22052,
+      "session": "734403f9-d608-4290-a846-fb9f7bf8b6ad",
+      "stream": 3,
+      "verify_recovery": {
+        "archive_comparison_ms": 0.00038,
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 55.593484,
+        "cold_archive_format": "row2,index1,retirement1",
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_journal_bytes_read": 5675586,
+        "full_replay_ms": 615.89805,
+        "profile": "alacritty_terminal=0.26.0+pigade-state.2;vte=0.15.0+pigade-state.1;osc=65536-ignore-overflow;unicode-width=0.2.2;font=unfixed-prototype;history=10000;osc52=disabled;kitty=false;schema=2",
+        "recovery_path": "checkpoint-tail",
+        "semantic_checkpoint_bytes": 8155708,
+        "sequence": 22052
+      }
+    }
+  ],
+  "source_sha256": {
+    "Cargo.lock": "178e83403bd9c5410b9ffd09afaca921bb14ec494d6b34726f9627829c220bc3",
+    "crates/session-host/src/checkpoint.rs": "31c7d2b255418108d912cf0461c11fd7386dcdac8495f4b98363120b0d7295d3",
+    "crates/session-host/src/history.rs": "931fffda2de34f7259c18b27b53910cabda12fa774e34f33dbbc37d03e75e66c",
+    "crates/session-host/src/lib.rs": "7dcbaa88a6212e6be9c178886a28af60fbd37b591bd38d70ec52d66fad311ec8",
+    "crates/session-host/src/metrics.rs": "68c8806251bc95bfb4637d1aae6da045a5eca82a6a1f1a7d2e1bd4510f1fbc08",
+    "crates/storage/src/lib.rs": "5c3cef30266b228dcbb6a939c595dc0e30264f0a49f7687be598df865568d1bf",
+    "crates/terminal/src/lib.rs": "1666b76ad9aada9b8c41a6d36091cf1aa096dc34bd23dc3f6ab68174fd4f3c27",
+    "scripts/soak-pty.py": "ee3ad970bc515a6a6807438c5437e030a8fa84a4209f1f38b507683985d47fb6",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "source_snapshot_scope": "repository files at harness start; not proof of supplied frozen binary build lineage",
+  "started_at": "2026-10-17T03:03:16.745332+00:00",
+  "state_directory": "/home/afterburner/.local/state/pigade/soak/async-checkpoint-1200s-20261017/state",
+  "state_retained": true,
+  "status": "completed",
+  "verify_recovery_passed_all_sessions": true,
+  "verify_requested": true
+}

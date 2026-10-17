@@ -64,3 +64,5 @@ This section describes development work; it is not a release announcement.
 - One bounded checkpoint worker persists immutable exact-watermark snapshots; live actors continue durable output while persistence is paused. Exit retains forced checkpoint-tail recovery. Fresh191-test workspace and30s CRC/recovery smoke pass; long soak remains pending.
 
 - One private actual-app Wayland-v3/Fcitx Pinyin fixture passes with exact raw PTY bytes and reviewed preedit/candidate captures. Signed SDK preparation, kernel/peer namespace attestation and a persistent fixed test keyboard are reproducible; target-generation and full platform gates remain open.
+
+- Frozen async-checkpoint host completed1200 actual seconds with four producer CRCs,238 ACKs/396 resizes per stream and exact full/checkpoint-tail recovery; slow resize/journal cases retained. A new actual24h run is active; cold rows in this short run are zero and the24h/resource gates remain open.

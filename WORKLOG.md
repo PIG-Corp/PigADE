@@ -1793,3 +1793,11 @@ Retain source-bound private Wayland Pinyin pass and hardened isolated fixture
 - Files: scripts/prepare-wayland-ime-sdk.py, scripts/test_prepare_wayland_ime_sdk.py, scripts/isolated-ime-wayland.py, scripts/test_isolated_ime_wayland.py, scripts/wayland-ime-input, crates/app/evidence/ime-wayland-20261017, docs/research/isolated-wayland-v3-plan.md, docs/reports/wayland-ime-20261017.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root actual private runtime PASS: zero precommit bytes, exactly6 UTF8 bytes plus child ACK; inspected both captures. Root SDK9 and harness20 tests pass, source and image hashes match. Earlier failed attempts retained.
 - Risks / next: Native target-generation barrier, hardware GPU, fractional scaling and clipboard remain open; notification transport changes separately under verification.
+
+## 2026-10-17T03:24:10+00:00 — root
+
+Retain completed1200s async checkpoint integrity diagnostic and start same-frozen-host actual24h soak
+
+- Files: benchmarks/results/async-checkpoint-20261017, docs/reports/async-checkpoint-20261017.md, docs/AGENT_HANDOFF.md, CHANGELOG.md, docs/research/isolated-wayland-v3-plan.md
+- Verification: Tool89343 exited0:1200.043s, four producer CRC/full+checkpoint-tail exact-state/frame checks pass,238ACK/396resizes perstream. Cold0 explicitlyvacuous; RSS20.3to206.2MB stillfills hot history. Disk106GiB available before actual24h tool82653 startup. Restored explicit checked SDKversion/license table.
+- Risks / next: 82653 active86400s,55262 old7200s independentlyactive; no24h/PERF/leak acceptance. Notification presentation deadline failure separately diagnosed.

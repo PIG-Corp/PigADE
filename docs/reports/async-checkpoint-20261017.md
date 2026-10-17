@@ -57,3 +57,34 @@ writer now trims the prior prefix on a UTF-8 boundary before adding that marker;
 ASCII and multibyte segmented-write regressions pass. Active frozen4e4a0fcb…
 diagnostics predate this tiny error-format fix; their source binding remains
 unchanged and must not be relabeled as the later executable.
+
+## Completed20-minute diagnostic and next elapsed run
+
+Frozen4e4a0fcb… completed **1200.043s** on Btrfs. All four producers exited
+cleanly with matching output CRC,238 ACKs and396 applied resizes per stream;
+all four full replay/checkpoint-tail complete-state and frame comparisons pass.
+Every comparison reports zero cold records, so cold-record equality here is
+vacuous; the separate nonzero cold-growth regression remains necessary.
+
+Retained [manifest](../../benchmarks/results/async-checkpoint-20261017/1200s-manifest.json),
+[samples](../../benchmarks/results/async-checkpoint-20261017/1200s-samples.jsonl)
+and [resize admission diagnostics](../../benchmarks/results/async-checkpoint-20261017/1200s-resize-admission-diagnostics.jsonl)
+include the slower cases: stream0 needed126 explicit pre-admission resize
+retries/3.15s total, and its last sampled stall was journal_append age670ms.
+No timeout or retry rule was relaxed. Maximum sampled checkpoint age was5.037s,
+and maximum sampled sequence lag93. Final recovery read356 raw-tail bytes per
+generation, taking53.86–65.89ms versus605.43–615.90ms full replay. Four individual
+recoveries are not a p95 distribution or UI-present measurement.
+
+Host sampled RSS rose from20,324,352 to206,229,504 bytes while hot history filled.
+That is not a demonstrated steady-state/leak bound, nor total product memory.
+The run overlapped builds, the old stage-instrumented host and private software
+UI tests, so it provides integrity/liveness diagnosis, not isolated PERF proof.
+
+A new actual86400s run uses that **same frozen host**, whose original source
+binding is retained in host-source.json (commit4d75513). Output directory:
+`~/.local/state/pigade/soak/async-checkpoint-24h-20261017`, tool82653. It remains
+pending until real elapsed completion, producer CRC and recovery checks finish.
+Later notification/code edits do not change that active process. The earlier
+7200s diagnostic tool55262 continues independently on frozen610efac4…. No24h
+or full REC08 pass is claimed by this20-minute result.

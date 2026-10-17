@@ -35,6 +35,26 @@ manifests before opening bwrap. It sets `XKB_CONFIG_ROOT` to the verified
 signed X11/Fcitx SDK's `usr/share/xkeyboard-config-2` files and preflights the
 fixed evdev keycodes, US symbols, and rules.
 
+## Checked dependency versions and licenses
+
+These are test payloads, not bundled product runtime dependencies. Exact archive
+hashes/signers are enforced by the committed preparer and the signed manifest.
+
+| Payload | Pinned version | License metadata |
+| --- | --- | --- |
+| Sway |1:1.12-4|MIT|
+| wlroots |0.20.2-1|MIT|
+| libliftoff |0.5.0-1|MIT|
+| wayland-protocols |1.49-1|MIT|
+| Fcitx core / Wayland frontend |5.1.23-1|LGPL-2.1-or-later; Unicode-DFS-2016|
+| wayland-utils |1.3.0-1|MIT|
+| wtype (prepared, not runtime keyboard helper) |0.4-2|MIT|
+| grim |1.5.0-2|MIT|
+
+Pinyin/chineseaddons remains GPL-2.0-or-later test-only payload from the signed
+X11 SDK. The persistent keyboard helper is first-party C; its exact wtype-v0.4
+protocol XML and upstream MIT notice are retained in scripts/wayland-ime-input.
+
 ## Reproduction commands
 
 Inspect the non-mutating plans and prepare/test the signed SDK:

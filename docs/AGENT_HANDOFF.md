@@ -233,8 +233,8 @@ no fix/24h claim yet. Startup READY/START barrier works and does not alter activ
 
 ADR0011 is implemented;191 workspace tests, strict Clippy/fmt/release pass.
 Frozen host4e4a0fcb…30.043s smoke passes4 CRC/full-recovery checks, cold0/vacuous.
-Tool89343 runs1200s at `~/.local/state/pigade/soak/async-checkpoint-1200s-20261017`;
-result pending, no duplicate/restart. Old7200s tool55262 stays independently
+Tool89343 completed1200.043s at `~/.local/state/pigade/soak/async-checkpoint-1200s-20261017`;
+all4 producerCRC/full+tail comparisons pass, cold0/vacuous. Do not poll/restart89343. Old7200s tool55262 stays independently
 active on610efac4…; do not conflate binaries/results.
 Capture remains synchronous, persistence single-flight async, final Exit waits;
 late errors degrade on bounded idle observation. See reports/async-checkpoint-20261017.md.
@@ -256,3 +256,11 @@ failed attempts are retained; see reports/wayland-ime-20261017.md.
 This does not resolve native target-generation barriers, hardware GPU, fractional
 scaling, clipboard or all-compositor support. Current builds differ from tested
 frozen binaries; preserve the source/hash binding.
+
+## Actual24h run after completed async smoke
+
+Tool82653 is ACTIVE: `~/.local/state/pigade/soak/async-checkpoint-24h-20261017`,
+requested86400 actual seconds +CRC/fullrecovery on same frozen4e4a0fcb…
+(source4d75513). Do not duplicate/restart/change that executable. Short1200s
+result passes but RSSstillfillinghot history; no leak/totalmemory/PERF claim.
+Original7200s tool55262 stays independently active on610e.
