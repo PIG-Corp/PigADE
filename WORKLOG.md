@@ -2561,3 +2561,11 @@ Rebuilt the first product flow after user rejection: native folder/new Git proje
 - Files: DESIGN.md, README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/setup_flow.rs, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
 - Verification: App: all156 tests, strict all-target Clippy, fmt check, debug and release builds passed. Host: project_setup3 real-IPC tests passed; earlier workspace strict Clippy/fmt/release passed. Harness22 tests passed. Actual private X11 setup02 keyboard, setup04 mouse, setup05 mouse+fake-Codex review and memory02 pass; screenshots inspected. setup01 exposed hidden cards/busy-drop and was fixed; setup03 had wrong fixed click coordinate, corrected and retained. No desktop input/config changes.
 - Risks / next: Native folder chooser itself, small-window/accessibility, full CLI/platform/MVP gates remain open. Old manual review window/host preserved; new review must use independent state. Preserve unrelated stress/IME-patch work and the deferred preferences stash.
+
+## 2026-10-17T17:00:25+00:00 — /root
+
+Opened the committed release build for manual user review with a fresh independent host/state; preserved the older user window and host.
+
+- Files: WORKLOG.md
+- Verification: Fresh host socket SO_PEERCRED matched PID2540063/current UID; release UI PID2540072 remained alive, app log empty; read-only hyprctl inventory confirms mapped PigADE window675x734. No focus/input/window-size/config automation.
+- Risks / next: Manual review state: /home/afterburner/.local/state/pigade/review-flow-we5dlnw7; socket /tmp/pigade-flow-bl8n1_aq/host.sock; exact identities in manual-review.json. Keep this host/sessions intact. Compact675px layout has not received isolated visual acceptance; full MVP remains open.
