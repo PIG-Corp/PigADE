@@ -1369,3 +1369,35 @@ Preserve mandatory blank unified-diff context in exact hash-pinned GPUI patch
 - Files: .gitattributes
 - Verification: Initial staged diff check correctly flagged single-space context lines in new patch file. Added exact-path blank-at-eol attribute, without changing patch/runtime/source hashes or bypassing hook; rerun staged check required.
 - Risks / next: Keep all ordinary source whitespace validation enabled; profile hashes continue to pin exact patch bytes.
+
+## 2026-10-17T02:09:33+00:00 — terminal_memory_budget
+
+Documented source-level soak ACK and resize pipeline audit, including bounded input admission, actor backpressure, persistence wait stages, a possible query-response/output wait cycle, and minimal diagnostics/tests; no root cause claimed.
+
+- Files: docs/research/soak-pipeline-audit.md
+- Verification: Read-only inspection of session-host InputWriter/actor/output reader, storage journal/history sync paths, and soak-pty producer handshake; git diff --check passed.
+- Risks / next: Root may use the proposed per-stage timestamps and two focused tests to correlate the next reproduction; do not treat hypotheses as RCA.
+
+## 2026-10-17T02:12:27+00:00 — terminal_memory_budget
+
+Fixed the session actor query-response backpressure cycle: bounded FIFO response chunks are retried without starving PTY output, and combined queued replies fail explicitly before history commit/checkpoint/frame publication when the 16 MiB cap would be exceeded. Added real-PTY regression.
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/query_backpressure.rs
+- Verification: Regression failed against old loop at sequence 2; passed after fix and verified exact ordered delivery of 300,000 query-response bytes. cargo test -p pigade-session-host passed (54 unit, 45 integration plus doc tests); existing burst query-response test passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --config skip_children=true applied to owned files; git diff --check passed.
+- Risks / next: Root review/integration. This verifies the identified mechanism is real and repaired, but does not attribute the prior soak ACK timeout to this path.
+
+## 2026-10-17T02:13:08+00:00 — /root/font_render_profile
+
+Documented source-grounded IME target-generation barrier design and platform limits
+
+- Files: docs/research/ime-generation-barrier-next.md, WORKLOG.md
+- Verification: Read pinned GPUI/XIM/xim-rs source; checked XIM protocol, xcb-imdkit 1.0.9 source, and text-input-v3 XML; git diff --check passed
+- Risks / next: Implementation requires endpoint/proxy rotation and explicit per-platform capability; root to review before app or GPUI changes
+
+## 2026-10-17T02:13:16+00:00 — /root
+
+Retain successful1200s same-host ACK diagnostic alongside prior failures
+
+- Files: benchmarks/results/soak-ack-timeout-20261017/completed-1200s-summary.json, docs/reports/soak-ack-timeout-20261017.md, docs/research/soak-pipeline-audit.md
+- Verification: Reviewed all4 CRC/full recovery results and bounded summary:1200.068s,238 ACKs/stream,396 resizes/stream,2856 producer milestones with0 gaps; cold counts0. No unique RCA. Independent source audit identifies a separately reproducible query-response wait cycle; its pending fix is not yet part of this commit.
+- Risks / next: Existing7200s diagnostic10513 continues unchanged on frozen67ed host; no24h acceptance. Review/fix query-response and app rejection independently.

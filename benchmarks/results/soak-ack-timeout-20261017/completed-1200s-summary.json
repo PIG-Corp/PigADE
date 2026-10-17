@@ -1,0 +1,185 @@
+{
+  "ack_sidechannel": {
+    "file_sha256": "e0be7c21acfa3b0cd3e8907b1c6e794918e930090a5e1b08cb1dddff2f32a440",
+    "last_token_index_by_stream": {
+      "0": 237,
+      "1": 237,
+      "2": 237,
+      "3": 237
+    },
+    "per_stream_event_counts": {
+      "0:ack_write_completed": 238,
+      "0:ping_received": 238,
+      "0:release_observed": 238,
+      "1:ack_write_completed": 238,
+      "1:ping_received": 238,
+      "1:release_observed": 238,
+      "2:ack_write_completed": 238,
+      "2:ping_received": 238,
+      "2:release_observed": 238,
+      "3:ack_write_completed": 238,
+      "3:ping_received": 238,
+      "3:release_observed": 238
+    },
+    "per_stream_lifecycle_order_and_token_sequence_valid": true,
+    "records_omitted": 0,
+    "records_written": 2856,
+    "sequence_gaps": 0
+  },
+  "actual_elapsed_seconds": 1200.0682581340006,
+  "all_session_cold_history_equal": true,
+  "all_session_cold_history_records": 0,
+  "all_session_journal_framing_and_producer_crc_valid": true,
+  "all_session_recovery_complete_state_equal": true,
+  "all_session_recovery_frame_equal": true,
+  "binary_sha256": "67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58",
+  "elapsed_24h_completed": false,
+  "filesystem": "btrfs",
+  "interpretation": {
+    "24h_acceptance_claim": false,
+    "ack_timeout_occurred": false,
+    "cold_history_comparison_note": "Cold-history records were zero in this run, so the cold-history equality check is vacuous.",
+    "root_cause_identified": false
+  },
+  "real_time_soak_24h_integrity_pass": false,
+  "requested_seconds": 1200,
+  "resize_count_per_session": [
+    396,
+    396,
+    396,
+    396
+  ],
+  "resize_queue_full_retries_per_session": [
+    77,
+    0,
+    0,
+    0
+  ],
+  "samples_per_session": [
+    20,
+    20,
+    20,
+    20
+  ],
+  "schema": 1,
+  "sessions": [
+    {
+      "event_counts": {
+        "1": 22678,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "final_sequence": 23075,
+      "input_ack_count": 238,
+      "journal_bytes": 5772556,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 5002013,
+      "output_crc32": "7c53f681",
+      "producer_body_bytes": 5001938,
+      "recovery": {
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 71.27702,
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_replay_ms": 785.4341919999999,
+        "path": "checkpoint-tail"
+      },
+      "resize_count": 396,
+      "stream": 0
+    },
+    {
+      "event_counts": {
+        "1": 22624,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "final_sequence": 23021,
+      "input_ack_count": 238,
+      "journal_bytes": 5755039,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4986278,
+      "output_crc32": "41f4a8a3",
+      "producer_body_bytes": 4986203,
+      "recovery": {
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 69.75640399999999,
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_replay_ms": 774.017955,
+        "path": "checkpoint-tail"
+      },
+      "resize_count": 396,
+      "stream": 1
+    },
+    {
+      "event_counts": {
+        "1": 22591,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "final_sequence": 22988,
+      "input_ack_count": 238,
+      "journal_bytes": 5738218,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4970546,
+      "output_crc32": "9a4100c5",
+      "producer_body_bytes": 4970471,
+      "recovery": {
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 63.465985,
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_replay_ms": 770.5362660000001,
+        "path": "checkpoint-tail"
+      },
+      "resize_count": 396,
+      "stream": 2
+    },
+    {
+      "event_counts": {
+        "1": 22459,
+        "2": 396,
+        "3": 0,
+        "4": 1
+      },
+      "final_sequence": 22856,
+      "input_ack_count": 238,
+      "journal_bytes": 5717868,
+      "journal_framing_and_producer_crc_valid": true,
+      "output_bytes": 4954552,
+      "output_crc32": "5f46ece7",
+      "producer_body_bytes": 4954477,
+      "recovery": {
+        "checkpoint_tail_journal_bytes_read": 356,
+        "checkpoint_tail_ms": 61.430893,
+        "cold_history_equal": true,
+        "cold_history_records": 0,
+        "complete_state_equal": true,
+        "frame_equal": true,
+        "full_replay_ms": 744.663721,
+        "path": "checkpoint-tail"
+      },
+      "resize_count": 396,
+      "stream": 3
+    }
+  ],
+  "sessions_count": 4,
+  "source_manifest": "manifest.json",
+  "source_run": "resize-ack-repro-20261017",
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "0eff07f1653552ddf977b39bb9188f7edc53d42f33342259cf4eef59b139ab92",
+    "scripts/soak-pty.py": "d1abca748f1c50b7a71c13d55bd1a09692a3725db28e3c1a68c0d214bdadaa19",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "status": "completed",
+  "verify_recovery_passed_all_sessions": true
+}
