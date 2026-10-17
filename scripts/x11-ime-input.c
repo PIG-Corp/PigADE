@@ -77,7 +77,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
         strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
-        strcmp(a.stage, "history-readonly"))
+        strcmp(a.stage, "history-readonly") && strcmp(a.stage, "setup-open") &&
+        strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
+        strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -282,7 +284,7 @@ static void memory_open_sequence(Display *dpy) {
     key(dpy, XK_space);
     if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
         !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("memory review shortcut release failed");
-    key(dpy, XK_v);
+    modified_key(dpy, XK_Shift_L, XK_Return);
 }
 
 static void memory_select_sequence(Display *dpy) {
@@ -337,6 +339,27 @@ static void resume_open_sequence(Display *dpy) {
     const KeySym query[] = { XK_r, XK_e, XK_s, XK_u, XK_m, XK_e };
     for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
     key(dpy, XK_Return);
+}
+
+/* Fixed product coordinates only, after private server/window verification.
+ * No arbitrary pointer coordinates are accepted from arguments. */
+static void setup_click(Display *dpy, Window app, int x, int y) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("setup click requires the fixed private 1280x800 app");
+    Window child; int root_x, root_y;
+    if (!XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), x, y,
+                               &root_x, &root_y, &child)) fail("setup coordinate translation failed");
+    if (!XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime) ||
+        !XTestFakeButtonEvent(dpy, 1, True, CurrentTime) ||
+        !XTestFakeButtonEvent(dpy, 1, False, CurrentTime)) fail("private setup click failed");
+    XSync(dpy, False);
+}
+
+static void setup_create_sequence(Display *dpy) {
+    const KeySym name[] = { XK_d, XK_e, XK_m, XK_o };
+    for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
+    modified_key(dpy, XK_Control_L, XK_Return);
 }
 
 static void context_edit_sequence(Display *dpy) {
@@ -543,7 +566,7 @@ int main(int argc, char **argv) {
         verify_app_focus_target(&a, dpy, c, 1);
         printf("{\"stage\":\"focus\",\"app_pid\":%ld,\"focus_verified\":true}\n", (long)a.app);
     } else {
-        verify_app_focus_target(&a, dpy, c, 1);
+        Window app_window = verify_app_focus_target(&a, dpy, c, 1);
         if (!strcmp(a.stage, "compose")) {
             const KeySym sequence[] = { XK_n, XK_i, XK_h, XK_a, XK_o };
             for (size_t i = 0; i < sizeof(sequence) / sizeof(sequence[0]); ++i) key(dpy, sequence[i]);
@@ -580,6 +603,16 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_c);
             key(dpy, XK_BackSpace);
             key(dpy, XK_Tab);
+        } else if (!strcmp(a.stage, "setup-open")) {
+            setup_click(dpy, app_window, 585, 506);
+        } else if (!strcmp(a.stage, "setup-create")) {
+            setup_create_sequence(dpy);
+        } else if (!strcmp(a.stage, "setup-shell")) {
+            setup_click(dpy, app_window, 411, 91);
+        } else if (!strcmp(a.stage, "setup-launcher")) {
+            setup_click(dpy, app_window, 306, 91);
+        } else if (!strcmp(a.stage, "setup-codex")) {
+            setup_click(dpy, app_window, 490, 177);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -595,6 +628,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "history-open") ? "2" :
                             !strcmp(a.stage, "history-search") ? "6" :
                             !strcmp(a.stage, "history-readonly") ? "6" :
+                            !strcmp(a.stage, "setup-open") ? "1" :
+                            !strcmp(a.stage, "setup-create") ? "5" :
+                            !strcmp(a.stage, "setup-shell") ? "1" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

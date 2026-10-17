@@ -2513,3 +2513,51 @@ Integrated native immutable terminal-history viewer with paging, Unicode search,
 - Files: crates/terminal/src/history_text.rs, crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/term/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, crates/session-host/src/history_view.rs, crates/session-host/src/checkpoint.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/recovery_tests.rs, crates/session-host/tests/history_view.rs, crates/app/src/history_view.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Fresh strict workspace and app Clippy pass; host114 lib tests serial, terminal36, real-PTY history1 pass. App154 full tests and latest history-filter6 pass; fmt/version/diff and Python22 harness tests pass. Host release bins/examples and app debug/release builds pass. Private native X11 history fixture02 passes immutable sources/no CLI input/no new generation/layout mutation; search capture visibly highlights READY at byte11 after fixing stale shaping cache found in fixture01. Explicit user-requested desktop app launch verified mapped PID2429684; initial own app-state directory0755 refused, ownership/type verified and only that directory restricted0700 before successful retry.
 - Risks / next: History has two snapshots/120s idle expiry/16MiB replay tail and explicit failure; whole-process heap/quota, rich terminal scrolling, full native accessibility/platform and MVP gates remain open. Keep prior parallel replay-cache test gap; no false full-green claim. User app is running for manual review; do not automate its input or replace it.
+
+## 2026-10-17T16:25:03+00:00 — /root/history_view_backend_luna
+
+Added persisted UI theme/font/reduced-motion preferences with selection CAS and change notifications
+
+- Files: crates/storage/src/preferences.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage ui_preferences (1 passed); cargo test -p pigade-storage preferences:: (2 passed); cargo test -p pigade-session-host ui_preferences -- --nocapture (2 passed); cargo clippy -p pigade-storage -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 on owned files and scoped git diff --check passed
+- Risks / next: Root/UI can consume Selection.window.preferences; no SQLite schema migration is needed because preferences are additive window_json fields.
+
+## 2026-10-17T16:27:03+00:00 — history_path_luna
+
+Added persisted-preference settings sheet, centralized dark/light chrome tokens, and theme-aware terminal fallback palette
+
+- Files: crates/app/src/product.rs, crates/app/src/theme.rs, crates/app/src/palette.rs
+- Verification: rustfmt --edition 2024 --config skip_children=true on owned app files; git diff --check passed; app Cargo checks are excluded by task instructions and root owns serialized checks
+- Risks / next: Root to add theme module and wire settings actions, keyboard access, persisted preference reply, palette theme resolution, and terminal font sizing in main.rs
+
+## 2026-10-17T16:41:16+00:00 — history_view_backend_luna
+
+Added explicit named Git project creation and bounded provider detection host commands
+
+- Files: crates/session-host/src/projects.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/tests/project_setup.rs
+- Verification: cargo test -p pigade-session-host projects::tests --lib (7 passed); cargo test -p pigade-session-host --test project_setup (3 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); git diff --check (passed)
+- Risks / next: Root should wire CreateProject and DetectProviders into product setup UX and add providers: None to remaining app Response fixtures; provider list comes on Response.providers.
+
+## 2026-10-17T16:41:22+00:00 — history_path_luna
+
+Redesigned first-run, workspace, launcher and toolbar product flows; added project/workspace dialog actions, provider-aware CLI choices and folded launch metadata.
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 --config skip_children=true crates/app/src/product.rs; git diff --check -- crates/app/src/product.rs passed; app Cargo intentionally not run per root instruction.
+- Risks / next: Root must wire new ProductAction variants and ProviderInfo metadata in main/protocol; no app compile run in this slice.
+
+## 2026-10-17T16:49:49+00:00 — /root/resume_adapter_luna
+
+Added a fixed-input private-Xvfb project setup fixture covering Welcome, project creation, ready workspace and first shell launch.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: python3 -c AST parse: passed; cc -std=c11 -O2 -Wall -Wextra -Werror ... -lXtst -lX11 -lxcb-res -lxcb: passed; python3 scripts/test_isolated_ime_x11.py: 22 passed; git diff --check: passed. Did not run the UI fixture.
+- Risks / next: Root rebuilds app and host, then runs the fixed fixture in the existing isolated Xvfb harness; review four private captures and run report.
+
+## 2026-10-17T16:59:31+00:00 — /root
+
+Rebuilt the first product flow after user rejection: native folder/new Git project, correlated first workspace/tab, always-visible project controls, detected agent picker, one-action durable shell, reviewed AI startup and compact pane menu. Fixed offscreen empty-state cards and provider detection blocking the first action; removed ignored workspace-name field after independent Luna review. Deferred preferences remain in named Git stash, with agent history preserved.
+
+- Files: DESIGN.md, README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/setup_flow.rs, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: App: all156 tests, strict all-target Clippy, fmt check, debug and release builds passed. Host: project_setup3 real-IPC tests passed; earlier workspace strict Clippy/fmt/release passed. Harness22 tests passed. Actual private X11 setup02 keyboard, setup04 mouse, setup05 mouse+fake-Codex review and memory02 pass; screenshots inspected. setup01 exposed hidden cards/busy-drop and was fixed; setup03 had wrong fixed click coordinate, corrected and retained. No desktop input/config changes.
+- Risks / next: Native folder chooser itself, small-window/accessibility, full CLI/platform/MVP gates remain open. Old manual review window/host preserved; new review must use independent state. Preserve unrelated stress/IME-patch work and the deferred preferences stash.

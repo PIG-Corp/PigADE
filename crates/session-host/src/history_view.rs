@@ -258,6 +258,7 @@ fn response(
         generations: None,
         generation_selection: None,
         history_view,
+        providers: None,
     }
 }
 

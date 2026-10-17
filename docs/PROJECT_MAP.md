@@ -35,8 +35,10 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
 | crates/session-host/src/prepared.rs | Review/start/session-context and explicit PrepareResume routes; frozen binding/context/cwd, unchanged exited-head checks and one durable attempt; resumed generations preserve layout |
 | crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1 resume argv; other resume versions remain unsupported |
-| crates/session-host/src/projects.rs, panel_launch.rs | Git repository identity, durable workspace preparation/worktree creation and prevalidated tab-scoped CLI launch |
-| crates/app/src/product.rs | Project/workspace sidebar, tab strip, CLI controls, palette, transfer picker, revisioned context editor and onboarding |
+| crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |
+| crates/session-host/tests/project_setup.rs | Real IPC create/reopen, existing-target preservation and bounded provider-version fixture |
+| crates/app/src/product.rs | Always-visible open/create project controls, task/worktree sheet, detected CLI chooser, compact toolbar/pane menu, context review and editor |
+| crates/app/src/setup_flow.rs | Exact-request project → first shared workspace/tab setup; stale replies do not advance setup or start a CLI |
 | crates/app/src/text_edit.rs | Unicode grapheme/UTF-16 editing, grouped composition, bounded100-entry/2MiB undo, plain-string wire serialization |
 | crates/app/src/edit_field.rs | Native GPUI wrapped text fields, cached shaping, caret/selection/IME geometry, horizontal and vertical reveal |
 | crates/app/src/startup.rs | Private local host discovery/startup, version-derived paths, host-lock-mediated stale-endpoint recovery; explicit sockets never auto-start |

@@ -14,6 +14,7 @@ mod product;
 mod protocol;
 mod publication_trace;
 mod selection;
+mod setup_flow;
 mod startup;
 mod text_edit;
 mod tiling;
@@ -845,6 +846,10 @@ struct CanvasApp {
     product_launch_unknown: bool,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
+    pending_quick_shell: Option<(uuid::Uuid, uuid::Uuid)>,
+    setup_flow: Option<setup_flow::SetupFlow>,
+    picker_request: Option<uuid::Uuid>,
+    providers_checked: bool,
     pending_context_inspection: bool,
     pending_conversation_inspection: bool,
     pending_generation_picker: bool,
@@ -969,9 +974,18 @@ impl CanvasApp {
                 if weak
                     .update_in(cx, |this, window, cx| {
                         while let Ok(reply) = this.product_rx.try_recv() {
-                            this.product.busy = false;
+                            let provider_reply = match &reply {
+                                Ok(reply) => reply.providers_request,
+                                Err(error) => error.providers_request,
+                            };
+                            if !provider_reply { this.product.busy = false; }
                             match reply {
                                 Ok(reply) => {
+                                    let ui_request = reply.ui_request;
+                                    if let Some(providers) = reply.providers {
+                                        this.product.providers = Some(providers);
+                                        this.product.provider_error = None;
+                                    }
                                     if reply.history_view_request {
                                         this.apply_history_reply(reply.history_view.clone(), cx);
                                     }
@@ -1018,6 +1032,11 @@ impl CanvasApp {
                                         ));
                                     }
                                     if let Some(preview) = reply.launch_preview {
+                                        let quick_shell = this.pending_quick_shell.is_some_and(|(tab, request)|
+                                            ui_request == Some(request) && this.product.catalog.as_ref().is_some_and(|catalog| catalog.selection.tab_id == Some(tab))
+                                            && preview.provider == "shell" && preview.tab_id == tab && preview.resume.is_none()
+                                            && !preview.deliver_context && preview.can_launch && reply.launch_phase.is_none());
+                                        if this.pending_quick_shell.is_some_and(|(_, request)| ui_request == Some(request)) { this.pending_quick_shell = None; }
                                         this.product.launch_phase = reply.launch_phase;
                                         if reply.launch_confirmed {
                                             if this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview) {
@@ -1041,6 +1060,10 @@ impl CanvasApp {
                                         this.pending_context_inspection = false;
                                         this.pending_conversation_inspection = false;
                                         this.product.launch_preview = Some(preview);
+                                        if quick_shell {
+                                            this.confirm_prepared_launch(cx);
+                                            if this.product_launch_unknown { this.product.dialog = None; }
+                                        }
                                     }
                                     if let Some(generations) = reply.generations {
                                         if this.pending_generation_picker {
@@ -1053,8 +1076,16 @@ impl CanvasApp {
                                         this.product.apply_context_reply(context.clone(),reply.context_saved,this.pending_context_editor == Some(context.scope_id));
                                         this.pending_context_editor = None;
                                     }
+                                    this.advance_project_setup(ui_request,cx);
+                                    if !this.providers_checked && this.setup_flow.is_none()
+                                        && this.product.catalog.as_ref().is_some_and(|catalog|catalog.selection.tab_id.is_some()) {
+                                        this.detect_providers(cx);
+                                    }
                                 }
                                 Err(error) => {
+                                    if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
+                                    if this.pending_quick_shell.is_some_and(|(_,request)| error.ui_request==Some(request)) { this.pending_quick_shell=None; }
+                                    if error.providers_request { this.product.provider_error=Some("Не удалось проверить CLI. Терминал можно открыть сразу; проверку агентов можно повторить.".into()); }
                                     if this.product.history_sheet.as_ref().is_some_and(|history| history.pending.is_some()) {
                                         this.apply_history_error(error.message.clone(), cx);
                                     }
@@ -1071,7 +1102,9 @@ impl CanvasApp {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
                                     }
-                                    this.product.notice = Some(error.message);
+                                    this.product.notice = Some(if error.providers_request {
+                                        this.product.provider_error.clone().unwrap_or(error.message)
+                                    } else { error.message });
                                 }
                             }
                             cx.notify();
@@ -1222,6 +1255,10 @@ impl CanvasApp {
             product_launch_unknown: false,
             pending_launch: None,
             pending_launch_review: false,
+            pending_quick_shell: None,
+            setup_flow: None,
+            picker_request: None,
+            providers_checked: false,
             pending_context_inspection: false,
             pending_conversation_inspection: false,
             pending_generation_picker: false,
@@ -1274,17 +1311,154 @@ impl CanvasApp {
         }
     }
     fn product_command(&mut self, command: Value, cx: &mut Context<Self>) {
+        self.try_product_command(command, cx);
+    }
+    fn try_product_command(&mut self, command: Value, cx: &mut Context<Self>) -> bool {
         if self.product.busy {
-            return;
+            return false;
         }
-        match self.product_tx.try_send(command) {
+        let admitted = match self.product_tx.try_send(command) {
             Ok(()) => {
                 self.product.busy = true;
                 self.product.notice = None;
+                true
             }
-            Err(_) => self.product.notice = Some("Операция не принята: очередь занята".into()),
+            Err(_) => {
+                self.product.notice = Some("Операция не принята: очередь занята".into());
+                false
+            }
+        };
+        cx.notify();
+        admitted
+    }
+
+    fn begin_project_setup(&mut self, mut command: Value, cx: &mut Context<Self>) {
+        if self.product.busy {
+            return;
+        }
+        let request = uuid::Uuid::new_v4();
+        command["_ui_request"] = json!(request);
+        if self.try_product_command(command, cx) {
+            self.setup_flow = Some(setup_flow::SetupFlow::new(request));
+            self.product.notice = Some("Открываем проект…".into());
+        }
+    }
+
+    fn advance_project_setup(&mut self, request: Option<uuid::Uuid>, cx: &mut Context<Self>) {
+        let Some(mut flow) = self.setup_flow.take() else {
+            return;
+        };
+        let Some(catalog) = self.product.catalog.as_ref() else {
+            self.setup_flow = Some(flow);
+            return;
+        };
+        match flow.accept(request, catalog) {
+            Ok(setup_flow::Next::Ignore) => self.setup_flow = Some(flow),
+            Ok(setup_flow::Next::Workspace { project, request }) => {
+                if self.try_product_command(json!({"command":"create_workspace","project":project,"task":"Основной","worktree":false,"_ui_request":request}),cx) {
+                    self.setup_flow = Some(flow);
+                    self.product.notice = Some("Создаём основной воркспейс в папке проекта…".into());
+                }
+            }
+            Ok(setup_flow::Next::Ready) => {
+                self.product.notice = Some("Проект открыт. Выберите агента или откройте терминал.".into());
+                self.detect_providers(cx);
+            }
+            Err(error) => self.product.notice = Some(error),
+        }
+    }
+
+    fn detect_providers(&mut self, cx: &mut Context<Self>) {
+        self.product.provider_error = None;
+        match self
+            .product_tx
+            .try_send(json!({"command":"detect_providers"}))
+        {
+            Ok(()) => self.providers_checked = true,
+            Err(_) => self.product.provider_error = Some(
+                "Проверка CLI не началась: очередь занята. Откройте выбор агента, чтобы повторить."
+                    .into(),
+            ),
         }
         cx.notify();
+    }
+
+    fn pick_project_folder(&mut self, parent: bool, cx: &mut Context<Self>) {
+        if self.picker_request.is_some() || self.product.busy {
+            return;
+        }
+        let dialog = parent
+            .then(|| self.product.dialog.as_ref().map(|dialog| dialog.id))
+            .flatten();
+        if parent && dialog.is_none() {
+            return;
+        }
+        let token = uuid::Uuid::new_v4();
+        self.picker_request = Some(token);
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(
+                if parent {
+                    "Выберите родительскую папку"
+                } else {
+                    "Откройте папку Git-проекта"
+                }
+                .into(),
+            ),
+        });
+        cx.spawn(async move |weak, cx| {
+            let result = picker.await;
+            let _ = weak.update_in(cx, |this, window, cx| {
+                if this.picker_request != Some(token) {
+                    return;
+                }
+                this.picker_request = None;
+                match result {
+                    Ok(Ok(Some(paths))) if paths.len() == 1 => {
+                        let path = &paths[0];
+                        let Some(path) = path.to_str() else {
+                            this.product.notice =
+                                Some("Путь должен содержать корректный Unicode".into());
+                            cx.notify();
+                            return;
+                        };
+                        if parent {
+                            if let Some(current) = &mut this.product.dialog
+                                && Some(current.id) == dialog
+                                && current.kind == product::DialogKind::CreateProject
+                            {
+                                current.fields[1] = path.into();
+                                this.editor_layouts.remove(&1);
+                            }
+                        } else {
+                            this.begin_project_setup(
+                                json!({"command":"add_project","path":path}),
+                                cx,
+                            );
+                        }
+                    }
+                    Ok(Ok(None)) => (),
+                    Ok(Ok(Some(_))) => {
+                        this.product.notice = Some("Выберите одну папку проекта".into())
+                    }
+                    _ => {
+                        if !parent {
+                            this.product.dialog =
+                                Some(product::Dialog::new(product::DialogKind::AddProject));
+                        }
+                        this.product.notice = Some(
+                            "Не удалось открыть системный выбор папки. Можно ввести путь вручную."
+                                .into(),
+                        );
+                    }
+                }
+                this.sync_editor_scope(window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn issue_history_query(
@@ -2455,13 +2629,19 @@ impl CanvasApp {
             action,
             A::CloseDialog
                 | A::OpenPalette
+                | A::OpenPaneMenu
+                | A::OpenLauncher
                 | A::AddProject
+                | A::OpenProjectPath
+                | A::CreateProject
                 | A::CreateWorkspace
+                | A::CreateWorkspaceFor(_)
                 | A::CreateTab
                 | A::OpenTransfer
                 | A::OpenSessions
         ) {
             self.pending_launch_review = false;
+            self.pending_quick_shell = None;
             self.pending_context_inspection = false;
             self.pending_conversation_inspection = false;
             self.pending_generation_picker = false;
@@ -2596,10 +2776,45 @@ impl CanvasApp {
                 self.product.dialog = None;
                 self.canvas_reveal = self.selected_pane();
             }
-            A::AddProject => self.product.dialog = Some(Dialog::new(DialogKind::AddProject)),
-            A::CreateWorkspace => {
-                self.product.dialog = Some(Dialog::new(DialogKind::CreateWorkspace))
+            A::AddProject => self.pick_project_folder(false, cx),
+            A::OpenProjectPath => self.product.dialog = Some(Dialog::new(DialogKind::AddProject)),
+            A::CreateProject => {
+                let mut dialog = Dialog::new(DialogKind::CreateProject);
+                let home = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("/tmp"));
+                let projects = home.join("Projects");
+                dialog.fields[1] = if projects.is_dir() { projects } else { home }
+                    .to_string_lossy()
+                    .into_owned()
+                    .into();
+                self.product.dialog = Some(dialog);
             }
+            A::ChooseProjectParent => self.pick_project_folder(true, cx),
+            A::CreateWorkspace | A::CreateWorkspaceFor(_) => {
+                let project = if let A::CreateWorkspaceFor(project) = action {
+                    Some(project)
+                } else {
+                    self.product
+                        .catalog
+                        .as_ref()
+                        .and_then(|catalog| catalog.selection.project_id)
+                };
+                if let Some(project) = project {
+                    self.product.workspace_project = Some(project);
+                    self.product.workspace_isolated = true;
+                    self.product.dialog = Some(Dialog::new(DialogKind::CreateWorkspace));
+                } else {
+                    self.product.notice = Some("Сначала откройте папку проекта".into());
+                }
+            }
+            A::WorkspaceIsolation(isolated) => self.product.workspace_isolated = isolated,
+            A::OpenLauncher => {
+                self.product.dialog = Some(Dialog::new(DialogKind::Launcher));
+                self.detect_providers(cx);
+            }
+            A::ToggleLaunchDetails => self.product.launch_details = !self.product.launch_details,
+            A::OpenPaneMenu => self.product.dialog = Some(Dialog::new(DialogKind::PaneMenu)),
             A::CreateTab => self.product.dialog = Some(Dialog::new(DialogKind::NewTab)),
             A::OpenSessions | A::RefreshSessions => {
                 self.product_command(json!({"command":"list"}), cx)
@@ -2639,6 +2854,9 @@ impl CanvasApp {
                 }
             }
             A::CloseDialog => {
+                self.setup_flow = None;
+                self.picker_request = None;
+                self.product.workspace_project = None;
                 if self
                     .product
                     .dialog
@@ -2887,21 +3105,19 @@ impl CanvasApp {
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
                 match kind {
-                    DialogKind::AddProject => {
-                        self.product_command(json!({"command":"add_project","path":field(0)}), cx)
+                    DialogKind::AddProject => self
+                        .begin_project_setup(json!({"command":"add_project","path":field(0)}), cx),
+                    DialogKind::CreateProject => {
+                        self.begin_project_setup(json!({"command":"create_project","name":field(0).trim(),"parent":field(1)}),cx);
                     }
                     DialogKind::CreateWorkspace => {
-                        if let Some(project) = self
-                            .product
-                            .catalog
-                            .as_ref()
-                            .and_then(|c| c.selection.project_id)
-                        {
-                            match field(1).trim().to_ascii_lowercase().as_str() {
-                                "worktree" => self.product_command(json!({"command":"create_workspace","project":project,"task":field(0),"worktree":true}),cx),
-                                "shared" => self.product_command(json!({"command":"create_workspace","project":project,"task":field(0),"worktree":false}),cx),
-                                _ => self.product.notice = Some("Выберите режим worktree или shared".into()),
-                            }
+                        if let Some(project) = self.product.workspace_project.or_else(|| {
+                            self.product
+                                .catalog
+                                .as_ref()
+                                .and_then(|c| c.selection.project_id)
+                        }) {
+                            self.product_command(json!({"command":"create_workspace","project":project,"task":if field(0).trim().is_empty() {"Новая задача"} else {field(0)},"worktree":self.product.workspace_isolated}),cx);
                         } else {
                             self.product.notice =
                                 Some("Сначала добавьте или выберите проект".into());
@@ -2961,7 +3177,7 @@ impl CanvasApp {
                             self.product_command(json!({"command":"bind_conversation","session":preview.session,"generation":preview.generation,"conversation_id":field(0).trim(),"expected_revision":preview.conversation.as_ref().map(|binding| binding.revision).unwrap_or(0)}),cx);
                         }
                     }
-                    DialogKind::Palette => {
+                    DialogKind::Palette | DialogKind::PaneMenu => {
                         let action = self.product.palette_action();
                         self.product.dialog = None;
                         if let Some(action) = action {
@@ -2972,10 +3188,17 @@ impl CanvasApp {
                         self.confirm_prepared_launch(cx)
                     }
                     DialogKind::History => self.history_search(None, cx),
+                    DialogKind::Launcher => self.product.dialog = None,
                     DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
-            A::Launch(provider) => self.launch_panel(provider, pigade_layout::Direction::Right, cx),
+            A::Launch(provider) => {
+                let quick_shell = provider == "shell";
+                self.launch_panel(provider, pigade_layout::Direction::Right, quick_shell, cx)
+            }
+            A::ReviewShell => {
+                self.launch_panel("shell".into(), pigade_layout::Direction::Right, false, cx)
+            }
             A::Layout(name) => {
                 let Some((tab, layout)) = self.tab_layout() else {
                     return;
@@ -2987,10 +3210,10 @@ impl CanvasApp {
                         }
                     }
                     "split_right" => {
-                        self.launch_panel("shell".into(), pigade_layout::Direction::Right, cx)
+                        self.launch_panel("shell".into(), pigade_layout::Direction::Right, true, cx)
                     }
                     "split_down" => {
-                        self.launch_panel("shell".into(), pigade_layout::Direction::Down, cx)
+                        self.launch_panel("shell".into(), pigade_layout::Direction::Down, true, cx)
                     }
                     "focus" => {
                         self.layout_command(pigade_layout::Command::ToggleFocusMode { tab }, cx)
@@ -3020,6 +3243,7 @@ impl CanvasApp {
         &mut self,
         provider: String,
         side: pigade_layout::Direction,
+        quick_shell: bool,
         cx: &mut Context<Self>,
     ) {
         if self.product_launch_unknown {
@@ -3036,8 +3260,13 @@ impl CanvasApp {
             return;
         }
         self.pending_launch_review = true;
-        self.product_command(json!({"command":"prepare_launch","request":{"tab":tab,"provider":provider,"side":side,
-            "target":self.selected_pane().or(layout.focused),"role_override":"","agent_instructions":"","include_memory":false,"deliver_context":provider != "shell"}}),cx);
+        let request = uuid::Uuid::new_v4();
+        let quick_shell = quick_shell && provider == "shell";
+        let command = json!({"command":"prepare_launch","_ui_request":request,"request":{"tab":tab,"provider":provider,"side":side,
+            "target":self.selected_pane().or(layout.focused),"role_override":"","agent_instructions":"","include_memory":false,"deliver_context":!quick_shell}});
+        if self.try_product_command(command, cx) && quick_shell {
+            self.pending_quick_shell = Some((tab, request));
+        }
         cx.notify();
     }
 
@@ -4372,11 +4601,25 @@ impl CanvasApp {
                 } else {
                     product::ProductAction::EditContext
                 }),
-                "o" => Some(product::ProductAction::OpenGenerations),
+                "o" => Some(if k.modifiers.shift {
+                    product::ProductAction::AddProject
+                } else {
+                    product::ProductAction::OpenGenerations
+                }),
+                "n" => Some(if k.modifiers.shift {
+                    product::ProductAction::CreateProject
+                } else {
+                    product::ProductAction::CreateWorkspace
+                }),
                 "i" => Some(product::ProductAction::OpenHistory),
                 "b" => Some(product::ProductAction::InspectConversation),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
+                "enter" => Some(if k.modifiers.shift {
+                    product::ProductAction::ReviewShell
+                } else {
+                    product::ProductAction::Launch("shell".into())
+                }),
                 "s" => Some(product::ProductAction::Layout("split_down".into())),
                 "v" => Some(product::ProductAction::Layout("split_right".into())),
                 "f" => Some(product::ProductAction::Layout("focus".into())),
@@ -5281,7 +5524,10 @@ impl Render for CanvasApp {
                                     )
                                     .size_full(),
                                 )
-                                .children(empty_state),
+                                .children(
+                                    empty_state
+                                        .map(|element| div().absolute().inset_0().child(element)),
+                                ),
                         )
                         .child({
                             let mut footer = div().flex().flex_col();
@@ -5867,6 +6113,7 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
+                window.set_window_title("PigADE");
                 let view = cx.new(|cx| {
                     CanvasApp::new(
                         window,

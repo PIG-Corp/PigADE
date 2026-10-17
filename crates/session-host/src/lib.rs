@@ -106,6 +106,7 @@ pub struct Launch {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     List,
+    DetectProviders,
     HistoryRead {
         query: history_read::Query,
     },
@@ -173,6 +174,10 @@ pub enum Command {
     },
     AddProject {
         path: PathBuf,
+    },
+    CreateProject {
+        parent: PathBuf,
+        name: String,
     },
     CreateWorkspace {
         project: Uuid,
@@ -273,6 +278,17 @@ pub struct Response {
     pub generation_selection: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_view: Option<history_view::Reply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<ProviderInfo>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderInfo {
+    pub provider: String,
+    pub executable: Option<PathBuf>,
+    pub version: Option<String>,
+    pub available: bool,
+    pub reason: Option<String>,
 }
 
 /// Stable machine-readable proof that no part of a command was admitted.
@@ -483,6 +499,143 @@ struct Host {
     recovery: RecoveryDiagnostics,
     changes: changes::ChangeHub,
     _lock: File,
+}
+
+struct ProviderTask {
+    reply: mpsc::SyncSender<Response>,
+}
+
+struct ProviderDetector {
+    sender: mpsc::SyncSender<ProviderTask>,
+}
+
+impl ProviderDetector {
+    fn new() -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel::<ProviderTask>(4);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let worker_receiver = receiver.clone();
+        thread::Builder::new()
+            .name("pigade-provider-detect".into())
+            .spawn(move || {
+                loop {
+                    let task = worker_receiver
+                        .lock()
+                        .expect("provider detector queue")
+                        .recv();
+                    let Ok(task) = task else { break };
+                    let providers = detect_providers();
+                    let _ = task
+                        .reply
+                        .try_send(provider_response(providers, None, None));
+                }
+            })?;
+        Ok(Self { sender })
+    }
+
+    fn submit(&self, reply: mpsc::SyncSender<Response>) {
+        match self.sender.try_send(ProviderTask { reply }) {
+            Ok(()) => (),
+            Err(mpsc::TrySendError::Full(task)) => {
+                let _ = task.reply.try_send(provider_response(
+                    Vec::new(),
+                    Some("provider detection queue is full".into()),
+                    Some(CommandRejection::QueueFull),
+                ));
+            }
+            Err(mpsc::TrySendError::Disconnected(task)) => {
+                let _ = task.reply.try_send(provider_response(
+                    Vec::new(),
+                    Some("provider detection worker unavailable".into()),
+                    None,
+                ));
+            }
+        }
+    }
+}
+
+fn detect_providers() -> Vec<ProviderInfo> {
+    let providers = ["shell", "claude", "codex", "opencode"];
+    let (sender, receiver) = mpsc::channel();
+    for provider in providers {
+        let sender = sender.clone();
+        let provider = provider.to_owned();
+        let _ = thread::Builder::new()
+            .name(format!("pigade-detect-{provider}"))
+            .spawn(move || {
+                let info = match panel_launch::resolve_provider(&provider) {
+                    Ok(executable) => {
+                        let inspected = adapters::inspect(&provider, &executable);
+                        let (version, reason) = match inspected {
+                            Ok(info) => (
+                                (info.cli_version != "unknown" && provider != "shell")
+                                    .then_some(info.cli_version),
+                                info.unsupported_reason,
+                            ),
+                            Err(error) => {
+                                (None, Some(format!("version inspection failed: {error:#}")))
+                            }
+                        };
+                        ProviderInfo {
+                            provider,
+                            executable: Some(executable),
+                            version,
+                            available: true,
+                            reason,
+                        }
+                    }
+                    Err(error) => ProviderInfo {
+                        provider,
+                        executable: None,
+                        version: None,
+                        available: false,
+                        reason: Some(format!("{error:#}")),
+                    },
+                };
+                let _ = sender.send(info);
+            });
+    }
+    drop(sender);
+    let mut results = Vec::new();
+    for _ in providers {
+        match receiver.recv_timeout(Duration::from_secs(2)) {
+            Ok(info) => results.push(info),
+            Err(_) => break,
+        }
+    }
+    results.sort_by_key(|info| {
+        ["shell", "claude", "codex", "opencode"]
+            .iter()
+            .position(|provider| *provider == info.provider)
+            .unwrap_or(usize::MAX)
+    });
+    results
+}
+
+fn provider_response(
+    providers: Vec<ProviderInfo>,
+    error: Option<String>,
+    rejection: Option<CommandRejection>,
+) -> Response {
+    Response {
+        protocol: PROTOCOL,
+        views: Vec::new(),
+        error,
+        rejected_before_admission: rejection,
+        catalog: None,
+        selection: None,
+        context: None,
+        launch_preview: None,
+        launch_phase: None,
+        catalog_notice: None,
+        recovery: None,
+        selected: None,
+        history_chunk: None,
+        change_token: None,
+        generations: None,
+        generation_selection: None,
+        history_view: None,
+        providers: Some(providers),
+    }
 }
 
 fn restore(path: &Path, fast: bool) -> Result<View> {
@@ -803,6 +956,7 @@ impl Host {
                 generations: None,
                 generation_selection: None,
                 history_view: None,
+                providers: None,
             });
         }
         if matches!(
@@ -846,6 +1000,7 @@ impl Host {
                 generations: None,
                 generation_selection: None,
                 history_view: None,
+                providers: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -868,6 +1023,7 @@ impl Host {
                 generations: None,
                 generation_selection: None,
                 history_view: None,
+                providers: None,
             });
         }
         match &command {
@@ -891,6 +1047,7 @@ impl Host {
                     generations: Some(generations),
                     generation_selection: Some(true),
                     history_view: None,
+                    providers: None,
                 });
             }
             Command::SelectGeneration {
@@ -917,6 +1074,7 @@ impl Host {
                     generations: None,
                     generation_selection: Some(true),
                     history_view: None,
+                    providers: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -959,7 +1117,11 @@ impl Host {
             }
             _ => (),
         }
+        if matches!(&command, Command::DetectProviders) {
+            bail!("provider detection is only available through the provider worker");
+        }
         let catalog = match command {
+            Command::DetectProviders => unreachable!("provider request routed to worker"),
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
             Command::LaunchInTab {
                 tab,
@@ -973,6 +1135,9 @@ impl Host {
                 self, tab, provider, session, generation, operation, side, target,
             )?,
             Command::AddProject { path } => projects::add_project(&mut self.metadata, path)?,
+            Command::CreateProject { parent, name } => {
+                projects::create_project(&mut self.metadata, parent, name)?
+            }
             Command::CreateWorkspace {
                 project,
                 task,
@@ -1004,6 +1169,7 @@ impl Host {
                     generations: None,
                     generation_selection: None,
                     history_view: None,
+                    providers: None,
                 });
             }
         };
@@ -1025,6 +1191,7 @@ impl Host {
             generations: None,
             generation_selection: Some(true),
             history_view: None,
+            providers: None,
         })
     }
     fn launch_response(
@@ -1051,6 +1218,7 @@ impl Host {
             generations: None,
             generation_selection: None,
             history_view: None,
+            providers: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -2174,6 +2342,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     let jobs = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
+    let provider_detector = ProviderDetector::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
     // independent verifiers that do not participate in this host's state lock.
@@ -2190,6 +2359,10 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
         eprintln!("Private replay-cache cleanup unavailable: {error}");
     }
     for job in jobs {
+        if let Command::DetectProviders = job.request.command {
+            provider_detector.submit(job.reply);
+            continue;
+        }
         if let Command::HistoryView { query } = job.request.command {
             match host.history_view_source(&query) {
                 Ok(source) => history_view_reader.submit(query, source, job.reply),
@@ -2228,6 +2401,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 generations: None,
                 generation_selection: None,
                 history_view: None,
+                providers: None,
             },
         };
         let _ = job.reply.try_send(response);

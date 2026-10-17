@@ -18,7 +18,12 @@ const ROW_HEIGHT: f32 = 30.0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
     AddProject,
+    OpenProjectPath,
+    CreateProject,
+    ChooseProjectParent,
     CreateWorkspace,
+    CreateWorkspaceFor(Uuid),
+    WorkspaceIsolation(bool),
     CreateTab,
     OpenTransfer,
     TransferTo(Uuid),
@@ -52,9 +57,13 @@ pub(super) enum ProductAction {
     SelectWorkspace(Uuid),
     SelectTab(Uuid),
     Launch(String),
+    ReviewShell,
     Layout(String),
     EditContext,
     EditProjectContext,
+    OpenLauncher,
+    ToggleLaunchDetails,
+    OpenPaneMenu,
     OpenPalette,
     CloseDialog,
     SubmitDialog,
@@ -63,9 +72,12 @@ pub(super) enum ProductAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
     AddProject,
+    CreateProject,
     CreateWorkspace,
+    Launcher,
     NewTab,
     Palette,
+    PaneMenu,
     Context,
     ProjectContext,
     LaunchReview,
@@ -82,9 +94,12 @@ impl DialogKind {
     fn title(self) -> &'static str {
         match self {
             Self::AddProject => "Добавить проект",
+            Self::CreateProject => "Создать проект",
             Self::CreateWorkspace => "Новый воркспейс",
+            Self::Launcher => "Добавить агента",
             Self::NewTab => "Новая вкладка",
             Self::Palette => "Команды PigADE",
+            Self::PaneMenu => "Управление панелями",
             Self::Context => "Контекст воркспейса",
             Self::ProjectContext => "Контекст проекта",
             Self::LaunchReview => "Проверка запуска",
@@ -101,9 +116,12 @@ impl DialogKind {
     fn fields(self) -> &'static [&'static str] {
         match self {
             Self::AddProject => &["Путь к Git-проекту"],
-            Self::CreateWorkspace => &["Задача", "Режим: worktree / shared"],
+            Self::CreateProject => &["Название проекта", "Папка проекта"],
+            Self::CreateWorkspace => &["Название задачи / воркспейса"],
+            Self::Launcher => &[],
             Self::NewTab => &["Название вкладки"],
             Self::Palette => &["Поиск команды"],
+            Self::PaneMenu => &["Поиск действия панели"],
             Self::Context => &["Инструкции", "Роль", "Память"],
             Self::ProjectContext => &["Инструкции проекта"],
             Self::LaunchReview => &[
@@ -124,9 +142,12 @@ impl DialogKind {
     fn submit_label(self) -> &'static str {
         match self {
             Self::AddProject => "Добавить проект",
+            Self::CreateProject => "Создать проект",
             Self::CreateWorkspace => "Создать воркспейс",
+            Self::Launcher => "Закрыть",
             Self::NewTab => "Создать вкладку",
             Self::Palette => "Закрыть",
+            Self::PaneMenu => "Закрыть",
             Self::Context => "Сохранить ревизию",
             Self::ProjectContext => "Сохранить ревизию",
             Self::LaunchReview => "Подтвердить и запустить",
@@ -154,10 +175,7 @@ impl Dialog {
         Self {
             kind,
             id: Uuid::new_v4(),
-            fields: match kind {
-                DialogKind::CreateWorkspace => vec![EditBuffer::default(), "worktree".into()],
-                _ => vec![EditBuffer::default(); kind.fields().len()],
-            },
+            fields: vec![EditBuffer::default(); kind.fields().len()],
             active_field: 0,
         }
     }
@@ -170,10 +188,15 @@ pub(super) struct ProductUi {
     pub(super) sessions: Vec<SessionSummary>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
     pub(super) launch_phase: Option<String>,
+    pub(super) providers: Option<Vec<protocol::ProviderInfo>>,
+    pub(super) provider_error: Option<String>,
+    pub(super) launch_details: bool,
     pub(super) generation_page: Option<protocol::GenerationList>,
     pub(super) notice: Option<String>,
     pub(super) busy: bool,
     pub(super) dialog: Option<Dialog>,
+    pub(super) workspace_isolated: bool,
+    pub(super) workspace_project: Option<Uuid>,
     pub(super) history_sheet: Option<crate::history_view::HistorySheet>,
 }
 
@@ -294,8 +317,12 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
-        ("Добавить проект", ProductAction::AddProject),
+        ("Открыть папку проекта", ProductAction::AddProject),
+        ("Создать проект", ProductAction::CreateProject),
+        ("Выбрать путь вручную…", ProductAction::OpenProjectPath),
         ("Новый воркспейс", ProductAction::CreateWorkspace),
+        ("Добавить агента", ProductAction::OpenLauncher),
+        ("Управление панелями", ProductAction::OpenPaneMenu),
         ("Контекст воркспейса · E", ProductAction::EditContext),
         (
             "Контекст проекта · Shift+E",
@@ -327,6 +354,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
+        ("Настроить запуск терминала", ProductAction::ReviewShell),
         ("Запустить Claude", ProductAction::Launch("claude".into())),
         ("Запустить Codex", ProductAction::Launch("codex".into())),
         (
@@ -344,6 +372,20 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Повторить раскладку", ProductAction::Layout("redo".into())),
         ("Скрыть панель", ProductAction::Layout("hide".into())),
     ]
+}
+
+fn panel_action(action: &ProductAction) -> bool {
+    matches!(
+        action,
+        ProductAction::Layout(_)
+            | ProductAction::OpenHistory
+            | ProductAction::OpenGenerations
+            | ProductAction::OpenTransfer
+            | ProductAction::InspectSessionContext
+            | ProductAction::InspectConversation
+            | ProductAction::PrepareResume
+            | ProductAction::RevealFocusedPane
+    )
 }
 
 fn context_lines(value: &str) -> Div {
@@ -478,7 +520,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
 impl ProductUi {
     pub(super) fn palette_action(&self) -> Option<ProductAction> {
         let dialog = self.dialog.as_ref()?;
-        if dialog.kind != DialogKind::Palette {
+        if !matches!(dialog.kind, DialogKind::Palette | DialogKind::PaneMenu) {
             return None;
         }
         let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
@@ -487,6 +529,7 @@ impl ProductUi {
         }
         palette_commands()
             .into_iter()
+            .filter(|(_, action)| dialog.kind != DialogKind::PaneMenu || panel_action(action))
             .find(|(label, _)| label.to_lowercase().contains(&query.to_lowercase()))
             .map(|(_, action)| action)
     }
@@ -603,17 +646,37 @@ impl ProductUi {
         if let Some(catalog) = &self.catalog {
             let active_workspace = selected_workspace(catalog);
             for project in &catalog.projects {
-                project_tree = project_tree.child(self.action_control(
-                    format!("project-{}", project.id),
-                    project.name.clone(),
-                    ProductAction::SelectProject(project.id),
-                    ControlStyle {
-                        role: Role::TreeItem,
-                        selected: catalog.selection.project_id == Some(project.id),
-                        compact: false,
-                    },
-                    cx,
-                ));
+                let selected_project = catalog.selection.project_id == Some(project.id);
+                let project_row = div()
+                    .id(format!("project-group-{}", project.id))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(self.action_control(
+                        format!("project-{}", project.id),
+                        project.name.clone(),
+                        ProductAction::SelectProject(project.id),
+                        ControlStyle {
+                            role: Role::TreeItem,
+                            selected: selected_project,
+                            compact: false,
+                        },
+                        cx,
+                    ))
+                    .child(self.action_control_with_accessible_name(
+                        format!("project-add-workspace-{}", project.id),
+                        "+".into(),
+                        format!("Создать воркспейс в проекте {}", project.name),
+                        ProductAction::CreateWorkspaceFor(project.id),
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    ));
+                project_tree = project_tree.child(project_row);
 
                 let mut has_workspace = false;
                 for workspace in catalog
@@ -622,17 +685,18 @@ impl ProductUi {
                     .filter(|workspace| workspace.project_id == project.id)
                 {
                     has_workspace = true;
-                    project_tree = project_tree.child(self.action_control(
-                        format!("workspace-{}", workspace.id),
-                        workspace_name(workspace),
-                        ProductAction::SelectWorkspace(workspace.id),
-                        ControlStyle {
-                            role: Role::TreeItem,
-                            selected: active_workspace == Some(workspace.id),
-                            compact: false,
-                        },
-                        cx,
-                    ));
+                    project_tree =
+                        project_tree.child(div().pl(px(14.)).child(self.action_control(
+                            format!("workspace-{}", workspace.id),
+                            workspace_name(workspace),
+                            ProductAction::SelectWorkspace(workspace.id),
+                            ControlStyle {
+                                role: Role::TreeItem,
+                                selected: active_workspace == Some(workspace.id),
+                                compact: true,
+                            },
+                            cx,
+                        )));
                 }
                 if !has_workspace {
                     project_tree = project_tree.child(
@@ -653,7 +717,7 @@ impl ProductUi {
                         .px(px(8.))
                         .py(px(10.))
                         .text_color(colors.muted)
-                        .child("Добавьте Git-проект, чтобы начать работу."),
+                        .child("Откройте папку или создайте проект."),
                 );
             }
         } else {
@@ -667,18 +731,32 @@ impl ProductUi {
             );
         }
 
-        let mut controls = div().flex().flex_col().gap_1();
-        controls = controls.child(self.action_control(
-            "add-project".into(),
-            "+  Добавить проект".into(),
-            ProductAction::AddProject,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: false,
-            },
-            cx,
-        ));
+        let mut controls = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(self.action_control(
+                "sidebar-open-project".into(),
+                "Открыть папку…".into(),
+                ProductAction::AddProject,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            ))
+            .child(self.action_control(
+                "sidebar-create-project".into(),
+                "Создать проект…".into(),
+                ProductAction::CreateProject,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            ));
         if self
             .catalog
             .as_ref()
@@ -697,18 +775,6 @@ impl ProductUi {
                 cx,
             ));
         }
-        controls = controls.child(self.action_control(
-            "new-workspace".into(),
-            "+  Новый воркспейс".into(),
-            ProductAction::CreateWorkspace,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: false,
-            },
-            cx,
-        ));
-
         let mut sidebar = div()
             .id("product-sidebar")
             .accessibility_id("product-sidebar")
@@ -801,7 +867,7 @@ impl ProductUi {
 
         tabs.child(self.action_control(
             "new-tab".into(),
-            "+".into(),
+            "+ Вкладка".into(),
             ProductAction::CreateTab,
             ControlStyle {
                 role: Role::Button,
@@ -829,30 +895,32 @@ impl ProductUi {
             .border_color(colors.border)
             .px(px(10.));
 
-        for (provider, label, accessible) in [
-            ("shell", "Shell", "Открыть терминал"),
-            ("claude", "Claude", "Запустить Claude"),
-            ("codex", "Codex", "Запустить Codex"),
-            ("opencode", "OpenCode", "Запустить OpenCode"),
-        ] {
-            toolbar = toolbar.child(self.action_control_with_accessible_name(
-                format!("launch-{provider}"),
-                label.into(),
-                accessible.into(),
-                ProductAction::Launch(provider.into()),
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: true,
-                },
-                cx,
-            ));
-        }
-
+        toolbar = toolbar.child(self.action_control(
+            "open-agent-launcher".into(),
+            "Добавить агента".into(),
+            ProductAction::OpenLauncher,
+            ControlStyle {
+                role: Role::Button,
+                selected: true,
+                compact: true,
+            },
+            cx,
+        ));
         toolbar = toolbar.child(self.action_control_with_accessible_name(
+            "launch-shell".into(),
+            "Терминал".into(),
+            "Открыть терминал".into(),
+            ProductAction::Launch("shell".into()),
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        ));
+        toolbar = toolbar.child(self.action_control(
             "edit-context".into(),
             "Контекст".into(),
-            "Редактировать контекст воркспейса".into(),
             ProductAction::EditContext,
             ControlStyle {
                 role: Role::Button,
@@ -861,12 +929,10 @@ impl ProductUi {
             },
             cx,
         ));
-
-        toolbar = toolbar.child(self.action_control_with_accessible_name(
-            "transfer-tab".into(),
-            "Перенос".into(),
-            "Перенести выбранную вкладку".into(),
-            ProductAction::OpenTransfer,
+        toolbar = toolbar.child(self.action_control(
+            "pane-menu".into(),
+            "Панели".into(),
+            ProductAction::OpenPaneMenu,
             ControlStyle {
                 role: Role::Button,
                 selected: false,
@@ -874,55 +940,6 @@ impl ProductUi {
             },
             cx,
         ));
-
-        toolbar = toolbar.child(self.action_control_with_accessible_name(
-            "open-sessions".into(),
-            "Сессии".into(),
-            "Показать неразмещённые сессии".into(),
-            ProductAction::OpenSessions,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        ));
-
-        toolbar = toolbar.child(self.action_control_with_accessible_name(
-            "open-history".into(),
-            "История".into(),
-            "Просмотреть историю терминальной панели".into(),
-            ProductAction::OpenHistory,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        ));
-
-        toolbar = toolbar.child(div().w(px(1.)).h(px(20.)).mx(px(4.)).bg(colors.border));
-        for (key, label, accessible) in [
-            ("split_right", "Справа", "Разделить вправо"),
-            ("split_down", "Вниз", "Разделить вниз"),
-            ("focus", "Фокус", "Режим фокуса"),
-            ("equalize", "Ровно", "Выровнять панели"),
-            ("undo", "Назад", "Отменить раскладку"),
-            ("redo", "Вперёд", "Повторить раскладку"),
-        ] {
-            toolbar = toolbar.child(self.action_control_with_accessible_name(
-                format!("layout-{key}"),
-                label.into(),
-                accessible.into(),
-                ProductAction::Layout(key.into()),
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: true,
-                },
-                cx,
-            ));
-        }
 
         toolbar
             .child(div().flex_1())
@@ -951,43 +968,62 @@ impl ProductUi {
 
     pub(super) fn empty_state(&self, cx: &mut Context<CanvasApp>) -> Option<AnyElement> {
         let catalog = self.catalog.as_ref()?;
-        let (title, detail, action, label) = if catalog.projects.is_empty() {
-            (
-                "Начните с Git-проекта",
-                "Проект объединяет воркспейсы, вкладки и рабочие панели.",
-                ProductAction::AddProject,
-                "Добавить проект",
-            )
+        let colors = ProductColors::dark();
+        let welcome = catalog.projects.is_empty();
+        let state = if welcome {
+            Some((
+                "Рабочее место для CLI-агентов",
+                "Откройте папку проекта, чтобы создать воркспейс и начать работу с терминалом.",
+            ))
         } else if catalog.selection.workspace_id.is_none() {
-            if let Some(workspace) = catalog.workspaces.first() {
-                (
+            if let Some(project_id) = catalog.selection.project_id {
+                let project = catalog
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)?;
+                if let Some(workspace) = catalog
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.project_id == project.id)
+                {
+                    return Some(self.welcome_card(
+                        "Выберите воркспейс",
+                        "Откройте воркспейс этого проекта из списка слева.",
+                        ProductAction::SelectWorkspace(workspace.id),
+                        "Открыть воркспейс",
+                        None,
+                        cx,
+                    ));
+                } else {
+                    Some((
+                        "Создайте воркспейс",
+                        "Воркспейс хранит задачу, вкладки и терминальные панели.",
+                    ))
+                }
+            } else if let Some(workspace) = catalog.workspaces.first() {
+                return Some(self.welcome_card(
                     "Выберите воркспейс",
-                    "Выбор доступен в списке проектов слева.",
+                    "Откройте воркспейс из списка слева.",
                     ProductAction::SelectWorkspace(workspace.id),
-                    "Открыть первый воркспейс",
-                )
-            } else if catalog.selection.project_id.is_some() {
-                (
-                    "Создайте воркспейс",
-                    "Воркспейс хранит задачу, рабочую копию и вкладки.",
-                    ProductAction::CreateWorkspace,
-                    "Новый воркспейс",
-                )
+                    "Открыть воркспейс",
+                    None,
+                    cx,
+                ));
             } else {
-                (
-                    "Выберите воркспейс",
-                    "Добавьте проект и создайте в нём воркспейс.",
+                return Some(self.welcome_card(
+                    "Откройте папку проекта",
+                    "Проекты объединяют воркспейсы и рабочие вкладки.",
                     ProductAction::AddProject,
-                    "Добавить проект",
-                )
+                    "Открыть папку",
+                    Some((ProductAction::CreateProject, "Создать проект")),
+                    cx,
+                ));
             }
         } else if catalog.selection.tab_id.is_none() {
-            (
+            Some((
                 "Создайте вкладку",
-                "Вкладка хранит раскладку терминальных панелей.",
-                ProductAction::CreateTab,
-                "Новая вкладка",
-            )
+                "Вкладка содержит раскладку терминальных панелей.",
+            ))
         } else {
             let tab = catalog
                 .tabs
@@ -997,21 +1033,36 @@ impl ProductUi {
             if !layout.panes().is_empty() {
                 return None;
             }
-            (
-                "Добавьте терминальную панель",
-                "Команда откроется в выбранной вкладке.",
-                ProductAction::Launch("shell".into()),
-                "Открыть терминал",
-            )
+            Some((
+                "Добавьте агента или откройте терминал",
+                "Выберите CLI для этой вкладки.",
+            ))
         };
-
-        let colors = ProductColors::dark();
+        let (title, detail) = state?;
+        let primary = if welcome {
+            ProductAction::AddProject
+        } else if catalog.selection.workspace_id.is_none() {
+            ProductAction::CreateWorkspace
+        } else if catalog.selection.tab_id.is_none() {
+            ProductAction::CreateTab
+        } else {
+            ProductAction::OpenLauncher
+        };
+        let primary_label = if welcome {
+            "Открыть папку"
+        } else if catalog.selection.workspace_id.is_none() {
+            "Создать воркспейс"
+        } else if catalog.selection.tab_id.is_none() {
+            "Создать вкладку"
+        } else {
+            "Добавить агента"
+        };
         let card = div()
             .id("product-empty-state-card")
             .role(Role::Group)
             .aria_label(title)
             .w_full()
-            .max_w(px(460.))
+            .max_w(px(520.))
             .mx(px(24.))
             .flex()
             .flex_col()
@@ -1020,7 +1071,7 @@ impl ProductUi {
             .border_1()
             .border_color(colors.border)
             .bg(colors.raised)
-            .p(px(24.))
+            .p(px(30.))
             .child(
                 div()
                     .id("product-empty-state-title")
@@ -1041,8 +1092,8 @@ impl ProductUi {
             )
             .child(self.action_control(
                 "product-empty-state-action".into(),
-                label.into(),
-                action,
+                primary_label.into(),
+                primary,
                 ControlStyle {
                     role: Role::Button,
                     selected: true,
@@ -1050,6 +1101,29 @@ impl ProductUi {
                 },
                 cx,
             ));
+        let mut card = card;
+        if welcome {
+            card = card.child(self.action_control(
+                "product-create-project".into(),
+                "Создать проект".into(),
+                ProductAction::CreateProject,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        } else if catalog.selection.tab_id.is_some() {
+            for (provider, label) in [
+                ("shell", "Терминал"),
+                ("claude", "Claude"),
+                ("codex", "Codex"),
+                ("opencode", "OpenCode"),
+            ] {
+                card = card.child(self.provider_choice(provider, label, cx));
+            }
+        }
 
         Some(
             div()
@@ -1064,6 +1138,166 @@ impl ProductUi {
                 .child(card)
                 .into_any_element(),
         )
+    }
+
+    fn welcome_card(
+        &self,
+        title: &'static str,
+        detail: &'static str,
+        primary: ProductAction,
+        primary_label: &'static str,
+        secondary: Option<(ProductAction, &'static str)>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = ProductColors::dark();
+        let mut card = div()
+            .id("product-empty-state-card")
+            .role(Role::Group)
+            .aria_label(title)
+            .w_full()
+            .max_w(px(520.))
+            .mx(px(24.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap_2()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.raised)
+            .p(px(30.))
+            .child(
+                div()
+                    .id("workspace-welcome-title")
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .text_size(px(20.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .mb(px(12.))
+                    .text_size(px(13.))
+                    .text_color(colors.muted)
+                    .child(detail),
+            )
+            .child(self.action_control(
+                "product-empty-state-action".into(),
+                primary_label.into(),
+                primary,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: true,
+                    compact: true,
+                },
+                cx,
+            ));
+        if let Some((action, label)) = secondary {
+            card = card.child(self.action_control(
+                "product-create-project".into(),
+                label.into(),
+                action,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
+        div()
+            .id("product-empty-state")
+            .accessibility_id("product-empty-state")
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(colors.base)
+            .child(card)
+            .into_any_element()
+    }
+
+    fn provider_choice(
+        &self,
+        provider: &str,
+        label: &str,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = ProductColors::dark();
+        if provider == "shell" {
+            return self.action_control(
+                format!("launch-{provider}"),
+                label.into(),
+                ProductAction::Launch(provider.into()),
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            );
+        }
+        let Some(providers) = &self.providers else {
+            let message = self
+                .provider_error
+                .clone()
+                .unwrap_or_else(|| "Проверяем CLI…".into());
+            return div()
+                .id(format!("provider-{provider}-checking"))
+                .h(px(30.))
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child(format!("{label} · {message}"))
+                .into_any_element();
+        };
+        let info = providers.iter().find(|info| info.provider == provider);
+        let Some(info) = info else {
+            return div()
+                .id(format!("provider-{provider}-missing"))
+                .h(px(30.))
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child(format!("{label} · проверка недоступна"))
+                .into_any_element();
+        };
+        if info.available {
+            let version = info
+                .version
+                .as_deref()
+                .map(|version| format!(" · {version}"))
+                .unwrap_or_default();
+            self.action_control(
+                format!("launch-{provider}"),
+                format!("{label}{version}"),
+                ProductAction::Launch(provider.into()),
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            )
+        } else {
+            let reason = info.reason.as_deref().unwrap_or("CLI не установлен");
+            div()
+                .id(format!("provider-{provider}-unavailable"))
+                .role(Role::Status)
+                .h(px(36.))
+                .flex()
+                .flex_col()
+                .justify_center()
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child(format!("{label} · {reason}"))
+                .into_any_element()
+        }
     }
 
     fn tab_control(&self, tab: &Tab, selected: bool, cx: &mut Context<CanvasApp>) -> AnyElement {
@@ -1101,12 +1335,21 @@ impl ProductUi {
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
         let colors = ProductColors::dark();
-        let foreground = if style.selected {
+        let primary = matches!(
+            id.as_str(),
+            "product-dialog-submit" | "launch-review-confirm" | "resume-review-confirm"
+        ) || matches!(&action, ProductAction::OpenLauncher)
+            || matches!(&action, ProductAction::AddProject) && style.selected;
+        let foreground = if primary {
+            colors.base
+        } else if style.selected {
             colors.text
         } else {
             colors.muted
         };
-        let background = if style.selected {
+        let background = if primary {
+            colors.accent
+        } else if style.selected {
             colors.selected
         } else {
             colors.raised
@@ -1130,7 +1373,7 @@ impl ProductUi {
                 FontWeight::NORMAL
             })
             .text_color(foreground)
-            .hover(move |style| style.bg(colors.hover))
+            .hover(move |style| style.bg(if primary { colors.accent } else { colors.hover }))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.product_action(action.clone(), window, cx);
                 cx.stop_propagation();
@@ -1155,8 +1398,11 @@ impl ProductUi {
         if dialog.kind == DialogKind::SessionContext {
             return self.session_context_overlay(cx);
         }
-        if dialog.kind == DialogKind::Palette {
+        if matches!(dialog.kind, DialogKind::Palette | DialogKind::PaneMenu) {
             return self.palette_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::Launcher {
+            return self.launcher_overlay(cx);
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(cx);
@@ -1264,6 +1510,88 @@ impl ProductUi {
                     this.editor_wheel(index, event, window, cx);
                 }));
             fields = fields.child(field);
+        }
+
+        if dialog.kind == DialogKind::CreateProject {
+            fields = fields.child(self.action_control(
+                "choose-project-parent".into(),
+                "Выбрать папку…".into(),
+                ProductAction::ChooseProjectParent,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
+        if dialog.kind == DialogKind::CreateWorkspace {
+            let project_label = self
+                .workspace_project
+                .and_then(|project_id| {
+                    self.catalog
+                        .as_ref()?
+                        .projects
+                        .iter()
+                        .find(|project| project.id == project_id)
+                })
+                .map(|project| format!("Проект: {}", project.name))
+                .unwrap_or_else(|| "Проект выбран в списке слева.".into());
+            fields = fields
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(project_label),
+                )
+                .child(
+                    div()
+                        .mt(px(6.))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(colors.text)
+                        .child("Рабочая папка"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child("Выберите, где хранить файлы задачи."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(self.action_control(
+                            "workspace-shared".into(),
+                            "В папке проекта".into(),
+                            ProductAction::WorkspaceIsolation(false),
+                            ControlStyle {
+                                role: Role::Button,
+                                selected: !self.workspace_isolated,
+                                compact: true,
+                            },
+                            cx,
+                        ))
+                        .child(self.action_control(
+                            "workspace-isolated".into(),
+                            "Отдельная ветка / worktree".into(),
+                            ProductAction::WorkspaceIsolation(true),
+                            ControlStyle {
+                                role: Role::Button,
+                                selected: self.workspace_isolated,
+                                compact: true,
+                            },
+                            cx,
+                        )),
+                )
+                .child(div().text_size(px(11.)).text_color(colors.muted).child(
+                    if self.workspace_isolated {
+                        "Изолированная рабочая копия для этой задачи."
+                    } else {
+                        "Работа идёт в папке выбранного проекта."
+                    },
+                ));
         }
 
         if dialog.kind == DialogKind::Generations
@@ -1555,6 +1883,107 @@ impl ProductUi {
             .into_any_element()
     }
 
+    fn launcher_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let mut choices = div()
+            .id("agent-launcher-choices")
+            .mt(px(16.))
+            .flex()
+            .flex_col()
+            .gap_2();
+        for (provider, label) in [
+            ("claude", "Claude Code"),
+            ("codex", "Codex"),
+            ("opencode", "OpenCode"),
+            ("shell", "Терминал"),
+        ] {
+            choices = choices.child(
+                div()
+                    .id(format!("launcher-choice-{provider}"))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(self.provider_choice(provider, label, cx)),
+            );
+        }
+        let availability = if self.providers.is_none() {
+            self.provider_error
+                .as_deref()
+                .unwrap_or("Проверяем доступность CLI…")
+        } else {
+            "Недоступные CLI показаны с причиной установки."
+        };
+        div()
+            .id("product-dialog-overlay")
+            .accessibility_id("product-dialog-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(24.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx)
+            }))
+            .child(
+                div()
+                    .id("agent-launcher-dialog")
+                    .role(Role::Dialog)
+                    .aria_label("Добавить агента")
+                    .w_full()
+                    .max_w(px(480.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .px(px(20.))
+                    .py(px(18.))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("provider-launcher-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.text)
+                            .child("Добавить агента"),
+                    )
+                    .child(
+                        div()
+                            .mt(px(6.))
+                            .text_size(px(12.))
+                            .text_color(colors.muted)
+                            .child("Выберите CLI для новой терминальной панели."),
+                    )
+                    .child(
+                        div()
+                            .mt(px(3.))
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child(availability.to_owned()),
+                    )
+                    .child(choices)
+                    .child(div().mt(px(16.)).child(self.action_control(
+                        "launcher-close".into(),
+                        "Закрыть".into(),
+                        ProductAction::CloseDialog,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    ))),
+            )
+            .into_any_element()
+    }
+
     fn resume_review_overlay(&self, _dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = ProductColors::dark();
         let preview = self.launch_preview.as_ref();
@@ -1812,12 +2241,21 @@ impl ProductUi {
                     Some(format!("{} · {}", workspace_name(workspace), tab.name))
                 })
                 .unwrap_or_else(|| preview.tab_id.to_string());
-            metadata = metadata
+            metadata = metadata.child(format!(
+                "{} · CLI {}",
+                preview.provider, preview.cli_version
+            ));
+            let details = div()
+                .id("launch-review-details")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_size(px(11.))
+                .text_color(colors.muted)
                 .child(format!(
-                    "{} · CLI {} · адаптер v{}",
-                    preview.provider, preview.cli_version, preview.adapter_version
+                    "Адаптер v{} · цель: {target} · план {}",
+                    preview.adapter_version, preview.plan_id
                 ))
-                .child(format!("Цель: {target} · план {}", preview.plan_id))
                 .child(match preview.target {
                     Some(pane) => format!(
                         "Размещение: {} от панели {}",
@@ -1841,11 +2279,32 @@ impl ProductUi {
                     capability_label(preview.capabilities.native_resume),
                     capability_label(preview.capabilities.conversation_id)
                 ));
-            if let Some(cwd) = &preview.cwd {
-                metadata = metadata.child(format!("Рабочая папка: {}", cwd.display()));
-            }
-            if let Some(executable) = &preview.executable {
-                metadata = metadata.child(format!("Программа: {}", executable.display()));
+            preview_controls = preview_controls.child(
+                self.action_control(
+                    "launch-review-details-toggle".into(),
+                    if self.launch_details {
+                        "Скрыть подробности"
+                    } else {
+                        "Технические подробности"
+                    }
+                    .into(),
+                    ProductAction::ToggleLaunchDetails,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ),
+            );
+            if self.launch_details {
+                metadata = metadata.child(details);
+                if let Some(cwd) = &preview.cwd {
+                    metadata = metadata.child(format!("Рабочая папка: {}", cwd.display()));
+                }
+                if let Some(executable) = &preview.executable {
+                    metadata = metadata.child(format!("Программа: {}", executable.display()));
+                }
             }
             context_blocks = effective_context_blocks(
                 &preview.context,
@@ -3057,7 +3516,11 @@ impl ProductUi {
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors.text)
-                .child("Команды"),
+                .child(if dialog.kind == DialogKind::PaneMenu {
+                    "Панели"
+                } else {
+                    "Команды"
+                }),
         );
         let field_label = "Поиск команды";
         card = card.child(
@@ -3110,6 +3573,9 @@ impl ProductUi {
             .overflow_y_scroll();
         let mut count = 0;
         for (index, (label, action)) in commands.iter().enumerate() {
+            if dialog.kind == DialogKind::PaneMenu && !panel_action(action) {
+                continue;
+            }
             if !query.is_empty() && !label.to_lowercase().contains(&query.to_lowercase()) {
                 continue;
             }

@@ -50,6 +50,7 @@ MEMORY_PASS = 'pass-private-x11-startup-memory-review-fixture'
 GENERATIONS_PASS = 'pass-private-x11-generation-history-selection-fixture'
 RESUME_PASS = 'pass-private-x11-codex-resume-review-fixture'
 HISTORY_PASS = 'pass-private-x11-readonly-terminal-history-fixture'
+SETUP_PASS = 'pass-private-x11-project-setup-shell-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -355,7 +356,7 @@ def fixture_status(name):
     return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
-            'history': HISTORY_PASS}[name]
+            'history': HISTORY_PASS, 'setup': SETUP_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False):
@@ -638,7 +639,7 @@ def run_memory_fixture(config, report, env, save):
             'prepared context memory block differs from the selected source slice')
     require('x' * 128 not in preview['context']['text'] and 'LATER' not in preview['context']['text'],
             'unselected memory text leaked into prepared context')
-    time.sleep(0.25)
+    time.sleep(1)
     helper_call(config, 'capture', '/artifacts/memory-review-selected.ppm')
     require(0 < Path('/artifacts/memory-review-selected.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
             'selected memory review capture exceeds bound')
@@ -701,6 +702,8 @@ def run_history_fixture(config, report, control, env, save):
 def run_resume_fixture(config, report, env, save):
     report['stage'] = 'codex-resume-review'
     save()
+
+
     deactivate_private_fcitx(config, env)
     session = report['fixture']['codex_session']
     generation = report['fixture']['codex_generation']
@@ -760,6 +763,107 @@ def run_resume_fixture(config, report, env, save):
     save()
 
 
+
+
+def run_setup_fixture(config, report, control, env, save):
+    report['stage'] = 'project-workspace-shell-setup'
+    save()
+    deactivate_private_fcitx(config, env)
+    baseline_generations = fixture_generations()
+    require((report['fixture']['session'], report['fixture']['generation']) in baseline_generations,
+            'unplaced bootstrap PTY disappeared before setup')
+    helper_call(config, 'capture', '/artifacts/welcome.ppm')
+    helper_call(config, 'setup-open')
+    time.sleep(0.2)
+    helper_call(config, 'capture', '/artifacts/new-project.ppm')
+    helper_call(config, 'setup-create')
+
+    def project_ready():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        if len(catalog['projects']) != 1 or len(catalog['workspaces']) != 1 or len(catalog['tabs']) != 1:
+            return None
+        project, workspace, tab = catalog['projects'][0], catalog['workspaces'][0], catalog['tabs'][0]
+        selection = catalog['selection']
+        if (project['name'] != 'demo' or Path(project['canonical_path']).name != 'demo' or
+                project['canonical_path'] != workspace['cwd'] or
+                workspace['task'] != 'Основной' or workspace['mode'] != 'shared_checkout' or
+                workspace['status'] != 'ready' or tab['name'] != 'Development' or
+                selection.get('project_id') != project['id'] or
+                selection.get('workspace_id') != workspace['id'] or
+                selection.get('tab_id') != tab['id']):
+            return None
+        layout = json.loads(tab['layout_json'])
+        if layout not in (None, {'tree': None, 'focused': None},
+                          {'root': None, 'focused': None, 'focus_mode': False}):
+            return None
+        if not Path(project['canonical_path']).is_dir():
+            return None
+        return catalog
+
+    catalog = wait_until(project_ready, time.monotonic() + 12)
+    require(fixture_generations() == baseline_generations,
+            'project setup automatically created a terminal generation')
+    helper_call(config, 'capture', '/artifacts/workspace-ready.ppm')
+    project = catalog['projects'][0]
+    workspace = catalog['workspaces'][0]
+    tab = catalog['tabs'][0]
+    helper_call(config, 'setup-shell')
+
+    def shell_ready():
+        generations = fixture_generations()
+        added = [pair for pair in generations if pair not in baseline_generations]
+        if len(added) != 1 or len(generations) != len(baseline_generations) + 1:
+            return None
+        session, generation = added[0]
+        models = fixture_session_models(session)
+        view = models.get(generation)
+        if not view or view.get('state') != 'running':
+            return None
+        preview = host_request({'command': 'get_session_context', 'session': session,
+                                'generation': generation}).get('launch_preview')
+        if not preview or preview.get('provider') != 'shell' or preview.get('cwd') != project['canonical_path']:
+            return None
+        return session, generation
+
+    session, generation = wait_until(shell_ready, time.monotonic() + 10)
+    current = host_request({'command': 'catalog'})['catalog']
+    selected = current['selection']
+    require((selected.get('project_id'), selected.get('workspace_id'), selected.get('tab_id')) ==
+            (project['id'], workspace['id'], tab['id']),
+            'shell launch changed the selected project, workspace, or tab')
+    current_tab = next(item for item in current['tabs'] if item['id'] == tab['id'])
+    layout = json.loads(current_tab['layout_json'])
+    require(layout.get('root') == {'Pane': {'id': session}} and layout.get('focused') == session,
+            'shell was not placed as the only focused pane in Development')
+    require(fixture_generations() == sorted(baseline_generations + [(session, generation)]),
+            'setup created an unexpected terminal generation')
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'setup UI sent input to the unplaced bootstrap PTY')
+    helper_call(config, 'capture', '/artifacts/first-terminal.ppm')
+    baseline_plans = prepared_launches_read_only()
+    helper_call(config, 'setup-launcher')
+    time.sleep(1)
+    helper_call(config, 'capture', '/artifacts/agent-picker.ppm')
+    helper_call(config, 'setup-codex')
+    def codex_review():
+        plans = prepared_launches_read_only()
+        added = [plan for key, plan in plans.items() if key not in baseline_plans]
+        return added[0] if len(added) == 1 and added[0]['payload']['preview']['provider'] == 'codex' else None
+    plan = wait_until(codex_review, time.monotonic() + 8)
+    require(plan['phase'] == 'prepared', 'AI choice attempted launch before confirmation')
+    require(fixture_generations() == sorted(baseline_generations + [(session, generation)]),
+            'AI choice created a process before review confirmation')
+    time.sleep(1)
+    helper_call(config, 'capture', '/artifacts/agent-review.ppm')
+    report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
+        'tab': tab['name'], 'shell_session': session, 'shell_generation': generation,
+        'no_automatic_cli': True, 'one_shell_generation': True,
+        'bootstrap_pty_received_no_input': True, 'fake_codex_review_without_launch': True,
+        'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
+                     'agent-picker.ppm', 'agent-review.ppm']}
+    report.update({'status': SETUP_PASS, 'stage': 'complete'})
+    save()
 def run_context_fixture(config, report, env, save):
     report['stage'] = 'workspace-context-editor'
     save()
@@ -1457,7 +1561,7 @@ def inside_run() -> int:
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(control_path)); os.chmod(control_path, 0o600); listener.listen(1); listener.settimeout(8)
         host_path = '/usr/bin'
-        if config.get('fixture') == 'resume':
+        if config.get('fixture') in ('resume', 'setup'):
             private_bin = Path('/artifacts/bin'); private_bin.mkdir(mode=0o700)
             fake_codex = private_bin / 'codex'
             fake_codex.write_text("#!/usr/bin/python3\nimport sys\n"
@@ -1542,6 +1646,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'history':
             run_history_fixture(config, report, control, app_env, save)
+            return 0
+        if config.get('fixture') == 'setup':
+            run_setup_fixture(config, report, control, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1679,6 +1786,8 @@ def outer_run(args) -> dict:
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
                  ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
                  ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
+                 ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
+                  'agent-picker.ppm', 'agent-review.ppm'] if args.fixture == 'setup' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
             'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history fixture only',
@@ -1697,10 +1806,11 @@ def plan(args) -> dict:
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
                   'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
-                  'memory': 'fixed Ctrl+Shift+Space, V, Tab, Tab, 2, Ctrl+R; no confirm/launch',
+                  'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
+                  'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
@@ -1717,7 +1827,7 @@ def plan(args) -> dict:
                        if args.fixture == 'resume' else
                        'history view opens, selects/copies without mutation, and searches READY; no PTY input is allowed'
                        if args.fixture == 'history' else
-                       'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
+                       'fresh project becomes shared workspace Основной with Development tab and no automatic CLI; explicit shell action creates one shell'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
                    'actual X11/Fcitx/app/input remain unrun until separately reviewed --run',
@@ -1731,6 +1841,8 @@ def plan(args) -> dict:
                     if args.fixture == 'resume' else
                     'history open/search/readonly captures are retained for human review'
                     if args.fixture == 'history' else
+                    'welcome, project dialog, workspace and first-terminal captures are retained for human review'
+                    if args.fixture == 'setup' else
                     'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
@@ -1740,8 +1852,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history'], default='pinyin',
-                        help='fixed Pinyin, EN/RU, latency, context editor, startup-memory review, generations, Codex resume, or text history fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, context, memory, generation, resume, history, or project setup fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

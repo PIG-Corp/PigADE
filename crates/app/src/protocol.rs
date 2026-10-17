@@ -199,6 +199,17 @@ struct Response {
     generation_selection: Option<bool>,
     #[serde(default)]
     history_view: Option<HistoryViewReply>,
+    #[serde(default)]
+    providers: Option<Vec<ProviderInfo>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProviderInfo {
+    pub provider: String,
+    pub executable: Option<std::path::PathBuf>,
+    pub version: Option<String>,
+    pub available: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -348,6 +359,9 @@ pub struct ResumeSource {
 }
 
 pub struct ProductReply {
+    pub ui_request: Option<uuid::Uuid>,
+    pub providers: Option<Vec<ProviderInfo>>,
+    pub providers_request: bool,
     pub generation_selection: Option<bool>,
     pub generation_selected: bool,
     pub generations: Option<GenerationList>,
@@ -364,11 +378,38 @@ pub struct ProductReply {
 }
 
 pub struct ProductError {
+    pub ui_request: Option<uuid::Uuid>,
+    pub providers_request: bool,
     pub message: String,
     pub rejected_before_launch: bool,
 }
 
-pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
+pub fn product_request(socket: &Path, mut command: Value) -> Result<ProductReply, ProductError> {
+    let ui_request = command
+        .as_object_mut()
+        .and_then(|object| object.remove("_ui_request"))
+        .and_then(|value| {
+            value
+                .as_str()
+                .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        });
+    let providers_request =
+        command.get("command").and_then(Value::as_str) == Some("detect_providers");
+    match product_request_inner(socket, command) {
+        Ok(mut reply) => {
+            reply.ui_request = ui_request;
+            reply.providers_request = providers_request;
+            Ok(reply)
+        }
+        Err(mut error) => {
+            error.ui_request = ui_request;
+            error.providers_request = providers_request;
+            Err(error)
+        }
+    }
+}
+
+fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
     let command_name = command.get("command").and_then(Value::as_str);
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
@@ -385,11 +426,15 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         .flatten();
     let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
         .map_err(|message| ProductError {
+            ui_request: None,
+            providers_request: false,
             message,
             rejected_before_launch: false,
         })?;
     if let Some(message) = response.error {
         return Err(ProductError {
+            ui_request: None,
+            providers_request: false,
             message,
             rejected_before_launch: launch_confirmed
                 && response.rejected_before_admission.as_deref() == Some("launch_preflight"),
@@ -405,12 +450,48 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
                 .any(|entry| entry.generation.is_nil() || !unique.insert(entry.generation))
         {
             return Err(ProductError {
+                ui_request: None,
+                providers_request: false,
                 message: "Недопустимый список поколений панели".into(),
                 rejected_before_launch: false,
             });
         }
     }
+    if let Some(providers) = &response.providers {
+        let mut unique = std::collections::HashSet::new();
+        if providers.len() > 4
+            || providers.iter().any(|info| {
+                !matches!(
+                    info.provider.as_str(),
+                    "shell" | "claude" | "codex" | "opencode"
+                ) || !unique.insert(info.provider.as_str())
+                    || info.available
+                        && info
+                            .executable
+                            .as_ref()
+                            .is_none_or(|path| !path.is_absolute())
+                    || info
+                        .version
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 65536)
+                    || info
+                        .reason
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 65536)
+            })
+        {
+            return Err(ProductError {
+                ui_request: None,
+                providers_request: false,
+                message: "Некорректный список CLI от session host".into(),
+                rejected_before_launch: false,
+            });
+        }
+    }
     Ok(ProductReply {
+        ui_request: None,
+        providers: response.providers,
+        providers_request: false,
         generation_selection: response.generation_selection,
         generation_selected,
         generations: response.generations,
@@ -795,6 +876,7 @@ mod tests {
             generations: None,
             generation_selection: None,
             history_view: None,
+            providers: None,
             views: Vec::new(),
             error: Some(error.into()),
             rejected_before_admission: rejection.map(str::to_owned),

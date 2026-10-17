@@ -101,6 +101,53 @@ pub(crate) fn add_project(store: &mut MetadataStore, path: PathBuf) -> Result<Ca
     )
 }
 
+/// Create a new, empty Git project directory below a user-selected parent.
+/// The directory is retained if `git init` or catalog registration fails so
+/// the user can inspect and recover the partial setup.
+pub(crate) fn create_project(
+    store: &mut MetadataStore,
+    parent: PathBuf,
+    name: String,
+) -> Result<Catalog> {
+    validate_project_name(&name)?;
+    let parent = fs::canonicalize(&parent)
+        .with_context(|| format!("cannot resolve project parent {}", parent.display()))?;
+    ensure!(parent.is_dir(), "project parent is not a directory");
+    let path = parent.join(&name);
+    fs::create_dir(&path)
+        .with_context(|| format!("cannot create new project directory {}", path.display()))?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&path)
+        .args(["init", "--initial-branch=main"])
+        .output()
+        .context("failed to start git init")?;
+    if !output.status.success() {
+        bail!(
+            "git init failed ({}): {}",
+            output.status,
+            bounded_error(String::from_utf8_lossy(&output.stderr).trim())
+        );
+    }
+    add_project(store, path)
+}
+
+fn validate_project_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty() && name.len() <= 96,
+        "project name must contain 1 to 96 UTF-8 bytes"
+    );
+    ensure!(
+        name != "."
+            && name != ".."
+            && !name.contains('/')
+            && !name.contains('\\')
+            && !name.chars().any(char::is_control),
+        "project name must be one safe directory name"
+    );
+    Ok(())
+}
+
 /// Create a shared-checkout workspace or a dedicated Git worktree.
 /// The Preparing row is committed before `git worktree add`; failures remain
 /// visible as Failed and never fall back to the shared project directory.
@@ -565,6 +612,53 @@ mod tests {
         assert!(add_project(&mut store, not_git).is_err());
         let catalog = store.catalog()?;
         assert!(catalog.projects.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn creates_a_new_named_git_project_without_committing() -> Result<()> {
+        let root = TempDir::new()?;
+        let parent = root.path().join("projects");
+        fs::create_dir(&parent)?;
+        let mut store = store(&root)?;
+
+        let catalog = create_project(&mut store, parent.clone(), "BridgeMind".into())?;
+        let project = catalog.projects.first().context("project not registered")?;
+        let path = parent.join("BridgeMind");
+        assert_eq!(project.canonical_path, fs::canonicalize(&path)?);
+        assert_eq!(project.name, "BridgeMind");
+        assert_eq!(git_root(&path)?, project.canonical_path);
+        assert_eq!(git_common_dir(&path)?, project.git_common_dir);
+        assert_eq!(catalog.selection.project_id, Some(project.id));
+        assert!(catalog.selection.workspace_id.is_none());
+        assert!(catalog.selection.tab_id.is_none());
+        assert!(
+            git_output(&path, &["status", "--porcelain"])?
+                .stdout
+                .is_empty()
+        );
+        assert_eq!(
+            git_output(&path, &["symbolic-ref", "--short", "HEAD"])?.stdout,
+            b"main\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_existing_targets_and_unsafe_names_without_overwriting() -> Result<()> {
+        let root = TempDir::new()?;
+        let parent = root.path().join("projects");
+        fs::create_dir(&parent)?;
+        let existing = parent.join("keep");
+        fs::write(&existing, b"keep exactly")?;
+        let mut store = store(&root)?;
+
+        assert!(create_project(&mut store, parent.clone(), "keep".into()).is_err());
+        assert_eq!(fs::read(existing)?, b"keep exactly");
+        for invalid in ["", ".", "..", "a/b", "a\\b", "bad\nname"] {
+            assert!(create_project(&mut store, parent.clone(), invalid.into()).is_err());
+        }
+        assert!(create_project(&mut store, parent, "é".repeat(49)).is_err());
         Ok(())
     }
 }
