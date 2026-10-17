@@ -985,3 +985,43 @@ Implement local UTF16 composition document and clipped native overlay with input
 - Files: crates/app/src/input.rs, crates/app/src/main.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/ime-composition-20261017, docs/research/ime-composition-plan.md, docs/research/linux-ime-reset.md, docs/reports/ime-composition.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Freshapp33tests/fmt/strictalltargetClippy/debugbuild pass. Python50tests pass (providerharness concurrent). Finalprivate100/200percent render/reopen passes appa3559318; rootvisuallyinspectedbothscreenshots, scale1fourdistinctchildACKs/warning/localJapaneseemoji preedit; textabsentfromhostframes/journals andsamePIDs/generations. IndependentLunareviewfoundmissingnativeinvalidation/modeclear, repaired. PinnedLinuxAPIreviewprovesnotificationnoop; noformalresetclaim. Speculativelatchremoved aftersource-evidencedIMEusabilitydefect, freshIMEwithoutKeyDown regressionpasses.
 - Risks / next: Commit localIME foundation; true IBus/Fcitx/Wayland/X11 ordering/candidate/clipboard gates remainopen. Fullcorpus completed and30hostreopens pass; bigVMreboot tool69343 running. ReleaseGPUI build tool38685 running. Provider script independentuncommitted; next native mouse protocol/UI integration.
+
+## 2026-10-17T00:52:51+00:00 — terminal_memory_budget
+
+Add pure mouse event encoder for acknowledged terminal modes
+
+- Files: crates/app/src/mouse.rs
+- Verification: rustfmt --edition 2021 crates/app/src/mouse.rs; rustc --edition=2021 --test crates/app/src/mouse.rs -o /tmp/pigade-mouse-tests && /tmp/pigade-mouse-tests (8 passed); git diff --check -- crates/app/src/mouse.rs
+- Risks / next: Root to register module and connect post-IME mouse events; standalone encoder does not prove GPUI integration.
+
+## 2026-10-17T00:57:18+00:00 — terminal_memory_budget
+
+Extend mouse encoder with cancellation releases, pressed-state query, event-signature deduplication, and bounded wheel accumulator
+
+- Files: crates/app/src/mouse.rs
+- Verification: rustfmt --edition 2021 crates/app/src/mouse.rs; rustc --edition=2021 --test crates/app/src/mouse.rs -o /tmp/pigade-mouse-tests && /tmp/pigade-mouse-tests (11 passed); git diff --check -- crates/app/src/mouse.rs
+- Risks / next: Root may integrate transactionally by cloning encoder and wheel accumulator, then retaining candidate state only after UI queue admission; reset wheel remainder at session boundaries.
+
+## 2026-10-17T00:57:47+00:00 — font_render_profile
+
+Record curated offline provider PTY outcomes and bounded Claude connectivity finding
+
+- Files: docs/research/provider-pty-plan.md, docs/reports/provider-pty-20261017.md, benchmarks/results/provider-pty-20261017/codex.json, benchmarks/results/provider-pty-20261017/claude.json, benchmarks/results/provider-pty-20261017/opencode.json, benchmarks/results/provider-pty-20261017/SHA256SUMS
+- Verification: Parsed final root result envelopes and retained Claude failure/replay metadata; generated redacted JSON allowlist artifacts; checked each artifact hash against SHA256SUMS; checked no frame text/title/stderr/argv/path fields; git diff --check
+- Risks / next: No provider rerun and no isolation change. Stage-0 provider evidence is limited to these binaries, environment, startup/resizes/one-second running state and DSR probe; no auth/task/context/resume/semantic rendering claims.
+
+## 2026-10-17T01:00:26+00:00 — terminal_memory_budget
+
+Add real PTY coverage for mode-acknowledged mouse reports and resized coordinates
+
+- Files: crates/session-host/tests/mouse_input.rs
+- Verification: cargo test -p pigade-session-host --test mouse_input (12 passed, including six wire ACKs from raw PTY child); git diff --check -- crates/session-host/tests/mouse_input.rs
+- Risks / next: Root owns UI wiring; this test proves generated SGR press/drag/release/wheel bytes traverse generation-scoped host input after mode acknowledgement and are observed by the PTY child.
+
+## 2026-10-17T01:00:53+00:00 — /root
+
+Integrate redacted offline provider PTY evidence and precise CLI matrix
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md, docs/reports/provider-pty-20261017.md, docs/compatibility/CLI.md, benchmarks/results/provider-pty-20261017, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Fresh scripts unittest discover: 53 passed. Root executed frozen-host Codex/OpenCode offline startup+2resizes+1s checks; Claude running check failed after resizes, retained and classified. Curated hashes reviewed; no task/context/resume certification.
+- Risks / next: Finish mouse/selection PTY integration; native provider conversations and exact resume remain open.

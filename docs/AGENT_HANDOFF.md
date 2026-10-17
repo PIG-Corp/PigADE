@@ -356,3 +356,15 @@ Linux's hook is a no-op. A speculative cancel-until-KeyDown latch was removed
 because it blocks legitimate IME-only gestures. Real IBus/Fcitx/XIM and native
 reset/ordering remain open; see reports/ime-composition.md and research note.
 Do not infer IME/platform certification from local fixture screenshots.
+
+## Latest isolated provider runs
+
+See [provider PTY report](reports/provider-pty-20261017.md) and the updated
+[CLI matrix](compatibility/CLI.md). Exact installed Codex/OpenCode executables
+passed offline startup, two acknowledged geometry changes and a one-second
+running observation using a frozen host and disposable homes. Claude's exact
+ELF produced output and both resize observations but exited; private replay
+classified its final screen as an Anthropic API connectivity failure. No
+authentication was copied, provider prompt supplied or isolation relaxed. These
+checks do not certify task/context receipt, exact resume, semantic redraw or
+full TUI/platform behavior. Harness unit tests and source hashes are retained.

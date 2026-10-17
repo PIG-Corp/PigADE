@@ -38,6 +38,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | scripts/prepare-platform-sdk.py | Signed local-only Weston/Lavapipe extraction; no system installation |
 | scripts/long-history.py, crates/session-host/examples/history_corpus.rs | Frozen-binary, durable-filesystem production-model long-history generator/runner; versioned SHA-bound sidecars map ordered events to logical timestamps; these are not elapsed soak |
 | scripts/recover-corpus.py | Owned host SIGKILL/reopen measurement with exact IPC peer, source hashes, frames and checkpoint-tail counters; no UI-present claim |
+| scripts/provider-pty.py, scripts/test_provider_pty.py | Frozen-host offline provider startup/resize checks inside disposable isolated homes; redacted outcomes in reports/provider-pty-20261017.md and benchmarks/results/provider-pty-20261017 |
 | scripts/soak-pty.py | Real-time synthetic PTY soak with durable sample evidence and optional full recovery oracle; short smoke is not the 24-hour gate |
 | scripts/prepare-vm-sdk.py, scripts/vm-reboot.py, scripts/test_vm_reboot.py | Signed local QEMU SDK and isolated two-boot recovery; optional completed-corpus staging, source inventories and exact checkpoint-tail reference; provider resume and power-loss proof are out of scope |
 | docs/adr/research/reports/compatibility | Decisions, evidence, reviews, exact CLI support gaps and next recovery work; see `reports/cold-history-integration.md` and `reports/vm-reboot.md` for current recovery scope and measurements |

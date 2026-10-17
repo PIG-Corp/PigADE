@@ -1,0 +1,92 @@
+{
+  "captured_at": "2026-10-17T00:51:57Z",
+  "environment": {
+    "binary_paths_recorded": false,
+    "desktop_environment_forwarded": false,
+    "network_namespace": "unshared by bubblewrap --unshare-all",
+    "provider_input_bytes_sent": 0
+  },
+  "failure": {
+    "classification_basis": "fixed phrase detector over disposable terminal replay; raw text not included",
+    "error_type": "DiagnosticError",
+    "failure_code": "diagnostic_error",
+    "host_state": null,
+    "screen_classification": "claude_api_endpoint_connectivity_error",
+    "stage": "provider_final_snapshot",
+    "transport_error_type": null
+  },
+  "frozen_host_sha256": "42bc8f71cd2cd8bbf0d98823bf4e48c1049213b90250ecfbf7a0e1e159ed785d",
+  "harness_source_sha256": "5e576e8f7488c671973de3564c327d45fd9aecbf94c1dea8faf3f7099ad4cd50",
+  "host_dsr_query_probe": {
+    "reply_observed": true,
+    "sequence": 2
+  },
+  "host_source_sha256": "42bc8f71cd2cd8bbf0d98823bf4e48c1049213b90250ecfbf7a0e1e159ed785d",
+  "limits": [
+    "No prompt/task, credentials, resume, provider home reuse, network, desktop IPC, GUI, or input.",
+    "Connectivity classification does not prove whether every retry/backoff path was exhausted.",
+    "No semantic claim about rendered content or context/task receipt."
+  ],
+  "provider": "claude",
+  "provider_launcher_sha256": "356673de39ab5e9e4d19314c33b2d0b01fa06519a44c3374aa947bfbd71a4049",
+  "provider_selection": {
+    "launcher_kind": "script_or_other",
+    "launcher_sha256": "356673de39ab5e9e4d19314c33b2d0b01fa06519a44c3374aa947bfbd71a4049",
+    "mode": "explicit_elf_override",
+    "selected_kind": "elf",
+    "selected_sha256": "f7dd62ae415378018cd21dd950eb3bac174ab085830304d3b8b098146bfd47b6",
+    "single_file_mount": true
+  },
+  "provider_sha256": "f7dd62ae415378018cd21dd950eb3bac174ab085830304d3b8b098146bfd47b6",
+  "provider_tui": {
+    "final_snapshot_sequence": 8,
+    "final_snapshot_state": "history",
+    "final_snapshot_storage_error_present": false,
+    "resizes": [
+      {
+        "cell_count": 3000,
+        "events": 4,
+        "geometry": {
+          "cols": 100,
+          "rows": 30
+        },
+        "mode_bits": 166032,
+        "output_bytes": 650,
+        "sequence": 4,
+        "stage": "resize_30x100",
+        "state": "running",
+        "storage_error_present": false
+      },
+      {
+        "cell_count": 1920,
+        "events": 7,
+        "geometry": {
+          "cols": 80,
+          "rows": 24
+        },
+        "mode_bits": 163969,
+        "output_bytes": 2533,
+        "sequence": 7,
+        "stage": "resize_24x80",
+        "state": "running",
+        "storage_error_present": false
+      }
+    ],
+    "startup_frame": {
+      "cell_count": 1920,
+      "events": 2,
+      "geometry": {
+        "cols": 80,
+        "rows": 24
+      },
+      "mode_bits": 166032,
+      "output_bytes": 145,
+      "sequence": 2,
+      "stage": "provider_startup",
+      "state": "running",
+      "storage_error_present": false
+    }
+  },
+  "schema_version": 1,
+  "status": "startup_and_resize_pass_final_snapshot_failed"
+}

@@ -29,6 +29,7 @@
 - IPC input arrays are checked before Serde's internally tagged buffering. A response that cannot be encoded returns an explicit unknown-outcome error before any frame header is written; dispatched commands are never retried.
 - Frame hyperlink interning retains shallow handles instead of a second owned copy of every ID/URI, preserving content deduplication and wire indices.
 - Native local IME composition now has UTF-16 range/selection handling, a clipped cursor overlay and lifecycle cancellation. Same-app private 100%/200% captures verify the overlay stays out of host history; actual Linux IME/reset ordering remains unverified.
+- Isolated offline PTY runs exercise exact Codex/OpenCode binaries through startup, two resizes and a one-second running observation. Claude reaches both resizes but exits with an API-connectivity failure category; task/context/resume certification remains open.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

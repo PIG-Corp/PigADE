@@ -1,0 +1,94 @@
+{
+  "captured_at": "2026-10-17T00:51:57.954771+00:00",
+  "environment": {
+    "binary_paths_recorded": false,
+    "desktop_environment_forwarded": false,
+    "network_namespace": "unshared by bubblewrap --unshare-all",
+    "provider_input_bytes_sent": 0
+  },
+  "frozen_host_sha256": "42bc8f71cd2cd8bbf0d98823bf4e48c1049213b90250ecfbf7a0e1e159ed785d",
+  "harness_source_sha256": "5e576e8f7488c671973de3564c327d45fd9aecbf94c1dea8faf3f7099ad4cd50",
+  "host_dsr_query_probe": {
+    "launch_resolution": "launch_response",
+    "reply_observed": true,
+    "sequence": 2
+  },
+  "host_source_sha256": "42bc8f71cd2cd8bbf0d98823bf4e48c1049213b90250ecfbf7a0e1e159ed785d",
+  "limits": [
+    "not provider task/authentication/resume testing",
+    "provider output text/title are never copied into result; failed private runtime is retained, successful runtime is deleted",
+    "provider TUI query replies are not separately attributed; the companion DSR probe verifies host reply path",
+    "resize is sent through host IPC and observed in the terminal frame; no desktop UI is opened"
+  ],
+  "provider": "opencode",
+  "provider_launcher_sha256": "74f4edb9f28c8c0466fbd99aae459a46aaf338d4968b84d8c10d3e1b9136bc9f",
+  "provider_selection": {
+    "launcher_kind": "elf",
+    "launcher_sha256": "74f4edb9f28c8c0466fbd99aae459a46aaf338d4968b84d8c10d3e1b9136bc9f",
+    "mode": "path_default",
+    "selected_kind": "elf",
+    "selected_sha256": "74f4edb9f28c8c0466fbd99aae459a46aaf338d4968b84d8c10d3e1b9136bc9f",
+    "single_file_mount": false
+  },
+  "provider_sha256": "74f4edb9f28c8c0466fbd99aae459a46aaf338d4968b84d8c10d3e1b9136bc9f",
+  "provider_tui": {
+    "final_frame": {
+      "cell_count": 1920,
+      "events": 7,
+      "geometry": {
+        "cols": 80,
+        "rows": 24
+      },
+      "mode_bits": 170224,
+      "output_bytes": 5895,
+      "sequence": 7,
+      "state": "running",
+      "storage_error_present": false
+    },
+    "launch_resolution": "launch_response",
+    "remained_running_during_observation": true,
+    "resizes": [
+      {
+        "cell_count": 3000,
+        "events": 5,
+        "geometry": {
+          "cols": 100,
+          "rows": 30
+        },
+        "mode_bits": 168176,
+        "output_bytes": 357,
+        "sequence": 5,
+        "state": "running",
+        "storage_error_present": false
+      },
+      {
+        "cell_count": 1920,
+        "events": 7,
+        "geometry": {
+          "cols": 80,
+          "rows": 24
+        },
+        "mode_bits": 170224,
+        "output_bytes": 5895,
+        "sequence": 7,
+        "state": "running",
+        "storage_error_present": false
+      }
+    ],
+    "startup_frame": {
+      "cell_count": 1920,
+      "events": 1,
+      "geometry": {
+        "cols": 80,
+        "rows": 24
+      },
+      "mode_bits": 168080,
+      "output_bytes": 239,
+      "sequence": 1,
+      "state": "running",
+      "storage_error_present": false
+    }
+  },
+  "schema_version": 1,
+  "status": "pty_startup_resize_and_host_dsr_pass"
+}
