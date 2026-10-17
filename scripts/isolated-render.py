@@ -29,14 +29,27 @@ PALETTE_FIXTURE_EXPECTED = [
     [256, [0xAB, 0xCD, 0xEF]],
     [257, [0x09, 0x18, 0x27]],
 ]
+CURSOR_FIXTURE_EXPECTED = [
+    {'shape': 'block', 'blinking': False},
+    {'shape': 'underline', 'blinking': False},
+    {'shape': 'beam', 'blinking': False},
+    {'shape': 'hidden', 'blinking': False},
+]
+CURSOR_FIXTURE_SESSIONS = [
+    f'00000000-0000-4000-8000-{index:012x}' for index in range(1, 5)
+]
 
 
-def app_command(ime_preedit, selection_fixture=False):
+def app_command(ime_preedit, selection_fixture=False, selected_pane=0, reduced_motion=False):
     command = ['/pigade/app', '/artifacts/state/host.sock']
     if ime_preedit:
         command.append('--diagnostic-preedit')
     if selection_fixture:
         command.append('--diagnostic-selection')
+    if selected_pane:
+        command.append(f'--diagnostic-selected={selected_pane}')
+    if reduced_motion:
+        command.append('--reduced-motion')
     return command
 
 
@@ -48,8 +61,18 @@ def palette_fixture_command():
             r"\033]11;rgb:09/18/27\007'; ")
 
 
-def shell_fixture(index, recovery_warning=False, palette_fixture=False):
+def cursor_fixture_command(index):
+    """Set one steady cursor shape (or hide it) using the owned shell PTY."""
+    sequences = (r"\033[2 q", r"\033[4 q", r"\033[6 q", r"\033[?25l")
+    require(isinstance(index, int) and 0 <= index < len(sequences),
+            'cursor fixture index must be between 0 and 3')
+    return f"printf '{sequences[index]}'; "
+
+
+def shell_fixture(index, recovery_warning=False, palette_fixture=False, cursor_fixture=False):
     prefix = palette_fixture_command() if palette_fixture else ''
+    if cursor_fixture:
+        prefix += cursor_fixture_command(index)
     palette_sample = (r"\033[31mNAMED-INDEX-1\033[0m/\033[38;5;1mINDEXED-1\033[0m\r\n"
                       if palette_fixture else '')
     return (prefix +
@@ -521,8 +544,11 @@ def inside():
                 index,
                 config.get('recovery_warning', False),
                 config.get('palette_fixture', False),
+                config.get('cursor_fixture', False),
             )
-            spec = {'session': str(uuid.uuid4()), 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
+            session = (CURSOR_FIXTURE_SESSIONS[index] if config.get('cursor_fixture')
+                       else str(uuid.uuid4()))
+            spec = {'session': session, 'generation': str(uuid.uuid4()), 'operation': str(uuid.uuid4()),
                     'executable': '/usr/bin/bash', 'args': ['--noprofile', '--norc', '-c', shell_script],
                     'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
             request({'command': 'launch', 'spec': spec})
@@ -548,7 +574,8 @@ def inside():
                 'omitted': initial_reply['recovery'].get('omitted'),
             }
         initial_ids = sorted((v['session'], v['generation'], v['pid']) for v in initial)
-        first = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False)))
+        first = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False),
+                                  config.get('selected_pane', 0), config.get('reduced_motion', False)))
         # Wait for host acknowledgement of app-computed viewport dimensions.
         wait_for(lambda: all(v['frame']['geometry'] != {'rows': 24, 'cols': 80} for v in request({'command': 'list'})))
         require(first.poll() is None, 'application exited before capture')
@@ -584,6 +611,43 @@ def inside():
                 'afterUiResize': True,
                 'stableAcrossPolls': True,
                 'scope': 'owned shell PTYs emitted OSC set/reset/set; typed host palette metadata only',
+            }
+        if config.get('cursor_fixture'):
+            cursor_index_by_session = {spec['session']: index for index, spec in enumerate(specs)}
+
+            def has_expected_cursors(views):
+                return len(views) == 4 and all(
+                    view['frame'].get('cursor_presentation') ==
+                    CURSOR_FIXTURE_EXPECTED[cursor_index_by_session[view['session']]]
+                    for view in views if view['session'] in cursor_index_by_session
+                ) and all(view['session'] in cursor_index_by_session for view in views)
+
+            def cursor_ready():
+                views = request({'command': 'list'})
+                if has_expected_cursors(views):
+                    return views
+                return None
+
+            cursor_first = wait_for(cursor_ready, timeout=10)
+            cursor_second = request({'command': 'list'})
+            require(has_expected_cursors(cursor_second) and all(
+                view['frame'].get('geometry') != {'rows': 24, 'cols': 80}
+                for view in cursor_second
+            ), 'cursor fixture changed or lacked typed presentation after stable UI resize')
+            require([view['frame']['cursor_presentation'] for view in cursor_first]
+                    == [view['frame']['cursor_presentation'] for view in cursor_second],
+                    'cursor presentation changed between stable host polls')
+            report['cursorFixture'] = {
+                'expectedPresentations': CURSOR_FIXTURE_EXPECTED,
+                'uiOrderedSessions': [view['session'] for view in cursor_second],
+                'observedPresentations': [view['frame']['cursor_presentation'] for view in cursor_second],
+                'selectedPane': config.get('selected_pane', 0),
+                'selectedSession': cursor_second[config.get('selected_pane', 0)]['session'],
+                'selectedPresentation': cursor_second[config.get('selected_pane', 0)]['frame']['cursor_presentation'],
+                'fourSessionsMatched': True,
+                'afterUiResize': True,
+                'stableAcrossPolls': True,
+                'scope': 'owned shell PTYs emitted steady DECSCUSR shapes and DECTCEM hide; typed host metadata only',
             }
         if config.get('accessibility_probe'):
             # Setting ScreenReaderEnabled true makes the private launcher also
@@ -661,7 +725,8 @@ def inside():
                             'scope': 'one fixed integer-scale private software output; no fractional or multi-monitor claim'}
         first.kill()
         first.wait(timeout=5)
-        reopened = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False)))
+        reopened = start(app_command(config.get('ime_preedit', False), config.get('selection_fixture', False),
+                                     config.get('selected_pane', 0), config.get('reduced_motion', False)))
         time.sleep(1)
         require(reopened.poll() is None, 'reopened app exited')
         final = request({'command': 'list'})
@@ -711,6 +776,9 @@ def outside(args):
         'ime_preedit': args.ime_preedit,
         'selection_fixture': args.selection_fixture,
         'palette_fixture': args.palette_fixture,
+        'cursor_fixture': args.cursor_fixture,
+        'selected_pane': args.selected_pane,
+        'reduced_motion': args.reduced_motion,
         'output_scale': args.scale,
         'font_preflight': embedded_fonts}, indent=2) + '\n')
     (output / 'passwd').write_text(f'pigade:x:{os.getuid()}:{os.getgid()}:Isolated test:/home/test:/usr/bin/bash\n')
@@ -754,6 +822,12 @@ if __name__ == '__main__':
                         help='stage local cell selection in the same app, without input injection')
     parser.add_argument('--palette-fixture', action='store_true',
                         help='set/reset/set synthetic OSC palette values in owned shell PTYs and verify host metadata')
+    parser.add_argument('--cursor-fixture', action='store_true',
+                        help='emit steady block/underline/beam and hidden cursor shapes in owned shell PTYs')
+    parser.add_argument('--selected-pane', type=int, choices=range(4), default=0,
+                        help='start the actual app focused on pane 0..3 (private diagnostic state only)')
+    parser.add_argument('--reduced-motion', action='store_true',
+                        help='opt into the app reduced-motion preference for stable cursor fixture capture')
     parser.add_argument('--ime-preedit', action='store_true',
                         help='show a local same-app composition fixture without desktop input or PTY commit')
     sys.exit(outside(parser.parse_args()))

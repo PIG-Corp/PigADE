@@ -1153,3 +1153,75 @@ Render host-owned dynamic palette with bounded typed replica validation
 - Files: crates/terminal/src/lib.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/palette.rs, crates/app/src/selection.rs, crates/app/README.md, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/palette-20261017, docs/reports/dynamic-palette.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Root26 terminal/176workspace/70app/79Python tests passed; workspace+app fmt/strictClippy and releasebuilds passed. All4realownedPTYs set/reset/set OSC palette, typedoverrides stableafterresize, privateUIrender/reopen passed. Root visuallyinspected PNG and verified exactRGBpixel counts BG779693 FG1666 named/indexed340; binary/source hashes retained. Profile/checkpoint semantics unchanged, legacywirecompatible.
 - Risks / next: Default-theme terminal query replies, cursor/decorations and fullnativeplatform gates remain open. Samefrozen1h resize reproducer continues; not24h/MVP completion.
+
+## 2026-10-17T01:22:16+00:00 — terminal_memory_budget
+
+Added typed cursor presentation metadata to terminal Frame for DECSCUSR shape/blink and terminal visibility
+
+- Files: crates/terminal/src/lib.rs
+- Verification: cargo test -p pigade-terminal (27 passed); cargo clippy -p pigade-terminal --all-targets -- -D warnings passed; rustfmt --edition 2024 --config skip_children=true --check crates/terminal/src/lib.rs passed; git diff --check passed
+- Risks / next: App protocol and painter integration remain root-owned; platform blink behavior still needs platform verification.
+
+## 2026-10-17T01:23:45+00:00 — font_render_profile
+
+Documented an isolated X11/XIM Fcitx Pinyin acceptance path and go/no-go gates from pinned GPUI, Fcitx, XTEST, Xvfb, and Arch package sources.
+
+- Files: docs/research/isolated-x11-ime-plan.md, WORKLOG.md
+- Verification: Research-only; reviewed official sources and local package/source inventory; git diff --check passed. No packages downloaded, displays launched, or system/user configuration changed.
+- Risks / next: Root can review the proposed private Xvfb/XIM topology and decide whether to authorize a separately bounded preparation and same-app runtime test; locale C in GPUI XIM open remains a key runtime uncertainty.
+
+## 2026-10-17T01:24:42+00:00 — recovery_slice_review
+
+Added pure typed/legacy cursor geometry planner with wide-cell normalization, focus and blink policy
+
+- Files: crates/app/src/cursor.rs
+- Verification: rustfmt --edition 2024 crates/app/src/cursor.rs; standalone rustc --test harness: 6 passed. App cargo test was stopped because cursor module is not yet registered and cargo began refreshing pinned GPUI dependencies.
+- Risks / next: Root registers module and verifies it through the app test suite.
+
+## 2026-10-17T01:24:54+00:00 — terminal_memory_budget
+
+Captured a bounded read-only /proc pressure probe of the frozen 1-hour resize reproducer using the manifest process identity
+
+- Files: /home/afterburner/.local/state/pigade/soak/resize-repro-20261017/pressure-probe.json
+- Verification: Manifest boot/PID/start identity matched before sampling and was revalidated after all 7 samples over 30.008 seconds; binary SHA matched frozen 67ed712c0e0f228aa3ee3e15ed2b86a35b364b75af803c66587bfd1bac8ffb58; probe stored numeric process/thread/IO/PSI metadata only
+- Risks / next: Evidence shows intermittent queue-full stalls but ongoing progress and no unique wait channel; investigate event-level actor scheduling/fsync spans using existing bounded diagnostics, do not infer global I/O cause from cumulative timers.
+
+## 2026-10-17T01:25:11+00:00 — recovery_slice_review
+
+Clamped wide cursor span to acknowledged frame geometry as well as viewport
+
+- Files: crates/app/src/cursor.rs
+- Verification: rustfmt --edition 2024 crates/app/src/cursor.rs; standalone rustc --test harness: 6 passed, including frame-edge wide marker with wider viewport.
+- Risks / next: Root owns app integration and full app verification.
+
+## 2026-10-17T01:28:56+00:00 — recovery_slice_review
+
+Added opt-in isolated cursor-shape fixture and selectable diagnostic pane
+
+- Files: scripts/isolated-render.py, scripts/test_isolated_render.py
+- Verification: python3 -m unittest scripts/test_isolated_render.py -v: 13 passed; python3 -m py_compile scripts/isolated-render.py scripts/test_isolated_render.py; git diff --check -- scripts/isolated-render.py scripts/test_isolated_render.py. No app/window launched.
+- Risks / next: Root can run isolated captures after app build; fixture verifies typed host cursor state after viewport resize.
+
+## 2026-10-17T01:30:02+00:00 — recovery_slice_review
+
+Aligned cursor-fixture pane order with host session sorting and recorded selected cursor mapping
+
+- Files: scripts/isolated-render.py, scripts/test_isolated_render.py
+- Verification: python3 -m unittest scripts/test_isolated_render.py -v: 13 passed; python3 -m py_compile scripts/isolated-render.py scripts/test_isolated_render.py; scoped git diff --check passed. No UI launched.
+- Risks / next: Root can capture selected panes 0..3; cursor fixture UI order now matches ascending session IDs.
+
+## 2026-10-17T01:30:46+00:00 — font_render_profile
+
+Added a signed, hash-pinned local X11/Fcitx-Pinyin SDK preparer and fail-closed archive tests; corrected the IME plan to the app’s current GPUI pin and recorded preparation evidence.
+
+- Files: scripts/prepare-x11-ime-sdk.py, scripts/test_prepare_x11_ime_sdk.py, docs/research/isolated-x11-ime-plan.md, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_prepare_x11_ime_sdk.py -v (9 passed); python3 scripts/prepare-x11-ime-sdk.py --plan (passed); python3 scripts/prepare-x11-ime-sdk.py (13 pinned packages, signer/hash/.PKGINFO checks passed, ready-for-isolated-review, 15 ldd -r checks with zero unresolved); python3 -m py_compile scripts/prepare-x11-ime-sdk.py scripts/test_prepare_x11_ime_sdk.py; git diff --check.
+- Risks / next: SDK and manifest are under /tmp/pigade-x11-ime-sdk-20261017 for root review. No Xvfb/Fcitx/app execution or XTEST input occurred; next authorized step should separately review namespace/mount design and run the real fixture only inside proven isolation.
+
+## 2026-10-17T01:36:29+00:00 — /root
+
+Integrate typed terminal cursor presentation, native shape/blink/reduced-motion paint and source-bound private captures; record failed one-hour ACK reproducer
+
+- Files: crates/terminal/src/lib.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/cursor.rs, crates/app/src/selection.rs, scripts/isolated-render.py, scripts/test_isolated_render.py, crates/app/evidence/cursor-20261017, crates/app/README.md, docs/reports/terminal-cursor.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: 177 workspace tests;79 app tests;92 Python tests; fmt and strict all-target Clippy; workspace release bins/examples and app debug/release builds passed. Four isolated steady cursor render/reopen runs passed and all PNGs visually inspected; pixel counts block207/underline18/beam23/hollow60/hidden0. One-hour frozen-host reproducer failed1013.162s input ACK timeout, not a24h pass.
+- Risks / next: Diagnose ACK timeout; finish reviewed private X11 IME harness. Actual compositor blink timing, wide/nonblank cursor pixel fixtures, GPU/platform/native clipboard and complete MVP remain open.

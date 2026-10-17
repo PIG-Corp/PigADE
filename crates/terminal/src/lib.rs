@@ -16,8 +16,8 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::{Config, Osc52};
-use alacritty_terminal::vte::ansi::{Processor, Rgb, Timeout};
+use alacritty_terminal::term::{Config, Osc52, TermMode};
+use alacritty_terminal::vte::ansi::{CursorShape, Processor, Rgb, Timeout};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +126,10 @@ pub struct Frame {
     pub hyperlinks: Vec<(String, String)>,
     pub cursor: (i32, usize),
     pub cursor_style: String,
+    /// Typed active cursor presentation. `Hidden` reflects terminal cursor
+    /// visibility modes while preserving the style's blinking setting.
+    #[serde(default)]
+    pub cursor_presentation: Option<CursorPresentation>,
     pub modes: u32,
     pub colors: String,
     /// Explicitly configured palette entries, sorted by terminal color index.
@@ -139,6 +143,23 @@ pub struct Frame {
     pub sync_pending_bytes: usize,
     pub title: String,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorPresentationShape {
+    Block,
+    Underline,
+    Beam,
+    HollowBlock,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CursorPresentation {
+    pub shape: CursorPresentationShape,
+    pub blinking: bool,
+}
+
 impl Frame {
     pub fn text(&self) -> String {
         self.cells
@@ -385,6 +406,9 @@ impl Terminal {
     }
     pub fn frame(&self) -> Frame {
         let grid = self.term.grid();
+        let cursor_style = self.term.cursor_style();
+        let cursor_visible = self.term.mode().contains(TermMode::SHOW_CURSOR)
+            || self.term.mode().contains(TermMode::VI);
         let mut hyperlinks = Vec::new();
         let mut link_index = std::collections::HashMap::new();
         let mut link_contents = std::collections::HashMap::new();
@@ -425,6 +449,20 @@ impl Terminal {
             hyperlinks,
             cursor: (grid.cursor.point.line.0, grid.cursor.point.column.0),
             cursor_style: format!("{:?}", self.term.cursor_style()),
+            cursor_presentation: Some(CursorPresentation {
+                shape: if cursor_visible {
+                    match cursor_style.shape {
+                        CursorShape::Block => CursorPresentationShape::Block,
+                        CursorShape::Underline => CursorPresentationShape::Underline,
+                        CursorShape::Beam => CursorPresentationShape::Beam,
+                        CursorShape::HollowBlock => CursorPresentationShape::HollowBlock,
+                        CursorShape::Hidden => CursorPresentationShape::Hidden,
+                    }
+                } else {
+                    CursorPresentationShape::Hidden
+                },
+                blinking: cursor_style.blinking,
+            }),
             modes: self.term.mode().bits(),
             colors: format!(
                 "{:?}",
@@ -634,11 +672,68 @@ mod tests {
         let frame = term().frame();
         let mut value = serde_json::to_value(&frame).unwrap();
         value.as_object_mut().unwrap().remove("palette_overrides");
+        value.as_object_mut().unwrap().remove("cursor_presentation");
         let decoded: Frame = serde_json::from_value(value).unwrap();
         assert!(decoded.palette_overrides.is_empty());
+        assert_eq!(decoded.cursor_presentation, None);
         assert_eq!(decoded.geometry, frame.geometry);
         assert_eq!(decoded.cells, frame.cells);
         assert_eq!(decoded.colors, frame.colors);
+    }
+
+    #[test]
+    fn cursor_presentation_tracks_decsusr_visibility_and_checkpoint_continuation() {
+        let shapes = [
+            (1, CursorPresentationShape::Block, true),
+            (2, CursorPresentationShape::Block, false),
+            (3, CursorPresentationShape::Underline, true),
+            (4, CursorPresentationShape::Underline, false),
+            (5, CursorPresentationShape::Beam, true),
+            (6, CursorPresentationShape::Beam, false),
+        ];
+        let mut live = term();
+        for (code, shape, blinking) in shapes {
+            live.output(format!("\x1b[{code} q").as_bytes());
+            assert_eq!(
+                live.frame().cursor_presentation,
+                Some(CursorPresentation { shape, blinking }),
+                "DECSCUSR {code}"
+            );
+        }
+
+        live.output(b"\x1b[5 q\x1b[?25l");
+        assert_eq!(
+            live.frame().cursor_presentation,
+            Some(CursorPresentation {
+                shape: CursorPresentationShape::Hidden,
+                blinking: true
+            })
+        );
+        live.output(b"\x1b[?25h");
+        assert_eq!(
+            live.frame().cursor_presentation,
+            Some(CursorPresentation {
+                shape: CursorPresentationShape::Beam,
+                blinking: true
+            })
+        );
+
+        let mut partial = term();
+        partial.output(b"\x1b[3 ");
+        let saved = partial.checkpoint().unwrap();
+        let mut restored = Terminal::from_checkpoint(&saved, false).unwrap();
+        partial.output(b"q");
+        restored.output(b"q");
+        let expected = Some(CursorPresentation {
+            shape: CursorPresentationShape::Underline,
+            blinking: true,
+        });
+        assert_eq!(partial.frame().cursor_presentation, expected);
+        assert_eq!(partial.frame(), restored.frame());
+        assert_eq!(
+            partial.checkpoint().unwrap(),
+            restored.checkpoint().unwrap()
+        );
     }
 
     #[test]

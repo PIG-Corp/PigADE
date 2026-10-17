@@ -1,0 +1,169 @@
+{
+  "scope": "Exact accent/inactive cursor RGB pixels inside fixed terminal content rectangles; excludes panel borders/chrome. Steady cursors only, software scale1. Root visually inspected block/underline/beam/hidden screenshots separately.",
+  "captures": [
+    {
+      "selected_shape": "block",
+      "selected_pane": 0,
+      "panes": [
+        {
+          "pane": 0,
+          "cursor_color_pixels": 207,
+          "bbox_xyxy": [
+            8,
+            264,
+            17,
+            287
+          ]
+        },
+        {
+          "pane": 1,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            651,
+            264,
+            660,
+            287
+          ]
+        },
+        {
+          "pane": 2,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            624,
+            17,
+            647
+          ]
+        },
+        {
+          "pane": 3,
+          "cursor_color_pixels": 0,
+          "bbox_xyxy": null
+        }
+      ]
+    },
+    {
+      "selected_shape": "underline",
+      "selected_pane": 1,
+      "panes": [
+        {
+          "pane": 0,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            264,
+            17,
+            287
+          ]
+        },
+        {
+          "pane": 1,
+          "cursor_color_pixels": 18,
+          "bbox_xyxy": [
+            651,
+            285,
+            660,
+            287
+          ]
+        },
+        {
+          "pane": 2,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            624,
+            17,
+            647
+          ]
+        },
+        {
+          "pane": 3,
+          "cursor_color_pixels": 0,
+          "bbox_xyxy": null
+        }
+      ]
+    },
+    {
+      "selected_shape": "beam",
+      "selected_pane": 2,
+      "panes": [
+        {
+          "pane": 0,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            264,
+            17,
+            287
+          ]
+        },
+        {
+          "pane": 1,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            651,
+            264,
+            660,
+            287
+          ]
+        },
+        {
+          "pane": 2,
+          "cursor_color_pixels": 23,
+          "bbox_xyxy": [
+            8,
+            624,
+            9,
+            647
+          ]
+        },
+        {
+          "pane": 3,
+          "cursor_color_pixels": 0,
+          "bbox_xyxy": null
+        }
+      ]
+    },
+    {
+      "selected_shape": "hidden",
+      "selected_pane": 3,
+      "panes": [
+        {
+          "pane": 0,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            264,
+            17,
+            287
+          ]
+        },
+        {
+          "pane": 1,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            651,
+            264,
+            660,
+            287
+          ]
+        },
+        {
+          "pane": 2,
+          "cursor_color_pixels": 60,
+          "bbox_xyxy": [
+            8,
+            624,
+            17,
+            647
+          ]
+        },
+        {
+          "pane": 3,
+          "cursor_color_pixels": 0,
+          "bbox_xyxy": null
+        }
+      ]
+    }
+  ]
+}

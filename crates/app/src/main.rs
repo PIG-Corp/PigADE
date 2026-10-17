@@ -1,4 +1,5 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod cursor;
 mod font;
 mod input;
 mod mouse;
@@ -17,7 +18,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const HEADER: f32 = 32.;
@@ -81,6 +82,23 @@ fn composition_target_changed(state: &State, selected: usize, update: &StateUpda
                 || new.state != "running"
                 || new.storage_error.is_some()
                 || input::protocol_error(new.frame.modes).is_some()
+        }
+        (None, None) => false,
+        _ => true,
+    }
+}
+
+fn cursor_target_changed(state: &State, selected: usize, update: &StateUpdate) -> bool {
+    let Some(views) = &update.views else {
+        return false;
+    };
+    match (state.views.get(selected), views.get(selected)) {
+        (Some(old), Some(new)) => {
+            old.session != new.session
+                || old.generation != new.generation
+                || old.frame.cursor != new.frame.cursor
+                || old.frame.cursor_presentation != new.frame.cursor_presentation
+                || old.state != new.state
         }
         (None, None) => false,
         _ => true,
@@ -291,6 +309,8 @@ struct CanvasApp {
     selection_dragging: bool,
     clipboard_pending: bool,
     input_epoch: u64,
+    cursor_epoch: Instant,
+    cursor_phase_visible: bool,
     input_error: Option<String>,
     input_notice: Option<String>,
     resized: Vec<(String, u16, u16)>,
@@ -318,6 +338,8 @@ impl CanvasApp {
                 cx.notify();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
+                this.reset_cursor_blink(cx);
+                cx.notify();
                 if !window.is_window_active() {
                     this.selection_dragging = false;
                     this.input_epoch = this.input_epoch.wrapping_add(1);
@@ -340,6 +362,9 @@ impl CanvasApp {
                             state_update(&this.state, &shared)
                         };
                         if let Some(next) = next {
+                            if cursor_target_changed(&this.state, this.selected, &next) {
+                                this.reset_cursor_blink(cx);
+                            }
                             if composition_target_changed(&this.state, this.selected, &next) {
                                 this.input_epoch = this.input_epoch.wrapping_add(1);
                                 this.text_input.cancel();
@@ -391,6 +416,26 @@ impl CanvasApp {
                             }
                             cx.notify();
                         }
+                        let blinking = this.state.error.is_none()
+                            && this.state.views.get(this.selected).is_some_and(|view| {
+                                view.state == "running"
+                                    && cursor::plan(
+                                        &view.frame,
+                                        view.frame.geometry.rows,
+                                        view.frame.geometry.cols,
+                                        this.focus.is_focused(window) && window.is_window_active(),
+                                    )
+                                    .is_some_and(|plan| plan.blinking)
+                            });
+                        let visible = cursor::blink_visible(
+                            this.cursor_epoch.elapsed(),
+                            blinking,
+                            cx.reduce_motion(),
+                        );
+                        if visible != this.cursor_phase_visible {
+                            this.cursor_phase_visible = visible;
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -413,12 +458,21 @@ impl CanvasApp {
             selection_dragging: false,
             clipboard_pending: false,
             input_epoch: 0,
+            cursor_epoch: Instant::now(),
+            cursor_phase_visible: true,
             input_error: None,
             input_notice: None,
             resized: Vec::new(),
             _input_subscriptions: input_subscriptions,
             diagnostic_preedit_pending,
             diagnostic_selection,
+        }
+    }
+    fn reset_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_epoch = Instant::now();
+        if !self.cursor_phase_visible {
+            self.cursor_phase_visible = true;
+            cx.notify();
         }
     }
     fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
@@ -626,6 +680,7 @@ impl CanvasApp {
             .iter()
             .position(|pane| pane.bounds.contains(&event.position))
         {
+            self.reset_cursor_blink(cx);
             self.input_epoch = self.input_epoch.wrapping_add(1);
             if self.selected != index
                 && !self
@@ -770,6 +825,7 @@ impl CanvasApp {
         }
     }
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_cursor_blink(cx);
         self.text_input.cancel();
         window.notify_text_input_changed(&self.focus);
         let modes = self
@@ -834,6 +890,7 @@ impl CanvasApp {
         self.input_error.as_deref().or(self.state.error.as_deref())
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_cursor_blink(cx);
         self.input_notice = None;
         if self.clipboard_pending {
             self.input_epoch = self.input_epoch.wrapping_add(1);
@@ -1127,6 +1184,7 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reset_cursor_blink(cx);
         let modes = self
             .state
             .views
@@ -1155,6 +1213,7 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reset_cursor_blink(cx);
         self.text_input.mark(range, text, selection);
         window.notify_text_input_changed(&self.focus);
         cx.notify();
@@ -1202,6 +1261,7 @@ impl Render for CanvasApp {
         let preedit = self.text_input.preedit.clone();
         let preedit_selection = self.text_input.selection_bytes();
         let selected = self.selected;
+        let cursor_visible = self.cursor_phase_visible;
         let selection = self.selection.clone();
         let attached = self.state.error.is_none();
         let terminal_label = self.state.views.get(selected).map_or_else(
@@ -1292,7 +1352,18 @@ impl Render for CanvasApp {
                                         paint_panel(
                                             pane,
                                             views.get(index),
-                                            (index == selected, attached),
+                                            PanelState {
+                                                selected: index == selected,
+                                                attached,
+                                                focused: index == selected
+                                                    && attached
+                                                    && views.get(index).is_some_and(|view| {
+                                                        view.state == "running"
+                                                    })
+                                                    && focus.is_focused(window)
+                                                    && window.is_window_active(),
+                                                cursor_visible,
+                                            },
                                             selection.as_ref(),
                                             &font,
                                             window,
@@ -1543,10 +1614,23 @@ fn paint_preedit(
     });
 }
 
+#[derive(Clone, Copy)]
+struct PanelState {
+    selected: bool,
+    attached: bool,
+    focused: bool,
+    cursor_visible: bool,
+}
+
 fn paint_panel(
     pane: PaneGeometry,
     view: Option<&View>,
-    (selected, attached): (bool, bool),
+    PanelState {
+        selected,
+        attached,
+        focused,
+        cursor_visible,
+    }: PanelState,
     selection: Option<&selection::CellSelection>,
     font: &Font,
     window: &mut Window,
@@ -1592,6 +1676,17 @@ fn paint_panel(
         return;
     };
     let frame = &view.frame;
+    let cursor = cursor::plan(frame, pane.rows, pane.cols, focused)
+        .filter(|plan| !plan.blinking || cursor_visible);
+    let cursor_color = frame
+        .palette_overrides
+        .binary_search_by_key(&258, |(index, _)| *index)
+        .ok()
+        .map(|index| {
+            let rgb = frame.palette_overrides[index].1;
+            u32::from(rgb[0]) << 16 | u32::from(rgb[1]) << 8 | u32::from(rgb[2])
+        })
+        .unwrap_or(if focused { 0x7dafff } else { 0x606875 });
     let viewport = Bounds::new(
         bounds.origin + point(px(1.), px(HEADER)),
         size(
@@ -1624,6 +1719,7 @@ fn paint_panel(
                 bg = 0x354c70;
                 fg = 0xf2f4f7;
             }
+            (fg, bg) = cursor::cell_colors(cursor, (y, x), (fg, bg), cursor_color);
             match operation {
                 CellPaint::Background(..) => {
                     window.paint_quad(fill(Bounds::new(origin, cell), rgb(bg)))
@@ -1658,19 +1754,41 @@ fn paint_panel(
                 }
             }
         }
-        if frame.modes & input::SHOW_CURSOR != 0 && frame.cursor.0 >= 0 {
+        if let Some(cursor) = cursor {
             let origin = pane.origin
                 + point(
-                    cell.width * frame.cursor.1 as f32,
-                    cell.height * frame.cursor.0 as f32,
+                    cell.width * f32::from(cursor.column),
+                    cell.height * f32::from(cursor.row),
                 );
-            window.paint_quad(fill(
-                Bounds::new(
-                    origin + point(px(0.), cell.height - px(2.)),
-                    size(cell.width, px(2.)),
-                ),
-                rgb(if selected { 0x7dafff } else { 0x606875 }),
-            ));
+            let width = cell.width * f32::from(cursor.span);
+            let thin = px(1. / valid_scale(window.scale_factor()));
+            let thick = (thin * 2.).min(cell.height);
+            let rect = |offset, size| Some(Bounds::new(origin + offset, size));
+            use protocol::CursorPresentationShape::*;
+            let strokes = match cursor.shape {
+                Underline => [
+                    rect(point(px(0.), cell.height - thick), size(width, thick)),
+                    None,
+                    None,
+                    None,
+                ],
+                Beam => [
+                    rect(point(px(0.), px(0.)), size(thin.min(width), cell.height)),
+                    None,
+                    None,
+                    None,
+                ],
+                HollowBlock => [
+                    rect(point(px(0.), px(0.)), size(width, thin)),
+                    rect(point(px(0.), cell.height - thin), size(width, thin)),
+                    rect(point(px(0.), px(0.)), size(thin, cell.height)),
+                    rect(point(width - thin, px(0.)), size(thin, cell.height)),
+                ],
+                Block | Hidden => [None; 4],
+            };
+            for bounds in strokes.into_iter().flatten() {
+                window.paint_quad(fill(bounds, rgb(cursor_color)));
+            }
         }
     });
 }
@@ -1689,11 +1807,23 @@ fn main() {
     let diagnostic_preedit = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-preedit");
+    let diagnostic_selected = std::env::args()
+        .skip(2)
+        .find_map(|arg| {
+            arg.strip_prefix("--diagnostic-selected=")
+                .and_then(|index| index.parse::<usize>().ok())
+        })
+        .filter(|index| *index < 4)
+        .unwrap_or(0);
+    let reduced_motion = std::env::args()
+        .skip(2)
+        .any(|arg| arg == "--reduced-motion");
     let diagnostic_selection = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-selection");
     let (tx, shared) = ipc(socket.into());
     application().run(move |cx: &mut App| {
+        cx.set_reduce_motion(reduced_motion);
         crate::font::install(cx).expect("bundled terminal font profile must load");
         cx.on_window_closed(|cx, _window_id| {
             if cx.windows().is_empty() {
@@ -1718,6 +1848,10 @@ fn main() {
                         diagnostic_preedit,
                         diagnostic_selection,
                     )
+                });
+                view.update(cx, |this, cx| {
+                    this.selected = diagnostic_selected;
+                    cx.notify();
                 });
                 let focus = view.read(cx).focus.clone();
                 focus.focus(window, cx);
@@ -1901,6 +2035,25 @@ mod tests {
         );
         assert!(!route.encoder.has_pressed());
         assert_eq!(route.position, last);
+    }
+
+    #[test]
+    fn cursor_blink_reset_tracks_its_target_not_unrelated_output() {
+        let state = State {
+            views: vec![view(None), view(None)],
+            ..State::default()
+        };
+        let mut shared = state.clone();
+        shared.revision += 1;
+        shared.views_revision += 1;
+        shared.views[1].sequence += 1;
+        let mut update = state_update(&state, &shared).unwrap();
+        assert!(!super::cursor_target_changed(&state, 0, &update));
+        update.views.as_mut().unwrap()[0].frame.cursor = (0, 1);
+        assert!(super::cursor_target_changed(&state, 0, &update));
+        update.views.as_mut().unwrap()[0].frame.cursor = (0, 0);
+        update.views.as_mut().unwrap()[0].generation = "new".into();
+        assert!(super::cursor_target_changed(&state, 0, &update));
     }
 
     #[test]

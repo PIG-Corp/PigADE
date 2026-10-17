@@ -73,6 +73,21 @@ fn deserialize_palette_overrides<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_seq(PaletteVisitor)
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorPresentationShape {
+    Block,
+    Underline,
+    Beam,
+    HollowBlock,
+    Hidden,
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub struct CursorPresentation {
+    pub shape: CursorPresentationShape,
+    pub blinking: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Frame {
     pub geometry: Geometry,
@@ -80,6 +95,8 @@ pub struct Frame {
     pub hyperlinks: Vec<(String, String)>,
     pub cursor: (i32, usize),
     pub cursor_style: String,
+    #[serde(default)]
+    pub cursor_presentation: Option<CursorPresentation>,
     pub modes: u32,
     pub colors: String,
     #[serde(default, deserialize_with = "deserialize_palette_overrides")]

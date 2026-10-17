@@ -1,0 +1,202 @@
+{
+  "scope": "actual debug app; private Weston/Pixman + Lavapipe; no input injection",
+  "status": "render_and_reopen_pass",
+  "not_certified": [
+    "real GPU/performance",
+    "input/IME",
+    "clipboard",
+    "accessibility",
+    "X11",
+    "scale/multi-monitor",
+    "VM reboot",
+    "24h soak"
+  ],
+  "preflight": {
+    "namespaces": {
+      "mnt": "mnt:[4026532954]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]",
+      "ipc": "ipc:[4026533017]",
+      "net": "net:[4026533022]"
+    },
+    "uid": 1000,
+    "devices": [
+      "ptmx",
+      "pts",
+      "shm",
+      "core",
+      "fd",
+      "stderr",
+      "stdout",
+      "stdin",
+      "tty",
+      "urandom",
+      "random",
+      "full",
+      "zero",
+      "null"
+    ],
+    "runtime_mode": "0700",
+    "host_display_and_devices_absent": true
+  },
+  "compositor": {
+    "pid": 5,
+    "uid": 1000,
+    "socket": "/run/pigade-test/pigade-private",
+    "fd_targets": [
+      "/dev/null",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston-0.log",
+      "/artifacts/weston.log",
+      "anon_inode:[eventpoll]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[eventfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[signalfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "anon_inode:[timerfd]",
+      "/memfd:weston-shared (deleted)",
+      "/run/pigade-test/pigade-private.lock",
+      "socket:[3378917]",
+      "socket:[3378917]"
+    ]
+  },
+  "recoveryWarning": {
+    "journal": "bad.journal",
+    "message": "journal corruption at byte 0: UnsupportedVersion",
+    "sourceSha256Before": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceSha256After": "b3d1620a1403a55a1b9c27a3ce8eb47b5e465873d2752e2c8e49fbc9804c142e",
+    "sourceBytesUnchanged": true,
+    "listAndPollDiagnosticsMatch": true,
+    "omitted": 0,
+    "fourHealthyPtysRunning": true,
+    "hostProtocolChildAcknowledged": true,
+    "inputProbe": {
+      "submitted": "__PIGADE_RECOVERY_PROBE_N__",
+      "childOutput": "__PIGADE_RECOVERY_CHILD_ACK_N__",
+      "ackIsDifferentFromSubmittedTTYText": true
+    },
+    "screenshotSettleSeconds": 0.5
+  },
+  "cursorFixture": {
+    "expectedPresentations": [
+      {
+        "shape": "block",
+        "blinking": false
+      },
+      {
+        "shape": "underline",
+        "blinking": false
+      },
+      {
+        "shape": "beam",
+        "blinking": false
+      },
+      {
+        "shape": "hidden",
+        "blinking": false
+      }
+    ],
+    "uiOrderedSessions": [
+      "00000000-0000-4000-8000-000000000001",
+      "00000000-0000-4000-8000-000000000002",
+      "00000000-0000-4000-8000-000000000003",
+      "00000000-0000-4000-8000-000000000004"
+    ],
+    "observedPresentations": [
+      {
+        "shape": "block",
+        "blinking": false
+      },
+      {
+        "shape": "underline",
+        "blinking": false
+      },
+      {
+        "shape": "beam",
+        "blinking": false
+      },
+      {
+        "shape": "hidden",
+        "blinking": false
+      }
+    ],
+    "selectedPane": 0,
+    "selectedSession": "00000000-0000-4000-8000-000000000001",
+    "selectedPresentation": {
+      "shape": "block",
+      "blinking": false
+    },
+    "fourSessionsMatched": true,
+    "afterUiResize": true,
+    "stableAcrossPolls": true,
+    "scope": "owned shell PTYs emitted steady DECSCUSR shapes and DECTCEM hide; typed host metadata only"
+  },
+  "output": {
+    "scale": 1,
+    "physical_pixels": [
+      1280,
+      800
+    ],
+    "logical_size_requested": [
+      1280,
+      800
+    ],
+    "scope": "one fixed integer-scale private software output; no fractional or multi-monitor claim"
+  },
+  "views": [
+    {
+      "session": "00000000-0000-4000-8000-000000000001",
+      "generation": "d629b0a1-d225-4b52-a94b-caab0fc2a5d7",
+      "pid": 12,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "00000000-0000-4000-8000-000000000002",
+      "generation": "e2f84a13-4df9-4a4b-9f7c-4933750e20bb",
+      "pid": 17,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "00000000-0000-4000-8000-000000000003",
+      "generation": "77c7d95c-501a-4e1d-a7cb-f75eed572783",
+      "pid": 22,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    },
+    {
+      "session": "00000000-0000-4000-8000-000000000004",
+      "generation": "7a973a19-754c-4adc-8581-840ecbcc0413",
+      "pid": 27,
+      "sequence": 4,
+      "state": "running",
+      "geometry": {
+        "rows": 13,
+        "cols": 69
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "wayland-screenshot-2026-10-17_01-34-45.png",
+      "sha256": "b1bd6a7e37c07778882f0d132da2bd6f24c1905156e7a6db15bf7a91e1a5c335",
+      "bytes": 73679
+    }
+  ]
+}

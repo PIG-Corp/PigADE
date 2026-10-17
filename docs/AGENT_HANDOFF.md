@@ -55,7 +55,7 @@ injection, `--last`, automatic repeated task or silent new conversation.
   imported Zed GPL terminal integration. Bundled OFL font aliases, fixed JP CJK
   fallback and cell-span clipping are documented in ADR0008. Unsupported glyph
   fallback is not deterministic across platforms.
-- Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and remaining cursor/decorations are still open.
+- Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and remaining decorations are still open. Typed cursor shapes/visibility/blink now reach the painter; four source-bound steady software captures verify block/underline/beam/hollow/hidden pixels. Actual blink timing remains open; see reports/terminal-cursor.md.
 - Native local IME has UTF16 range/selection handling and a clipped overlay;
   actual Linux IME reset ordering is unverified. Do not reintroduce the removed
   cancelled-until-KeyDown latch: IMEs may consume physical keys themselves.
@@ -70,10 +70,10 @@ injection, `--last`, automatic repeated task or silent new conversation.
 
 ## Latest verification
 
-- Root workspace fmt, strict all-target Clippy and176 tests passed (including
+- Root workspace fmt, strict all-target Clippy and177 tests passed (including
   the25-test input target:23 shared pure codec tests and2 real raw-PTY tests).
-  Release workspace bins/examples build passed. Native app70 tests, strict
-  all-target Clippy, fmt and debug/release builds passed. Python79 tests passed.
+  Release workspace bins/examples build passed. Native app79 tests, strict
+  all-target Clippy, fmt and debug/release builds passed. Python92 tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
   identities. Root inspected selection/Unicode/child ACKs/footer controls in
@@ -123,10 +123,12 @@ retain the findings. The runner now samples bounded/throttled QueueFull numeric
 metrics and uses identity-revalidated pidfd child cleanup. Deadline10s and
 unknown-outcome rules are unchanged. Concurrent VM I/O is only a hypothesis.
 
-**Running one-hour reproducer:** tool50088,
+**Failed one-hour reproducer:** tool50088 exited1 after1013.162s with
+`input ACK timeout: SOAK-0-196`; no24h/recovery pass. Bounded rejection metrics
+and the exact frozen binary remain in
 `~/.local/state/pigade/soak/resize-repro-20261017`, same frozen67ed712c host from
 `soak-20261017T000738Z-6244149d/state/host-release`, with new instrumentation.
-It is not a24h acceptance run. Inspect its manifest/diagnostics before duplicates.
+It is not a24h acceptance run. A bounded read-only investigation is active; inspect its manifest/diagnostics before duplicates.
 
 **Completed VM run:** tool50099 exited successfully,
 `~/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e`.
@@ -137,7 +139,7 @@ do not poll/restart them as active jobs. Private source data never belongs in Gi
 
 1. Diagnose/fix sustained resize admission saturation with the instrumented same
    binary reproducer; retain failures and repeat the necessary recovery checks.
-2. Finish full-data VM evidence, then actual24h soak on the corrected foundation.
+2. Full-data VM evidence is committed/passed at its documented scope. Repeat actual24h soak only after resolving the producer/host failure above.
 3. Whole-event/global heap admission remains open. Lazy VTE sync storage,
    width-sensitive spare-row payload targets and shallow frame link interning
    remove specific copies; they are not a memory bound. Follow

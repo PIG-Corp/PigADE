@@ -285,6 +285,7 @@ mod tests {
                 hyperlinks: Vec::new(),
                 cursor: (0, 0),
                 cursor_style: String::new(),
+                cursor_presentation: None,
                 modes: 0,
                 colors: String::new(),
                 palette_overrides: Vec::new(),

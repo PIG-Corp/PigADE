@@ -39,3 +39,5 @@
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 
 This section describes development work; it is not a release announcement.
+
+- Typed host cursor state now drives block/underline/beam/hidden rendering, inactive hollow outlines and reduced-motion-aware blinking. Four private same-app steady captures verify pixels and process-preserving reopen; actual blink timing and other platform gates remain open.

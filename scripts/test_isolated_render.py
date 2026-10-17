@@ -127,5 +127,63 @@ class PaletteFixtureTests(unittest.TestCase):
             text=True, timeout=2, check=True).stdout
         self.assertIn('--palette-fixture', help_text)
 
+
+class CursorFixtureTests(unittest.TestCase):
+    def test_cursor_commands_emit_exact_shape_and_visibility_sequences(self):
+        expected = [b'\x1b[2 q', b'\x1b[4 q', b'\x1b[6 q', b'\x1b[?25l']
+        for index, sequence in enumerate(expected):
+            command = RENDER.cursor_fixture_command(index)
+            result = subprocess.run(
+                ['/bin/bash', '--noprofile', '--norc', '-c', command],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=False, timeout=2, check=True)
+            self.assertEqual(result.stdout, sequence)
+        for invalid in (-1, 4):
+            with self.assertRaisesRegex(RuntimeError, 'between 0 and 3'):
+                RENDER.cursor_fixture_command(invalid)
+
+    def test_fixture_is_opt_in_and_starts_after_palette_setup_before_text(self):
+        plain = RENDER.shell_fixture(0)
+        fixture = RENDER.shell_fixture(2, palette_fixture=True, cursor_fixture=True)
+        self.assertNotIn(r'\033[6 q', plain)
+        self.assertLess(fixture.index('4;1;rgb:01/02/03'), fixture.index(r'\033[6 q'))
+        self.assertLess(fixture.index(r'\033[6 q'), fixture.index(']2;Bash 3'))
+        self.assertIn(r'\033[?25l', RENDER.shell_fixture(3, cursor_fixture=True))
+        self.assertEqual(RENDER.CURSOR_FIXTURE_EXPECTED, [
+            {'shape': 'block', 'blinking': False},
+            {'shape': 'underline', 'blinking': False},
+            {'shape': 'beam', 'blinking': False},
+            {'shape': 'hidden', 'blinking': False},
+        ])
+        self.assertEqual(RENDER.CURSOR_FIXTURE_SESSIONS,
+                         sorted(RENDER.CURSOR_FIXTURE_SESSIONS))
+        self.assertEqual(len(set(RENDER.CURSOR_FIXTURE_SESSIONS)), 4)
+
+    def test_app_selection_and_reduced_motion_arguments_are_opt_in(self):
+        plain = RENDER.app_command(False)
+        self.assertEqual(plain, ['/pigade/app', '/artifacts/state/host.sock'])
+        self.assertEqual(RENDER.app_command(False, selected_pane=2),
+                         [*plain, '--diagnostic-selected=2'])
+        self.assertEqual(RENDER.app_command(False, reduced_motion=True),
+                         [*plain, '--reduced-motion'])
+        self.assertEqual(RENDER.app_command(True, True, 3, True), [
+            *plain, '--diagnostic-preedit', '--diagnostic-selection',
+            '--diagnostic-selected=3', '--reduced-motion'])
+
+    def test_cursor_cli_options_are_bounded_and_recorded_as_opt_in(self):
+        help_text = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('isolated-render.py')), '--help'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=2, check=True).stdout
+        self.assertIn('--cursor-fixture', help_text)
+        self.assertIn('--selected-pane', help_text)
+        self.assertIn('--reduced-motion', help_text)
+        rejected = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('isolated-render.py')),
+             '--selected-pane', '4', '--output', '/tmp/not-created'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=2, check=False)
+        self.assertEqual(rejected.returncode, 2)
+
 if __name__ == '__main__':
     unittest.main()
