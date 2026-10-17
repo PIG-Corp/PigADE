@@ -2,6 +2,7 @@
 mod cell_style;
 mod command_worker;
 mod cursor;
+mod edit_field;
 mod font;
 mod input;
 mod mouse;
@@ -12,6 +13,7 @@ mod protocol;
 mod publication_trace;
 mod selection;
 mod startup;
+mod text_edit;
 mod tiling;
 mod viewport;
 mod wake_signal;
@@ -762,12 +764,18 @@ struct PaneDrag {
 
 struct CanvasApp {
     product: product::ProductUi,
+    editor_layouts: std::collections::BTreeMap<usize, edit_field::FieldLayout>,
+    editor_scroll: std::collections::BTreeMap<usize, Pixels>,
+    editor_drag: Option<(uuid::Uuid, usize, usize)>,
+    editor_preferred_x: Option<(uuid::Uuid, usize, Pixels)>,
     product_tx: mpsc::SyncSender<Value>,
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
     product_launch_unknown: bool,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
     pending_context_inspection: bool,
+    pending_context_editor: Option<uuid::Uuid>,
+    editor_dialog: Option<uuid::Uuid>,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
     canvas_bounds: Option<Bounds<Pixels>>,
     canvas_bars: Vec<viewport::Scrollbar>,
@@ -852,6 +860,7 @@ impl CanvasApp {
             cx.on_blur(&focus, window, |this, window, cx| {
                 this.canvas_drag = None;
                 this.selection_dragging = false;
+                this.editor_drag = None;
                 this.input_epoch = this.input_epoch.wrapping_add(1);
                 this.finish_pointer(cx);
                 this.text_input.cancel();
@@ -935,8 +944,8 @@ impl CanvasApp {
                                         } else if (this.product.launch_phase.is_some() && this.pending_context_inspection)
                                             || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
                                             let kind = if this.product.launch_phase.is_some() {product::DialogKind::SessionContext} else {product::DialogKind::LaunchReview};
-                                            let mut dialog = product::Dialog::new(kind);
-                                            if kind == product::DialogKind::LaunchReview { dialog.fields = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).map(|dialog| dialog.fields.clone()).unwrap_or_else(|| vec![preview.role_override.clone(),preview.agent_instructions.clone()]); }
+                                            let mut dialog = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).cloned().unwrap_or_else(|| product::Dialog::new(kind));
+                                            if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into()]; }
                                             this.product.dialog = Some(dialog);
                                         }
                                         this.pending_launch_review = false;
@@ -944,16 +953,8 @@ impl CanvasApp {
                                         this.product.launch_preview = Some(preview);
                                     }
                                     if let Some(context) = reply.context {
-                                        let project_context = this.product.catalog.as_ref().is_some_and(|catalog| catalog.projects.iter().any(|project| project.id == context.scope_id));
-                                        let kind = if project_context {product::DialogKind::ProjectContext} else {product::DialogKind::Context};
-                                        let mut dialog = product::Dialog::new(kind);
-                                        dialog.fields = if project_context {vec![context.instructions.clone()]} else {vec![context.instructions.clone(),context.role.clone(),context.memory.clone()]};
-                                        this.product.context = Some(context);
-                                        this.product.dialog = Some(dialog);
-                                        this.product.notice = Some(
-                                            "Контекст сохранён отдельно от работающих сессий"
-                                                .into(),
-                                        );
+                                        this.product.apply_context_reply(context.clone(),reply.context_saved,this.pending_context_editor == Some(context.scope_id));
+                                        this.pending_context_editor = None;
                                     }
                                 }
                                 Err(error) => {
@@ -963,6 +964,7 @@ impl CanvasApp {
                                     }
                                     this.pending_launch_review = false;
                                     this.pending_context_inspection = false;
+                                    this.pending_context_editor = None;
                                     if error.rejected_before_launch {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
@@ -1073,6 +1075,7 @@ impl CanvasApp {
                             }
                             cx.notify();
                         }
+                        this.sync_editor_scope(window,cx);
                         this.flush_canvas_offset(cx);
                         if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
                             window.remove_window();
@@ -1108,12 +1111,18 @@ impl CanvasApp {
         .detach();
         Self {
             product: product::ProductUi::default(),
+            editor_layouts: Default::default(),
+            editor_scroll: Default::default(),
+            editor_drag: None,
+            editor_preferred_x: None,
             product_tx,
             product_rx,
             product_launch_unknown: false,
             pending_launch: None,
             pending_launch_review: false,
             pending_context_inspection: false,
+            pending_context_editor: None,
+            editor_dialog: None,
             layout_geometry: None,
             canvas_bounds: None,
             canvas_bars: Vec::new(),
@@ -1181,6 +1190,98 @@ impl CanvasApp {
         self.canvas_tab
             .and_then(|tab| self.canvas_offsets.get(&tab).copied())
             .unwrap_or_default()
+    }
+
+    fn sync_editor_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let scope = self.product.dialog.as_ref().map(|dialog| dialog.id);
+        if scope != self.editor_dialog {
+            self.editor_dialog = scope;
+            self.editor_preferred_x = None;
+            self.editor_layouts.clear();
+            self.editor_scroll.clear();
+            self.editor_drag = None;
+            self.text_input.cancel();
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+            self.finish_pointer(cx);
+            window.notify_text_input_changed(&self.focus);
+        }
+    }
+
+    fn editor_pointer_down(
+        &mut self,
+        index: usize,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = &mut self.product.dialog else {
+            return;
+        };
+        if index >= dialog.fields.len() {
+            return;
+        }
+        if dialog.active_field != index {
+            dialog.fields[dialog.active_field].cancel_mark();
+        }
+        dialog.active_field = index;
+        self.editor_preferred_x = None;
+        let buffer = &mut dialog.fields[index];
+        let position = self
+            .editor_layouts
+            .get(&index)
+            .filter(|layout| layout.dialog_id == dialog.id)
+            .map_or(buffer.cursor(), |layout| {
+                layout.index_for_point(event.position)
+            });
+        let selection = buffer.selection();
+        let anchor = if event.modifiers.shift {
+            if buffer.reversed() {
+                selection.end
+            } else {
+                selection.start
+            }
+        } else {
+            position
+        };
+        buffer.select_bytes(
+            anchor.min(position)..anchor.max(position),
+            position < anchor,
+        );
+        self.editor_drag = Some((dialog.id, index, anchor));
+        self.focus.focus(window, cx);
+        window.notify_text_input_changed(&self.focus);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn editor_wheel(
+        &mut self,
+        index: usize,
+        event: &ScrollWheelEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(layout) = self.editor_layouts.get(&index)
+            && self
+                .product
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.id == layout.dialog_id)
+        {
+            let delta = match event.delta {
+                ScrollDelta::Lines(value) => value.y * 24.,
+                ScrollDelta::Pixels(value) => f32::from(value.y),
+            };
+            let current = self.editor_scroll.entry(index).or_default();
+            *current = (*current - px(delta)).clamp(px(0.), layout.max_scroll());
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    fn editor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.notify_text_input_changed(&self.focus);
+        cx.notify();
     }
 
     fn set_canvas_offset(&mut self, offset: pigade_storage::CanvasOffset) {
@@ -1557,6 +1658,23 @@ impl CanvasApp {
         self.focus.focus(window, cx);
         if matches!(
             action,
+            A::SubmitDialog
+                | A::ConfirmPreparedLaunch
+                | A::RefreshLaunchPreview
+                | A::ToggleMemory
+                | A::ToggleContextDelivery
+        ) && self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.fields.iter().any(|buffer| buffer.marked().is_some()))
+        {
+            self.product.notice = Some("Завершите ввод IME перед сохранением или запуском".into());
+            cx.notify();
+            return;
+        }
+        if matches!(
+            action,
             A::CloseDialog
                 | A::OpenPalette
                 | A::AddProject
@@ -1567,6 +1685,7 @@ impl CanvasApp {
         ) {
             self.pending_launch_review = false;
             self.pending_context_inspection = false;
+            self.pending_context_editor = None;
         }
         match action {
             A::PanCanvas => {
@@ -1624,18 +1743,15 @@ impl CanvasApp {
                 self.product.dialog = None;
                 self.text_input.cancel();
             }
-            A::EditField(field) => {
-                if let Some(dialog) = &mut self.product.dialog {
-                    dialog.active_field = field.min(dialog.fields.len().saturating_sub(1));
-                }
-            }
             A::EditProjectContext => {
                 if let Some(scope) = self
                     .product
                     .catalog
                     .as_ref()
                     .and_then(|catalog| catalog.selection.project_id)
+                    && !self.product.busy
                 {
+                    self.pending_context_editor = Some(scope);
                     self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
                 }
             }
@@ -1655,7 +1771,13 @@ impl CanvasApp {
                         .dialog
                         .as_ref()
                         .filter(|dialog| dialog.kind == DialogKind::LaunchReview)
-                        .map(|dialog| dialog.fields.clone())
+                        .map(|dialog| {
+                            dialog
+                                .fields
+                                .iter()
+                                .map(|field| field.text().to_owned())
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default();
                     let include_memory = if action == A::ToggleMemory {
                         !preview.include_memory
@@ -1678,7 +1800,9 @@ impl CanvasApp {
                     .catalog
                     .as_ref()
                     .and_then(|c| c.selection.workspace_id)
+                    && !self.product.busy
                 {
+                    self.pending_context_editor = Some(scope);
                     self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
                 }
             }
@@ -1733,11 +1857,17 @@ impl CanvasApp {
                 }
             }
             A::SubmitDialog => {
-                let Some(dialog) = self.product.dialog.clone() else {
+                let Some(dialog) = self.product.dialog.as_ref() else {
                     return;
                 };
-                let field = |index| dialog.fields.get(index).map(String::as_str).unwrap_or("");
-                match dialog.kind {
+                let kind = dialog.kind;
+                let fields = dialog
+                    .fields
+                    .iter()
+                    .map(|field| field.text().to_owned())
+                    .collect::<Vec<_>>();
+                let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
+                match kind {
                     DialogKind::AddProject => {
                         self.product_command(json!({"command":"add_project","path":field(0)}), cx)
                     }
@@ -1826,6 +1956,7 @@ impl CanvasApp {
                 }
             }
         }
+        self.sync_editor_scope(window, cx);
         cx.notify();
     }
 
@@ -1871,8 +2002,10 @@ impl CanvasApp {
         };
         if !preview.can_launch
             || self.product.launch_phase.is_some()
-            || dialog.fields.first() != Some(&preview.role_override)
-            || dialog.fields.get(1) != Some(&preview.agent_instructions)
+            || dialog.fields.first().map(text_edit::EditBuffer::text)
+                != Some(preview.role_override.as_str())
+            || dialog.fields.get(1).map(text_edit::EditBuffer::text)
+                != Some(preview.agent_instructions.as_str())
         {
             self.product.notice =
                 Some("Обновите просмотр после изменения параметров запуска".into());
@@ -2450,6 +2583,13 @@ impl CanvasApp {
         }
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_drag.take().is_some() {
+            cx.stop_propagation();
+            return;
+        }
+        if self.product.dialog.is_some() {
+            return;
+        }
         if event.button == MouseButton::Left && self.canvas_drag.take().is_some() {
             cx.stop_propagation();
             cx.notify();
@@ -2489,6 +2629,30 @@ impl CanvasApp {
         }
     }
     fn pointer_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((id, index, anchor)) = self.editor_drag {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.editor_drag = None;
+            } else if let Some(dialog) = &mut self.product.dialog
+                && dialog.id == id
+                && let Some(layout) = self
+                    .editor_layouts
+                    .get(&index)
+                    .filter(|layout| layout.dialog_id == id)
+                && let Some(buffer) = dialog.fields.get_mut(index)
+            {
+                let position = layout.index_for_point(event.position);
+                buffer.select_bytes(
+                    anchor.min(position)..anchor.max(position),
+                    position < anchor,
+                );
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.product.dialog.is_some() {
+            return;
+        }
         if let Some(drag) = &self.canvas_drag {
             if event.pressed_button == Some(MouseButton::Left) {
                 let delta = match drag.bar.axis {
@@ -2648,8 +2812,6 @@ impl CanvasApp {
     }
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.product.dialog.is_some() {
-            self.product.insert_text(text);
-            cx.notify();
             return;
         }
         self.reset_cursor_blink(cx);
@@ -2807,14 +2969,37 @@ impl CanvasApp {
                     return;
                 }
             }
-            if k.modifiers.control && k.key == "v" {
+            use text_edit::Movement as M;
+            let control = k.modifiers.control || k.modifiers.platform;
+            if control && k.key == "v" {
+                let scope = self.product.dialog.as_ref().and_then(|dialog| {
+                    dialog.fields.get(dialog.active_field).map(|buffer| {
+                        (
+                            dialog.id,
+                            dialog.active_field,
+                            buffer.revision(),
+                            buffer.selection(),
+                        )
+                    })
+                });
                 let clipboard = cx.read_from_clipboard_async();
                 cx.spawn(async move |weak, cx| {
                     if let Ok(Some(item)) = clipboard.await {
-                        let _ = weak.update(cx, |this, cx| {
-                            if let Some(text) = item.text() {
+                        let _ = weak.update_in(cx, |this, window, cx| {
+                            if this.product.dialog.as_ref().and_then(|dialog| {
+                                dialog.fields.get(dialog.active_field).map(|buffer| {
+                                    (
+                                        dialog.id,
+                                        dialog.active_field,
+                                        buffer.revision(),
+                                        buffer.selection(),
+                                    )
+                                })
+                            }) == scope
+                                && let Some(text) = item.text()
+                            {
                                 this.product.insert_text(&text);
-                                cx.notify();
+                                this.editor_changed(window, cx);
                             }
                         });
                     }
@@ -2823,26 +3008,148 @@ impl CanvasApp {
                 cx.stop_propagation();
                 return;
             }
-            match k.key.as_str() {
-                "escape" => self.product_action(product::ProductAction::CloseDialog, window, cx),
-                "backspace" => {
-                    self.product.backspace();
-                    cx.notify();
-                }
-                "tab" => {
-                    if let Some(dialog) = &mut self.product.dialog {
-                        dialog.active_field =
-                            (dialog.active_field + 1) % dialog.fields.len().max(1);
+            if control && matches!(k.key.as_str(), "c" | "x") {
+                if let Some(buffer) = self.product.active_editor_mut() {
+                    let text = buffer.selected_text().to_owned();
+                    if !text.is_empty() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        if k.key == "x" {
+                            buffer.delete(false);
+                        }
                     }
-                    cx.notify();
                 }
-                "enter" if k.modifiers.shift => {
-                    self.product.insert_text("\n");
-                    cx.notify();
-                }
-                "enter" => self.product_action(product::ProductAction::SubmitDialog, window, cx),
-                _ => return,
+                self.editor_changed(window, cx);
+                cx.stop_propagation();
+                return;
             }
+            if self
+                .product
+                .active_editor()
+                .is_some_and(|buffer| buffer.marked().is_some())
+            {
+                if k.key == "escape" {
+                    if let Some(buffer) = self.product.active_editor_mut() {
+                        buffer.cancel_mark();
+                    }
+                    self.editor_changed(window, cx);
+                    cx.stop_propagation();
+                }
+                return;
+            }
+            if matches!(k.key.as_str(), "up" | "down" | "pageup" | "pagedown") {
+                if let Some(dialog) = &mut self.product.dialog
+                    && let Some(layout) = self
+                        .editor_layouts
+                        .get(&dialog.active_field)
+                        .filter(|layout| layout.dialog_id == dialog.id)
+                    && let Some(buffer) = dialog.fields.get_mut(dialog.active_field)
+                    && let Some(caret) = layout.bounds_for_range(buffer.cursor()..buffer.cursor())
+                {
+                    let x = self
+                        .editor_preferred_x
+                        .filter(|(id, index, _)| *id == dialog.id && *index == dialog.active_field)
+                        .map_or(caret.left(), |(_, _, x)| x);
+                    self.editor_preferred_x = Some((dialog.id, dialog.active_field, x));
+                    let distance = if matches!(k.key.as_str(), "pageup" | "pagedown") {
+                        layout.bounds.size.height
+                    } else {
+                        caret.size.height
+                    };
+                    let y = caret.top()
+                        + caret.size.height / 2.
+                        + if matches!(k.key.as_str(), "up" | "pageup") {
+                            -distance
+                        } else {
+                            distance
+                        };
+                    let target = layout.index_for_point(point(x, y));
+                    let selected = buffer.selection();
+                    let anchor = if k.modifiers.shift {
+                        if buffer.reversed() {
+                            selected.end
+                        } else {
+                            selected.start
+                        }
+                    } else {
+                        target
+                    };
+                    buffer.select_bytes(anchor.min(target)..anchor.max(target), target < anchor);
+                    self.editor_changed(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+            } else {
+                self.editor_preferred_x = None;
+            }
+            let movement = match k.key.as_str() {
+                "left" => Some(if control { M::WordLeft } else { M::Left }),
+                "right" => Some(if control { M::WordRight } else { M::Right }),
+                "up" => Some(M::Up),
+                "down" => Some(M::Down),
+                "home" => Some(if control {
+                    M::DocumentStart
+                } else {
+                    M::LineStart
+                }),
+                "end" => Some(if control { M::DocumentEnd } else { M::LineEnd }),
+                _ => None,
+            };
+            if let Some(movement) = movement {
+                if let Some(buffer) = self.product.active_editor_mut() {
+                    buffer.navigate(movement, k.modifiers.shift);
+                }
+            } else if control && k.key == "a" {
+                if let Some(buffer) = self.product.active_editor_mut() {
+                    buffer.select_all();
+                }
+            } else if control && matches!(k.key.as_str(), "z" | "y") {
+                if let Some(buffer) = self.product.active_editor_mut() {
+                    if k.key == "y" || k.modifiers.shift {
+                        buffer.redo();
+                    } else {
+                        buffer.undo();
+                    }
+                }
+            } else {
+                match k.key.as_str() {
+                    "escape" => {
+                        self.product_action(product::ProductAction::CloseDialog, window, cx)
+                    }
+                    "backspace" => {
+                        if let Some(buffer) = self.product.active_editor_mut() {
+                            buffer.backspace(control);
+                        }
+                    }
+                    "delete" => {
+                        if let Some(buffer) = self.product.active_editor_mut() {
+                            buffer.delete(control);
+                        }
+                    }
+                    "tab" => {
+                        if let Some(dialog) = &mut self.product.dialog {
+                            let count = dialog.fields.len();
+                            if count > 0 {
+                                dialog.fields[dialog.active_field].unmark();
+                                dialog.active_field = (dialog.active_field
+                                    + if k.modifiers.shift { count - 1 } else { 1 })
+                                    % count;
+                            }
+                        }
+                    }
+                    "enter" if !control && self.product.active_multiline() => {
+                        self.product.insert_text("\n")
+                    }
+                    "enter" if k.modifiers.shift => self.product.insert_text("\n"),
+                    "enter" => {
+                        self.product_action(product::ProductAction::SubmitDialog, window, cx)
+                    }
+                    "s" if control => {
+                        self.product_action(product::ProductAction::SubmitDialog, window, cx)
+                    }
+                    _ => return,
+                }
+            }
+            self.editor_changed(window, cx);
             cx.stop_propagation();
             return;
         }
@@ -2935,6 +3242,11 @@ impl CanvasApp {
             }
             let action = match k.key.as_str() {
                 "p" => Some(product::ProductAction::OpenPalette),
+                "e" => Some(if k.modifiers.shift {
+                    product::ProductAction::EditProjectContext
+                } else {
+                    product::ProductAction::EditContext
+                }),
                 "m" => Some(product::ProductAction::OpenTransfer),
                 "t" => Some(product::ProductAction::CreateTab),
                 "s" => Some(product::ProductAction::Layout("split_down".into())),
@@ -3344,11 +3656,13 @@ fn project_panels(bounds: Bounds<Pixels>, count: usize, scale: f32) -> Vec<Bound
 }
 impl EntityInputHandler for CanvasApp {
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
-        self.product.dialog.is_some()
-            || (!self.prefix && self.layout_mode.is_none())
-                && self.state.views.get(self.selected).is_some_and(|view| {
-                    self.target_can_send(view) && input::protocol_error(view.frame.modes).is_none()
-                })
+        if self.product.dialog.is_some() {
+            return self.product.active_editor().is_some();
+        }
+        (!self.prefix && self.layout_mode.is_none())
+            && self.state.views.get(self.selected).is_some_and(|view| {
+                self.target_can_send(view) && input::protocol_error(view.frame.modes).is_none()
+            })
     }
     fn text_for_range(
         &mut self,
@@ -3357,6 +3671,11 @@ impl EntityInputHandler for CanvasApp {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
+        if self.product.dialog.is_some() {
+            let (text, actual) = self.product.active_editor()?.text_for_utf16(range);
+            *actual_range = Some(actual);
+            return Some(text);
+        }
         let (text, actual) = self.text_input.text_for_range(range);
         *actual_range = Some(actual);
         Some(text)
@@ -3367,6 +3686,13 @@ impl EntityInputHandler for CanvasApp {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.product.dialog.is_some() {
+            let buffer = self.product.active_editor()?;
+            return Some(UTF16Selection {
+                range: buffer.selected_utf16(),
+                reversed: buffer.reversed(),
+            });
+        }
         Some(UTF16Selection {
             range: self.text_input.selection(),
             reversed: false,
@@ -3378,17 +3704,44 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.text_input.select(range);
+        if self.product.dialog.is_some() {
+            if let Some(buffer) = self.product.active_editor_mut() {
+                buffer.select_utf16(range);
+            }
+        } else {
+            self.text_input.select(range);
+        }
         window.notify_text_selection_changed(&self.focus);
         cx.notify();
     }
     fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        if self.product.dialog.is_some() {
+            return self
+                .product
+                .active_editor()
+                .map(text_edit::EditBuffer::len_utf16);
+        }
         Some(self.text_input.len_utf16())
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        if self.product.dialog.is_some() {
+            let buffer = self.product.active_editor()?;
+            let range = buffer.marked()?;
+            return Some(
+                text_edit::utf16_at_byte(buffer.text(), range.start)
+                    ..text_edit::utf16_at_byte(buffer.text(), range.end),
+            );
+        }
         self.text_input.marked()
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.product.dialog.is_some() {
+            if let Some(buffer) = self.product.active_editor_mut() {
+                buffer.unmark();
+            }
+            self.editor_changed(window, cx);
+            return;
+        }
         let had_preedit = !self.text_input.preedit.is_empty();
         self.text_input.cancel();
         window.notify_text_input_changed(&self.focus);
@@ -3404,7 +3757,12 @@ impl EntityInputHandler for CanvasApp {
         cx: &mut Context<Self>,
     ) {
         if self.product.dialog.is_some() {
-            self.product.insert_text(text);
+            let multiline = self.product.active_multiline();
+            if let Some(buffer) = self.product.active_editor_mut()
+                && let Err(error) = buffer.replace(range, text, multiline)
+            {
+                self.product.notice = Some(format!("Текст не изменён: {error}"));
+            }
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
             cx.notify();
@@ -3432,7 +3790,12 @@ impl EntityInputHandler for CanvasApp {
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = item.text() {
-            self.paste_text(&text, window, cx);
+            if self.product.dialog.is_some() {
+                self.product.insert_text(&text);
+                self.editor_changed(window, cx);
+            } else {
+                self.paste_text(&text, window, cx);
+            }
         }
     }
     fn replace_and_mark_text_in_range(
@@ -3443,6 +3806,25 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.product.dialog.is_some() {
+            let multiline = self.product.active_multiline();
+            if let Some(buffer) = self.product.active_editor_mut() {
+                let replacement = range.unwrap_or_else(|| {
+                    buffer
+                        .marked()
+                        .map(|range| {
+                            text_edit::utf16_at_byte(buffer.text(), range.start)
+                                ..text_edit::utf16_at_byte(buffer.text(), range.end)
+                        })
+                        .unwrap_or_else(|| buffer.selected_utf16())
+                });
+                if let Err(error) = buffer.mark(replacement, text, selection, multiline) {
+                    self.product.notice = Some(format!("Текст не изменён: {error}"));
+                }
+            }
+            self.editor_changed(window, cx);
+            return;
+        }
         self.reset_cursor_blink(cx);
         self.text_input.mark(range, text, selection);
         window.notify_text_input_changed(&self.focus);
@@ -3455,6 +3837,15 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if let Some(dialog) = &self.product.dialog {
+            let buffer = dialog.fields.get(dialog.active_field)?;
+            let byte_range = text_edit::byte_range_from_utf16(buffer.text(), &range);
+            return self
+                .editor_layouts
+                .get(&dialog.active_field)
+                .filter(|layout| layout.dialog_id == dialog.id)?
+                .bounds_for_range(byte_range);
+        }
         let pane = self.panes.get(self.selected)?;
         let view = self.state.views.get(self.selected)?;
         let area = preedit_area(*pane, view)?;
@@ -3476,11 +3867,18 @@ impl EntityInputHandler for CanvasApp {
     }
     fn character_index_for_point(
         &mut self,
-        _: Point<Pixels>,
+        point: Point<Pixels>,
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        None
+        let dialog = self.product.dialog.as_ref()?;
+        let buffer = dialog.fields.get(dialog.active_field)?;
+        let index = self
+            .editor_layouts
+            .get(&dialog.active_field)
+            .filter(|layout| layout.dialog_id == dialog.id)?
+            .index_for_point(point);
+        Some(text_edit::utf16_at_byte(buffer.text(), index))
     }
 }
 impl Render for CanvasApp {
@@ -3488,7 +3886,7 @@ impl Render for CanvasApp {
         let sidebar = self.product.sidebar(cx).into_any_element();
         let tabbar = self.product.tabbar(cx).into_any_element();
         let toolbar = self.product.toolbar(cx).into_any_element();
-        let overlay = self.product.overlay(cx);
+        let overlay = self.product.overlay(&self.editor_layouts, cx);
         let empty_state = self
             .state
             .views

@@ -218,6 +218,7 @@ pub struct LaunchPreview {
 }
 
 pub struct ProductReply {
+    pub context_saved: bool,
     pub launch_preview: Option<LaunchPreview>,
     pub launch_phase: Option<String>,
     pub sessions: Option<Vec<View>>,
@@ -236,6 +237,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
     let command_name = command.get("command").and_then(Value::as_str);
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
+    let context_saved = command_name == Some("save_context");
     let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
         .map_err(|message| ProductError {
             message,
@@ -249,6 +251,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         });
     }
     Ok(ProductReply {
+        context_saved,
         launch_preview: response.launch_preview,
         launch_phase: response.launch_phase,
         sessions: list_sessions.then_some(response.views),

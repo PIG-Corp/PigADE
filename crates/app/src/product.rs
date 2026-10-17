@@ -1,15 +1,16 @@
 //! Native PigADE product chrome. The host owns commands and durable state;
 //! this module renders the current catalog and emits typed user actions.
 
+use crate::edit_field::FieldLayout;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, IntoElement, ParentElement, Role,
     Stateful, StatefulInteractiveElement, Styled, div, prelude::InteractiveElement, px, rgb,
 };
 use pigade_storage::{Catalog, ContextDocument, Tab, Workspace, WorkspaceStatus};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
-use super::{CanvasApp, protocol};
+use super::{CanvasApp, protocol, text_edit::EditBuffer};
 
 const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 30.0;
@@ -41,7 +42,6 @@ pub(super) enum ProductAction {
     OpenPalette,
     CloseDialog,
     SubmitDialog,
-    EditField(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +108,8 @@ impl DialogKind {
 #[derive(Clone, Debug)]
 pub(super) struct Dialog {
     pub(super) kind: DialogKind,
-    pub(super) fields: Vec<String>,
+    pub(super) id: Uuid,
+    pub(super) fields: Vec<EditBuffer>,
     pub(super) active_field: usize,
 }
 
@@ -116,9 +117,10 @@ impl Dialog {
     pub(super) fn new(kind: DialogKind) -> Self {
         Self {
             kind,
+            id: Uuid::new_v4(),
             fields: match kind {
-                DialogKind::CreateWorkspace => vec![String::new(), "worktree".into()],
-                _ => vec![String::new(); kind.fields().len()],
+                DialogKind::CreateWorkspace => vec![EditBuffer::default(), "worktree".into()],
+                _ => vec![EditBuffer::default(); kind.fields().len()],
             },
             active_field: 0,
         }
@@ -256,8 +258,11 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
         ("Добавить проект", ProductAction::AddProject),
         ("Новый воркспейс", ProductAction::CreateWorkspace),
-        ("Контекст воркспейса", ProductAction::EditContext),
-        ("Контекст проекта", ProductAction::EditProjectContext),
+        ("Контекст воркспейса · E", ProductAction::EditContext),
+        (
+            "Контекст проекта · Shift+E",
+            ProductAction::EditProjectContext,
+        ),
         ("Прокрутить canvas · G", ProductAction::PanCanvas),
         (
             "Показать выбранную панель",
@@ -288,23 +293,6 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Повторить раскладку", ProductAction::Layout("redo".into())),
         ("Скрыть панель", ProductAction::Layout("hide".into())),
     ]
-}
-
-fn multiline_lines(value: &str) -> Div {
-    value
-        .split('\n')
-        .fold(div().flex().flex_col().items_start(), |lines, line| {
-            lines.child(
-                div()
-                    .h(px(16.))
-                    .text_size(px(12.))
-                    .child(if line.is_empty() {
-                        " ".to_owned()
-                    } else {
-                        line.to_owned()
-                    }),
-            )
-        })
 }
 
 fn context_lines(value: &str) -> Div {
@@ -426,7 +414,7 @@ fn launch_phase_label(phase: Option<&str>) -> &'static str {
     }
 }
 
-fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
+pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
     match kind {
         DialogKind::Context => index != 1,
         DialogKind::ProjectContext => true,
@@ -441,7 +429,7 @@ impl ProductUi {
         if dialog.kind != DialogKind::Palette {
             return None;
         }
-        let query = dialog.fields.first().map(String::as_str).unwrap_or("");
+        let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
         if query.trim().is_empty() {
             return None;
         }
@@ -451,39 +439,90 @@ impl ProductUi {
             .map(|(_, action)| action)
     }
 
-    pub(super) fn insert_text(&mut self, text: &str) {
-        let Some(dialog) = self.dialog.as_mut() else {
-            return;
-        };
-        if dialog.kind == DialogKind::Transfer {
-            return;
-        }
-        let Some(field) = dialog.fields.get_mut(dialog.active_field) else {
-            return;
-        };
-        const MAX_FIELD_BYTES: usize = 16 * 1024;
-        let accepts_newlines = dialog_field_multiline(dialog.kind, dialog.active_field);
-        if text
-            .chars()
-            .any(|character| character.is_control() && !(accepts_newlines && character == '\n'))
-            || field.len().saturating_add(text.len()) > MAX_FIELD_BYTES
-        {
+    pub(super) fn apply_context_reply(
+        &mut self,
+        context: ContextDocument,
+        saved: bool,
+        requested: bool,
+    ) {
+        if !saved && !requested {
             return;
         }
-        field.push_str(text);
+        let project = self
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.projects.iter().any(|p| p.id == context.scope_id));
+        if !saved {
+            let mut dialog = Dialog::new(if project {
+                DialogKind::ProjectContext
+            } else {
+                DialogKind::Context
+            });
+            dialog.fields = if project {
+                vec![context.instructions.clone().into()]
+            } else {
+                vec![
+                    context.instructions.clone().into(),
+                    context.role.clone().into(),
+                    context.memory.clone().into(),
+                ]
+            };
+            self.dialog = Some(dialog);
+        } else {
+            let dirty = self.dialog.as_ref().is_some_and(|dialog| {
+                matches!(
+                    dialog.kind,
+                    DialogKind::Context | DialogKind::ProjectContext
+                ) && (dialog
+                    .fields
+                    .first()
+                    .is_some_and(|field| field.text() != context.instructions)
+                    || (dialog.kind == DialogKind::Context
+                        && (dialog
+                            .fields
+                            .get(1)
+                            .is_some_and(|field| field.text() != context.role)
+                            || dialog
+                                .fields
+                                .get(2)
+                                .is_some_and(|field| field.text() != context.memory))))
+            });
+            self.notice = Some(format!(
+                "Ревизия {} сохранена. {}Работающие сессии не изменены.",
+                context.revision,
+                if dirty {
+                    "В редакторе есть новые несохранённые изменения. "
+                } else {
+                    ""
+                }
+            ));
+        }
+        self.context = Some(context);
     }
 
-    pub(super) fn backspace(&mut self) {
-        let Some(dialog) = self.dialog.as_mut() else {
-            return;
-        };
-        if dialog.kind == DialogKind::Transfer {
-            return;
+    pub(super) fn active_editor(&self) -> Option<&EditBuffer> {
+        let dialog = self.dialog.as_ref()?;
+        dialog.fields.get(dialog.active_field)
+    }
+
+    pub(super) fn active_editor_mut(&mut self) -> Option<&mut EditBuffer> {
+        let dialog = self.dialog.as_mut()?;
+        dialog.fields.get_mut(dialog.active_field)
+    }
+
+    pub(super) fn active_multiline(&self) -> bool {
+        self.dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog_field_multiline(dialog.kind, dialog.active_field))
+    }
+
+    pub(super) fn insert_text(&mut self, text: &str) {
+        let multiline = self.active_multiline();
+        if let Some(field) = self.active_editor_mut()
+            && let Err(error) = field.replace(None, text, multiline)
+        {
+            self.notice = Some(format!("Текст не изменён: {error}"));
         }
-        let Some(field) = dialog.fields.get_mut(dialog.active_field) else {
-            return;
-        };
-        field.pop();
     }
 
     pub(super) fn sidebar(&self, cx: &mut Context<CanvasApp>) -> impl IntoElement {
@@ -824,9 +863,13 @@ impl ProductUi {
             ))
     }
 
-    pub(super) fn overlay(&self, cx: &mut Context<CanvasApp>) -> Option<AnyElement> {
+    pub(super) fn overlay(
+        &self,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> Option<AnyElement> {
         let dialog = self.dialog.as_ref()?;
-        Some(self.dialog_overlay(dialog, cx))
+        Some(self.dialog_overlay(dialog, layouts, cx))
     }
 
     pub(super) fn empty_state(&self, cx: &mut Context<CanvasApp>) -> Option<AnyElement> {
@@ -1019,16 +1062,21 @@ impl ProductUi {
             .into_any_element()
     }
 
-    fn dialog_overlay(&self, dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
+    fn dialog_overlay(
+        &self,
+        dialog: &Dialog,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
         let colors = ProductColors::dark();
         if dialog.kind == DialogKind::LaunchReview {
-            return self.launch_review_overlay(dialog, cx);
+            return self.launch_review_overlay(dialog, layouts, cx);
         }
         if dialog.kind == DialogKind::SessionContext {
             return self.session_context_overlay(cx);
         }
         if dialog.kind == DialogKind::Palette {
-            return self.palette_overlay(dialog, cx);
+            return self.palette_overlay(dialog, layouts, cx);
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(cx);
@@ -1039,49 +1087,84 @@ impl ProductUi {
 
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
         for (index, label) in dialog.kind.fields().iter().enumerate() {
-            let value = dialog.fields.get(index).map(String::as_str).unwrap_or("");
             let active = index == dialog.active_field;
             let multiline = dialog_field_multiline(dialog.kind, index);
-            let shown = if value.is_empty() {
-                if active {
-                    format!("{label}…▏")
-                } else {
-                    format!("{label}…")
-                }
-            } else if active {
-                format!("{value}▏")
-            } else {
-                value.to_owned()
-            };
-            let mut field = div()
+            let buffer = &dialog.fields[index];
+            let field = div()
                 .id(format!("product-dialog-field-{index}"))
                 .role(Role::TextInput)
                 .aria_label(*label)
                 .w_full()
-                .h(px(if multiline { 90. } else { 42. }))
+                .h(px(if multiline { 120. } else { 42. }))
                 .px(px(12.))
-                .flex()
+                .py(px(6.))
                 .rounded(px(7.))
                 .border_1()
                 .border_color(if active { colors.accent } else { colors.border })
                 .bg(colors.base)
-                .text_color(if value.is_empty() {
-                    colors.muted
-                } else {
-                    colors.text
-                })
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.product_action(ProductAction::EditField(index), window, cx);
-                    cx.stop_propagation();
+                .text_color(colors.text)
+                .overflow_hidden()
+                .child(crate::edit_field::content(
+                    buffer,
+                    crate::edit_field::FieldOptions {
+                        cache: layouts.get(&index),
+                        dialog_id: dialog.id,
+                        index,
+                        active,
+                        multiline,
+                        placeholder: label,
+                        accent: colors.accent,
+                        muted: colors.muted,
+                    },
+                    cx,
+                ))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, event, window, cx| {
+                        this.editor_pointer_down(index, event, window, cx);
+                    }),
+                )
+                .on_scroll_wheel(cx.listener(move |this, event, window, cx| {
+                    this.editor_wheel(index, event, window, cx);
                 }));
-            field = if multiline {
-                field.items_start().child(multiline_lines(&shown))
-            } else {
-                field.items_center().child(shown)
-            };
             fields = fields.child(field);
         }
 
+        if matches!(
+            dialog.kind,
+            DialogKind::Context | DialogKind::ProjectContext
+        ) && let Some(context) = &self.context
+        {
+            let revision = if context.revision == 0 {
+                "Ещё не сохранено".into()
+            } else {
+                format!(
+                    "Сохранённая ревизия v{} · hash {}…",
+                    context.revision,
+                    context.content_hash.chars().take(12).collect::<String>()
+                )
+            };
+            fields = fields.child(
+                div()
+                    .id("context-revision-summary")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(revision),
+            );
+        }
+        if let Some(notice) = &self.notice {
+            fields = fields.child(
+                div()
+                    .id("product-dialog-notice")
+                    .role(Role::Status)
+                    .aria_label(notice.clone())
+                    .text_size(px(12.))
+                    .text_color(colors.accent)
+                    .whitespace_normal()
+                    .child(notice.clone()),
+            );
+        }
         if matches!(
             dialog.kind,
             DialogKind::Context | DialogKind::ProjectContext
@@ -1092,7 +1175,7 @@ impl ProductUi {
                     .role(Role::Status)
                     .text_size(px(11.))
                     .text_color(colors.muted)
-                    .child("Новая ревизия; работающие сессии не изменяются."),
+                    .child("Enter — новая строка · Ctrl+Enter — сохранить · Ctrl+Z — undo. Работающие сессии не изменяются."),
             );
         }
 
@@ -1178,11 +1261,16 @@ impl ProductUi {
             .into_any_element()
     }
 
-    fn launch_review_overlay(&self, dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
+    fn launch_review_overlay(
+        &self,
+        dialog: &Dialog,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
         let colors = ProductColors::dark();
         let preview = self.launch_preview.as_ref();
-        let role_override = dialog.fields.first().map(String::as_str).unwrap_or("");
-        let agent_instructions = dialog.fields.get(1).map(String::as_str).unwrap_or("");
+        let role_override = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
+        let agent_instructions = dialog.fields.get(1).map(EditBuffer::text).unwrap_or("");
         let fields_match = preview.is_some_and(|preview| {
             preview.role_override == role_override
                 && preview.agent_instructions == agent_instructions
@@ -1361,57 +1449,69 @@ impl ProductUi {
             status = Some("Запуск недоступен без актуального предпросмотра.".into());
         }
 
-        let role = role_override.to_owned();
-        let instructions = agent_instructions.to_owned();
         let fields = [
-            (0usize, "Роль для запуска", role),
-            (1usize, "Дополнительные инструкции агенту", instructions),
+            (0usize, "Роль для запуска"),
+            (1usize, "Дополнительные инструкции агенту"),
         ]
         .into_iter()
         .fold(
             div().flex().flex_col().gap_2().mt(px(12.)),
-            |container, (index, label, value)| {
+            |container, (index, label)| {
                 let active = index == dialog.active_field;
-                let shown = if value.is_empty() {
-                    if active {
-                        format!("{label}…▏")
-                    } else {
-                        format!("{label}…")
-                    }
-                } else if active {
-                    format!("{value}▏")
-                } else {
-                    value
-                };
                 container.child(
                     div()
                         .id(format!("launch-review-field-{index}"))
                         .role(Role::TextInput)
                         .aria_label(label)
                         .w_full()
-                        .h(px(if index == 1 { 76. } else { 40. }))
-                        .overflow_y_scroll()
+                        .h(px(if index == 1 { 96. } else { 40. }))
                         .px(px(10.))
-                        .flex()
-                        .items_start()
+                        .py(px(6.))
                         .rounded(px(7.))
                         .border_1()
                         .border_color(if active { colors.accent } else { colors.border })
                         .bg(colors.base)
-                        .text_color(if shown.is_empty() {
-                            colors.muted
-                        } else {
-                            colors.text
-                        })
-                        .child(context_lines(&shown))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.product_action(ProductAction::EditField(index), window, cx);
-                            cx.stop_propagation();
+                        .text_color(colors.text)
+                        .overflow_hidden()
+                        .child(crate::edit_field::content(
+                            &dialog.fields[index],
+                            crate::edit_field::FieldOptions {
+                                cache: layouts.get(&index),
+                                dialog_id: dialog.id,
+                                index,
+                                active,
+                                multiline: index == 1,
+                                placeholder: label,
+                                accent: colors.accent,
+                                muted: colors.muted,
+                            },
+                            cx,
+                        ))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, event, window, cx| {
+                                this.editor_pointer_down(index, event, window, cx)
+                            }),
+                        )
+                        .on_scroll_wheel(cx.listener(move |this, event, window, cx| {
+                            this.editor_wheel(index, event, window, cx)
                         })),
                 )
             },
         );
 
+        if let Some(notice) = &self.notice {
+            warnings = warnings.child(
+                div()
+                    .id("launch-review-notice")
+                    .role(Role::Status)
+                    .aria_label(notice.clone())
+                    .text_size(px(12.))
+                    .text_color(colors.accent)
+                    .whitespace_normal()
+                    .child(notice.clone()),
+            );
+        }
         if let Some(message) = status {
             warnings = warnings.child(
                 div()
@@ -1424,12 +1524,9 @@ impl ProductUi {
             );
         }
 
-        warnings = warnings.child(
-            div()
-                .text_size(px(11.))
-                .text_color(colors.muted)
-                .child("Ctrl+R — обновить · Ctrl+M — память · Ctrl+D — контекст · Enter — запуск"),
-        );
+        warnings = warnings.child(div().text_size(px(11.)).text_color(colors.muted).child(
+            "Ctrl+R — обновить · Ctrl+M — память · Ctrl+D — контекст · Ctrl+Enter — запуск",
+        ));
         let refresh = self.action_control(
             "launch-review-refresh".into(),
             "Обновить предпросмотр".into(),
@@ -1980,9 +2077,14 @@ impl ProductUi {
             .into_any_element()
     }
 
-    fn palette_overlay(&self, dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
+    fn palette_overlay(
+        &self,
+        dialog: &Dialog,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
         let colors = ProductColors::dark();
-        let query = dialog.fields.first().map(String::as_str).unwrap_or("");
+        let query = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
         let mut card = div()
             .id("product-command-palette")
             .role(Role::Dialog)
@@ -2012,11 +2114,6 @@ impl ProductUi {
                 .child("Команды"),
         );
         let field_label = "Поиск команды";
-        let shown = if query.is_empty() {
-            format!("{field_label}…▏")
-        } else {
-            format!("{query}▏")
-        };
         card = card.child(
             div()
                 .id("product-dialog-field-0")
@@ -2025,21 +2122,33 @@ impl ProductUi {
                 .h(px(42.))
                 .w_full()
                 .px(px(12.))
-                .flex()
-                .items_center()
+                .py(px(6.))
                 .rounded(px(7.))
                 .border_1()
                 .border_color(colors.accent)
                 .bg(colors.base)
-                .text_color(if query.is_empty() {
-                    colors.muted
-                } else {
-                    colors.text
-                })
-                .child(shown)
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.product_action(ProductAction::EditField(0), window, cx);
-                })),
+                .text_color(colors.text)
+                .overflow_hidden()
+                .child(crate::edit_field::content(
+                    &dialog.fields[0],
+                    crate::edit_field::FieldOptions {
+                        cache: layouts.get(&0),
+                        dialog_id: dialog.id,
+                        index: 0,
+                        active: true,
+                        multiline: false,
+                        placeholder: field_label,
+                        accent: colors.accent,
+                        muted: colors.muted,
+                    },
+                    cx,
+                ))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, event, window, cx| {
+                        this.editor_pointer_down(0, event, window, cx)
+                    }),
+                ),
         );
 
         let commands = palette_commands();
@@ -2098,5 +2207,61 @@ impl ProductUi {
             }))
             .child(card)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod context_edit_tests {
+    use super::*;
+
+    fn document() -> ContextDocument {
+        ContextDocument {
+            scope_id: Uuid::from_u128(1),
+            revision: 1,
+            instructions: "Saved instructions".into(),
+            role: "reviewer".into(),
+            memory: "Facts".into(),
+            content_hash: String::new(),
+            saved_at_unix_ms: None,
+            author: "user".into(),
+        }
+    }
+
+    #[test]
+    fn save_ack_keeps_newer_draft_caret_and_undo() {
+        let mut ui = ProductUi::default();
+        let saved = document();
+        ui.apply_context_reply(saved.clone(), false, true);
+        let dialog = ui.dialog.as_mut().unwrap();
+        let id = dialog.id;
+        dialog.fields[0].replace(None, " + edit", true).unwrap();
+        let mut acknowledged = saved;
+        acknowledged.revision = 2;
+        acknowledged.instructions = dialog.fields[0].text().to_owned();
+        dialog.fields[0]
+            .replace(None, " + newer typing", true)
+            .unwrap();
+        let cursor = dialog.fields[0].cursor();
+        ui.apply_context_reply(acknowledged, true, false);
+        let dialog = ui.dialog.as_mut().unwrap();
+        assert_eq!(dialog.id, id);
+        assert_eq!(dialog.fields[0].cursor(), cursor);
+        assert!(dialog.fields[0].text().ends_with(" + newer typing"));
+        assert!(dialog.fields[0].undo());
+        assert!(dialog.fields[0].text().ends_with(" + edit"));
+        assert_eq!(ui.context.as_ref().unwrap().revision, 2);
+        assert!(ui.notice.as_ref().unwrap().contains("несохранённые"));
+    }
+
+    #[test]
+    fn canceled_load_and_save_ack_never_reopen_the_editor() {
+        let mut ui = ProductUi::default();
+        ui.apply_context_reply(document(), false, false);
+        assert!(ui.dialog.is_none());
+        assert!(ui.context.is_none());
+        ui.apply_context_reply(document(), false, true);
+        ui.dialog = None;
+        ui.apply_context_reply(document(), true, false);
+        assert!(ui.dialog.is_none());
     }
 }

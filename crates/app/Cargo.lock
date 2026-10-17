@@ -3695,6 +3695,7 @@ dependencies = [
  "pigade-storage",
  "serde",
  "serde_json",
+ "unicode-segmentation",
  "uuid",
 ]
 

@@ -44,6 +44,7 @@ KEYBOARD_EXPECTED = b'ab1Z\x03\x04\x1a\x12\x0c\x01\x1bx\x1b[D\x1b[H\r' + 'при
 KEYBOARD_PASS = 'pass-private-x11-en-ru-cli-keyboard-fixture'
 IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
 LATENCY_PASS = 'pass-private-x11-fixed-input-cell-latency-fixture'
+CONTEXT_PASS = 'pass-private-x11-workspace-context-editor-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -346,7 +347,75 @@ def deactivate_private_fcitx(config, env):
 
 
 def fixture_status(name):
-    return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS}[name]
+    return {'keyboard': KEYBOARD_PASS, 'pinyin': IME_PASS, 'latency': LATENCY_PASS,
+            'context': CONTEXT_PASS}[name]
+
+
+def seed_context_catalog(session):
+    catalog = host_request({'command': 'catalog'})['catalog']
+    project, workspace, tab = (str(uuid.uuid4()) for _ in range(3))
+    selection = dict(catalog['selection'], project_id=project, workspace_id=workspace, tab_id=tab)
+    catalog = host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [{'expected_revision': None, 'value': {
+            'id': project, 'canonical_path': '/artifacts', 'git_common_dir': '/artifacts',
+            'name': 'Context fixture', 'roots': [], 'revision': 0}}],
+        'workspaces': [{'expected_revision': None, 'value': {
+            'id': workspace, 'project_id': project, 'task': 'Context editor fixture',
+            'cwd': '/artifacts', 'mode': 'shared_checkout', 'status': 'ready',
+            'error': None, 'context_revision': None, 'revision': 0}}],
+        'tabs': [{'expected_revision': None, 'value': {
+            'id': tab, 'workspace_id': workspace, 'name': 'Development',
+            'layout_json': 'null', 'active_pane': None, 'revision': 0}}],
+        'selection': {'expected_revision': selection['revision'], 'value': selection},
+        'layout': None}})['catalog']
+    host_request({'command': 'layout_edit', 'expected_revision': catalog['layout']['revision'],
+                  'action': {'action': 'apply', 'command': {'Insert': {
+                      'tab': tab, 'pane': session, 'target': None, 'side': 'Right',
+                      'split': str(uuid.uuid4())}}}})
+    return {'project': project, 'workspace': workspace, 'tab': tab}
+
+
+def run_context_fixture(config, report, env, save):
+    report['stage'] = 'workspace-context-editor'
+    save()
+    workspace = report['fixture']['workspace']
+    get_context = lambda: host_request({'command': 'get_context', 'scope_id': workspace})['context']
+    initial = get_context()
+    require(initial['revision'] == 0 and initial['instructions'] == '',
+            'workspace context fixture did not start empty')
+    helper_call(config, 'context-open')
+    time.sleep(0.5)
+    active_im = select_private_pinyin(config, Path('/home/pigade'), Path('/run/pigade-test'),
+                                      Path('/run/pigade-test/Xauthority'))
+    helper_call(config, 'compose')
+    time.sleep(0.2)
+    helper_call(config, 'commit')
+    time.sleep(0.2)
+    deactivate_private_fcitx(config, env)
+    helper_call(config, 'context-edit')
+    time.sleep(0.2)
+    helper_call(config, 'capture', '/artifacts/context-editor.ppm')
+    require(0 < Path('/artifacts/context-editor.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'context editor capture exceeds bound')
+    before_save = get_context()
+    require(before_save['revision'] == 0 and before_save['instructions'] == '',
+            'workspace context changed before explicit save')
+    helper_call(config, 'context-save')
+    expected = '你好xb'
+    saved = wait_until(lambda: (document if (document := get_context())['revision'] == 1
+                                and document['instructions'] == expected else None),
+                       time.monotonic() + 8)
+    require(saved['instructions'] == expected and saved['revision'] == 1,
+            'saved workspace context differs from fixed edit sequence')
+    report['contextEditor'] = {
+        'workspace': workspace, 'initialRevision': initial['revision'],
+        'unsavedRevisionRemainedZero': True, 'savedRevision': saved['revision'],
+        'savedInstructions': expected, 'editSequence': 'Pinyin commit 你好; type ab; Left; Shift+Left; replace x; undo; redo; Ctrl+Enter',
+        'privateInputMethod': active_im,
+        'capture': 'context-editor.ppm', 'scope': 'private Xvfb window; isolated host metadata only',
+    }
+    report.update({'status': CONTEXT_PASS, 'stage': 'complete'})
+    save()
 
 
 def run_latency_fixture(config, report, control, app, fcitx, env, save):
@@ -1025,6 +1094,8 @@ def inside_run() -> int:
         wait_until(fixture_visible, time.monotonic() + 8)
         report['fixture'] = {'session': session, 'generation': generation, 'ready': True,
                              'tty': 'raw/no-echo', 'ack_marker': FIXTURE_TOKEN}
+        if config.get('fixture') == 'context':
+            report['fixture'].update(seed_context_catalog(session))
         report['stage'] = 'pigade-app'
         save()
         app_env = dict(fcitx_env)
@@ -1057,6 +1128,9 @@ def inside_run() -> int:
             return 0
         if config.get('fixture') == 'keyboard':
             run_keyboard_fixture(config, report, control, app, fcitx, app_env, artifacts, save)
+            return 0
+        if config.get('fixture') == 'context':
+            run_context_fixture(config, report, app_env, save)
             return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
@@ -1188,8 +1262,10 @@ def outer_run(args) -> dict:
             'app_sha256': sha256(app), 'host_sha256': sha256(host),
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
-                (['committed.ppm'] if args.fixture in ('keyboard', 'latency') else ['preedit.ppm', 'committed.ppm'])],
-            'limits': ['one fixed local X11 keyboard/IME fixture only',
+                (['context-editor.ppm'] if args.fixture == 'context' else
+                 ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
+                 ['preedit.ppm', 'committed.ppm'])],
+            'limits': ['one fixed local X11 keyboard/IME/context-editor fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -1204,17 +1280,22 @@ def plan(args) -> dict:
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
+                  'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',
                       'Unix-socket inode plus SO_PEERCRED exact Xvfb PID',
                       'XTEST extension and XRes local PID ownership for XIM and app window',
-                      'raw/no-echo PTY receives exactly UTF-8 你好 once after Space',
+                      ('workspace context editing/saving occurs only in the private app and host'
+                       if args.fixture == 'context' else
+                       'raw/no-echo PTY receives exactly UTF-8 你好 once after Space'),
                       'host display/session/device paths and inherited desktop variables absent'],
         'limits': ['plan mode does not verify readiness by launching software',
                    'actual X11/Fcitx/app/input remain unrun until separately reviewed --run',
-                   'preedit capture is retained for human review and is not machine-interpreted']}
+                   ('context editor capture is retained for human review'
+                    if args.fixture == 'context' else
+                    'preedit capture is retained for human review and is not machine-interpreted')]}
 
 
 def parse_args(argv=None):
@@ -1223,8 +1304,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency'], default='pinyin',
-                        help='fixed Pinyin commit, EN/RU shortcuts, or50 causal color latency samples')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context'], default='pinyin',
+                        help='fixed Pinyin, EN/RU, latency, or workspace-context editor fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

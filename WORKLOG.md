@@ -2225,3 +2225,67 @@ Connect minimum-size tiling to scrollable canvas, saved per-tab offsets and keyb
 - Files: crates/app/src/main.rs, crates/app/src/viewport.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/tests/context_launch.rs, crates/storage/src/catalog.rs, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Storage catalog 14 tests and host viewport persistence test pass; app 138 tests then added scrolling/PTy fractional-scale test passes (139 total compiled); workspace/app strict Clippy pass; real-host PTY test verifies viewport selection-only ACK and reopen; final release host and app builds pass; private isolated-render.py render/reopen pass with 4 live PTYs at /tmp/pigade-canvas-ui-20261017-01, screenshot visually inspected; subsequent focus-ACK routing change verified by final lint/build; version/fmt/diff pass
 - Risks / next: Native overflow scrolling/scrollbar interaction and small-window visual acceptance remain open. User desktop untouched. Continue complete context text editing and memory section selection; existing provider/platform/performance/MVP gates remain open.
+
+## 2026-10-17T14:17:33+00:00 — recovery_slice_review
+
+Add bounded Unicode-aware text edit buffer with UTF-16 selection/composition, grapheme navigation, bounded undo, plain-string serde, and text-only revision counter
+
+- Files: crates/app/src/text_edit.rs
+- Verification: rustfmt --edition 2024 crates/app/src/text_edit.rs; git diff --check -- crates/app/src/text_edit.rs (passed); app tests not run per root instruction to avoid concurrent app build
+- Risks / next: Root to run the wired app tests and clippy; initial String and serde construction are caller-provided and remain unbounded by the infallible constructor.
+
+## 2026-10-17T14:18:29+00:00 — recovery_slice_review
+
+Fix edit-buffer revision tracking for deletion and reject oversized deserialized text
+
+- Files: crates/app/src/text_edit.rs
+- Verification: rustfmt --edition 2024 crates/app/src/text_edit.rs; git diff --check -- crates/app/src/text_edit.rs (passed); app Cargo tests not run per root instruction
+- Risks / next: Root to run wired app tests; new constructor remains infallible for trusted host-bounded initial text.
+
+## 2026-10-17T14:19:58+00:00 — font_render_profile
+
+Added cached GPUI shaped text-field canvas with selection, marked-text underline, caret reveal, point/range geometry, and active native input registration.
+
+- Files: crates/app/src/edit_field.rs
+- Verification: rustfmt --edition 2024 crates/app/src/edit_field.rs (passed); app Cargo not run per root instruction and awaits CanvasApp editor_layouts/editor_scroll wiring.
+- Risks / next: Root integrate edit_field::content into dialogs and compile with the planned CanvasApp editor maps; check native UTF-16 range adapters and multiline/empty-field behavior.
+
+## 2026-10-17T14:20:15+00:00 — font_render_profile
+
+Polished edit-field cache invalidation and byte hit testing.
+
+- Files: crates/app/src/edit_field.rs
+- Verification: rustfmt --edition 2024 crates/app/src/edit_field.rs (passed); app Cargo intentionally not run per root instruction.
+- Risks / next: Root integrates and compiles against CanvasApp.editor_layouts/editor_scroll; verify input handler routing.
+
+## 2026-10-17T14:21:59+00:00 — font_render_profile
+
+Fixed renderer compile imports and added collapsed-caret geometry plus horizontal scrolling for long single-line fields.
+
+- Files: crates/app/src/edit_field.rs
+- Verification: rustfmt --edition 2024 crates/app/src/edit_field.rs (passed); app Cargo not run per root instruction.
+- Risks / next: Root reruns app check; verify caret-range adapter and single-line scroll on real field render.
+
+## 2026-10-17T14:25:14+00:00 — recovery_slice_review
+
+Preserve collapsed UTF-16 carets inside surrogate pairs instead of expanding them into character selections
+
+- Files: crates/app/src/text_edit.rs
+- Verification: rustfmt --edition 2024 crates/app/src/text_edit.rs; git diff --check -- crates/app/src/text_edit.rs (passed); app Cargo tests not run per root instruction
+- Risks / next: Root to rerun the app unit tests; collapsed UTF-16 ranges now map to one grapheme-safe insertion point while nonempty ranges expand to cover partial scalars.
+
+## 2026-10-17T14:34:33+00:00 — recovery_slice_review
+
+Add opt-in private X11 workspace-context editor fixture using fixed owned-window input stages and isolated metadata verification
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py; python3 -m unittest scripts.test_isolated_ime_x11 (22 passed); cc -std=c11 -O2 -Wall -Wextra -Werror -fsyntax-only scripts/x11-ime-input.c $(pkg-config --cflags x11 xtst xcb xcb-res); git diff --check (passed); native fixture not run per instruction
+- Risks / next: Root to review app shortcut integration and run --fixture context only on the proven private Xvfb harness after rebuilding the app and host.
+
+## 2026-10-17T14:40:31+00:00 — /root
+
+Integrate native Unicode context editor, IME geometry, bounded undo, clipboard and pending-draft preservation
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/text_edit.rs, crates/app/src/edit_field.rs, crates/app/Cargo.toml, crates/app/Cargo.lock, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 147 app tests pass; final strict app Clippy and debug build pass via bootstrap; existing private-X11 harness 22 unit tests pass; final isolated context fixture /tmp/pigade-context-editor-20261017-02 passes exact Fcitx/edit/undo/redo/save sequence: revision0 unchanged before save, revision1 contains 你好xb; final screenshot visually inspected; version and diff checks pass
+- Risks / next: Broader native clipboard/mouse/Wayland/reset and accessibility acceptance remain open; continue product memory selection and settings. Existing terminal/performance/MVP gates remain open; active desktop untouched.

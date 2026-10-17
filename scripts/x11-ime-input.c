@@ -1,6 +1,6 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
- * It intentionally has no text/key arguments: only `compose` (nihao) and
- * `commit` (Space), or one fixed EN/RU/CLI sequence can synthesize input,
+ * It intentionally has no text/key arguments: only fixed compose/commit,
+ * EN/RU/CLI, and workspace-context edit/save sequences can synthesize input,
  * after private-server ownership checks. The latency stage uses50 fixed
  * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
@@ -70,7 +70,9 @@ static Args parse_args(int argc, char **argv) {
     if (strcmp(a.stage, "preflight") && strcmp(a.stage, "probe-window") &&
         strcmp(a.stage, "focus") && strcmp(a.stage, "compose") &&
         strcmp(a.stage, "commit") && strcmp(a.stage, "capture") &&
-        strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency"))
+        strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency") &&
+        strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
+        strcmp(a.stage, "context-save"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -254,6 +256,30 @@ static void modified_key(Display *dpy, KeySym modifier, KeySym sym) {
     if (!XTestFakeKeyEvent(dpy, code, False, CurrentTime))
         fail("private modifier release failed");
     XSync(dpy, False);
+}
+
+static void context_open_sequence(Display *dpy) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime)) fail("context shortcut press failed");
+    key(dpy, XK_space);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("context shortcut release failed");
+    key(dpy, XK_e);
+}
+
+static void context_edit_sequence(Display *dpy) {
+    key(dpy, XK_a); key(dpy, XK_b); key(dpy, XK_Left);
+    modified_key(dpy, XK_Shift_L, XK_Left); key(dpy, XK_x);
+    modified_key(dpy, XK_Control_L, XK_z);
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime)) fail("redo shortcut press failed");
+    key(dpy, XK_z);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("redo shortcut release failed");
 }
 
 static void keyboard_sequence(Display *dpy) {
@@ -451,11 +477,20 @@ int main(int argc, char **argv) {
         if (!strcmp(a.stage, "compose")) {
             const KeySym sequence[] = { XK_n, XK_i, XK_h, XK_a, XK_o };
             for (size_t i = 0; i < sizeof(sequence) / sizeof(sequence[0]); ++i) key(dpy, sequence[i]);
+        } else if (!strcmp(a.stage, "context-open")) {
+            context_open_sequence(dpy);
+        } else if (!strcmp(a.stage, "context-edit")) {
+            context_edit_sequence(dpy);
+        } else if (!strcmp(a.stage, "context-save")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
+        const char *count = !strcmp(a.stage, "compose") ? "5" :
+                            !strcmp(a.stage, "keyboard") ? "20" :
+                            !strcmp(a.stage, "context-open") ? "2" :
+                            !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
-               a.stage, (long)a.app, !strcmp(a.stage, "compose") ? "5" :
-               (!strcmp(a.stage, "keyboard") ? "20" : "1"));
+               a.stage, (long)a.app, count);
     }
     XSync(dpy, False); xcb_disconnect(c); XCloseDisplay(dpy); return 0;
 }
