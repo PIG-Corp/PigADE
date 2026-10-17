@@ -181,6 +181,7 @@ struct Response {
 }
 
 pub struct ProductReply {
+    pub sessions: Option<Vec<View>>,
     pub launch_confirmed: bool,
     pub catalog: Option<pigade_storage::Catalog>,
     pub context: Option<pigade_storage::ContextDocument>,
@@ -192,11 +193,14 @@ pub struct ProductError {
 }
 
 pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
-    let launch_confirmed = command.get("command").and_then(Value::as_str) == Some("launch_in_tab");
-    let response = request_response(socket, command).map_err(|message| ProductError {
-        message,
-        rejected_before_launch: false,
-    })?;
+    let command_name = command.get("command").and_then(Value::as_str);
+    let launch_confirmed = command_name == Some("launch_in_tab");
+    let list_sessions = command_name == Some("list");
+    let response = request_response_with_timeout(socket, command, Duration::from_secs(15))
+        .map_err(|message| ProductError {
+            message,
+            rejected_before_launch: false,
+        })?;
     if let Some(message) = response.error {
         return Err(ProductError {
             message,
@@ -205,6 +209,7 @@ pub fn product_request(socket: &Path, command: Value) -> Result<ProductReply, Pr
         });
     }
     Ok(ProductReply {
+        sessions: list_sessions.then_some(response.views),
         launch_confirmed,
         catalog: response.catalog,
         context: response.context,
@@ -284,6 +289,14 @@ fn command_result(response: Response) -> Result<Vec<View>, CommandFailure> {
 }
 
 fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
+    request_response_with_timeout(socket, command, Duration::from_secs(2))
+}
+
+fn request_response_with_timeout(
+    socket: &Path,
+    command: Value,
+    timeout: Duration,
+) -> Result<Response, String> {
     // Host and UI run as the same user. Reject group/world-accessible endpoints.
     let metadata = socket.metadata().map_err(|e| e.to_string())?;
     let own_uid = std::fs::metadata("/proc/self")
@@ -294,10 +307,10 @@ fn request_response(socket: &Path, command: Value) -> Result<Response, String> {
     }
     let mut stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
+        .set_write_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     let payload =
         serde_json::to_vec(&json!({"protocol":2,"command":command})).map_err(|e| e.to_string())?;

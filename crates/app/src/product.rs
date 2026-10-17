@@ -6,9 +6,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::InteractiveElement, px, rgb,
 };
 use pigade_storage::{Catalog, ContextDocument, Tab, Workspace, WorkspaceStatus};
+use std::collections::HashSet;
 use uuid::Uuid;
 
-use super::CanvasApp;
+use super::{CanvasApp, protocol};
 
 const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 30.0;
@@ -20,6 +21,10 @@ pub(super) enum ProductAction {
     CreateTab,
     OpenTransfer,
     TransferTo(Uuid),
+    OpenSessions,
+    RefreshSessions,
+    AttachSession(Uuid),
+    SelectProject(Uuid),
     SelectWorkspace(Uuid),
     SelectTab(Uuid),
     Launch(String),
@@ -39,6 +44,7 @@ pub(super) enum DialogKind {
     Palette,
     Context,
     Transfer,
+    Sessions,
 }
 
 impl DialogKind {
@@ -50,6 +56,7 @@ impl DialogKind {
             Self::Palette => "Команды PigADE",
             Self::Context => "Контекст воркспейса",
             Self::Transfer => "Перенести панель",
+            Self::Sessions => "Неразмещённые сессии",
         }
     }
 
@@ -61,6 +68,7 @@ impl DialogKind {
             Self::Palette => &["Поиск команды"],
             Self::Context => &["Инструкции", "Роль", "Память"],
             Self::Transfer => &[],
+            Self::Sessions => &[],
         }
     }
 
@@ -72,6 +80,7 @@ impl DialogKind {
             Self::Palette => "Закрыть",
             Self::Context => "Сохранить ревизию",
             Self::Transfer => "Закрыть",
+            Self::Sessions => "Закрыть",
         }
     }
 }
@@ -100,9 +109,26 @@ impl Dialog {
 pub(super) struct ProductUi {
     pub(super) catalog: Option<Catalog>,
     pub(super) context: Option<ContextDocument>,
+    pub(super) sessions: Vec<SessionSummary>,
     pub(super) notice: Option<String>,
     pub(super) busy: bool,
     pub(super) dialog: Option<Dialog>,
+}
+
+pub(super) struct SessionSummary {
+    session: String,
+    title: String,
+    state: String,
+}
+
+impl From<protocol::View> for SessionSummary {
+    fn from(view: protocol::View) -> Self {
+        Self {
+            session: view.session,
+            title: view.frame.title,
+            state: view.state,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -176,12 +202,33 @@ fn selected_tab(catalog: &Catalog) -> Option<Uuid> {
     catalog.selection.tab_id
 }
 
+fn placed_session_ids(catalog: Option<&Catalog>) -> HashSet<Uuid> {
+    let mut ids = HashSet::new();
+    for tab in catalog.into_iter().flat_map(|catalog| &catalog.tabs) {
+        if let Ok(layout) = serde_json::from_str::<pigade_layout::TabLayout>(&tab.layout_json) {
+            ids.extend(layout.panes());
+        }
+    }
+    ids
+}
+
+fn session_state_label(state: &str) -> &'static str {
+    match state {
+        "running" => "Работает",
+        "history" | "historical" => "История",
+        "exited" => "Завершён",
+        "degraded" => "Ошибка терминала",
+        _ => "Исход неизвестен",
+    }
+}
+
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
         ("Добавить проект", ProductAction::AddProject),
         ("Новый воркспейс", ProductAction::CreateWorkspace),
         ("Контекст воркспейса", ProductAction::EditContext),
         ("Перенести панель", ProductAction::OpenTransfer),
+        ("Сессии", ProductAction::OpenSessions),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Открыть терминал", ProductAction::Launch("shell".into())),
         ("Запустить Claude", ProductAction::Launch("claude".into())),
@@ -199,6 +246,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Выровнять панели", ProductAction::Layout("equalize".into())),
         ("Отменить раскладку", ProductAction::Layout("undo".into())),
         ("Повторить раскладку", ProductAction::Layout("redo".into())),
+        ("Скрыть панель", ProductAction::Layout("hide".into())),
     ]
 }
 
@@ -284,19 +332,17 @@ impl ProductUi {
         if let Some(catalog) = &self.catalog {
             let active_workspace = selected_workspace(catalog);
             for project in &catalog.projects {
-                project_tree = project_tree.child(
-                    div()
-                        .id(format!("project-{}", project.id))
-                        .role(Role::ListItem)
-                        .aria_label(format!("Проект {}", project.name))
-                        .w_full()
-                        .px(px(8.))
-                        .py(px(7.))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.muted)
-                        .child(project.name.clone()),
-                );
+                project_tree = project_tree.child(self.action_control(
+                    format!("project-{}", project.id),
+                    project.name.clone(),
+                    ProductAction::SelectProject(project.id),
+                    ControlStyle {
+                        role: Role::TreeItem,
+                        selected: catalog.selection.project_id == Some(project.id),
+                        compact: false,
+                    },
+                    cx,
+                ));
 
                 let mut has_workspace = false;
                 for workspace in catalog
@@ -532,6 +578,19 @@ impl ProductUi {
             "Перенос".into(),
             "Перенести выбранную вкладку".into(),
             ProductAction::OpenTransfer,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        ));
+
+        toolbar = toolbar.child(self.action_control_with_accessible_name(
+            "open-sessions".into(),
+            "Сессии".into(),
+            "Показать неразмещённые сессии".into(),
+            ProductAction::OpenSessions,
             ControlStyle {
                 role: Role::Button,
                 selected: false,
@@ -781,6 +840,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(cx);
+        }
+        if dialog.kind == DialogKind::Sessions {
+            return self.sessions_overlay(cx);
         }
 
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
@@ -1059,6 +1121,187 @@ impl ProductUi {
                             .child(source_label),
                     )
                     .child(targets)
+                    .child(div().flex().justify_end().mt(px(12.)).child(close)),
+            )
+            .into_any_element()
+    }
+
+    fn sessions_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = ProductColors::dark();
+        let placed = placed_session_ids(self.catalog.as_ref());
+        let mut seen = HashSet::new();
+        let mut entries = div()
+            .id("unplaced-session-list")
+            .role(Role::List)
+            .aria_label("Неразмещённые сессии")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mt(px(14.))
+            .max_h(px(360.))
+            .overflow_y_scroll();
+        let has_tab = self.catalog.as_ref().and_then(selected_tab).is_some();
+        let mut count = 0;
+
+        for view in &self.sessions {
+            let Ok(session_id) = Uuid::parse_str(&view.session) else {
+                continue;
+            };
+            if placed.contains(&session_id) || !seen.insert(session_id) {
+                continue;
+            }
+            count += 1;
+            let short_id = session_id.simple().to_string()[..8].to_owned();
+            let title = if view.title.trim().is_empty() {
+                "Без названия"
+            } else {
+                view.title.as_str()
+            };
+            let state = session_state_label(&view.state);
+            let attach = if has_tab {
+                self.action_control_with_accessible_name(
+                    format!("attach-session-{session_id}"),
+                    "Разместить".into(),
+                    format!("Разместить сессию {short_id} в выбранной вкладке"),
+                    ProductAction::AttachSession(session_id),
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: true,
+                        compact: true,
+                    },
+                    cx,
+                )
+            } else {
+                div()
+                    .id(format!("attach-session-unavailable-{session_id}"))
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("Выберите вкладку")
+                    .into_any_element()
+            };
+            entries = entries.child(
+                div()
+                    .id(format!("session-entry-{session_id}"))
+                    .role(Role::ListItem)
+                    .aria_label(format!("{title}; {state}; {short_id}"))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.base)
+                    .px(px(10.))
+                    .py(px(8.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(colors.text)
+                                    .truncate()
+                                    .child(title.to_owned()),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(2.))
+                                    .text_size(px(10.))
+                                    .text_color(colors.muted)
+                                    .child(format!("{state} · {short_id}")),
+                            ),
+                    )
+                    .child(attach),
+            );
+        }
+
+        if count == 0 {
+            entries = entries.child(
+                div()
+                    .id("sessions-all-placed")
+                    .px(px(10.))
+                    .py(px(16.))
+                    .text_color(colors.muted)
+                    .child("Все сессии размещены"),
+            );
+        }
+
+        let refresh = self.action_control_with_accessible_name(
+            "refresh-sessions".into(),
+            "Обновить".into(),
+            "Обновить список сессий".into(),
+            ProductAction::RefreshSessions,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let close = self.action_control(
+            "sessions-dialog-close".into(),
+            "Закрыть".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("sessions-dialog-overlay")
+            .accessibility_id("sessions-dialog-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(24.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx);
+            }))
+            .child(
+                div()
+                    .id("sessions-dialog")
+                    .role(Role::Dialog)
+                    .aria_label("Неразмещённые сессии")
+                    .w_full()
+                    .max_w(px(560.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(16.))
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("sessions-dialog-heading")
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .id("sessions-dialog-title")
+                                    .role(Role::Heading)
+                                    .aria_level(2)
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(colors.text)
+                                    .child("Неразмещённые сессии"),
+                            )
+                            .child(refresh),
+                    )
+                    .child(entries)
                     .child(div().flex().justify_end().mt(px(12.)).child(close)),
             )
             .into_any_element()

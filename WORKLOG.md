@@ -2057,3 +2057,35 @@ Connect native project/workspace/tab UI to durable catalog, real CLI launch, con
 - Files: AGENTS.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, crates/app/Cargo.toml, crates/app/Cargo.lock, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/tiling.rs, crates/session-host/src/lib.rs, crates/session-host/src/poll.rs, crates/session-host/src/projects.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/history_read.rs, crates/session-host/src/ipc_server.rs, crates/storage/src/context.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, scripts/isolated-render.py
 - Verification: Host workspace strict clippy passed; app 130 tests passed after updating transport fixture for initial catalog read; 13 layout invariants passed; app strict clippy/build passed; private Weston render/reopen passed with 4 unchanged PTY identities and screenshot reviewed. Initial private attempts failed due to legacy fixture lacking catalog placement and a Direction case mismatch; corrected only fixture setup. Versions aligned; diff check passed.
 - Risks / next: Continue product implementation: context delivery/adapters, session reconciliation/history, complete interaction/settings/themes and packaging. Remaining terminal/platform/release gates remain open; no new diagnostic/report work prioritised.
+
+## 2026-10-17T13:21:26+00:00 — terminal_memory_budget
+
+Added Linux startup socket resolver that reuses a healthy v2 host or starts the local host safely
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 crates/app/src/startup.rs; git diff --check -- crates/app/src/startup.rs (passed). Module is not yet registered in main.rs, so cargo check is pending root integration as assigned.
+- Risks / next: Root to register startup::resolve_socket in app startup and run focused app check; verify no stale endpoint cleanup.
+
+## 2026-10-17T13:21:41+00:00 — /root/font_render_profile
+
+Add unplaced-session picker dialog
+
+- Files: crates/app/src/product.rs
+- Verification: cargo check --manifest-path crates/app/Cargo.toml --locked passed; rustfmt --edition 2024 --check crates/app/src/product.rs and git diff --check -- crates/app/src/product.rs passed
+- Risks / next: Root owns IPC List routing and attachment behavior; app-level clippy remains with root
+
+## 2026-10-17T13:25:23+00:00 — terminal_memory_budget
+
+Added isolated subprocess startup integration test with stale private socket recovery and exact Child cleanup
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 crates/app/src/startup.rs and git diff --check passed. Focused app test was attempted but the first fresh GPUI build exposed test-only compile issues, then retry blocked on root clippy build lock and was canceled; fixed issues are awaiting root compile verification.
+- Risks / next: Root to run the focused startup test after current Cargo build; test uses target/release/pigade-session-host, isolated XDG dirs, and kills/waits only its returned Child.
+
+## 2026-10-17T13:30:10+00:00 — /root
+
+Add standalone app startup and restore unplaced sessions without relaunching CLI
+
+- Files: AGENTS.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, crates/app/src/startup.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs
+- Verification: Bootstrap app strict clippy and build passed. Focused real-host startup test passed: owned stale private endpoint recovered under host locks, second resolution reused host, no CLI sessions created, exact Child cleaned up. Earlier 130 app tests and native render/reopen passed at f785093. Version check and diff check passed.
+- Risks / next: Continue context preview/delivery through capability-checked adapters, full text editing/themes, scrollable minimum-size canvas and native interaction verification. Git worktree creation still executes on the host dispatcher; move it to bounded background preparation before claiming responsive concurrent-worktree acceptance. Remaining MVP release gates remain open. Use bootstrap only to avoid rebuilding the GPUI graph under alternate Cargo homes.

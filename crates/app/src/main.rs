@@ -11,6 +11,7 @@ mod product;
 mod protocol;
 mod publication_trace;
 mod selection;
+mod startup;
 mod tiling;
 mod wake_signal;
 use command_worker::{
@@ -756,6 +757,7 @@ struct CanvasApp {
     product_tx: mpsc::SyncSender<Value>,
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
     product_launch_unknown: bool,
+    pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
     layout_mode: Option<LayoutMode>,
     layout_preview: Option<(uuid::Uuid, pigade_layout::TabLayout)>,
@@ -849,12 +851,26 @@ impl CanvasApp {
                                 Ok(reply) => {
                                     if reply.launch_confirmed {
                                         this.product_launch_unknown = false;
+                                        this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
                                         this.product.catalog = Some(catalog);
                                         this.product.notice = None;
                                         this.product.dialog = None;
                                         this.sync_product_selection(window, cx);
+                                    }
+                                    if let Some(sessions) = reply.sessions {
+                                        if this.pending_launch.is_some_and(|(session,generation)| sessions.iter().any(|view|
+                                            view.session == session.to_string() && view.generation == generation.to_string()
+                                            && matches!(view.state.as_str(),"running"|"exited"|"history"))) {
+                                            this.product_launch_unknown = false;
+                                            this.pending_launch = None;
+                                            this.product.notice = Some("Предыдущая сессия найдена; её можно вернуть во вкладку".into());
+                                        }
+                                        this.product.sessions = sessions.into_iter().map(Into::into).collect();
+                                        this.product.dialog = Some(product::Dialog::new(
+                                            product::DialogKind::Sessions,
+                                        ));
                                     }
                                     if let Some(context) = reply.context {
                                         let mut dialog =
@@ -875,6 +891,7 @@ impl CanvasApp {
                                 Err(error) => {
                                     if error.rejected_before_launch {
                                         this.product_launch_unknown = false;
+                                        this.pending_launch = None;
                                     }
                                     this.product.notice = Some(error.message);
                                 }
@@ -1015,6 +1032,7 @@ impl CanvasApp {
             product_tx,
             product_rx,
             product_launch_unknown: false,
+            pending_launch: None,
             layout_geometry: None,
             layout_mode: None,
             layout_preview: None,
@@ -1372,6 +1390,26 @@ impl CanvasApp {
                 self.product.dialog = Some(Dialog::new(DialogKind::CreateWorkspace))
             }
             A::CreateTab => self.product.dialog = Some(Dialog::new(DialogKind::NewTab)),
+            A::OpenSessions | A::RefreshSessions => {
+                self.product_command(json!({"command":"list"}), cx)
+            }
+            A::AttachSession(pane) => {
+                if let Some((tab, layout)) = self.tab_layout() {
+                    self.product.dialog = None;
+                    self.layout_command(
+                        pigade_layout::Command::Insert {
+                            tab,
+                            pane,
+                            target: self.selected_pane().or(layout.focused),
+                            side: pigade_layout::Direction::Right,
+                            split: uuid::Uuid::new_v4(),
+                        },
+                        cx,
+                    );
+                } else {
+                    self.product.notice = Some("Сначала выберите вкладку".into());
+                }
+            }
             A::OpenPalette => self.product.dialog = Some(Dialog::new(DialogKind::Palette)),
             A::OpenTransfer => self.product.dialog = Some(Dialog::new(DialogKind::Transfer)),
             A::TransferTo(to_tab) => {
@@ -1406,6 +1444,24 @@ impl CanvasApp {
                     .and_then(|c| c.selection.workspace_id)
                 {
                     self.product_command(json!({"command":"get_context","scope_id":scope}), cx);
+                }
+            }
+            A::SelectProject(id) => {
+                if let Some(catalog) = &self.product.catalog {
+                    let mut selection = catalog.selection.clone();
+                    selection.project_id = Some(id);
+                    selection.workspace_id = catalog
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.project_id == id)
+                        .map(|workspace| workspace.id);
+                    selection.tab_id = catalog
+                        .tabs
+                        .iter()
+                        .find(|tab| Some(tab.workspace_id) == selection.workspace_id)
+                        .map(|tab| tab.id);
+                    let revision = selection.revision;
+                    self.product_command(json!({"command":"catalog_apply","batch":{"projects":[],"workspaces":[],"tabs":[],"selection":{"value":selection,"expected_revision":revision},"layout":null}}),cx);
                 }
             }
             A::SelectWorkspace(id) => {
@@ -1456,7 +1512,11 @@ impl CanvasApp {
                             .as_ref()
                             .and_then(|c| c.selection.project_id)
                         {
-                            self.product_command(json!({"command":"create_workspace","project":project,"task":field(0),"worktree":field(1).trim() != "shared"}),cx);
+                            match field(1).trim().to_ascii_lowercase().as_str() {
+                                "worktree" => self.product_command(json!({"command":"create_workspace","project":project,"task":field(0),"worktree":true}),cx),
+                                "shared" => self.product_command(json!({"command":"create_workspace","project":project,"task":field(0),"worktree":false}),cx),
+                                _ => self.product.notice = Some("Выберите режим worktree или shared".into()),
+                            }
                         } else {
                             self.product.notice =
                                 Some("Сначала добавьте или выберите проект".into());
@@ -1484,7 +1544,7 @@ impl CanvasApp {
                             self.product_action(action, window, cx);
                         }
                     }
-                    DialogKind::Transfer => (),
+                    DialogKind::Transfer | DialogKind::Sessions => (),
                 }
             }
             A::Launch(provider) => self.launch_panel(provider, pigade_layout::Direction::Right, cx),
@@ -1493,6 +1553,11 @@ impl CanvasApp {
                     return;
                 };
                 match name.as_str() {
+                    "hide" => {
+                        if let Some(pane) = self.selected_pane() {
+                            self.layout_command(pigade_layout::Command::ClosePane { pane }, cx);
+                        }
+                    }
                     "split_right" => {
                         self.launch_panel("shell".into(), pigade_layout::Direction::Right, cx)
                     }
@@ -1530,7 +1595,7 @@ impl CanvasApp {
     ) {
         if self.product_launch_unknown {
             self.product.notice = Some(
-                "Предыдущий запуск не подтверждён. Проверьте сессии перед новым запуском.".into(),
+                "Предыдущий запуск не подтверждён. Откройте «Сессии» для сверки; повторный запуск заблокирован.".into(),
             );
             return;
         }
@@ -1541,12 +1606,15 @@ impl CanvasApp {
         if self.product.busy {
             return;
         }
+        let session = uuid::Uuid::new_v4();
+        let generation = uuid::Uuid::new_v4();
         let command = json!({"command":"launch_in_tab","tab":tab,"provider":provider,
-            "session":uuid::Uuid::new_v4(),"generation":uuid::Uuid::new_v4(),"operation":uuid::Uuid::new_v4(),
+            "session":session,"generation":generation,"operation":uuid::Uuid::new_v4(),
             "side":side,"target":self.selected_pane().or(layout.focused)});
         match self.product_tx.try_send(command) {
             Ok(()) => {
                 self.product_launch_unknown = true;
+                self.pending_launch = Some((session, generation));
                 self.product.busy = true;
                 self.product.notice = None;
             }
@@ -2909,6 +2977,13 @@ impl Render for CanvasApp {
                 )
             }
         });
+        let status = match self.pane_drag.as_ref().and_then(|drag| drag.drop.as_ref()) {
+            Some((pigade_layout::Command::Swap { .. }, _)) => {
+                "Отпустите для обмена панелей · Escape — отменить".to_owned()
+            }
+            Some(_) => "Отпустите для перемещения панели · Escape — отменить".to_owned(),
+            None => status,
+        };
         let status = match self.layout_mode {
             Some(LayoutMode::Resize) => {
                 "Размер: стрелки — пропорции · Enter — сохранить · Escape — отменить".to_owned()
@@ -3380,6 +3455,8 @@ fn paint_panel(
                 match v.state.as_str() {
                     "running" => "Работает",
                     "exited" => "Завершён",
+                    "degraded" => "Ошибка терминала",
+                    "launch_outcome_unknown" => "Исход запуска неизвестен",
                     _ => "История",
                 }
             };
@@ -3577,15 +3654,24 @@ fn paint_panel(
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("PigADE {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let explicit_socket = std::env::args().nth(1);
+    if explicit_socket.as_deref() == Some("--help") {
         println!(
-            "PigADE native canvas {} (stage-0)",
+            "PigADE {}\nUsage: pigade-app [HOST_SOCKET]\nWithout a socket, starts or reconnects to the local session host.",
             env!("CARGO_PKG_VERSION")
         );
         return;
     }
-    let socket = std::env::args()
-        .nth(1)
-        .expect("usage: pigade-app /path/to/host.sock");
+    let socket = match startup::resolve_socket(explicit_socket.map(PathBuf::from)) {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("PigADE: {error}");
+            std::process::exit(2);
+        }
+    };
     let diagnostic_preedit = std::env::args()
         .skip(2)
         .any(|arg| arg == "--diagnostic-preedit");
@@ -3611,7 +3697,7 @@ fn main() {
     } else {
         Trace::disabled()
     };
-    let connection = ipc(socket.into(), trace);
+    let connection = ipc(socket, trace);
     application().run(move |cx: &mut App| {
         cx.set_reduce_motion(reduced_motion);
         crate::font::install(cx).expect("bundled terminal font profile must load");
