@@ -40,3 +40,5 @@ are separate evidence; this code change does not establish the stalled stage or
 pass the24h gate.
 
 A30-second four-PTY smoke on frozen release SHA610efac4b817116ed761217a9738485c2b499bf6fb05a30ebce7cb6dbf7e4791 completed in30.019603s with all-session CRC/full-recovery checks. A manual read-only observation was attempted after this short run had exited and got connection-refused; it is not live-probe evidence. The harness now retains initial READY snapshot probe summaries directly, and a longer diagnostic will test that path. No24h claim follows from the smoke.
+
+The new7200s diagnostic is running on that same610efac4 release. All four initial READY snapshots provide version1 available probe data and reader/enqueue counters. [Curated smoke and initial probes](../../benchmarks/results/actor-stage-20261017/) retain the exact source/binary and scope. Initial availability is not evidence of a completed long run or localization of a stall.

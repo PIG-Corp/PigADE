@@ -159,13 +159,19 @@ Token104 was received and its ACK write completed in the child. The timeout
 snapshot remained at10509; the final durable event10510 contains the ACK and
 frozen-host recovery displays it. All four complete hot/frame recovery checks
 pass (zero cold records); clean producer CRC is unavailable after abort. The
-specific post-write/pre-publication stage is unresolved. No soak is currently
-running; do not restart one until the independent actor/reader stage probe is
-reviewed. No24h or isolated PERF claim.
+specific post-write/pre-publication stage is unresolved. That frozen-host run is finished. A new independently instrumented run is
+listed below; do not duplicate it. No24h or isolated PERF claim.
 
 The independent stage/reader probe is now implemented and headlessly verified;
 fresh30.020s smoke on frozen610efac4… passes all4 CRC/full-recovery checks. The
 probe does not yet localize a real stall. See reports/actor-stage-diagnostics.md.
+
+**Running stage-instrumented7200s diagnostic:** tool55262,
+`~/.local/state/pigade/soak/actor-stage-long-20261017`, frozen610efac4…; initial
+version1 probes are available for all4 sessions. Host identity at startup:
+bootd639535a-367c-4655-8316-12063ad08144 / PID1333425 / start2824033. Never signal
+from these stale coordinates without revalidation. Do not duplicate/restart or
+claim completion before final exit. No24h/PERF acceptance.
 
 **Completed VM run:** tool50099 exited successfully,
 `~/.local/state/pigade/vm-reboot-full-20261017/run-20261017T005802Z-34a0410e`.

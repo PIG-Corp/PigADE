@@ -1513,3 +1513,11 @@ Integrate independent actor/PTYreader stage probe and bounded timeout summaries 
 - Files: crates/session-host/src/lib.rs, crates/session-host/src/metrics.rs, crates/session-host/src/poll.rs, scripts/soak-pty.py, scripts/test_soak_pty.py, scripts/test_soak_admission.py, docs/reports/actor-stage-diagnostics.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
 - Verification: Fresh185 workspace tests, strictalltargetClippy, fmt, release bins/examples pass. Root adds explicit historybegin/query/exited stages, poison refusal and strict harness whitelist.16 focusedsoaktests pass, pycompile/version/diff checks pass. Frozen610efac4 30.019603s actual4PTYsmoke passesall CRC/fullrecovery. Manualprobe attemptedafterexit gotrefused, notclaimedliveproof; initialREADYprobe retention nowintegrated.
 - Risks / next: Freeze reviewed610efac4 release for one7200s stage-instrumented reproducer after commit; retain failure or final recovery, unchanged5s ACK/10s resize deadlines. FullMVP remainsopen.
+
+## 2026-10-17T02:32:53+00:00 — /root
+
+Start one reviewed stage-instrumented7200s reproducer and retain actual initial probe evidence
+
+- Files: benchmarks/results/actor-stage-20261017, docs/reports/actor-stage-diagnostics.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: Tool55262 running with frozen610efac4, exactboot/PID/start startupidentity retained; all4 initialREADY snapshots haveavailable v1 stage/reader summaries. Previous30s smokecompletedCRC/fullrecovery. Actual7200s outcome pending, no24h/PERFclaim.
+- Risks / next: Observe finalrunornewboundedtimeoutstage, no duplicate/restart. ContinueindependentWaylandSDKintegrity and per-targetmouse delivery work.

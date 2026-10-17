@@ -1,0 +1,111 @@
+{
+  "binary_sha256": "610efac4b817116ed761217a9738485c2b499bf6fb05a30ebce7cb6dbf7e4791",
+  "host_identity": [
+    "d639535a-367c-4655-8316-12063ad08144",
+    1333425,
+    2824033
+  ],
+  "scope": "initial READY snapshot probes from running7200s diagnostic; not a completion or stalled-stage finding",
+  "sessions": [
+    {
+      "generation": "9120b4d0-e756-4895-a014-4a6dc6c5daf0",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 28244187149476,
+        "reader": {
+          "bytes_enqueued": 15787,
+          "bytes_read": 15787,
+          "enqueued_calls": 88,
+          "last_enqueued_monotonic_ns": 28244184340194,
+          "last_read_bytes": 257,
+          "last_read_monotonic_ns": 28244184340114,
+          "read_calls": 88
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 24646314,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 28244211795790,
+      "session": "8225e581-4d3b-4e38-a5d3-4af65cc8820b",
+      "stream": 0
+    },
+    {
+      "generation": "312ee096-da45-41df-baf5-0599d55f3f67",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 28248009844783,
+        "reader": {
+          "bytes_enqueued": 15787,
+          "bytes_read": 15787,
+          "enqueued_calls": 87,
+          "last_enqueued_monotonic_ns": 28248007031583,
+          "last_read_bytes": 257,
+          "last_read_monotonic_ns": 28248007031453,
+          "read_calls": 87
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 33720116,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 28248043564899,
+      "session": "5e297d85-5e9a-4789-be80-ebd16ebc2457",
+      "stream": 1
+    },
+    {
+      "generation": "1edd28b3-7d18-4cd1-bd5c-ab40705434b2",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 28251843111438,
+        "reader": {
+          "bytes_enqueued": 15787,
+          "bytes_read": 15787,
+          "enqueued_calls": 89,
+          "last_enqueued_monotonic_ns": 28251839978431,
+          "last_read_bytes": 257,
+          "last_read_monotonic_ns": 28251839978371,
+          "read_calls": 89
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 29797839,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 28251872909277,
+      "session": "4fdd6890-7c39-4d1a-9f22-cf77e3f9cc38",
+      "stream": 2
+    },
+    {
+      "generation": "e23ed50d-495f-4fea-acc5-b421947f3f35",
+      "initial_actor_diagnostic": {
+        "candidate_sequence": null,
+        "entered_monotonic_ns": 28255670886692,
+        "reader": {
+          "bytes_enqueued": 15787,
+          "bytes_read": 15787,
+          "enqueued_calls": 88,
+          "last_enqueued_monotonic_ns": 28255668488863,
+          "last_read_bytes": 258,
+          "last_read_monotonic_ns": 28255668488542,
+          "read_calls": 88
+        },
+        "stage": "waiting",
+        "stage_age_at_snapshot_completion_ns": 51788552,
+        "status": "available",
+        "version": 1
+      },
+      "initial_snapshot_completed_monotonic_ns": 28255722675244,
+      "session": "36152dc7-c3df-475e-989e-6665b28442eb",
+      "stream": 3
+    }
+  ],
+  "source_sha256": {
+    "Cargo.lock": "178e83403bd9c5410b9ffd09afaca921bb14ec494d6b34726f9627829c220bc3",
+    "crates/session-host/src/lib.rs": "507003d0f6de924b8ca3842e9cd2a1b17dbd2e7c57aa73dd262228e27befa0af",
+    "crates/session-host/src/metrics.rs": "a6fc562c0905927a431f462e2a5e3fd8f780ee8d8f6919105f22e1a947456b40",
+    "scripts/soak-pty.py": "147c21881741e3ddab2bdafb9d11637f8703fc57434991c33752324e8c58285b",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "status_at_capture": "running"
+}

@@ -1,0 +1,18 @@
+{
+  "actual_elapsed_seconds": 30.01960265800153,
+  "binary_sha256": "610efac4b817116ed761217a9738485c2b499bf6fb05a30ebce7cb6dbf7e4791",
+  "elapsed_24h_completed": false,
+  "errors": [],
+  "filesystem": "btrfs",
+  "journal_crc_verified_all_sessions": true,
+  "real_time_soak_24h_integrity_pass": false,
+  "requested_seconds": 30,
+  "scope": "30s correctness smoke only, no independent live-probe capture in this run",
+  "source_sha256": {
+    "crates/session-host/src/lib.rs": "507003d0f6de924b8ca3842e9cd2a1b17dbd2e7c57aa73dd262228e27befa0af",
+    "scripts/soak-pty.py": "63062b702e5582492d09813acd2dbe447d01225453c73b9bcc16129e3d91b38f",
+    "scripts/stress-pty.py": "71d37788d8167ea2a90b0e7b34eea426dc700cde01aee8b93baafe5844dc6806"
+  },
+  "status": "completed",
+  "verify_recovery_passed_all_sessions": true
+}
