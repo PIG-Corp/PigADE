@@ -1097,3 +1097,43 @@ Integrate full corpus,30-cycle reopen and two-boot VM proof; preserve51-minute s
 - Files: benchmarks/results/long-history-full-20261017, benchmarks/results/recovery-full-corpus-30-cycles.json, benchmarks/results/vm-reboot-full-20261017, benchmarks/results/soak-resize-saturation-20261017, docs/reports/long-history-full-20261017.md, docs/reports/soak-resize-saturation.md, scripts/vm-reboot.py, scripts/test_vm_reboot.py, scripts/soak-pty.py, scripts/test_soak_admission.py, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
 - Verification: Root verified completed full4x1GiB live/full/fast54.36M cold oracle,30 frozen-host SIGKILL/reopens source unchanged,p95=1367.28ms,p99=1731.69ms hostonly. Luna reran full-data actual2boots after regression-tested LF-gatedserial fix, finalinventory unchanged and4historicalframes/exacttails equal. Root59Python tests and174workspace tests/fmt/strictClippy/releasepassed. Failedsoak3079.132s kept; root samefrozen67ed verified all4 postfailurehot/parser/frame/cold equality. Instrumented3600s samefrozen reproducer launched tool50088; notcompleted/not24h. Handoff refreshed to currentstate; detailedhistoryretained inWORKLOG/reports.
 - Risks / next: Inspect bounded resize QueueFull diagnostics and fix hoststall before another24h acceptance run; no UI-present/GPU/provider-resume/globalmemory/MVP completion claim.
+
+## 2026-10-17T01:14:15+00:00 — terminal_memory_budget
+
+Added backward-compatible typed terminal palette overrides to Frame, derived from explicit model colors and covered set/reset/replay behavior
+
+- Files: crates/terminal/src/lib.rs
+- Verification: cargo test -p pigade-terminal (26 passed); cargo clippy -p pigade-terminal --all-targets -- -D warnings passed; rustfmt --edition 2024 --config skip_children=true --check crates/terminal/src/lib.rs passed; git diff --check passed
+- Risks / next: Root can mirror the additive DTO in app protocol/render resolution; no palette defaults or theme seeding added. Existing palette remains limited to explicit OSC settings until baseline query semantics are addressed.
+
+## 2026-10-17T01:16:14+00:00 — recovery_slice_review
+
+Add a bounded pure cell-color resolver with explicit host palette overrides and regression coverage
+
+- Files: crates/app/src/palette.rs
+- Verification: rustc --edition=2024 --test crates/app/src/palette.rs -o /tmp/pigade-palette-tests && /tmp/pigade-palette-tests (7 passed); rustfmt --edition 2024 --check crates/app/src/palette.rs; git diff --check -- crates/app/src/palette.rs
+- Risks / next: Root wires crate::palette::color into the app frame renderer and passes Frame.palette_overrides; app build remains root-owned
+
+## 2026-10-17T01:16:41+00:00 — font_render_profile
+
+Hardened Codex conversation harness pipe draining, environment filtering, intent persistence, and JSONL validation
+
+- Files: scripts/codex-conversation.py, scripts/test_codex_conversation.py, docs/research/codex-conversation-plan.md, WORKLOG.md
+- Verification: python3 scripts/test_codex_conversation.py (17 tests passed); python3 -m py_compile scripts/codex-conversation.py scripts/test_codex_conversation.py; python3 scripts/codex-conversation.py (plan-only, spawned_processes=false); git diff --check for owned files
+- Risks / next: Root review; no provider task was run. Installed codex exec rejects --no-daemon, so daemon isolation is not claimed.
+
+## 2026-10-17T01:17:18+00:00 — font_render_profile
+
+Place Codex --no-daemon at global CLI scope for both conversation turns
+
+- Files: scripts/codex-conversation.py, scripts/test_codex_conversation.py, docs/research/codex-conversation-plan.md, WORKLOG.md
+- Verification: python3 scripts/test_codex_conversation.py (17 passed); python3 -m py_compile scripts/codex-conversation.py scripts/test_codex_conversation.py; codex --no-daemon exec --help (exit 0); plan-only run shows --no-daemon before exec and spawned_processes=false; git diff --check
+- Risks / next: Root review; no provider task or network request was run.
+
+## 2026-10-17T01:19:05+00:00 — /root
+
+Verify actual native Codex exact-ID conversation continuity with redacted source-bound evidence
+
+- Files: scripts/codex-conversation.py, scripts/test_codex_conversation.py, docs/research/codex-conversation-plan.md, docs/reports/codex-conversation-20261017.md, benchmarks/results/codex-conversation-20261017/result.json, docs/compatibility/CLI.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Reviewed and fixed via Luna unread-pipe truncation, allowlisted environment, exact global no-daemon placement, reasoning-vs-tool handling and durable phase intent;17 harness tests passed. Root executed2real provider turns once: codex-cli0.162.1 exactthreadID resumed acrossprocesses, syntheticcontextnonce matched, samethread.started event true; rawoutput/auth/history nevercopied. Harness SHAe06c9727...0406 matches result.
+- Risks / next: No interactive TUI/PigADE adapter/host or reboot auto-resume certification. Integrate durable product conversation binding and explicit capability gates; do not rerununknown.

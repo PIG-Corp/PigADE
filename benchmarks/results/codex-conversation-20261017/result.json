@@ -1,0 +1,22 @@
+{
+  "cli_sha256": "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1",
+  "cli_version": "codex-cli 0.162.1",
+  "context_nonce_sha256": "14bead3ad77ecb349de2a8586055a849bdfa0aece9052221cd672b92462caee5",
+  "created_utc": "2026-10-17T01:18:09.497084+00:00",
+  "cwd_is_private_run_directory": true,
+  "harness_source_sha256": "e06c972721daaff95fcd8ce2cc476280880befe082fd4286672ce418c7470406",
+  "initial_stdout_sha256": "51281323b43c8db68f6a996ea319b4d0653b8d92dca063e7eb62576b6f2e0513",
+  "initial_thread_started_event": true,
+  "native_codex_home_policy": "inherited_directly_not_copied",
+  "native_rollouts_are_isolated": false,
+  "phase": "resume_spawn_intent",
+  "provider": "codex",
+  "raw_stderr_saved": false,
+  "raw_stdout_saved": false,
+  "resume_stdout_sha256": "bcb22664b41cda19acc09a826630568eeb3219f82bbe76fa13739af5e31c34b9",
+  "resume_thread_started_same_id": true,
+  "status": "passed",
+  "thread_id_sha256": "9535b5ebf234755771ba7b416882b30f42f331d35cc05961f44a0b7b645f7c20",
+  "used_exact_resume_id": true,
+  "used_last_fallback": false
+}

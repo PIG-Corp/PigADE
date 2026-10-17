@@ -145,8 +145,10 @@ do not poll/restart them as active jobs. Private source data never belongs in Gi
    transients and durable whole-event refusal. Never crop ANSI operations.
 4. Complete isolated native input/IME/clipboard/X11/fractional scale/real GPU and
    accessibility checks, actual CLI conversations and exact native resume.
-   A plan-only Codex conversation harness is being prepared by the Luna font
-   agent; root must review before executing provider tasks. No task has yet run.
+   The reviewed Codex conversation harness passed two real native exec turns
+   with exact-ID resume and retained synthetic context. See
+   reports/codex-conversation-20261017.md. Product/interactive TUI binding and
+   automatic resume are still pending; no credential/history copying occurred.
 5. Build stable history viewing/search/copy, then full project/workspace/tab/
    tiling UI, Git/worktrees, revisioned context/roles/memory and versioned adapters.
 6. Finish packaging, platform build matrix, performance/fault matrix and the
