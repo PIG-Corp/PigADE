@@ -1,0 +1,121 @@
+{
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 35,
+    "start_time_ticks": 2718611,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "bwrap_exit_status": 1,
+  "failure_reason": "native EN/RU/CLI bytes differed from fixed expectation",
+  "failure_stage": "native-en-ru-cli-keyboard",
+  "failure_type": "RuntimeError",
+  "fcitx": {
+    "input_method": "pinyin",
+    "pid": 12,
+    "private_profile": true,
+    "start_time_ticks": 2718586,
+    "xim_owner_verified_by": "XRes local client PID",
+    "xim_selection": "@server=fcitx"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "27564c21-5a2f-4ec1-a94f-6e01b92cfa34",
+    "ready": true,
+    "session": "00121ba3-d199-42de-8455-b96223252d83",
+    "tty": "raw/no-echo"
+  },
+  "keyboard": {
+    "controls": [
+      "Ctrl-C",
+      "Ctrl-D",
+      "Ctrl-Z",
+      "Ctrl-R",
+      "Ctrl-L",
+      "Ctrl-A",
+      "Alt-x",
+      "Left",
+      "Home",
+      "Enter"
+    ],
+    "exact_once": false,
+    "exact_utf8": false,
+    "expected_bytes": 31,
+    "expected_sha256": "375a49675f7eba00a9b1b56403014cc88450e09c118620e7dbba8aec4a82dd57",
+    "extra_bytes": 0,
+    "groups": [
+      "us",
+      "ru"
+    ],
+    "modifiers_clear_before_after": true,
+    "payload_sha256": "9a9e63c27043ebb10bb0cad7e16f9fe0dbbdf8019a32a844991bfb16b08cda10",
+    "pre_input_bytes": 0,
+    "received_bytes": 29,
+    "xkb_group_verified": true
+  },
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 5783,
+      "stream_sha256": "e8552f38550383593641a21bb7617ce6d42d0f88e5ece5bd278d81508a564e4d",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "edbf5fa1186cb9bb31ba256de4cc4051b0ec2dff08aa9067cb27b6ef4cef3159",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "schema": 1,
+  "stage": "native-en-ru-cli-keyboard",
+  "status": "failed-closed",
+  "xvfb": {
+    "display": ":0",
+    "pid": 4,
+    "socket_inode": 3,
+    "start_time_ticks": 2718578,
+    "tcp": false,
+    "transport": "private local Unix socket"
+  }
+}

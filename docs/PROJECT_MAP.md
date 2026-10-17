@@ -23,6 +23,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/tests | Real PTY/reconnect/resize/kill/Stop/query-burst and durable placement scenarios |
 | crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
 | crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; unchanged poll metadata avoids cloning frames/cells |
+| crates/app/src/command_worker.rs | Explicit token-bound known-rejection acknowledgement, unknown lock, actual dispatch closure, unsent counts and resize cache; prototype gate is global |
 | crates/app/src/cell_style.rs | Pure bounded device-pixel underline/strike recipes, wide/hidden/spacer policy and decorated-space foreground admission |
 | crates/app/src/cursor.rs | Pure typed cursor geometry, wide-cell normalization, blink/reduced-motion and block glyph contrast; native paint/lifecycle in main.rs |
 | crates/app/src/palette.rs | Bounded host-cell color resolver; typed sorted dynamic overrides, truecolor and unchanged default theme; no ANSI parser |
@@ -32,7 +33,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/font.rs, assets/fonts | Embedded unique-family OFL derivatives, exact manifests, disabled liga/calt and fixed JP CJK fallback policy; unsupported platform fallback is unpinned |
 | crates/app/bootstrap.sh, patches/gpui-x11-ime | Immutable GPUI archive plus guarded exact X11 focus lifecycle patch; ignored .upstream source cache |
 | scripts/apply-gpui-patches.py, test_gpui_xim_focus.py | Bounded locked patch pre/postimage guard and exact embedded XIM lifecycle tests |
-| scripts/prepare-x11-ime-sdk.py, isolated-ime-x11.py, x11-ime-input.c | Signed test-only Xvfb/Fcitx/Pinyin SDK, verified private namespaces/display/window ownership and fixed native commit proof; no active desktop access |
+| scripts/prepare-x11-ime-sdk.py, isolated-ime-x11.py, x11-ime-input.c | Signed test-only Xvfb/Fcitx/Pinyin SDK, verified private namespaces/display/window ownership and fixed native Pinyin/EN/RU/CLI byte proofs; no active desktop access |
 | crates/app/evidence/conditional-poll-20261017 | Fresh isolated software-rendered UI reopen evidence; not GPU or platform certification |
 | vendor/vte |0.15.0 maintained UTF8/full-parser-state/OSC-bound patches, original licenses |
 | vendor/alacritty_terminal |0.26.0 explicit Term/Grid export/import, allocation-aware pools, borrowed row export and runtime normal-history retirement notifications |
@@ -69,3 +70,5 @@ compression and global model heap admission remain independent unfinished work.
 The pinned GPUI X11 focus correction now passes one native Pinyin commit in the actual debug/release app; a settled clean-upstream baseline lacked an active IC. See [ADR0010](adr/0010-gpui-x11-ime-focus-lifecycle.md) and [source-bound report](reports/x11-ime-20261017.md). Composition-generation barriers, inline preedit and the full platform gate remain open.
 
 The response-priority actor wait cycle is reproduced and repaired with bounded FIFO replies while draining PTY output; [report](reports/query-response-backpressure.md). This repair does not establish a cause for the separate soak ACK timeout.
+
+Actual fixed X11 EN/RU/CLI keyboard now passes after a reproduced Alt-printable loss repair; the same release passes Pinyin again. See [keyboard evidence](reports/x11-keyboard-20261017.md). Full native target-generation barriers remain open; [source review](research/ime-generation-barrier-next.md) demonstrates why reused XIM IC IDs are insufficient.

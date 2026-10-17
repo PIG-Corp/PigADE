@@ -6,6 +6,8 @@ import importlib.util
 import io
 import json
 import os
+import pty
+import socket
 from pathlib import Path
 import subprocess
 import tempfile
@@ -146,6 +148,74 @@ class IsolatedImePlanTests(unittest.TestCase):
             self.assertEqual(env['DISPLAY'], ':3')
             self.assertEqual(env['XAUTHORITY'], '/run/pigade-test/Xauthority')
             self.assertEqual(env['DBUS_SESSION_BUS_ADDRESS'], 'unix:path=/run/pigade-test/bus')
+
+    def test_keyboard_mode_is_fixed_plan_only_and_loads_only_private_map(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'keyboard']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'keyboard')
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        self.assertEqual(IME.KEYBOARD_EXPECTED,
+                         b'ab1Z\x03\x04\x1a\x12\x0c\x01\x1bx\x1b[D\x1b[H\r' + 'привет'.encode())
+        env = {'DISPLAY': ':3', 'XAUTHORITY': '/run/pigade-test/Xauthority'}
+        with mock.patch.object(IME.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='', stderr='')) as run:
+            IME.prepare_private_keyboard({'x11_root': '/pigade/x11-sdk', 'display': ':3'}, env)
+        self.assertEqual(run.call_args.args[0], ['/pigade/x11-sdk/usr/bin/setxkbmap',
+                         '-display', ':3', '-layout', 'us,ru', '-option', ''])
+        self.assertEqual(run.call_args.kwargs['env'], env)
+
+    def run_raw_fixture(self, expected, delivered):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = str(Path(temporary) / 'control.sock')
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            master, slave = pty.openpty()
+            process = None
+            control = None
+            try:
+                listener.bind(path); listener.listen(1); listener.settimeout(3)
+                process = subprocess.Popen(['/usr/bin/python3', '-I', '-c', IME.FIXTURE,
+                                            path, expected.hex()], stdin=slave, stdout=slave,
+                                           stderr=subprocess.DEVNULL, close_fds=True)
+                os.close(slave); slave = -1
+                control, _ = listener.accept()
+                self.assertEqual(IME.json_line(control, timeout=2), 'READY')
+                control.sendall(b'CHECK\n')
+                self.assertEqual(IME.json_line(control, timeout=2), 'NO_PRECOMMIT_INPUT')
+                os.write(master, delivered)
+                control.sendall(b'COLLECT\n')
+                line = IME.json_line(control, timeout=5)
+                self.assertTrue(line.startswith('RESULT:'))
+                result = json.loads(line[len('RESULT:'):])
+                self.assertEqual(process.wait(timeout=3), 0)
+                return result
+            finally:
+                if control is not None:
+                    control.close()
+                listener.close()
+                os.close(master)
+                if slave >= 0:
+                    os.close(slave)
+                if process is not None and process.poll() is None:
+                    # Still-owned direct child; no PID discovery or desktop access.
+                    process.kill(); process.wait(timeout=3)
+
+    def test_raw_pty_oracle_checks_ime_and_keyboard_bytes_without_echo_or_duplicates(self):
+        for expected in ('你好'.encode(), IME.KEYBOARD_EXPECTED):
+            with self.subTest(expected_bytes=len(expected)):
+                result = self.run_raw_fixture(expected, expected)
+                self.assertEqual(result['received_bytes'], len(expected))
+                self.assertTrue(result['exact_once'])
+                self.assertEqual(result['extra_bytes'], 0)
+
+    def test_raw_pty_oracle_refuses_duplicate_trailing_bytes(self):
+        expected = '你好'.encode()
+        result = self.run_raw_fixture(expected, expected + expected)
+        self.assertFalse(result['exact_once'])
+        self.assertEqual(result['extra_bytes'], len(expected))
 
     def test_helper_contains_only_fixed_input_stages_and_server_validation(self):
         source = Path(__file__).with_name('x11-ime-input.c').read_text()

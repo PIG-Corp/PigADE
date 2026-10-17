@@ -65,9 +65,13 @@ injection, `--last`, automatic repeated task or silent new conversation.
 - Typed dynamic palette overrides now reach the cell painter and terminal padding; reset returns to the unchanged default UI palette. Invalid palette updates are bounded/atomic. See reports/dynamic-palette.md. Default-theme terminal query responses and font-exact decoration positions are still open. Cell underline variants/custom color/strikeout and decorated spaces now render from host attributes; fixed-scale1/2 captures are in reports/terminal-decorations.md. Typed cursor shapes/visibility/blink now reach the painter; four source-bound steady software captures verify block/underline/beam/hollow/hidden pixels. Actual blink timing remains open; see reports/terminal-cursor.md.
 - Native local IME has UTF16 range/selection handling and a clipped overlay;
   one real X11 Fcitx-Pinyin commit passes in debug/release with no premature or
-  duplicate PTY input. Clean upstream failed IC activation after render/focus.
+  duplicate PTY input. A fixed native EN/RU/Ctrl/Alt/arrow31-byte sequence now
+  passes after fixing lost Alt+X; the same release passes Pinyin again. See
+  reports/x11-keyboard-20261017.md. Clean upstream failed IC activation after render/focus.
   Native Linux session-generation reset ordering remains unverified. Do not reintroduce the removed
   cancelled-until-KeyDown latch: IMEs may consume physical keys themselves.
+  The stronger endpoint-generation design and IC-ID reuse evidence are in
+  research/ime-generation-barrier-next.md; no such barrier is implemented yet.
 - Mode-aware mouse input, stable generation drag capture, visible cell selection
   and explicit clipboard paste are integrated. Shift selects locally. Prefix
   Ctrl+Shift+Space then1–4/A/C/V selects pane/all/copy/paste; footer copy/paste
@@ -75,14 +79,19 @@ injection, `--last`, automatic repeated task or silent new conversation.
   bounded16KiB command including brackets; unsafe embedded controls are refused.
   Stale clipboard completion produces a nonblocking notice. Explicit prefix+Esc
   reconciles a locally rejected release; shared unknown errors remain blocked.
+  The UI command worker now requires token-bound acknowledgement of known
+  host rejection; later queued requests are counted unsent and unknown outcomes
+  remain locked. Rejected resize caches clear and vanished generations prune.
+  The prototype gate is still global; per-session gating, mouse acknowledgement
+  and rejection-aware drag reconciliation remain open (reports/app-command-rejection.md).
   See [mouse](reports/mouse-input.md) and [selection/paste](reports/selection-and-paste.md).
 
 ## Latest verification
 
 - Root workspace fmt, strict all-target Clippy and180 tests passed (including
   the27-test input target:25 shared pure codec tests and2 real raw-PTY tests).
-  Release workspace bins/examples build passed. Native app90 tests, strict
-  all-target Clippy, fmt and debug/release builds passed. Python126 tests and9 explicit pinned XIM state tests passed.
+  Release workspace bins/examples build passed. Native app98 tests, strict
+  all-target Clippy, fmt and debug/release builds passed. Python129 tests and9 explicit pinned XIM state tests passed.
   Fresh checks must still follow future changes.
 - Private same-app software-Wayland render/reopen preserves four live CLI
   identities. Root inspected selection/Unicode/child ACKs/footer controls in

@@ -1,5 +1,6 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
 mod cell_style;
+mod command_worker;
 mod cursor;
 mod font;
 mod input;
@@ -7,6 +8,7 @@ mod mouse;
 mod palette;
 mod protocol;
 mod selection;
+use command_worker::{CommandNotice, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate};
 use gpui::{prelude::*, *};
 use gpui_platform::application;
 use palette::color;
@@ -30,12 +32,20 @@ struct State {
     views_revision: u64,
     views: Vec<View>,
     error: Option<String>,
+    command_notice: Option<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
 }
 impl State {
     fn fail(&mut self, error: String) {
         if self.error.is_none() {
             self.error = Some(error);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    fn set_command_notice(&mut self, notice: Option<CommandNotice>) {
+        if self.command_notice != notice {
+            self.command_notice = notice;
             self.revision = self.revision.wrapping_add(1);
         }
     }
@@ -46,6 +56,7 @@ struct StateUpdate {
     views_revision: u64,
     views: Option<Vec<View>>,
     error: Option<String>,
+    command_notice: Option<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
 }
 
@@ -55,6 +66,7 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
         views_revision: shared.views_revision,
         views: (current.views_revision != shared.views_revision).then(|| shared.views.clone()),
         error: shared.error.clone(),
+        command_notice: shared.command_notice.clone(),
         recovery: shared.recovery.clone(),
     })
 }
@@ -62,6 +74,7 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
 fn apply_state_update(state: &mut State, update: StateUpdate) {
     state.revision = update.revision;
     state.error = update.error;
+    state.command_notice = update.command_notice;
     state.recovery = update.recovery;
     if let Some(views) = update.views {
         state.views_revision = update.views_revision;
@@ -70,7 +83,7 @@ fn apply_state_update(state: &mut State, update: StateUpdate) {
 }
 
 fn composition_target_changed(state: &State, selected: usize, update: &StateUpdate) -> bool {
-    if update.error.is_some() {
+    if update.error.is_some() || update.command_notice.is_some() {
         return true;
     }
     let Some(views) = update.views.as_ref() else {
@@ -109,6 +122,7 @@ fn cursor_target_changed(state: &State, selected: usize, update: &StateUpdate) -
 fn can_send_to_view(view: &View, state: &State, local_error: Option<&str>) -> bool {
     view.state == "running"
         && state.error.is_none()
+        && state.command_notice.is_none()
         && local_error.is_none()
         && view.storage_error.is_none()
 }
@@ -178,24 +192,81 @@ fn recovery_warning(
     (!parts.is_empty()).then(|| short_notice_part(&parts.join(" · "), 160))
 }
 
-fn ipc(socket: PathBuf) -> (mpsc::SyncSender<Value>, Arc<Mutex<State>>) {
+enum IpcMessage {
+    Request(Value),
+    AcknowledgeKnownRejection(u64),
+}
+
+fn resize_key(command: &Value) -> Option<ResizeKey> {
+    if command.get("command")?.as_str()? != "resize" {
+        return None;
+    }
+    Some(ResizeKey {
+        generation: command.get("generation")?.as_str()?.to_owned(),
+        rows: command
+            .get("geometry")?
+            .get("rows")?
+            .as_u64()?
+            .try_into()
+            .ok()?,
+        cols: command
+            .get("geometry")?
+            .get("cols")?
+            .as_u64()?
+            .try_into()
+            .ok()?,
+    })
+}
+
+fn publish_worker_notice(shared: &Arc<Mutex<State>>, notice: Option<CommandNotice>) {
+    shared.lock().unwrap().set_command_notice(notice);
+}
+
+fn ipc(socket: PathBuf) -> (mpsc::SyncSender<IpcMessage>, Arc<Mutex<State>>) {
     let (tx, rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Mutex::new(State::default()));
     let output = shared.clone();
     thread::spawn(move || {
+        let mut gate = WorkerGate::default();
         loop {
             // At most 32 queued commands, no retries of ambiguous input/resize.
-            while let Ok(command) = rx.try_recv() {
-                if let Err(e) = request(&socket, command) {
-                    let message = match &e {
-                        CommandFailure::NotAdmitted { .. } => {
-                            format!("Команда не принята: {e}")
+            while let Ok(message) = rx.try_recv() {
+                match message {
+                    IpcMessage::AcknowledgeKnownRejection(token) => {
+                        if gate.acknowledge(token) {
+                            publish_worker_notice(&output, None);
                         }
-                        CommandFailure::OutcomeUnknown(_) => {
-                            format!("Исход команды неизвестен: {e}")
+                    }
+                    IpcMessage::Request(command) => {
+                        let resize = resize_key(&command);
+                        match gate.dispatch_request(resize, || {
+                            request(&socket, command)
+                                .map(|_| ())
+                                .map_err(|error| match error {
+                                    CommandFailure::NotAdmitted { .. } => {
+                                        RequestFailure::NotAdmitted(format!(
+                                            "Команда не принята: {error}"
+                                        ))
+                                    }
+                                    CommandFailure::OutcomeUnknown(_) => {
+                                        RequestFailure::OutcomeUnknown(format!(
+                                            "Исход команды неизвестен: {error}"
+                                        ))
+                                    }
+                                })
+                        }) {
+                            Dispatch::Executed => (),
+                            Dispatch::Dropped | Dispatch::RejectedKnown => {
+                                publish_worker_notice(&output, gate.notice().cloned());
+                            }
+                            Dispatch::OutcomeUnknown => {
+                                let mut state = output.lock().unwrap();
+                                let message = gate.notice().unwrap().message.clone();
+                                state.fail(message);
+                                state.set_command_notice(gate.notice().cloned());
+                            }
                         }
-                    };
-                    output.lock().unwrap().fail(message);
+                    }
                 }
             }
             let known = output
@@ -301,7 +372,7 @@ struct CanvasApp {
     selected: usize,
     prefix: bool,
     state: State,
-    tx: mpsc::SyncSender<Value>,
+    tx: mpsc::SyncSender<IpcMessage>,
     shared: Arc<Mutex<State>>,
     panes: Vec<PaneGeometry>,
     text_input: input::TextInput,
@@ -314,7 +385,7 @@ struct CanvasApp {
     cursor_phase_visible: bool,
     input_error: Option<String>,
     input_notice: Option<String>,
-    resized: Vec<(String, u16, u16)>,
+    resized: ResizeCache,
     _input_subscriptions: Vec<Subscription>,
     diagnostic_preedit_pending: bool,
     diagnostic_selection: bool,
@@ -323,7 +394,7 @@ impl CanvasApp {
     fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        tx: mpsc::SyncSender<Value>,
+        tx: mpsc::SyncSender<IpcMessage>,
         shared: Arc<Mutex<State>>,
         diagnostic_preedit_pending: bool,
         diagnostic_selection: bool,
@@ -363,6 +434,14 @@ impl CanvasApp {
                             state_update(&this.state, &shared)
                         };
                         if let Some(next) = next {
+                            if let Some(notice) = next.command_notice.as_ref() {
+                                this.resized.apply_notice(notice);
+                            }
+                            if let Some(views) = next.views.as_ref() {
+                                this.resized.retain_generations(
+                                    views.iter().map(|view| view.generation.as_str()),
+                                );
+                            }
                             if cursor_target_changed(&this.state, this.selected, &next) {
                                 this.reset_cursor_blink(cx);
                             }
@@ -463,7 +542,7 @@ impl CanvasApp {
             cursor_phase_visible: true,
             input_error: None,
             input_notice: None,
-            resized: Vec::new(),
+            resized: ResizeCache::default(),
             _input_subscriptions: input_subscriptions,
             diagnostic_preedit_pending,
             diagnostic_selection,
@@ -498,7 +577,7 @@ impl CanvasApp {
         }
         let mut value = command(view, "input");
         value["bytes"] = json!(bytes);
-        if self.tx.try_send(value).is_err() {
+        if self.tx.try_send(IpcMessage::Request(value)).is_err() {
             self.input_error = Some("Очередь ввода заполнена; ввод не принят".into());
             cx.notify();
             return false;
@@ -887,8 +966,18 @@ impl CanvasApp {
         })
         .detach();
     }
-    fn error(&self) -> Option<&str> {
-        self.input_error.as_deref().or(self.state.error.as_deref())
+    fn error(&self) -> Option<String> {
+        let notice = self.state.command_notice.as_ref();
+        let command_error = notice.map(|notice| {
+            let message = notice.display_message();
+            match self.state.error.as_deref() {
+                Some(error) if error != notice.message => format!("{error} · {message}"),
+                _ => message,
+            }
+        });
+        command_error
+            .or_else(|| self.state.error.clone())
+            .or_else(|| self.input_error.clone())
     }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_cursor_blink(cx);
@@ -931,7 +1020,17 @@ impl CanvasApp {
             // Only this explicit acknowledgement clears a local rejected-input error.
             // It never resends a failed or unknown command.
             if k.key == "escape" {
-                self.input_error = None;
+                let acknowledged = match self.state.command_notice.as_ref() {
+                    None => true,
+                    Some(notice) if notice.acknowledgeable => self
+                        .tx
+                        .try_send(IpcMessage::AcknowledgeKnownRejection(notice.token))
+                        .is_ok(),
+                    Some(_) => false,
+                };
+                if acknowledged {
+                    self.input_error = None;
+                }
                 // A rejected local release never reached the worker. Close its
                 // remembered press before accepting a fresh click. An unknown
                 // IPC outcome stays blocked by state.error and is not retried.
@@ -999,19 +1098,23 @@ impl CanvasApp {
             .collect();
         for (view, pane) in self.state.views.iter().zip(&self.panes) {
             let (rows, cols) = (pane.rows, pane.cols);
-            if view.state == "running"
-                && !self
-                    .resized
-                    .contains(&(view.generation.clone(), rows, cols))
+            let resize = ResizeKey {
+                generation: view.generation.clone(),
+                rows,
+                cols,
+            };
+            if self.state.error.is_none()
+                && self.state.command_notice.is_none()
+                && self.input_error.is_none()
+                && view.state == "running"
+                && !self.resized.contains(&resize)
             {
                 let mut value = command(view, "resize");
                 value["geometry"] = json!({"rows":rows,"cols":cols});
-                if self.tx.try_send(value).is_err() {
+                if self.tx.try_send(IpcMessage::Request(value)).is_err() {
                     self.input_error = Some("Очередь resize заполнена; размер не принят".into());
                 } else {
-                    self.resized
-                        .retain(|(generation, _, _)| generation != &view.generation);
-                    self.resized.push((view.generation.clone(), rows, cols));
+                    self.resized.remember(resize);
                 }
             }
         }
@@ -1269,7 +1372,7 @@ impl Render for CanvasApp {
             || "Терминал: нет выбранной сессии".to_owned(),
             |view| format!("Терминал {} · {}", view.frame.title, view.state),
         );
-        let status = self.error().or(self.input_notice.as_deref()).map(str::to_owned).unwrap_or_else(|| {
+        let status = self.error().or_else(|| self.input_notice.clone()).unwrap_or_else(|| {
             if self.prefix {
                 "Режим PigADE: 1–4 — фокус · A/C/V — выделить/копировать/вставить · Escape — выход"
                     .into()

@@ -39,8 +39,13 @@ NAMESPACES = ('mnt', 'pid', 'user', 'ipc', 'net')
 MAX_IPC = 8 * 1024 * 1024
 MAX_CAPTURE_BYTES = 1280 * 800 * 3 + 128
 FIXTURE_TOKEN = '__PIGADE_IME_CHILD_ACK_20261017__'
+KEYBOARD_EXPECTED = b'ab1Z\x03\x04\x1a\x12\x0c\x01\x1bx\x1b[D\x1b[H\r' + 'привет'.encode('utf-8')
+KEYBOARD_PASS = 'pass-private-x11-en-ru-cli-keyboard-fixture'
+IME_PASS = 'pass-private-x11-xim-pinyin-commit-fixture'
 FIXTURE = r'''import json, os, select, socket, sys, termios, time, tty
 control_path = sys.argv[1]
+expected = bytes.fromhex(sys.argv[2])
+assert 0 < len(expected) <= 128
 fd = sys.stdin.fileno()
 original = termios.tcgetattr(fd)
 control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -63,17 +68,19 @@ try:
         elif command.startswith(b"COLLECT\n"):
             payload = bytearray()
             deadline = time.monotonic() + 3.0
-            while len(payload) < 6 and time.monotonic() < deadline:
+            while len(payload) < len(expected) and time.monotonic() < deadline:
                 ready, _, _ = select.select([fd], [], [], max(0, deadline-time.monotonic()))
                 if ready:
-                    payload.extend(os.read(fd, 6-len(payload)))
+                    payload.extend(os.read(fd, len(expected)-len(payload)))
             extra_ready, _, _ = select.select([fd], [], [], 0.35)
             extra = os.read(fd, 64) if extra_ready else b""
-            exact = bytes(payload) == "你好".encode("utf-8") and not extra
+            exact = bytes(payload) == expected and not extra
             control.sendall(("RESULT:" + json.dumps({
                 "received_bytes": len(payload),
+                "synthetic_fixture_payload_hex": payload.hex(),
+                "synthetic_fixture_extra_hex": extra.hex(),
                 "payload_sha256": __import__("hashlib").sha256(payload).hexdigest(),
-                "exact_utf8": bytes(payload) == "你好".encode("utf-8"),
+                "exact_utf8": bytes(payload) == expected,
                 "extra_bytes": len(extra),
                 "exact_once": exact,
             }, sort_keys=True) + "\n").encode())
@@ -274,6 +281,65 @@ def select_private_pinyin(config: dict, home: Path, runtime: Path, auth: Path) -
     return result.stdout.strip()
 
 
+def prepare_private_keyboard(config: dict, env: dict) -> None:
+    # Only called after inside_run proves namespace, server and XIM ownership.
+    result = subprocess.run([config['x11_root'] + '/usr/bin/setxkbmap',
+                             '-display', config['display'], '-layout', 'us,ru', '-option', ''],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, timeout=5, check=False, env=env)
+    require(result.returncode == 0 and len(result.stdout) <= 4096 and len(result.stderr) <= 4096,
+            'private US/RU keyboard map load failed: ' + result.stderr[-240:])
+
+
+def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, save):
+    report['stage'] = 'native-en-ru-cli-keyboard'
+    save()
+    remote = config['x11_root'] + '/usr/bin/fcitx5-remote'
+    result = subprocess.run([remote, '-c'], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, timeout=3, check=False, env=env)
+    require(result.returncode == 0 and len(result.stdout) <= 1024 and len(result.stderr) <= 1024,
+            'private Fcitx keyboard deactivation failed')
+    result = subprocess.run([remote], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, timeout=3, check=False, env=env)
+    require(result.returncode == 0 and result.stdout.strip() == '1',
+            'private Fcitx did not confirm inactive state')
+    report['fcitx']['activation_state'] = 1
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'PTY received bytes before fixed keyboard sequence')
+    helper_call(config, 'keyboard')
+    control.sendall(b'COLLECT\n')
+    line = json_line(control, timeout=5)
+    require(line.startswith('RESULT:'), 'keyboard fixture omitted bounded result')
+    result = json.loads(line[len('RESULT:'):])
+    expected_hash = hashlib.sha256(KEYBOARD_EXPECTED).hexdigest()
+    report['keyboard'] = {'expected_bytes': len(KEYBOARD_EXPECTED),
+                           'expected_sha256': expected_hash, **result,
+                           'requested_layouts': ['us', 'ru'], 'verified_group_indices': [0, 1],
+                           'modifiers_clear_before_after': True,
+                           'controls': ['Ctrl-C', 'Ctrl-D', 'Ctrl-Z', 'Ctrl-R', 'Ctrl-L', 'Ctrl-A',
+                                        'Alt-x', 'Left', 'Home', 'Enter'],
+                           'pre_input_bytes': 0}
+    save()
+    require(result.get('received_bytes') == len(KEYBOARD_EXPECTED) and
+            result.get('payload_sha256') == expected_hash and result.get('exact_once') is True and
+            result.get('extra_bytes') == 0, 'native EN/RU/CLI bytes differed from fixed expectation')
+    def ack_seen():
+        views = host_request({'command': 'poll', 'known': []}).get('views', [])
+        return bool(views and FIXTURE_TOKEN in view_text(views[0]))
+    wait_until(ack_seen, time.monotonic() + 8)
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/committed.ppm')
+    require(0 < (artifacts / 'committed.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'keyboard capture exceeds bound')
+    require(app.poll() is None and fcitx.poll() is None, 'app or Fcitx exited during keyboard fixture')
+    report['keyboard']['child_ack_seen'] = True
+    report.update({'status': KEYBOARD_PASS, 'stage': 'complete'})
+    save()
+
+
 def wait_for_private_xim(config: dict, timeout: float = 8.0) -> dict:
     deadline = time.monotonic() + timeout
     last_error = 'XIM owner has not appeared yet'
@@ -299,7 +365,7 @@ def inside_config(args, output, helper, x11_evidence, platform_evidence):
         'private_icd_host': str(output / 'lavapipe-icd.json'), 'app_command': app_command(),
         'host_command': ['/pigade/host', 'serve', '/artifacts/state'],
         'screen': list(SCREEN), 'namespaces': list(NAMESPACES),
-        'fixture_token': FIXTURE_TOKEN,
+        'fixture_token': FIXTURE_TOKEN, 'fixture': getattr(args, 'fixture', 'pinyin'),
     }
 
 
@@ -661,7 +727,8 @@ def inside_run() -> int:
         require(host.poll() is None, 'private host exited before fixture setup')
         session, generation, operation = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
         spec = {'session': session, 'generation': generation, 'operation': operation,
-                'executable': '/usr/bin/python3', 'args': ['-c', FIXTURE, str(control_path)],
+                'executable': '/usr/bin/python3', 'args': ['-c', FIXTURE, str(control_path),
+                    (KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else '你好'.encode()).hex()],
                 'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
         launch = host_request({'command': 'launch', 'spec': spec})
         require(launch.get('error') is None, 'private fixture launch failed')
@@ -680,6 +747,8 @@ def inside_run() -> int:
         app_env['LIBGL_ALWAYS_SOFTWARE'] = 'true'
         app_env['VK_DRIVER_FILES'] = '/pigade/platform-sdk/lavapipe-icd.json'
         app_env['VK_ICD_FILENAMES'] = '/pigade/platform-sdk/lavapipe-icd.json'
+        if config.get('fixture') == 'keyboard':
+            prepare_private_keyboard(config, app_env)
         app = start_process(app_command(), env=app_env)
         children.append(app)
         boot, app_start = process_identity(app.pid)
@@ -698,6 +767,9 @@ def inside_run() -> int:
         report['app']['baseline_capture'] = 'baseline.ppm'
         report['app']['initial_settle_seconds'] = 5
         save()
+        if config.get('fixture') == 'keyboard':
+            run_keyboard_fixture(config, report, control, app, fcitx, app_env, artifacts, save)
+            return 0
         active_im = select_private_pinyin(config, home, runtime, auth)
         time.sleep(0.25)
         report['fcitx']['active_input_method'] = active_im
@@ -745,7 +817,7 @@ def inside_run() -> int:
                             'expected_fixture_hash': hashlib.sha256('你好'.encode()).hexdigest(),
                             'exact_once': True, 'extra_bytes': 0, 'child_ack_seen': True}
         report['commit']['capture_settle_seconds'] = 0.25
-        report['status'] = 'pass-private-x11-xim-pinyin-commit-fixture'
+        report['status'] = IME_PASS
         report['stage'] = 'complete'
         save()
         return 0
@@ -818,14 +890,14 @@ def outer_run(args) -> dict:
         run_result.update({'status': 'failed-closed', 'failure_stage': 'bwrap-exit',
                            'failure_reason': 'private run exited without a terminal report'})
     atomic_json(args.output / 'run.json', run_result)
-    if exit_status != 0 or run_result.get('status') != 'pass-private-x11-xim-pinyin-commit-fixture':
+    if exit_status != 0 or run_result.get('status') != (KEYBOARD_PASS if args.fixture == 'keyboard' else IME_PASS):
         raise RuntimeError('isolated fixture failed closed; private run.json retains stage metadata')
     return {'status': run_result['status'], 'run': str(args.output / 'run.json'),
             'app_sha256': sha256(app), 'host_sha256': sha256(host),
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
-            'platform_sdk': platform, 'captures': [str(args.output / 'preedit.ppm'),
-                                                    str(args.output / 'committed.ppm')],
-            'limits': ['one local X11/XIM/Fcitx-Pinyin fixture only',
+            'platform_sdk': platform, 'captures': [str(args.output / name) for name in
+                (['committed.ppm'] if args.fixture == 'keyboard' else ['preedit.ppm', 'committed.ppm'])],
+            'limits': ['one fixed local X11 keyboard/IME fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -833,11 +905,12 @@ def plan(args) -> dict:
     return {
         'status': 'plan-only-no-process-no-write',
         'run_requires_explicit_flag': '--run',
-        'actual_app_only': True,
+        'actual_app_only': True, 'fixture': args.fixture,
         'app': str(args.app), 'host': str(args.host), 'output': str(args.output) if args.output else None,
         'private_sdk': str(args.x11_sdk / 'evidence/manifest.json'),
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
+                  'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',
@@ -856,6 +929,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard'], default='pinyin',
+                        help='fixed native Pinyin commit or fixed EN/RU and CLI shortcuts')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)
     parser.add_argument('--host', type=Path, default=DEFAULT_HOST)
     parser.add_argument('--x11-sdk', type=Path, default=X11_SDK)

@@ -1,0 +1,125 @@
+{
+  "app": {
+    "baseline_capture": "baseline.ppm",
+    "command": [
+      "/pigade/app",
+      "/artifacts/state/host.sock"
+    ],
+    "initial_settle_seconds": 5,
+    "pid": 35,
+    "start_time_ticks": 2758446,
+    "window_verified_by": [
+      "_NET_WM_PID",
+      "XRes local client PID"
+    ]
+  },
+  "bwrap_exit_status": 0,
+  "fcitx": {
+    "activation_state": 1,
+    "input_method": "pinyin",
+    "pid": 12,
+    "private_profile": true,
+    "start_time_ticks": 2758421,
+    "xim_owner_verified_by": "XRes local client PID",
+    "xim_selection": "@server=fcitx"
+  },
+  "fixture": {
+    "ack_marker": "__PIGADE_IME_CHILD_ACK_20261017__",
+    "generation": "334f5504-6a80-4b8e-8c31-8b15a4b8896e",
+    "ready": true,
+    "session": "7b80ed0a-1010-41fb-ac04-bca232fef145",
+    "tty": "raw/no-echo"
+  },
+  "keyboard": {
+    "child_ack_seen": true,
+    "controls": [
+      "Ctrl-C",
+      "Ctrl-D",
+      "Ctrl-Z",
+      "Ctrl-R",
+      "Ctrl-L",
+      "Ctrl-A",
+      "Alt-x",
+      "Left",
+      "Home",
+      "Enter"
+    ],
+    "exact_once": true,
+    "exact_utf8": true,
+    "expected_bytes": 31,
+    "expected_sha256": "375a49675f7eba00a9b1b56403014cc88450e09c118620e7dbba8aec4a82dd57",
+    "extra_bytes": 0,
+    "modifiers_clear_before_after": true,
+    "payload_sha256": "375a49675f7eba00a9b1b56403014cc88450e09c118620e7dbba8aec4a82dd57",
+    "pre_input_bytes": 0,
+    "received_bytes": 31,
+    "requested_layouts": [
+      "us",
+      "ru"
+    ],
+    "synthetic_fixture_extra_hex": "",
+    "synthetic_fixture_payload_hex": "6162315a03041a120c011b781b5b441b5b480dd0bfd180d0b8d0b2d0b5d182",
+    "verified_group_indices": [
+      0,
+      1
+    ]
+  },
+  "preflight": {
+    "host_display_bus_devices_absent": true,
+    "namespaces": {
+      "ipc": "ipc:[4026533017]",
+      "mnt": "mnt:[4026532954]",
+      "net": "net:[4026533022]",
+      "pid": "pid:[4026533018]",
+      "user": "user:[4026533076]"
+    },
+    "network_interfaces": [
+      "lo"
+    ],
+    "non_loopback_routes": 0,
+    "uid": 1000
+  },
+  "process_logs": [
+    {
+      "process": "Xvfb",
+      "saved_bytes": 5783,
+      "stream_sha256": "e8552f38550383593641a21bb7617ce6d42d0f88e5ece5bd278d81508a564e4d",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "app",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "dbus-daemon",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "fcitx5",
+      "saved_bytes": 5127,
+      "stream_sha256": "a1016cceeb38174d2d99fc467152f6b20392fc2aad7fd2f38dfb9548483d0a58",
+      "truncated_at_bytes": 65536
+    },
+    {
+      "process": "host",
+      "saved_bytes": 0,
+      "stream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_at_bytes": 65536
+    }
+  ],
+  "schema": 1,
+  "stage": "complete",
+  "status": "pass-private-x11-en-ru-cli-keyboard-fixture",
+  "xvfb": {
+    "display": ":0",
+    "pid": 4,
+    "socket_inode": 3,
+    "start_time_ticks": 2758413,
+    "tcp": false,
+    "transport": "private local Unix socket"
+  }
+}

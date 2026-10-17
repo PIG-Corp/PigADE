@@ -1,11 +1,13 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only `compose` (nihao) and
- * `commit` (Space) can synthesize input, after private-server ownership checks.
+ * `commit` (Space), or one fixed EN/RU/CLI sequence can synthesize input,
+ * after private-server ownership checks. No arbitrary key/text arguments.
  */
 #define _GNU_SOURCE
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/XKBlib.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 #include <xcb/xcb.h>
@@ -66,7 +68,8 @@ static Args parse_args(int argc, char **argv) {
         !a.fcitx || !a.fcitx_start) fail("missing required identity argument");
     if (strcmp(a.stage, "preflight") && strcmp(a.stage, "probe-window") &&
         strcmp(a.stage, "focus") && strcmp(a.stage, "compose") &&
-        strcmp(a.stage, "commit") && strcmp(a.stage, "capture"))
+        strcmp(a.stage, "commit") && strcmp(a.stage, "capture") &&
+        strcmp(a.stage, "keyboard"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
@@ -230,6 +233,52 @@ static void key(Display *dpy, KeySym sym) {
     XFlush(dpy); nanosleep(&delay, NULL);
 }
 
+/* Both group changes and modifier injection stay on the verified private Xvfb. */
+static void keyboard_group(Display *dpy, unsigned int group) {
+    XkbStateRec state;
+    if (!XkbLockGroup(dpy, XkbUseCoreKbd, group) ||
+        XkbGetState(dpy, XkbUseCoreKbd, &state) != Success ||
+        state.group != group || state.mods != 0)
+        fail("private keyboard group/modifier state differs from fixture");
+    struct timespec delay = { .tv_sec = 0, .tv_nsec = 100000000 };
+    nanosleep(&delay, NULL);
+}
+
+static void modified_key(Display *dpy, KeySym modifier, KeySym sym) {
+    KeyCode code = XKeysymToKeycode(dpy, modifier);
+    if (!code || !XTestFakeKeyEvent(dpy, code, True, CurrentTime))
+        fail("private modifier press failed");
+    XSync(dpy, False);
+    key(dpy, sym);
+    if (!XTestFakeKeyEvent(dpy, code, False, CurrentTime))
+        fail("private modifier release failed");
+    XSync(dpy, False);
+}
+
+static void keyboard_sequence(Display *dpy) {
+    char pressed[32];
+    XQueryKeymap(dpy, pressed);
+    for (size_t i = 0; i < sizeof(pressed); ++i)
+        if (pressed[i]) fail("private keyboard has an unexpectedly held key");
+    keyboard_group(dpy, 0);
+    key(dpy, XK_a); key(dpy, XK_b); key(dpy, XK_1);
+    modified_key(dpy, XK_Shift_L, XK_z);
+    const KeySym controls[] = { XK_c, XK_d, XK_z, XK_r, XK_l, XK_a };
+    for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i)
+        modified_key(dpy, XK_Control_L, controls[i]);
+    modified_key(dpy, XK_Alt_L, XK_x);
+    key(dpy, XK_Left); key(dpy, XK_Home); key(dpy, XK_Return);
+    keyboard_group(dpy, 1);
+    const KeySym russian[] = { XK_Cyrillic_pe, XK_Cyrillic_er, XK_Cyrillic_i,
+                               XK_Cyrillic_ve, XK_Cyrillic_ie, XK_Cyrillic_te };
+    for (size_t i = 0; i < sizeof(russian) / sizeof(russian[0]); ++i)
+        key(dpy, russian[i]);
+    keyboard_group(dpy, 0);
+    XQueryKeymap(dpy, pressed);
+    for (size_t i = 0; i < sizeof(pressed); ++i)
+        if (pressed[i]) fail("private keyboard retained a held key after fixture");
+}
+
 static Window verify_app_focus_target(const Args *a, Display *dpy, xcb_connection_t *c, int set_focus) {
     verify_identity(a->app, a->app_start, a->boot);
     Window w = find_app_window(dpy, c, a->app);
@@ -316,9 +365,11 @@ int main(int argc, char **argv) {
         if (!strcmp(a.stage, "compose")) {
             const KeySym sequence[] = { XK_n, XK_i, XK_h, XK_a, XK_o };
             for (size_t i = 0; i < sizeof(sequence) / sizeof(sequence[0]); ++i) key(dpy, sequence[i]);
-        } else key(dpy, XK_space);
-        printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_events\":%s}\n",
-               a.stage, (long)a.app, !strcmp(a.stage, "compose") ? "5" : "1");
+        } else if (!strcmp(a.stage, "keyboard")) keyboard_sequence(dpy);
+        else key(dpy, XK_space);
+        printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
+               a.stage, (long)a.app, !strcmp(a.stage, "compose") ? "5" :
+               (!strcmp(a.stage, "keyboard") ? "20" : "1"));
     }
     XSync(dpy, False); xcb_disconnect(c); XCloseDisplay(dpy); return 0;
 }

@@ -1,6 +1,8 @@
 //! Pure legacy terminal input encoding for the host's alacritty state.2 profile.
 //! No output parsing lives here. Printable keydown text is intentionally deferred
 //! to the platform text-input commit callback, including EN/RU and IME input.
+//! Explicit Alt-printable chords use the key event: GPUI intentionally does not
+//! generate default text commits for modifiers other than Shift.
 
 // Mirrored from vendor/alacritty_terminal/src/term/mod.rs; profile changes must
 // review these flags. Linking the terminal parser into the UI is unnecessary.
@@ -120,9 +122,24 @@ pub fn encode(key: Key<'_>, modes: u32) -> Encoded {
         return Encoded::Unsupported(error);
     }
     if printable && !modifiers.control {
-        return Encoded::PlatformText {
-            meta: modifiers.alt,
-        };
+        if modifiers.alt {
+            // The caller consumes Bytes, stopping GPUI's default insertion.
+            // Use actual layout text, never guess a dead/uncommitted key.
+            let Some(text) = key.text.filter(|text| !text.is_empty()) else {
+                return Encoded::Ignore;
+            };
+            if text.chars().any(char::is_control) {
+                return Encoded::Ignore;
+            }
+            if text.len() >= MAX_INPUT_BYTES {
+                return Encoded::Unsupported("Сочетание Alt превышает предел ввода");
+            }
+            let mut bytes = Vec::with_capacity(1 + text.len());
+            bytes.push(27);
+            bytes.extend_from_slice(text.as_bytes());
+            return Encoded::Bytes(bytes);
+        }
+        return Encoded::PlatformText { meta: false };
     }
     let modifier = 1
         + u8::from(modifiers.shift)
@@ -460,6 +477,86 @@ mod tests {
             bytes.extend(input.commit(None, text));
         }
         assert_eq!(String::from_utf8(bytes).unwrap(), "aф界e\u{301} ");
+    }
+    #[test]
+    fn alt_printable_keys_are_encoded_without_waiting_for_a_platform_commit() {
+        for text in ["x", "X", "ф", " "] {
+            assert_eq!(
+                encode(
+                    Key {
+                        name: "x",
+                        text: Some(text),
+                        modifiers: Modifiers {
+                            alt: true,
+                            ..Default::default()
+                        },
+                    },
+                    0,
+                ),
+                Encoded::Bytes([b"\x1b".as_slice(), text.as_bytes()].concat()),
+            );
+        }
+        // An uncommitted dead key has no printable text to send yet.
+        assert_eq!(
+            encode(
+                Key {
+                    name: "dead_acute",
+                    text: None,
+                    modifiers: Modifiers {
+                        alt: true,
+                        ..Default::default()
+                    },
+                },
+                0,
+            ),
+            Encoded::Ignore,
+        );
+    }
+    #[test]
+    fn alt_text_is_atomic_bounded_and_never_guesses_dead_or_control_text() {
+        let alt = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        for text in ["", "\r", "\x1b[200~"] {
+            assert_eq!(
+                encode(
+                    Key {
+                        name: "x",
+                        text: Some(text),
+                        modifiers: alt
+                    },
+                    0
+                ),
+                Encoded::Ignore
+            );
+        }
+        let boundary = "x".repeat(MAX_INPUT_BYTES - 1);
+        let Encoded::Bytes(bytes) = encode(
+            Key {
+                name: "x",
+                text: Some(&boundary),
+                modifiers: alt,
+            },
+            0,
+        ) else {
+            panic!("bounded Alt text was rejected")
+        };
+        assert_eq!(bytes.len(), MAX_INPUT_BYTES);
+        assert_eq!(bytes[0], 27);
+        assert_eq!(&bytes[1..], boundary.as_bytes());
+        let excessive = "x".repeat(MAX_INPUT_BYTES);
+        assert!(matches!(
+            encode(
+                Key {
+                    name: "x",
+                    text: Some(&excessive),
+                    modifiers: alt
+                },
+                0
+            ),
+            Encoded::Unsupported(_)
+        ));
     }
     #[test]
     fn ime_preedit_is_local_and_meta_is_consumed_once() {

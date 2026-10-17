@@ -1457,3 +1457,19 @@ Retain failed7200s diagnostic that localizes ACK delay after child write and bef
 - Files: docs/reports/soak-ack-timeout-20261017.md, benchmarks/results/soak-ack-timeout-20261017/failed-7200s-summary.json, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
 - Verification: Tool10513exited1 at548.819621s. Root read boundedtimeout+producerartifacts; exactACK104 milestones present,noRelease/no seqgaps. Agent validatedall4 frozen-hostcomplete/frame recovery with0coldrows. Finalevent10510containsACK; snapshot10509 took17.333ms after5s deadline. No cleanENDCRC or24h pass.
 - Risks / next: Implement independent bounded actor/PTYreader stage probe before anotherreproducer; no deadlineinflation or inputloss claim.
+
+## 2026-10-17T02:22:34+00:00 — /root/terminal_memory_budget
+
+Added snapshot-independent live actor stage and PTY reader diagnostics
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/metrics.rs, crates/session-host/src/poll.rs
+- Verification: cargo fmt --all --check; cargo test -p pigade-session-host (60 unit, 49 integration, doc tests pass); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check
+- Risks / next: Root should review additive View field/probe exposure and freeze a host binary before using the diagnostics in the next bounded reproducer. Existing app DTO uses permissive serde and ignores the additive field.
+
+## 2026-10-17T02:22:41+00:00 — /root
+
+Repair native Alt-printable loss and integrate explicit command rejection gate with private EN/RU and IME proof
+
+- Files: crates/app/src/input.rs, crates/app/src/main.rs, crates/app/src/command_worker.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, crates/app/evidence/keyboard-20261017, docs/reports/x11-keyboard-20261017.md, docs/reports/app-command-rejection.md, docs/research/ime-generation-barrier-next.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, CHANGELOG.md
+- Verification: Actual frozen baseline b4d received29/31 bytes, raw synthetic diagnostic isolates missingESCx. Encoder regression red then14 pure input tests green; app98 tests/strictClippy pass from reviewer, root releasebuild/fmt pass. Fixed f9fea release nativekeyboard31exactbytes and Pinyin6exactUTF8bytes pass withnoextra/precommit. Root inspectedACK/preedit/finalPNGs. Python129 tests pass including16 harness and realrawPTY exact/duplicate checks. Reviewed staleack race; matchingnotice token nowrequired.
+- Risks / next: FullMVP stillopen. Follow independent per-session worker gate/mouse acknowledgement/drag reconciliation and native IME endpoint-generation barrier; no active desktop access.

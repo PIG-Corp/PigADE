@@ -1,0 +1,16 @@
+{
+  "app_source_base_git": "5525bb4",
+  "app_sources_sha256": {
+    "crates/app/patches/gpui-x11-ime/manifest.json": "85f3b64518f300dcfc7127385f57f9d84ab10fc3177f68df8cb484b8cd76c069",
+    "crates/app/src/command_worker.rs": "55d2d5408dc6c6c43837786b49e36b5ae2ff98a98ff37ded328ef5cba12287cd",
+    "crates/app/src/input.rs": "b89d24382213e639123a5f65e07d7ca653695802a17a8c1d10b36b20ddef9ae6",
+    "crates/app/src/main.rs": "878ce3297fe9fbeaeacc1ebdcd374df34360bb50f53755f5a5a28a0f70252268",
+    "scripts/isolated-ime-x11.py": "e538291f4bf214111f8e0b7fab94670875b74f2dc391a0e6cbc5d0bc5d0f4401",
+    "scripts/test_isolated_ime_x11.py": "de37578c59a0488a30fc3946bc0a6a3554165bb587a097ffee6f89b77d65181e",
+    "scripts/x11-ime-input.c": "ba44499d13e2c21158671f5c47bb6fadf468e5e74bcab2d0d4274b7f600b0f39"
+  },
+  "host_lib_sha256": "332a57c192dfe42f8826e86f61f4ba17d0c71c98e70f4f661dabfcea33f12ad2",
+  "host_source_git": "2698c66",
+  "schema": 1,
+  "scope": "Current app files were uncommitted at build; exact source hashes bind this slice. Host from query-backpressure commit before subsequent stage diagnostics."
+}
