@@ -58,3 +58,54 @@ Primary pinned sources: [GPUI XIM handler](https://github.com/zed-industries/zed
 [GPUI X11 client](https://github.com/zed-industries/zed/blob/322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_linux/src/linux/x11/client.rs),
 [xim-rs request/dispatch](https://github.com/zed-industries/xim-rs/blob/16f35a2c881b815a2b6cdfd6687988e84f8447d8/src/client.rs),
 [Fcitx current-context activation](https://github.com/fcitx/fcitx5/blob/27cca6e0239938b2d53937061d0980c087856b22/src/lib/fcitx/instance.cpp).
+
+## Update18.10.2026 — complete XIM style for hover safety
+
+Profile `pigade-x11-ime-focus-v2` retains the lifecycle correction and pairs
+`PREEDIT_CALLBACKS` with `STATUS_NOTHING` at IC creation and both XIC attribute
+updates. The [Xlib specification](https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.pdf)
+defines separate preedit and status interaction categories. Pointer fixtures02/03
+showed Fcitx composing `nihao` in its popup with no application preedit: a local
+empty-string check could therefore allow hover to change the pane during IME.
+The style correction must pass the actual private native fixture; source tests
+alone are insufficient evidence of callbacks or safe hover.
+
+Bootstrap accepts a complete exact v1 file set through the manifest's
+`previous_files_sha256`. It verifies the upstream archive and successor patch in
+a private temporary tree before replacing those exact known cache files.
+Unknown or mixed file sets remain untouched and fail closed. An interrupted
+multi-file replacement can leave a mixed cache requiring deliberate rebuild;
+this migration operates on derived build sources, never user/session data.
+The broader native composition/generation barrier limitations above remain.
+
+Follow-up evidence: release pointer04 still showed external preedit after the
+style pair correction. [Fcitx5.1.23 XIM config](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.23/src/frontend/xim/xim.h)
+defaults `UseOnTheSpot` to false; its [style selection](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.23/src/frontend/xim/xim.cpp)
+then omits callback preedit. The backend must validate the advertised style
+before creating an IC. Unsupported callback styles use the native keyboard
+fallback; silently accepting an opaque popup would leave hover unable to see
+composition ownership. Private acceptance configures only its own server HOME
+with callback preedit enabled. This does not certify the user's IM configuration
+or resolve the delayed target/generation barrier.
+
+The pinned xim-rs dispatcher also omitted the synchronous
+`XIM_PREEDIT_START_REPLY`. The [XIM protocol](https://x.org/releases/X11R7.6/doc/libX11/specs/XIM/xim.pdf)
+requires that reply. The small [transport profile](../../crates/app/patches/xim-preedit/README.md)
+sends it once after a successful handler callback with unlimited preedit length;
+handler errors propagate. The existing MIT dependency version and revision stay
+fixed, with one hash-checked source patch in a private build checkout and a Cargo
+path override. `bootstrap.sh test-xim` executes the patched crate's actual
+mock-transport tests; it uses its upstream workspace because Cargo cannot test a
+nonmember dependency's dev-dependencies from the app workspace.
+
+Final18.10 evidence: source-bound12 capability/lifecycle tests and the actual
+patched xim-rs2 mock-transport tests pass. Native release pointer07, Pinyin04,
+keyboard03 and controls01 pass. Inline preedit and final drop/undo captures were
+inspected. Pointer05/Pinyin02 exposed an overly strict requirement that protocol
+padding be zero; the typed decoder correctly skips it. The preflight now checks
+count/length while accepting unspecified padding. Unsupported external-style
+Fcitx has no IC and still delivers the exact31 EN/RU/control bytes through the
+ordinary keyboard path. On-the-spot mode commits exactly6 bytes once with no
+precommit input. These are private software X11 results, not platform parity or
+resolution of delayed target/generation callbacks. The dependency's five existing
+warnings remain visible; first-party strict Clippy passes.

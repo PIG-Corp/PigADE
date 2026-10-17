@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "upstream_commit": "16f35a2c881b815a2b6cdfd6687988e84f8447d8",
+  "archive_root": "xim-rs-16f35a2c881b815a2b6cdfd6687988e84f8447d8",
+  "upstream_archive_sha256": "a1a2163b226b6103e1ac39932832439ae7003c1e7bd559ce63dc50b6d68610cc",
+  "profile": "pigade-x11-preedit-reply-v1",
+  "patches": [
+    {
+      "path": "reply.patch",
+      "sha256": "9dff51a6f7838e08c3e3bca6847c3c4bdd79822745d34c391a2ae53a3f21cd73"
+    }
+  ],
+  "files": [
+    {
+      "path": "src/client.rs",
+      "before_sha256": "b16c37b3281f0d86fda1cdf8db77537496bbc270d95c4181568e8520233872f4",
+      "after_sha256": "8417307e64dfb3c9b5aaccb86b82cf7309b1c6a7c0c0ad53f04d04e59cf8df28"
+    }
+  ]
+}

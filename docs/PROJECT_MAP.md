@@ -15,6 +15,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout command routes |
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
+| crates/app/src/pointer_layout.rs | Pure Dwindle tear-off/drop projection and bounded latest-intent focus persistence helpers; integration in main.rs |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |
 | crates/session-host/src/history_read.rs | Bounded asynchronous canonical-record reads; exact generation/sequence, no ANSI parsing or host-command-thread cold I/O |
@@ -59,7 +60,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/mouse.rs, selection.rs | Pure mode-aware mouse encoding, bounded wheel accumulation and frame-bound Unicode cell selection; native event/clipboard integration remains in main.rs |
 | docs/reports/ime-composition.md, docs/research/linux-ime-reset.md | Local input/overlay evidence and the unverified native Linux reset boundary |
 | crates/app/src/font.rs, assets/fonts | Embedded unique-family OFL derivatives, exact manifests, disabled liga/calt and fixed JP CJK fallback policy; unsupported platform fallback is unpinned |
-| crates/app/bootstrap.sh, patches/gpui-x11-ime | Immutable GPUI archive plus guarded exact X11 focus lifecycle patch; ignored .upstream source cache |
+| crates/app/bootstrap.sh, patches/gpui-x11-ime, patches/xim-preedit | Pinned GPUI/XIM archives, exact focus/style and synchronous preedit-reply patches; ignored .upstream sources; test-xim runs actual transport unit tests |
 | scripts/apply-gpui-patches.py, test_gpui_xim_focus.py | Bounded locked patch pre/postimage guard and exact embedded XIM lifecycle tests |
 | scripts/prepare-x11-ime-sdk.py, isolated-ime-x11.py, x11-ime-input.c | Signed test-only Xvfb/Fcitx/Pinyin SDK, verified private namespaces/display/window ownership and fixed native Pinyin/EN/RU/CLI byte proofs; no active desktop access |
 | crates/app/evidence/conditional-poll-20261017 | Fresh isolated software-rendered UI reopen evidence; not GPU or platform certification |
@@ -96,7 +97,7 @@ record the upgrade. Separate short runtime sockets and marked/leased replay-cach
 maintenance are described in `reports/runtime-and-replay-cache.md`. Storage quota,
 compression and global model heap admission remain independent unfinished work.
 
-The pinned GPUI X11 focus correction now passes one native Pinyin commit in the actual debug/release app; a settled clean-upstream baseline lacked an active IC. See [ADR0010](adr/0010-gpui-x11-ime-focus-lifecycle.md) and [source-bound report](reports/x11-ime-20261017.md). Composition-generation barriers, inline preedit and the full platform gate remain open.
+The pinned GPUI X11 focus correction now passes one native Pinyin commit in the actual debug/release app; a settled clean-upstream baseline lacked an active IC. See [ADR0010](adr/0010-gpui-x11-ime-focus-lifecycle.md) and [source-bound report](reports/x11-ime-20261017.md). The callback-only X11 update now has one visually verified inline preedit and protected-hover sequence; native target/generation barriers, complete caret placement and the full platform gate remain open.
 
 The response-priority actor wait cycle is reproduced and repaired with bounded FIFO replies while draining PTY output; [report](reports/query-response-backpressure.md). This repair does not establish a cause for the separate soak ACK timeout.
 

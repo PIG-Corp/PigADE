@@ -174,6 +174,19 @@ class IsolatedImePlanTests(unittest.TestCase):
                          '-display', ':3', '-layout', 'us,ru', '-option', ''])
         self.assertEqual(run.call_args.kwargs['env'], env)
 
+    def test_private_fcitx_callback_preedit_is_enabled_only_outside_keyboard_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / 'private-home'
+            home.mkdir(mode=0o700)
+            config = home / '.config/fcitx5/conf/xim.conf'
+            self.assertEqual(IME.prepare_private_fcitx_preedit_config(home, 'pointer'),
+                             'on-the-spot')
+            self.assertEqual(config.read_text(), 'UseOnTheSpot=True\n')
+            self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(IME.prepare_private_fcitx_preedit_config(home, 'keyboard'),
+                             'server-default-external')
+            self.assertFalse(config.exists())
+
     def test_opencode_mode_is_fixed_plan_only_with_no_enter_or_arbitrary_input(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
@@ -192,6 +205,14 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('XK_Return', sequence)
         self.assertNotIn('--text', source)
 
+    def test_only_keyboard_fallback_accepts_no_fcitx_context(self):
+        with mock.patch.object(IME.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='0\n', stderr='')):
+            self.assertEqual(IME.deactivate_private_fcitx(
+                {'x11_root': '/private', 'fixture': 'keyboard'}, {}), 0)
+            with self.assertRaises(RuntimeError):
+                IME.deactivate_private_fcitx({'x11_root': '/private', 'fixture': 'pointer'}, {})
+
     def test_controls_mode_is_fixed_plan_only_and_contains_only_private_fixed_stages(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
@@ -204,7 +225,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('Alt+F', plan['input']['controls'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
-        for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-swap',
+        for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-move',
                       'controls-resize-cancel', 'controls-resize-commit', 'controls-close',
                       'controls-open', 'controls-select-alt', 'controls-select-control',
                       'controls-select-disabled'):
@@ -212,6 +233,32 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('int start_x = button == 1 ? 485 : 720;', source)
         self.assertIn('int end_x = button == 1 ? 1015 : 660;', source)
         self.assertNotIn('--coordinates', source)
+
+    def test_pointer_mode_is_fixed_plan_only_and_whitelists_held_drag_and_hover_stages(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'pointer']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'pointer')
+        self.assertIn('last-hover unsent text', plan['input']['pointer'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
+                      'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
+                      'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
+                      'pointer-dialog-hover', 'pointer-inactive-hold'):
+            self.assertIn(f'"{stage}"', source)
+        self.assertIn('strcmp(response, "CANCEL\\n")', source)
+        self.assertIn('XK_p, XK_i, XK_g, XK_a, XK_d, XK_e', source)
+        ime_stage = source.split('} else if (!strcmp(a.stage, "pointer-ime-input")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-ime-cancel")) {', 1)[0]
+        self.assertLess(ime_stage.index('nanosleep'), ime_stage.index('capture(dpy, a.output)'))
+        self.assertLess(ime_stage.index('capture(dpy, a.output)'), ime_stage.index('pointer_position'))
+        self.assertIn('/artifacts/pointer-ime-preedit.ppm', source)
+        self.assertNotIn('--coordinates', source)
+        self.assertNotIn('--text', source)
 
     def run_raw_fixture(self, expected, delivered):
         with tempfile.TemporaryDirectory() as temporary:

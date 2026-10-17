@@ -74,7 +74,7 @@ def extract_sources(archive: Path, manifest: dict, destination: Path) -> None:
 def apply_profile(archive: Path, temp: Path) -> tuple[dict, Path]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     fail(manifest.get("schema") == 1, "unsupported manifest schema")
-    fail(manifest.get("profile") == "pigade-x11-ime-focus-v1", "unexpected patch profile")
+    fail(manifest.get("profile") == "pigade-x11-ime-focus-v2", "unexpected patch profile")
     fail(len(manifest.get("files", [])) == MAX_SOURCE_FILES, "unexpected source file set")
     fail(len(manifest.get("patches", [])) == 1, "expected one focus patch")
     source = temp / "upstream"
@@ -101,6 +101,42 @@ def apply_profile(archive: Path, temp: Path) -> tuple[dict, Path]:
         data = source.joinpath(*PurePosixPath(entry["path"]).parts).read_bytes()
         fail(len(data) <= MAX_ARCHIVE_FILE, "patched source exceeds source bound")
         fail(sha256(data) == entry["after_sha256"], f"patched source hash mismatch: {entry['path']}")
+    xim_handler = next(row for row in manifest["files"]
+                       if row["path"].endswith("xim_handler.rs"))
+    handler_text = source.joinpath(*PurePosixPath(xim_handler["path"]).parts).read_text(
+        encoding="utf-8")
+    fail("InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING" in handler_text,
+         "input context must select a complete preedit/status style pair")
+    fail(".push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)" not in handler_text,
+         "preedit callbacks must not be selected without a status style")
+    fail("xim::read(bytes)" in handler_text and
+         "xim::InputStyleList" in handler_text and
+         "AttributeName::QueryInputStyle" in handler_text,
+         "input contexts must be gated by the typed QueryInputStyle response")
+    fail("QueryInputStyle was not returned" in handler_text and
+         "PigADE: X11 IME unavailable: server does not advertise callback preedit" in handler_text,
+         "unsupported or missing callback style must be reported and fail closed")
+    xim_manifest_path = PROFILE.parent / "xim-preedit" / "manifest.json"
+    xim_manifest = json.loads(xim_manifest_path.read_text(encoding="utf-8"))
+    fail(xim_manifest.get("profile") == "pigade-x11-preedit-reply-v1" and
+         xim_manifest.get("upstream_commit") ==
+         "16f35a2c881b815a2b6cdfd6687988e84f8447d8",
+         "pinned xim-rs preedit reply profile is missing")
+    reply_patch = (xim_manifest_path.parent / xim_manifest["patches"][0]["path"]).read_text(
+        encoding="utf-8")
+    fail("Request::PreeditStartReply" in reply_patch and
+         "return_value: -1" in reply_patch and
+         "failed_preedit_start_sends_no_reply" in reply_patch,
+         "xim-rs preedit-start reply patch or its failure-path test is missing")
+    client_entry = next(row for row in manifest["files"]
+                        if row["path"].endswith("client.rs"))
+    client_text = source.joinpath(*PurePosixPath(client_entry["path"]).parts).read_text(
+        encoding="utf-8")
+    style_pair = "xim::InputStyle::PREEDIT_CALLBACKS | xim::InputStyle::STATUS_NOTHING"
+    fail(client_text.count(style_pair) == 2,
+         "both live XIC style updates must keep the complete preedit/status style pair")
+    fail("xim::InputStyle::PREEDIT_CALLBACKS," not in client_text,
+         "client XIC updates must not select preedit callbacks without a status style")
     return manifest, source
 
 

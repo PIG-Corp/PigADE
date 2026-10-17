@@ -13,6 +13,7 @@ mod memory_choice;
 mod mouse;
 mod mouse_delivery;
 mod palette;
+mod pointer_layout;
 mod product;
 mod protocol;
 mod publication_trace;
@@ -456,6 +457,7 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
         let mut next = json!({"command":"catalog"});
         let mut routing_catalog: Option<pigade_storage::Catalog> = None;
         loop {
+            let focus_only = next.pointer("/action/command/Focus/pane").is_some();
             let reply = protocol::product_request(&product_socket, next);
             if let Ok(reply) = &reply {
                 if let Some(catalog) = &reply.catalog {
@@ -478,14 +480,16 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
                         }
                         state.set_visible_panels(panels);
                     }
-                    serialized_poll(
-                        &product_shared,
-                        &product_poll_gate,
-                        true,
-                        |known, visible, supports| {
-                            fetch_replica(&product_socket, known, visible, supports)
-                        },
-                    );
+                    if !focus_only {
+                        serialized_poll(
+                            &product_shared,
+                            &product_poll_gate,
+                            true,
+                            |known, visible, supports| {
+                                fetch_replica(&product_socket, known, visible, supports)
+                            },
+                        );
+                    }
                 }
             }
             product_wake.notify();
@@ -918,6 +922,10 @@ struct ResizeGesture {
 struct PaneDrag {
     pane: uuid::Uuid,
     split: uuid::Uuid,
+    tab: uuid::Uuid,
+    base: pigade_layout::TabLayout,
+    source: pigade_layout::Rect,
+    position: Point<Pixels>,
     start: Point<Pixels>,
     moved: bool,
     drop: Option<(pigade_layout::Command, pigade_layout::Rect)>,
@@ -940,6 +948,87 @@ impl DirectLaunch {
         provider: &str,
     ) -> bool {
         selected_tab == Some(self.tab) && tab == self.tab && provider == self.provider
+    }
+}
+
+fn same_focus_placement(before: &pigade_storage::Catalog, after: &pigade_storage::Catalog) -> bool {
+    if before.selection.project_id != after.selection.project_id
+        || before.selection.workspace_id != after.selection.workspace_id
+        || before.selection.tab_id != after.selection.tab_id
+        || before.selection.window.panel_generations != after.selection.window.panel_generations
+    {
+        return false;
+    }
+    let layout = |catalog: &pigade_storage::Catalog| {
+        catalog
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.id) == catalog.selection.tab_id)
+            .and_then(|tab| serde_json::from_str::<pigade_layout::TabLayout>(&tab.layout_json).ok())
+    };
+    match (layout(before), layout(after)) {
+        (Some(before), Some(after)) => {
+            before.root == after.root
+                && before.focus_mode == after.focus_mode
+                && (!before.focus_mode || before.focused == after.focused)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod focus_placement_tests {
+    use super::same_focus_placement;
+    use pigade_layout::{Node, TabLayout};
+    use pigade_storage::{Catalog, LayoutDocument, Selection, Tab};
+    use uuid::Uuid;
+
+    #[test]
+    fn focus_ack_preserves_local_state_only_for_same_placement_and_generation() {
+        let tab = Uuid::from_u128(1);
+        let pane = Uuid::from_u128(2);
+        let mut before = Catalog {
+            projects: vec![],
+            workspaces: vec![],
+            tabs: vec![Tab {
+                id: tab,
+                workspace_id: Uuid::from_u128(3),
+                name: "tab".into(),
+                layout_json: serde_json::to_string(&TabLayout {
+                    root: Some(Node::Pane { id: pane }),
+                    focused: Some(pane),
+                    focus_mode: false,
+                })
+                .unwrap(),
+                active_pane: Some(pane),
+                revision: 1,
+            }],
+            selection: Selection {
+                tab_id: Some(tab),
+                ..Default::default()
+            },
+            layout: LayoutDocument::default(),
+        };
+        let mut after = before.clone();
+        after.tabs[0].revision += 1;
+        after.layout.revision += 1;
+        assert!(same_focus_placement(&before, &after));
+        let mut layout: TabLayout = serde_json::from_str(&after.tabs[0].layout_json).unwrap();
+        layout.focused = None;
+        after.tabs[0].layout_json = serde_json::to_string(&layout).unwrap();
+        assert!(same_focus_placement(&before, &after));
+        layout.focus_mode = true;
+        after.tabs[0].layout_json = serde_json::to_string(&layout).unwrap();
+        assert!(!same_focus_placement(&before, &after));
+        after = before.clone();
+        after
+            .selection
+            .window
+            .panel_generations
+            .insert(pane, Uuid::from_u128(4));
+        assert!(!same_focus_placement(&before, &after));
+        before.selection.tab_id = None;
+        assert!(!same_focus_placement(&before, &after));
     }
 }
 
@@ -982,6 +1071,9 @@ struct CanvasApp {
     resize_pending: Option<pigade_layout::Command>,
     resize_gesture: Option<ResizeGesture>,
     pane_drag: Option<PaneDrag>,
+    focus_queue: pointer_layout::FocusQueue,
+    hover_position: Option<Point<Pixels>>,
+    deferred_placement: Option<pigade_layout::Command>,
     focus: FocusHandle,
     selected: usize,
     prefix: bool,
@@ -1086,6 +1178,7 @@ impl CanvasApp {
                 if weak
                     .update_in(cx, |this, window, cx| {
                         while let Ok(reply) = this.product_rx.try_recv() {
+                            let focus_reply = this.focus_queue.matches(match &reply { Ok(reply)=>reply.ui_request, Err(error)=>error.ui_request });
                             let provider_reply = match &reply {
                                 Ok(reply) => reply.providers_request,
                                 Err(error) => error.providers_request,
@@ -1125,10 +1218,17 @@ impl CanvasApp {
                                         this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
+                                        let keep_local = focus_reply && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
+                                        if focus_reply {
+                                            let saved=catalog.selection.tab_id.and_then(|tab|catalog.tabs.iter().find(|value|value.id==tab).and_then(|value|serde_json::from_str::<pigade_layout::TabLayout>(&value.layout_json).ok()).and_then(|layout|layout.focused.map(|pane|pointer_layout::FocusIntent{tab,pane})));
+                                            this.focus_queue.complete(reply.ui_request.expect("matching focus request"),saved);
+                                        }
                                         this.product.catalog = Some(catalog);
-                                        this.product.notice = None;
-                                        this.product.dialog = None;
-                                        this.sync_product_selection(window, cx);
+                                        if !keep_local {
+                                            this.product.notice = None;
+                                            this.product.dialog = None;
+                                            this.sync_product_selection(window, cx);
+                                        }
                                     }
                                     if let Some(sessions) = reply.sessions {
                                         if this.pending_launch.is_some_and(|(session,generation)| sessions.iter().any(|view|
@@ -1199,6 +1299,11 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if focus_reply {
+                                        this.focus_queue.cancel();
+                                        this.focus_queue.complete(error.ui_request.expect("matching focus error"),None);
+                                        this.deferred_placement=None;
+                                    }
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
                                     if this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(error.ui_request)) { this.pending_direct_launch=None; }
                                     if error.providers_request { this.product.provider_error=Some("Не удалось проверить CLI. Терминал можно открыть сразу; проверку агентов можно повторить.".into()); }
@@ -1327,6 +1432,7 @@ impl CanvasApp {
                             cx.notify();
                         }
                         this.sync_editor_scope(window,cx);
+                        this.flush_focus(cx);
                         this.flush_canvas_offset(cx);
                         if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
                             window.remove_window();
@@ -1410,6 +1516,9 @@ impl CanvasApp {
             resize_pending: None,
             resize_gesture: None,
             pane_drag: None,
+            focus_queue: Default::default(),
+            hover_position: None,
+            deferred_placement: None,
             focus,
             selected: 0,
             prefix: false,
@@ -2366,6 +2475,7 @@ impl CanvasApp {
 
     fn flush_canvas_offset(&mut self, cx: &mut Context<Self>) {
         if self.product.busy
+            || self.pane_drag.is_some()
             || self.canvas_drag.is_some()
             || !self
                 .canvas_save_at
@@ -2497,10 +2607,55 @@ impl CanvasApp {
         }
     }
 
+    fn begin_pane_drag(
+        &mut self,
+        pane: uuid::Uuid,
+        position: Point<Pixels>,
+        immediate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((tab, base)) = self.tab_layout() else {
+            return;
+        };
+        let Some(bounds) = self
+            .state
+            .views
+            .iter()
+            .position(|view| view.session == pane.to_string())
+            .and_then(|index| self.panes.get(index))
+            .map(|pane| pane.bounds)
+        else {
+            return;
+        };
+        self.pane_drag = Some(PaneDrag {
+            pane,
+            split: uuid::Uuid::new_v4(),
+            tab,
+            base,
+            source: pigade_layout::Rect {
+                x: f64::from(f32::from(bounds.left())),
+                y: f64::from(f32::from(bounds.top())),
+                width: f64::from(f32::from(bounds.size.width)),
+                height: f64::from(f32::from(bounds.size.height)),
+            },
+            position,
+            start: position,
+            moved: immediate,
+            drop: None,
+        });
+        self.update_pane_drag_at(position, cx);
+    }
+
+    fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
+        if self.pane_drag.take().is_some() {
+            self.layout_preview = None;
+            cx.notify();
+        }
+    }
+
     fn update_pane_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
-            self.pane_drag = None;
-            cx.notify();
+            self.cancel_pane_drag(cx);
             return;
         }
         self.update_pane_drag_at(event.position, cx);
@@ -2510,65 +2665,48 @@ impl CanvasApp {
         let Some(drag) = &mut self.pane_drag else {
             return;
         };
+        drag.position = position;
         drag.moved |= f32::from(position.x - drag.start.x).abs() > 6.
             || f32::from(position.y - drag.start.y).abs() > 6.;
         drag.drop = None;
-        if drag.moved
-            && self
+        if drag.moved {
+            // Detachment is stable for the whole gesture; pointer motion only
+            // changes the floating rectangle and destination, not this tree.
+            if self.layout_preview.is_none() && !drag.base.focus_mode {
+                self.layout_preview = pointer_layout::detached_layout(&drag.base, drag.pane)
+                    .map(|layout| (drag.tab, layout));
+            }
+            if self
                 .canvas_bounds
                 .is_some_and(|bounds| bounds.contains(&position))
-            && let Some(geometry) = &self.layout_geometry
-        {
-            let x = f64::from(f32::from(position.x));
-            let y = f64::from(f32::from(position.y));
-            if let Some(target) = geometry.panes.iter().find(|target| {
-                let r = target.rect;
-                target.pane != drag.pane
-                    && x >= r.x
-                    && x <= r.x + r.width
-                    && y >= r.y
-                    && y <= r.y + r.height
-            }) {
-                let mut hint = target.rect;
-                let horizontal = (x - hint.x) / hint.width;
-                let vertical = (y - hint.y) / hint.height;
-                let command = if (0.3..=0.7).contains(&horizontal)
-                    && (0.3..=0.7).contains(&vertical)
+                && let Some(geometry) = &self.layout_geometry
+            {
+                let x = f64::from(f32::from(position.x));
+                let y = f64::from(f32::from(position.y));
+                if let Some(target) = geometry.panes.iter().find(|target| {
+                    target.pane != drag.pane
+                        && x >= target.rect.x
+                        && x <= target.rect.x + target.rect.width
+                        && y >= target.rect.y
+                        && y <= target.rect.y + target.rect.height
+                }) && let Some(command) =
+                    pointer_layout::drop_command(drag.pane, drag.split, *target, x, y)
                 {
-                    pigade_layout::Command::Swap {
-                        first: drag.pane,
-                        second: target.pane,
-                    }
-                } else {
-                    let side = if horizontal.min(1. - horizontal) < vertical.min(1. - vertical) {
-                        hint.width /= 2.;
-                        if horizontal < 0.5 {
-                            pigade_layout::Direction::Left
-                        } else {
-                            hint.x += hint.width;
-                            pigade_layout::Direction::Right
+                    let mut hint = target.rect;
+                    if let pigade_layout::Command::Move { side, .. } = command {
+                        match side {
+                            pigade_layout::Direction::Left => hint.width /= 2.,
+                            pigade_layout::Direction::Right => {
+                                hint.x += hint.width / 2.;
+                                hint.width /= 2.;
+                            }
+                            pigade_layout::Direction::Up => hint.height /= 2.,
+                            pigade_layout::Direction::Down => {
+                                hint.y += hint.height / 2.;
+                                hint.height /= 2.;
+                            }
                         }
-                    } else {
-                        hint.height /= 2.;
-                        if vertical < 0.5 {
-                            pigade_layout::Direction::Up
-                        } else {
-                            hint.y += hint.height;
-                            pigade_layout::Direction::Down
-                        }
-                    };
-                    pigade_layout::Command::Move {
-                        pane: drag.pane,
-                        target: target.pane,
-                        side,
-                        split: drag.split,
                     }
-                };
-                if let Some(catalog) = &self.product.catalog
-                    && let Ok(history) = serde_json::from_str(&catalog.layout.json)
-                    && let Ok(model) = pigade_layout::LayoutModel::from_history(history)
-                    && model.preview(command.clone()).is_ok()
-                {
                     drag.drop = Some((command, hint));
                 }
             }
@@ -2622,6 +2760,8 @@ impl CanvasApp {
             }
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
+            self.persist_focus(cx);
+            return;
         }
         self.layout_command(command, cx);
     }
@@ -2685,6 +2825,8 @@ impl CanvasApp {
     }
 
     fn sync_product_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_queue.cancel();
+        self.deferred_placement = None;
         self.layout_preview = None;
         self.resize_pending = None;
         self.resize_gesture = None;
@@ -2740,17 +2882,61 @@ impl CanvasApp {
     }
 
     fn persist_focus(&mut self, cx: &mut Context<Self>) {
-        if !self.product.busy
-            && let Some(pane) = self.selected_pane()
-            && self
-                .tab_layout()
-                .is_some_and(|(_, layout)| layout.focused != Some(pane))
+        if let Some(pane) = self.selected_pane()
+            && let Some((tab, _)) = self.tab_layout()
         {
-            self.layout_command(pigade_layout::Command::Focus { pane }, cx);
+            self.focus_queue
+                .choose(pointer_layout::FocusIntent { tab, pane });
+        }
+        cx.notify();
+    }
+
+    fn flush_focus(&mut self, cx: &mut Context<Self>) {
+        if self.product.busy
+            || self.focus_queue.is_saving()
+            || self.pane_drag.is_some()
+            || self.resize_gesture.is_some()
+        {
+            return;
+        }
+        let Some(intent) = self.focus_queue.pending() else {
+            if let Some(command) = self.deferred_placement.take() {
+                self.layout_command(command, cx);
+            }
+            return;
+        };
+        let Some((tab, layout)) = self.tab_layout() else {
+            self.focus_queue.cancel();
+            return;
+        };
+        if tab != intent.tab
+            || !layout.panes().contains(&intent.pane)
+            || layout.focused == Some(intent.pane)
+        {
+            self.focus_queue.cancel();
+            return;
+        }
+        let request = uuid::Uuid::new_v4();
+        let command = json!({"command":"layout_edit","expected_revision":self.product.catalog.as_ref().expect("tab requires catalog").layout.revision,
+            "action":{"action":"apply","command":{"Focus":{"pane":intent.pane}}},"_ui_request":request});
+        if self.try_product_command(command, cx) {
+            self.focus_queue.start(request);
         }
     }
 
     fn layout_command(&mut self, command: pigade_layout::Command, cx: &mut Context<Self>) {
+        // Placement (especially focus-mode toggle) must observe the latest
+        // hovered focus, including one not yet dispatched to the host.
+        if self.focus_queue.is_saving() || self.focus_queue.pending().is_some() {
+            if self.deferred_placement.is_none() {
+                self.deferred_placement = Some(command);
+            } else {
+                self.product.notice =
+                    Some("Операция размещения уже ожидает сохранения фокуса".into());
+            }
+            cx.notify();
+            return;
+        }
         let Some(catalog) = &self.product.catalog else {
             return;
         };
@@ -4105,12 +4291,12 @@ impl CanvasApp {
         if self.held_modifier(event.modifiers)
             && matches!(event.button, MouseButton::Left | MouseButton::Right)
         {
-            if self.product.busy {
+            if self.product.busy && !self.focus_queue.is_saving() {
                 self.input_notice =
                     Some("Раскладка обновляется; повторите жест после завершения операции".into());
                 cx.notify();
             }
-            if !self.product.busy
+            if (!self.product.busy || self.focus_queue.is_saving())
                 && let Some(index) = self
                     .panes
                     .iter()
@@ -4126,6 +4312,7 @@ impl CanvasApp {
                     return;
                 }
                 self.selected = index;
+                self.input_epoch = self.input_epoch.wrapping_add(1);
                 self.selection = None;
                 self.selection_dragging = false;
                 self.text_input.cancel();
@@ -4133,13 +4320,7 @@ impl CanvasApp {
                 window.notify_text_input_changed(&self.focus);
                 if let Some(pane) = self.selected_pane() {
                     if event.button == MouseButton::Left {
-                        self.pane_drag = Some(PaneDrag {
-                            pane,
-                            split: uuid::Uuid::new_v4(),
-                            start: event.position,
-                            moved: false,
-                            drop: None,
-                        });
+                        self.begin_pane_drag(pane, event.position, true, cx);
                     } else if let Some((tab, base)) = self.tab_layout()
                         && let Some(geometry) = &self.layout_geometry
                         && let Some((divider, extent)) = tiling::pointer_boundary(
@@ -4237,18 +4418,12 @@ impl CanvasApp {
                 return;
             }
             if event.button == MouseButton::Left
-                && !self.product.busy
+                && (!self.product.busy || self.focus_queue.is_saving())
                 && event.position.y < self.panes[index].bounds.top() + px(HEADER)
                 && let Some(pane) = self.selected_pane()
             {
                 self.finish_pointer(cx);
-                self.pane_drag = Some(PaneDrag {
-                    pane,
-                    split: uuid::Uuid::new_v4(),
-                    start: event.position,
-                    moved: false,
-                    drop: None,
-                });
+                self.begin_pane_drag(pane, event.position, false, cx);
                 cx.stop_propagation();
                 cx.notify();
                 return;
@@ -4314,6 +4489,7 @@ impl CanvasApp {
         if event.button == MouseButton::Left
             && let Some(drag) = self.pane_drag.take()
         {
+            self.layout_preview = None;
             if let Some((command, _)) = drag.drop.filter(|_| drag.moved) {
                 self.layout_command(command, cx);
             } else {
@@ -4349,7 +4525,15 @@ impl CanvasApp {
             );
         }
     }
-    fn pointer_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn pointer_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Only real pointer movement changes hover focus. Repaint/layout changes
+        // beneath a stationary cursor must not undo a keyboard focus command.
+        let moved = self.hover_position.replace(event.position) != Some(event.position);
         if let Some((id, index, anchor)) = self.editor_drag {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.editor_drag = None;
@@ -4422,6 +4606,32 @@ impl CanvasApp {
             // Recover a release delivered outside this window without inventing
             // a press in the newly hovered pane.
             self.finish_pointer(cx);
+        }
+        if moved
+            && event.pressed_button.is_none()
+            && window.is_window_active()
+            && !self.prefix
+            && self.layout_mode.is_none()
+            && self.text_input.preedit.is_empty()
+            && self
+                .canvas_bounds
+                .is_some_and(|bounds| bounds.contains(&event.position))
+            && let Some(index) = self
+                .panes
+                .iter()
+                .position(|pane| pane.bounds.contains(&event.position))
+            && index != self.selected
+            && self.state.views.get(index).is_some()
+        {
+            self.finish_pointer(cx);
+            self.selected = index;
+            self.selection = None;
+            self.text_input.cancel();
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+            window.notify_text_input_changed(&self.focus);
+            self.focus.focus(window, cx);
+            self.reset_cursor_blink(cx);
+            self.persist_focus(cx);
         }
         self.pointer_event(PointerAction::Motion, event.position, event.modifiers, cx);
     }
@@ -4516,7 +4726,10 @@ impl CanvasApp {
         }
     }
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.product.dialog.is_some() {
+        if self.product.dialog.is_some()
+            || self.pane_drag.is_some()
+            || self.resize_gesture.is_some()
+        {
             return;
         }
         self.reset_cursor_blink(cx);
@@ -4675,8 +4888,12 @@ impl CanvasApp {
             return;
         }
         if k.key == "escape" && (self.resize_gesture.is_some() || self.pane_drag.is_some()) {
-            self.pane_drag = None;
+            self.cancel_pane_drag(cx);
             self.finish_resize(false, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.pane_drag.is_some() || self.resize_gesture.is_some() {
             cx.stop_propagation();
             return;
         }
@@ -5255,7 +5472,9 @@ impl CanvasApp {
             let extent = geometry.bounds;
             let (geometry, offset) =
                 viewport::project(geometry, content, self.canvas_offset(), scale, reveal);
-            self.set_canvas_offset(offset);
+            if !self.pane_drag.as_ref().is_some_and(|drag| drag.moved) {
+                self.set_canvas_offset(offset);
+            }
             self.canvas_bounds = Some(layout_bounds(content));
             self.canvas_bars = [
                 viewport::scrollbar(
@@ -5282,15 +5501,30 @@ impl CanvasApp {
                 .views
                 .iter()
                 .filter_map(|view| {
-                    projected
-                        .panes
-                        .iter()
-                        .find(|pane| pane.pane.to_string() == view.session)
-                        .map(|pane| {
+                    let floating = self
+                        .pane_drag
+                        .as_ref()
+                        .filter(|drag| drag.moved && drag.pane.to_string() == view.session)
+                        .and_then(|drag| {
+                            pointer_layout::floating_rect(
+                                drag.source,
+                                f64::from(f32::from(drag.position.x)),
+                                f64::from(f32::from(drag.position.y)),
+                            )
+                        });
+                    floating
+                        .or_else(|| {
+                            projected
+                                .panes
+                                .iter()
+                                .find(|pane| pane.pane.to_string() == view.session)
+                                .map(|pane| pane.rect)
+                        })
+                        .map(|rect| {
                             PaneGeometry::new(
                                 Bounds::new(
-                                    point(px(pane.rect.x as f32), px(pane.rect.y as f32)),
-                                    size(px(pane.rect.width as f32), px(pane.rect.height as f32)),
+                                    point(px(rect.x as f32), px(rect.y as f32)),
+                                    size(px(rect.width as f32), px(rect.height as f32)),
                                 ),
                                 cell,
                                 scale,
@@ -5324,6 +5558,7 @@ impl CanvasApp {
                 if self
                     .canvas_bounds
                     .is_none_or(|bounds| pixel_bounds_intersect(bounds, pane.bounds))
+                    && !self.pane_drag.as_ref().is_some_and(|drag| drag.moved)
                     && self.state.error.is_none()
                     && self.input_error.is_none()
                     && view.state == "running"
@@ -5494,7 +5729,10 @@ impl EntityInputHandler for CanvasApp {
                 dialog.kind == product::DialogKind::History && dialog.active_field == 1
             }) && self.product.active_editor().is_some();
         }
-        (!self.prefix && self.layout_mode.is_none())
+        (!self.prefix
+            && self.layout_mode.is_none()
+            && self.pane_drag.is_none()
+            && self.resize_gesture.is_none())
             && self.state.views.get(self.selected).is_some_and(|view| {
                 self.target_can_send(view) && input::protocol_error(view.frame.modes).is_none()
             })
@@ -5610,6 +5848,11 @@ impl EntityInputHandler for CanvasApp {
             self.editor_changed(window, cx);
             return;
         }
+        if self.pane_drag.is_some() || self.resize_gesture.is_some() {
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+            return;
+        }
         self.reset_cursor_blink(cx);
         let had_preedit = !self.text_input.preedit.is_empty();
         let modes = self
@@ -5679,6 +5922,11 @@ impl EntityInputHandler for CanvasApp {
                 }
             }
             self.editor_changed(window, cx);
+            return;
+        }
+        if self.pane_drag.is_some() || self.resize_gesture.is_some() {
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
             return;
         }
         self.reset_cursor_blink(cx);
@@ -5773,6 +6021,15 @@ impl Render for CanvasApp {
             .pane_drag
             .as_ref()
             .and_then(|drag| drag.drop.as_ref().map(|(_, rect)| *rect));
+        let dragged_index = self
+            .pane_drag
+            .as_ref()
+            .filter(|drag| drag.moved)
+            .and_then(|drag| {
+                views
+                    .iter()
+                    .position(|view| view.session == drag.pane.to_string())
+            });
         let attached = self.state.error.is_none();
         let terminal_label = self.state.views.get(selected).map_or_else(
             || "Терминал: нет выбранной сессии".to_owned(),
@@ -5924,9 +6181,24 @@ impl Render for CanvasApp {
                                             window.with_content_mask(
                                                 Some(ContentMask { bounds: content }),
                                                 |window| {
-                                                    for (index, pane) in
-                                                        panes.into_iter().enumerate()
-                                                    {
+                                                    let order = (0..panes.len())
+                                                        .filter(|index| {
+                                                            Some(*index) != dragged_index
+                                                        })
+                                                        .chain(dragged_index);
+                                                    for index in order {
+                                                        let Some(pane) = panes.get(index).copied()
+                                                        else {
+                                                            continue;
+                                                        };
+                                                        if Some(index) == dragged_index
+                                                            && let Some(rect) = drop_preview
+                                                        {
+                                                            window.paint_quad(fill(
+                                                                layout_bounds(rect),
+                                                                rgba(0xb9a5ef44),
+                                                            ));
+                                                        }
                                                         if !pixel_bounds_intersect(
                                                             content,
                                                             pane.bounds,
@@ -5968,19 +6240,12 @@ impl Render for CanvasApp {
                                                             );
                                                         }
                                                     }
-                                                    if let Some(rect) = drop_preview {
+                                                    if dragged_index.is_none()
+                                                        && let Some(rect) = drop_preview
+                                                    {
                                                         window.paint_quad(fill(
-                                                            Bounds::new(
-                                                                point(
-                                                                    px(rect.x as f32),
-                                                                    px(rect.y as f32),
-                                                                ),
-                                                                size(
-                                                                    px(rect.width as f32),
-                                                                    px(rect.height as f32),
-                                                                ),
-                                                            ),
-                                                            rgba(0x80aeff44),
+                                                            layout_bounds(rect),
+                                                            rgba(0xb9a5ef44),
                                                         ));
                                                     }
                                                 },

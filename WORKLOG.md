@@ -2649,3 +2649,75 @@ Implemented user-selected Hyprland-style held modifier (default Ctrl), native mo
 - Files: SPEC.md, DESIGN.md, README.md, crates/app/README.md, crates/app/src/controls.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/tiling.rs, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
 - Verification: App173 tests, strict all-target Clippy, fmt and debug/release builds passed; harness24 tests passed. Actual private controls05: four shells, focus restore, directional focus, mouse swap, resize commit/cancel, panel-only close, unchanged PID/generation/session IDs, saved Alt/Ctrl/Disabled and Alt+F; sheet capture inspected. Native EN/RU/control keyboard01 exact31bytes passed. Actual user Hyprland bindings read only; review host2540063 and all5 CLI identities preserved while opening repaired release UI.
 - Risks / next: Busy layout operations reject gestures with a visible notice; native helper waits350ms for UI receipt application, not a latency claim. Super can be intercepted by OS; full platform/MVP gates remain open. Retain runs01 baseline bookkeeping failure and02-04 stale-UI-busy drag failures. Final mouse-up coordinates are now recomputed; temporary probe logging removed. Preserve unrelated stress/IME edits and preferences stash.
+
+## 2026-10-17T19:39:20+00:00 — opencode_glyphs_luna
+
+Add pure pointer-driven tiled drag geometry, detach preview, and latest-intent focus queue helpers with unit tests
+
+- Files: crates/app/src/pointer_layout.rs
+- Verification: rustfmt --edition 2024 crates/app/src/pointer_layout.rs; git diff --check -- crates/app/src/pointer_layout.rs passed. App Cargo tests intentionally not run per task instruction.
+- Risks / next: Root to add module declaration and integrate; run targeted app tests in serialized root Cargo lane.
+
+## 2026-10-17T19:45:30+00:00 — opencode_glyphs_luna
+
+Add private pointer-layout acceptance fixture for hover focus, gesture suppression, drag preview, Dwindle drop and undo; update controls drag expectation from swap to split insertion
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts/test_isolated_ime_x11.py (25 tests passed, includes strict C helper compile/selftests); python3 scripts/isolated-ime-x11.py --fixture pointer (plan-only); git diff --check on owned scripts passed. No live fixture or app Cargo run per task scope.
+- Risks / next: Root to run private live pointer fixture after application integration/build is ready; inspect retained screenshot and run.json.
+
+## 2026-10-17T19:47:12+00:00 — opencode_glyphs_luna
+
+Corrected the private pointer fixture IME helper call after the first isolated run exposed an arity mismatch.
+
+- Files: scripts/isolated-ime-x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts/test_isolated_ime_x11.py (25 passed); python3 scripts/isolated-ime-x11.py --fixture pointer (plan-only); scoped git diff --check passed. No live fixture run.
+- Risks / next: Root owns rerun of the isolated pointer fixture and review of its captures.
+
+## 2026-10-17T19:48:28+00:00 — opencode_glyphs_luna
+
+Made the pointer IME suppression probe wait for private Pinyin activation and preedit round trip before moving the cursor; retained a pre-hover preedit capture and added a host-frame no-commit assertion.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile passed; python3 -m unittest scripts/test_isolated_ime_x11.py passed all 25 tests including helper compilation; pointer fixture plan-only passed; scoped git diff --check passed. Live fixture intentionally not run.
+- Risks / next: Root to rerun the isolated pointer fixture and inspect pointer-ime-preedit.ppm plus the strict active-preedit focus result.
+
+## 2026-10-17T19:51:15+00:00 — opencode_glyphs_luna
+
+Updated the pinned GPUI X11 XIM profile to request PREEDIT_CALLBACKS with STATUS_NOTHING, preserving the v1 lifecycle and recording exact migration hashes.
+
+- Files: crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py passed exact archive/preimage/patch/postimage checks and all 9 embedded Rust lifecycle tests; python3 -m py_compile scripts/test_gpui_xim_focus.py passed; scoped git diff --check passed. No app Cargo or live fixture run.
+- Risks / next: Root owns applying profile v2 to the pinned checkout, app build, and isolated IME fixture verification.
+
+## 2026-10-17T19:52:01+00:00 — /root
+
+Implement cursor-following panel focus, Dwindle tear-off preview and ordered focus/placement persistence; add exact previous-profile migration for the pinned GPUI build cache
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, SPEC.md, DESIGN.md, README.md, crates/app/README.md, docs/PROJECT_MAP.md, scripts/apply-gpui-patches.py, scripts/test_apply_gpui_patches.py
+- Verification: App179 tests and strict Clippy pass before final XIM profile integration; layout13 tests, harness25 and patch-applier14 tests pass. Private pointer01 passes hover/input/held-preview/cancel/selection then fails harness helper arity;02/03 expose missing inline XIM preedit, retained for investigation. Final release verification pending.
+- Risks / next: Finish complete XIM style integration, rerun release pointer/keyboard/IME fixtures, inspect captures and preserve live review host/CLI identities.
+
+## 2026-10-17T19:52:02+00:00 — opencode_glyphs_luna
+
+Corrected GPUI XIM profile v2 so the two client-side XIC style updates also retain STATUS_NOTHING; added static assertions for all three XIC style writes.
+
+- Files: crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py passed exact archive/preimage/patch/postimage checks and all 9 embedded Rust lifecycle tests; python3 -m py_compile scripts/test_gpui_xim_focus.py passed; scoped git diff --check passed. No app Cargo or live fixture run.
+- Risks / next: Root owns applying profile v2 over exact v1 migration images, then pinned app build and isolated IME fixture.
+
+## 2026-10-17T20:03:04+00:00 — opencode_glyphs_luna
+
+Added fail-closed typed XIM callback-style negotiation, a pinned xim-rs PreeditStartReply patch, and private Fcitx on-the-spot fixture setup (keyboard remains default fallback).
+
+- Files: crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/README.md, crates/app/patches/xim-preedit/reply.patch, crates/app/patches/xim-preedit/manifest.json, crates/app/patches/xim-preedit/README.md, scripts/test_gpui_xim_focus.py, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 scripts/test_gpui_xim_focus.py (12 tests); python3 scripts/test_isolated_ime_x11.py (26 tests); python3 scripts/test_apply_gpui_patches.py (15 tests); python3 -m py_compile ...; git diff --check; xim-preedit manifest applied successfully to verified pinned archive in a temporary tree.
+- Risks / next: Root: bootstrap private pinned xim-rs archive, compile/test app against profile, and run the isolated on-the-spot pointer fixture; no live desktop was used.
+
+## 2026-10-17T20:13:38+00:00 — /root
+
+Finish hover focus and Dwindle drag integration, callback-safe X11 IME negotiation/reply, reproducible pinned builds and native acceptance
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, crates/app/Cargo.toml, crates/app/Cargo.lock, crates/app/bootstrap.sh, crates/app/README.md, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/README.md, crates/app/patches/xim-preedit, scripts/apply-gpui-patches.py, scripts/test_apply_gpui_patches.py, scripts/test_gpui_xim_focus.py, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, SPEC.md, DESIGN.md, README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0010-gpui-x11-ime-focus-lifecycle.md
+- Verification: Fresh app179 tests; actual patched xim transport2 tests through bootstrap test-xim; GPUI12 source-bound tests; layout13 tests; harness27 and applier15 tests; strict app Clippy, fmt, version alignment, diff-check and locked release build pass. Release private pointer07, keyboard03, Pinyin04 and controls01 pass. Drag, final drop, exact Undo and inline preedit captures inspected. Four real shell session/generation/PID identities and preview PTY geometry preserved; keyboard exact31 bytes in no-IC fallback, callback commit exact6 bytes with no precommit/extras. No active-desktop input injection or settings changes.
+- Risks / next: Full platform/MVP and delayed native target/generation barriers remain open; callback-only X11 CJK requires supported server configuration. Five existing dependency warnings remain visible. Capture settling350ms is not a latency metric. Preserve failed runs01-06 and unrelated stress/IME quarantine edits; open new UI on the preserved review host without killing existing UI/CLI.

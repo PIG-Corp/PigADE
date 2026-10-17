@@ -1,0 +1,90 @@
+--- i/src/client.rs
++++ w/src/client.rs
+@@ -218,7 +218,14 @@
+         Request::PreeditStart {
+             input_method_id,
+             input_context_id,
+-        } => handler.handle_preedit_start(client, input_method_id, input_context_id),
++        } => {
++            handler.handle_preedit_start(client, input_method_id, input_context_id)?;
++            client.send_req(Request::PreeditStartReply {
++                input_method_id,
++                input_context_id,
++                return_value: -1,
++            })
++        },
+         Request::PreeditDone {
+             input_method_id,
+             input_context_id,
+@@ -605,3 +612,71 @@
+         Ok(())
+     }
+ }
++
++
++#[cfg(test)]
++mod pigade_preedit_start_reply_tests {
++    use alloc::{vec, vec::Vec};
++    use super::{handle_request, ClientCore, ClientError, ClientHandler};
++    use crate::{AHashMap, Attr, AttributeName, Request};
++
++    #[derive(Default)]
++    struct MockCore {
++        sent: Vec<Request>,
++        ic_attributes: AHashMap<AttributeName, u16>,
++        im_attributes: AHashMap<AttributeName, u16>,
++    }
++
++    impl ClientCore for MockCore {
++        type XEvent = ();
++
++        fn set_attrs(&mut self, _ic_attrs: Vec<Attr>, _im_attrs: Vec<Attr>) {}
++        fn ic_attributes(&self) -> &AHashMap<AttributeName, u16> { &self.ic_attributes }
++        fn im_attributes(&self) -> &AHashMap<AttributeName, u16> { &self.im_attributes }
++        fn serialize_event(&self, _event: &Self::XEvent) -> crate::XEvent { unreachable!() }
++        fn deserialize_event(&self, _event: &crate::XEvent) -> Self::XEvent { unreachable!() }
++        fn send_req(&mut self, request: Request) -> Result<(), ClientError> {
++            self.sent.push(request);
++            Ok(())
++        }
++    }
++
++    struct Handler { fail: bool }
++
++    impl ClientHandler<MockCore> for Handler {
++        fn handle_preedit_start(
++            &mut self,
++            _client: &mut MockCore,
++            _input_method_id: u16,
++            _input_context_id: u16,
++        ) -> Result<(), ClientError> {
++            if self.fail { Err(ClientError::InvalidReply) } else { Ok(()) }
++        }
++    }
++
++    #[test]
++    fn successful_preedit_start_sends_one_unlimited_length_reply() {
++        let mut client = MockCore::default();
++        let mut handler = Handler { fail: false };
++        handle_request(&mut client, &mut handler, Request::PreeditStart {
++            input_method_id: 23,
++            input_context_id: 41,
++        }).unwrap();
++        assert_eq!(client.sent, vec![Request::PreeditStartReply {
++            input_method_id: 23,
++            input_context_id: 41,
++            return_value: -1,
++        }]);
++    }
++
++    #[test]
++    fn failed_preedit_start_sends_no_reply() {
++        let mut client = MockCore::default();
++        let mut handler = Handler { fail: true };
++        assert!(handle_request(&mut client, &mut handler, Request::PreeditStart {
++            input_method_id: 23,
++            input_context_id: 41,
++        }).is_err());
++        assert!(client.sent.is_empty());
++    }
++}

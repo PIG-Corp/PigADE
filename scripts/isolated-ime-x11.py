@@ -53,6 +53,7 @@ HISTORY_PASS = 'pass-private-x11-readonly-terminal-history-fixture'
 SETUP_PASS = 'pass-private-x11-project-setup-shell-fixture'
 OPENCODE_PASS = 'pass-private-x11-opencode-mouse-terminal-fixture'
 CONTROLS_PASS = 'pass-private-x11-panel-controls-fixture'
+POINTER_PASS = 'pass-private-x11-pointer-layout-fixture'
 LATENCY_KEYS = bytes(97 + index % 26 for index in range(50))
 HOST_STATES = {'running', 'exited', 'starting', 'degraded', 'recovering'}
 ACTOR_STAGES = {'waiting', 'pty_resize', 'journal_append', 'history_begin', 'model_apply',
@@ -330,6 +331,18 @@ def select_private_pinyin(config: dict, home: Path, runtime: Path, auth: Path) -
     return result.stdout.strip()
 
 
+def prepare_private_fcitx_preedit_config(home: Path, fixture: str) -> str:
+    """Select callback preedit only in the harness-owned Fcitx configuration."""
+    config_path = home / '.config/fcitx5/conf/xim.conf'
+    if fixture == 'keyboard':
+        config_path.unlink(missing_ok=True)
+        return 'server-default-external'
+    config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config_path.write_text('UseOnTheSpot=True\n')
+    config_path.chmod(0o600)
+    return 'on-the-spot'
+
+
 def prepare_private_keyboard(config: dict, env: dict) -> None:
     # Only called after inside_run proves namespace, server and XIM ownership.
     result = subprocess.run([config['x11_root'] + '/usr/bin/setxkbmap',
@@ -350,8 +363,10 @@ def deactivate_private_fcitx(config, env):
     result = subprocess.run([remote], stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, timeout=3, check=False, env=env)
-    require(result.returncode == 0 and result.stdout.strip() == '1',
-            'private Fcitx did not confirm inactive state')
+    expected_state = '0' if config.get('fixture') == 'keyboard' else '1'
+    require(result.returncode == 0 and result.stdout.strip() == expected_state,
+            'private Fcitx did not confirm expected inactive/no-context state')
+    return int(expected_state)
 
 
 def fixture_status(name):
@@ -359,7 +374,8 @@ def fixture_status(name):
             'context': CONTEXT_PASS, 'memory': MEMORY_PASS,
             'generations': GENERATIONS_PASS, 'resume': RESUME_PASS,
             'history': HISTORY_PASS, 'setup': SETUP_PASS,
-            'opencode': OPENCODE_PASS, 'controls': CONTROLS_PASS}[name]
+            'opencode': OPENCODE_PASS, 'controls': CONTROLS_PASS,
+            'pointer': POINTER_PASS}[name]
 
 
 def seed_context_catalog(session, memory_fixture=False, cwd='/artifacts'):
@@ -837,13 +853,15 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
             set(pane_ids(focused_layout.get('root'))) == original_ids,
             'Ctrl+Right changed the tiling tree instead of focus only')
 
-    before_swap = focused_layout
-    step('controls-swap')
+    before_move = focused_layout
+    old_split_ids = split_ids(before_move.get('root'))
+    step('controls-move')
     swapped = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('root') !=
-                                 before_swap.get('root') else None), time.monotonic() + 6)
+                                 before_move.get('root') else None), time.monotonic() + 6)
     require(set(pane_ids(swapped.get('root'))) == original_ids and
+            split_ids(swapped.get('root')) != old_split_ids and
             same_live_generations(generations),
-            'Ctrl+LMB swap changed pane/session identity or process generations')
+            'Ctrl+LMB did not reinsert the pane as a Dwindle split or changed terminal identity')
 
     before_cancel = swapped
     step('controls-resize-cancel')
@@ -872,7 +890,7 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     helper_call(config, 'capture', '/artifacts/controls-settings.ppm')
     report['controls'] = {'initial_pane_ids': sorted(original_ids), 'generations': generations,
                           'focus_mode_restored_exact_layout': True, 'focus_right_only': True,
-                          'swap_preserved_ids': True, 'process_pids_unchanged': True,
+                          'move_reinserted_as_split': True, 'process_pids_unchanged': True,
                           'resize_escape_restored_exact_layout': True,
                           'resize_commit_preserved_ids': True, 'close_left_cli_running': True,
                           'settings_capture': 'controls-settings.ppm'}
@@ -922,6 +940,258 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                                'modifier_disabled_persisted': True,
                                'disabled_mode_ctrl_q_passthrough': True})
     report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
+    save()
+
+
+def split_ids(node):
+    if not isinstance(node, dict):
+        return set()
+    split = node.get('Split')
+    if not isinstance(split, dict):
+        return set()
+    result = {split.get('id')}
+    for child in split.get('children', []):
+        result |= split_ids(child)
+    return result
+
+
+def run_pointer_fixture(config, report, control, app, env, save, tab_id, baseline_generations):
+    def catalog_layout():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        tab = next(item for item in catalog['tabs'] if item['id'] == tab_id)
+        return catalog, json.loads(tab['layout_json'])
+
+    def pane_ids(node):
+        if not isinstance(node, dict):
+            return []
+        pane = node.get('Pane')
+        if isinstance(pane, dict) and isinstance(pane.get('id'), str):
+            return [pane['id']]
+        split = node.get('Split')
+        if isinstance(split, dict):
+            return [pane_id for child in split.get('children', []) for pane_id in pane_ids(child)]
+        return []
+
+    def process_snapshot():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32, 'pointer process snapshot exceeds bounds')
+        result = sorted((view.get('session'), view.get('generation'), view.get('pid')) for view in views)
+        require(all(isinstance(session, str) and isinstance(generation, str) and
+                    type(pid) is int and pid > 0 for session, generation, pid in result),
+                'pointer fixture omitted a process identity')
+        return result
+
+    def live_unchanged(expected_generations, expected_processes):
+        current = fixture_generations()
+        if current != expected_generations or process_snapshot() != expected_processes:
+            return False
+        return all(fixture_session_models(session).get(generation, {}).get('state') == 'running'
+                   for session, generation in expected_generations)
+
+    def frame_geometries(panes):
+        views = host_request({'command': 'list'}).get('views', [])
+        by_key = {(view.get('session'), view.get('generation')): view
+                  for view in views if isinstance(view, dict)}
+        result = {}
+        for session, generation in panes:
+            view = by_key.get((session, generation))
+            frame = view.get('frame', {}) if view else {}
+            geometry = frame.get('geometry') if isinstance(frame, dict) else None
+            require(isinstance(geometry, dict), 'pointer fixture host frame omitted geometry')
+            result[session] = dict(geometry)
+        return result
+
+    def step(stage):
+        report['stage'] = stage
+        save()
+        helper_call(config, stage)
+
+    def held_stage(stage, marker, response, output, verify):
+        argv = ['/pigade/x11-ime-input', '--stage', stage,
+                '--display', config['display'], '--boot-id', config['boot_id'],
+                '--xvfb-pid', str(config['xvfb_pid']), '--xvfb-start', str(config['xvfb_start']),
+                '--xvfb-socket-inode', str(config['xvfb_socket_inode']),
+                '--fcitx-pid', str(config['fcitx_pid']), '--fcitx-start', str(config['fcitx_start']),
+                '--app-pid', str(config['app_pid']), '--app-start', str(config['app_start'])]
+        if output:
+            argv += ['--output', output]
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, bufsize=1,
+                                   env={'PATH': '/usr/bin', 'DISPLAY': config['display'],
+                                        'XAUTHORITY': '/run/pigade-test/Xauthority',
+                                        'XMODIFIERS': '@im=fcitx', 'LC_ALL': 'C.utf8',
+                                        'LD_LIBRARY_PATH': os.environ['LD_LIBRARY_PATH']})
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 5)
+            require(ready and process.stdout.readline().strip() == marker,
+                    f'{stage} did not reach its fixed held state')
+            verify()
+            process.stdin.write(response + '\n')
+            process.stdin.flush()
+            remainder, error = process.communicate(timeout=5)
+            require(process.returncode == 0 and len(remainder) <= 4096 and len(error) <= 4096,
+                    f'{stage} did not release cleanly')
+        finally:
+            if process.poll() is None:
+                try:
+                    process.stdin.write(response + '\n')
+                    process.stdin.flush()
+                    process.communicate(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+                    process.communicate(timeout=2)
+
+    _, before = catalog_layout()
+    original_root = before.get('root')
+    original_ids = set(pane_ids(original_root))
+    generations = fixture_generations()
+    expected_processes = process_snapshot()
+    panes = sorted(pair for pair in generations if pair[0] in original_ids)
+    require(len(original_ids) == 4 and len(panes) == 4 and
+            len(generations) == len(baseline_generations) + 4,
+            'pointer fixture did not reach exactly four real shell panes')
+    require(live_unchanged(generations, expected_processes),
+            'a pointer fixture terminal was not live before hover tests')
+
+    step('pointer-hover-left')
+    time.sleep(0.2)
+    left_layout = catalog_layout()[1]
+    left_pane = left_layout.get('focused')
+    require(left_pane in original_ids, 'hover left did not focus an existing pane')
+    step('pointer-hover-right')
+    right_layout = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') != left_pane
+                                       else None), time.monotonic() + 5)
+    right_pane = right_layout.get('focused')
+    require(right_pane in original_ids and right_pane != left_pane,
+            'hover right did not follow the cursor to a different pane')
+    step('pointer-hover-input')
+    focused = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == left_pane
+                                  else None), time.monotonic() + 5)
+    del focused
+    text_ready = wait_until(lambda: (views if (views := host_request({'command': 'list'}).get('views', [])) and
+                                     any(view.get('session') == left_pane and
+                                         'pigadehover' in view_text(view) for view in views) else None),
+                            time.monotonic() + 6)
+    require(sum('pigadehover' in view_text(view) for view in text_ready
+                if view.get('session') in original_ids) == 1 and
+            any(view.get('session') == left_pane and 'pigadehover' in view_text(view)
+                for view in text_ready),
+            'rapid hover A/B/A input did not reach only the last pane')
+    require(catalog_layout()[1].get('root') == original_root and
+            live_unchanged(generations, expected_processes),
+            'hover focus or unsent input changed pane placement/process identity')
+    helper_call(config, 'capture', '/artifacts/pointer-hover.ppm')
+
+    _, before_drag = catalog_layout()
+    geometries_before = frame_geometries(panes)
+    def check_drag_preview():
+        require(catalog_layout()[1] == before_drag and
+                frame_geometries(panes) == geometries_before and
+                live_unchanged(generations, expected_processes),
+                'held preview wrote layout metadata, resized PTYs, or changed process identity')
+        require(0 < Path('/artifacts/pointer-drag.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'held pointer capture is missing or oversized')
+
+    held_stage('pointer-hold-preview', 'HELD', 'CANCEL',
+               '/artifacts/pointer-drag.ppm', check_drag_preview)
+    wait_until(lambda: catalog_layout()[1].get('root') == before_drag.get('root') and
+               frame_geometries(panes) == geometries_before, time.monotonic() + 5)
+    require(live_unchanged(generations, expected_processes),
+            'cancelled pointer preview changed a terminal or PTY size')
+    # Host commit and UI paint are separate receipts; this is capture settling,
+    # not an input-to-present latency measurement.
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-after-cancel.ppm')
+
+    before_selection = catalog_layout()[1]
+    def check_selection():
+        require(catalog_layout()[1] == before_selection and
+                live_unchanged(generations, expected_processes) and
+                0 < Path('/artifacts/pointer-selection.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'text selection caused hover focus or changed the terminal layout')
+    held_stage('pointer-selection-hold', 'SELECTING', 'RELEASE',
+               '/artifacts/pointer-selection.ppm', check_selection)
+    step('pointer-hover-left')
+    time.sleep(0.2)
+    ime_name = select_private_pinyin(config, Path(env['HOME']), Path(env['XDG_RUNTIME_DIR']),
+                                     Path(env['XAUTHORITY']))
+    require(ime_name == 'pinyin', 'private IME did not activate its fixed Pinyin engine')
+    # Let Fcitx finish switching the active XIM context before sending the
+    # fixed composition sequence; pointer movement happens only after the
+    # helper has also allowed the preedit round trip to settle.
+    time.sleep(0.25)
+    ime_focus = catalog_layout()[1]
+    report['stage'] = 'pointer-ime-input'
+    save()
+    helper_call(config, 'pointer-ime-input', '/artifacts/pointer-ime-preedit.ppm')
+    require(0 < Path('/artifacts/pointer-ime-preedit.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'active IME preedit capture is missing or oversized')
+    time.sleep(0.3)
+    require(catalog_layout()[1] == ime_focus and live_unchanged(generations, expected_processes),
+            'active IME preedit allowed hover to change focus or terminal identity')
+    ime_views = host_request({'command': 'list'}).get('views', [])
+    require(not any('nihao' in view_text(view) for view in ime_views),
+            'IME preedit was committed into a terminal while hovering')
+    helper_call(config, 'capture', '/artifacts/pointer-ime.ppm')
+    control.sendall(b'CHECK\n')
+    require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+            'IME hover fixture committed bytes into the focused terminal')
+    step('pointer-ime-cancel')
+    deactivate_private_fcitx(config, env)
+    step('controls-open')
+    dialog_focus = catalog_layout()[1]
+    step('pointer-dialog-hover')
+    time.sleep(0.25)
+    require(catalog_layout()[1] == dialog_focus and live_unchanged(generations, expected_processes),
+            'open controls dialog allowed pointer hover to move pane focus')
+    helper_call(config, 'capture', '/artifacts/pointer-dialog.ppm')
+    step('setup-close')
+    step('pointer-hover-left')
+    before_inactive = catalog_layout()[1]
+    held_stage('pointer-inactive-hold', 'INACTIVE', 'RESTORE', None,
+               lambda: require(catalog_layout()[1] == before_inactive and
+                               live_unchanged(generations, expected_processes),
+                               'inactive app followed pointer focus'))
+    wait_until(lambda: catalog_layout()[1] == before_inactive, time.monotonic() + 5)
+    require(live_unchanged(generations, expected_processes),
+            'inactive pointer probe changed terminal identities')
+
+    old_split_ids = split_ids(before_drag.get('root'))
+    step('pointer-drop')
+    dropped = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('root') !=
+                                  before_drag.get('root') else None), time.monotonic() + 6)
+    require(set(pane_ids(dropped.get('root'))) == original_ids and
+            split_ids(dropped.get('root')) != old_split_ids and
+            live_unchanged(generations, expected_processes),
+            'pointer drop failed Dwindle reinsert or changed terminal identities')
+    # Host commit and UI paint are separate receipts; this is capture settling,
+    # not an input-to-present latency measurement.
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-dropped.ppm')
+    step('pointer-undo')
+    restored = wait_until(lambda: (layout if (layout := catalog_layout()[1]) == before_drag else None),
+                          time.monotonic() + 8)
+    del restored
+    require(live_unchanged(generations, expected_processes),
+            'pointer layout undo changed CLI/session process identities')
+    # Host commit and UI paint are separate receipts; this is capture settling,
+    # not an input-to-present latency measurement.
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-undo.ppm')
+    report['pointer'] = {
+        'four_pane_ids_preserved': sorted(original_ids),
+        'process_generations_and_pids_unchanged': True,
+        'hover_left_right_left_followed_without_click': True,
+        'unsent_input_reached_only_last_hovered_pane': True,
+        'held_drag_preview_did_not_commit_or_resize_ptys': True,
+        'escape_cancel_restored_exact_root': True,
+        'selection_ime_dialog_and_inactive_focus_suppressed': True,
+        'drop_reinserted_as_dwindle_split_without_swap': True,
+        'prefix_undo_restored_exact_pre_drag_layout': True,
+        'captures': ['pointer-hover.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
+                     'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
+                     'pointer-dropped.ppm', 'pointer-undo.ppm']}
+    report.update({'status': POINTER_PASS, 'stage': 'complete'})
     save()
 
 
@@ -1032,6 +1302,10 @@ def run_setup_fixture(config, report, control, app, env, save):
     if config.get('fixture') == 'controls':
         run_controls_fixture(config, report, control, app, env, save, grid_catalog['tabs'][0]['id'], baseline_generations)
         return
+    if config.get('fixture') == 'pointer':
+        run_pointer_fixture(config, report, control, app, env, save,
+                            grid_catalog['tabs'][0]['id'], baseline_generations)
+        return
     helper_call(config, 'setup-live')
     try:
         wait_until(lambda: any(view.get('session') == focused and 'pigadegridlive' in view_text(view) for view in host_request({'command':'list'}).get('views', [])), time.monotonic() + 8)
@@ -1126,8 +1400,10 @@ def run_context_fixture(config, report, env, save):
 def run_latency_fixture(config, report, control, app, fcitx, env, save):
     report['stage'] = 'fixed-input-cell-latency'
     save()
-    deactivate_private_fcitx(config, env)
-    report['fcitx']['activation_state'] = 1
+    activation_state = deactivate_private_fcitx(config, env)
+    report['fcitx']['activation_state'] = activation_state
+    require(activation_state == 0 and report['fcitx']['preedit_mode'] == 'server-default-external',
+            'keyboard fallback probe unexpectedly created an unsupported external-preedit IC')
     control.sendall(b'START\n')
     samples = helper_call(config, 'latency', timeout=60)
     values = samples.get('samples_ns')
@@ -1158,8 +1434,10 @@ def run_latency_fixture(config, report, control, app, fcitx, env, save):
 def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, save):
     report['stage'] = 'native-en-ru-cli-keyboard'
     save()
-    deactivate_private_fcitx(config, env)
-    report['fcitx']['activation_state'] = 1
+    activation_state = deactivate_private_fcitx(config, env)
+    report['fcitx']['activation_state'] = activation_state
+    require(activation_state == 0 and report['fcitx']['preedit_mode'] == 'server-default-external',
+            'keyboard fallback probe unexpectedly created an unsupported external-preedit IC')
     control.sendall(b'CHECK\n')
     require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
             'PTY received bytes before fixed keyboard sequence')
@@ -1175,7 +1453,8 @@ def run_keyboard_fixture(config, report, control, app, fcitx, env, artifacts, sa
                            'modifiers_clear_before_after': True,
                            'controls': ['Ctrl-C', 'Ctrl-D', 'Ctrl-Z', 'Ctrl-R', 'Ctrl-L', 'Ctrl-A',
                                         'Alt-x', 'Left', 'Home', 'Enter'],
-                           'pre_input_bytes': 0}
+                           'pre_input_bytes': 0,
+                           'unsupported_external_preedit_has_no_ic': activation_state == 0}
     save()
     require(result.get('received_bytes') == len(KEYBOARD_EXPECTED) and
             result.get('payload_sha256') == expected_hash and result.get('exact_once') is True and
@@ -1850,6 +2129,7 @@ def inside_run() -> int:
         profile = home / '.config/fcitx5/profile'
         profile.write_text('''[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=pinyin\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=us\n\n[Groups/0/Items/1]\nName=pinyin\n\n[GroupOrder]\n0=Default\n''')
         profile.chmod(0o600)
+        preedit_mode = prepare_private_fcitx_preedit_config(home, config.get('fixture', 'pinyin'))
         plugin_dir = Path(config['x11_root']) / 'usr/lib/fcitx5'
         model_dir = Path(config['x11_root']) / 'usr/lib/libime'
         require((model_dir / 'zh_CN.lm').is_file(), 'pinned libime model is missing')
@@ -1872,7 +2152,8 @@ def inside_run() -> int:
         wait_for_private_xim(config)
         report['fcitx'] = {'pid': fcitx.pid, 'start_time_ticks': fcitx_start,
                            'private_profile': True, 'xim_owner_verified_by': 'XRes local client PID',
-                           'xim_selection': '@server=fcitx', 'input_method': 'pinyin'}
+                           'xim_selection': '@server=fcitx', 'input_method': 'pinyin',
+                           'preedit_mode': preedit_mode}
         report['stage'] = 'host-fixture'
         save()
         control_path = runtime / 'ime-fixture.sock'
@@ -1970,7 +2251,7 @@ def inside_run() -> int:
         if config.get('fixture') == 'history':
             run_history_fixture(config, report, control, app_env, save)
             return 0
-        if config.get('fixture') in ('setup', 'controls'):
+        if config.get('fixture') in ('setup', 'controls', 'pointer'):
             run_setup_fixture(config, report, control, app, app_env, save)
             return 0
         if config.get('fixture') == 'opencode':
@@ -2118,10 +2399,15 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm']
                  if args.fixture == 'controls' else
+                 ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
+                  'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
+                  'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
+                  'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
+                  'pointer-undo.ppm'] if args.fixture == 'pointer' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
-        'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode/panel-controls fixture only',
+        'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode/panel-controls/pointer-layout fixture only',
                        'does not certify Wayland, other IMEs/locales, reset barriers, or universal CJK']}
 
 
@@ -2142,7 +2428,8 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
-                  'controls': 'fixed private four-shell setup; Ctrl focus/swap/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
                   'arbitrary_text_argument': False},
@@ -2185,8 +2472,8 @@ def parse_args(argv=None):
     modes.add_argument('--run', action='store_true', help='run the private Xvfb/Fcitx/app fixture')
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
-    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls'], default='pinyin',
-                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, or panel controls fixture')
+    parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer'], default='pinyin',
+                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pointer layout fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

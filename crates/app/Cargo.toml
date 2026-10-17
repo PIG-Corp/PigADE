@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [workspace]
-exclude = [".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_platform"]
+exclude = [".upstream/xim-rs-16f35a2c881b815a2b6cdfd6687988e84f8447d8", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui", ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui_platform"]
 
 [dependencies]
 gpui = { path = ".upstream/zed-322cd509dcccaee1f6bc44725d270598ae8171ad/crates/gpui" }
@@ -16,3 +16,6 @@ pigade-storage = { path = "../storage" }
 pigade-layout = { path = "../layout" }
 uuid = { version = "1.18", features = ["v4", "serde"] }
 unicode-segmentation = "=1.13.3"
+
+[patch."https://github.com/zed-industries/xim-rs.git"]
+zed-xim = { path = ".upstream/xim-rs-16f35a2c881b815a2b6cdfd6687988e84f8447d8" }

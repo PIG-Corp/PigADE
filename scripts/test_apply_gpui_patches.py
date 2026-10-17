@@ -85,15 +85,15 @@ class PatchApplierTest(unittest.TestCase):
         self.write_archive(archive, list(self.before))
         return outer, source, archive
 
-    def write_archive(self, archive, names):
+    def write_archive(self, archive, names, prefix="zed"):
         with tarfile.open(archive, "w:gz") as bundle:
-            root_info = tarfile.TarInfo(f"zed-{self.commit}")
+            root_info = tarfile.TarInfo(f"{prefix}-{self.commit}")
             root_info.type = tarfile.DIRTYPE
             root_info.mode = 0o755
             bundle.addfile(root_info)
             for name in names:
                 data = self.before[name]
-                info = tarfile.TarInfo(f"zed-{self.commit}/{name}")
+                info = tarfile.TarInfo(f"{prefix}-{self.commit}/{name}")
                 info.size = len(data)
                 info.mode = 0o644
                 bundle.addfile(info, io.BytesIO(data))
@@ -201,6 +201,49 @@ class PatchApplierTest(unittest.TestCase):
         with self.assertRaisesRegex(PATCHER.PatchError, "duplicate upstream archive target"):
             PATCHER.apply(source, self.manifest_path, archive)
         self.assertEqual((source / "src/a.rs").read_bytes(), self.before["src/a.rs"])
+
+    def test_pinned_xim_archive_root_is_supported_without_widening_paths(self):
+        _outer, source, archive = self.make_archive_source()
+        renamed = source.with_name(f"xim-rs-{self.commit}")
+        source.rename(renamed)
+        self.write_archive(archive, list(self.before), prefix="xim-rs")
+        self.manifest["archive_root"] = renamed.name
+        self.archive_manifest(archive)
+        self.assertEqual(PATCHER.apply(renamed, self.manifest_path, archive)["status"], "applied")
+        for name, expected in self.after.items():
+            self.assertEqual((renamed / name).read_bytes(), expected)
+        self.manifest["archive_root"] = "../outside"
+        self.archive_manifest(archive)
+        with self.assertRaisesRegex(PATCHER.PatchError, "unsupported upstream archive root"):
+            PATCHER.apply(renamed, self.manifest_path, archive)
+
+    def test_archive_migrates_only_complete_exact_previous_profile(self):
+        _outer, source, archive = self.make_archive_source()
+        previous = {name: data.replace(b" }", b" + 1 }") for name, data in self.before.items()}
+        self.manifest["previous_files_sha256"] = {
+            name: hashlib.sha256(data).hexdigest() for name, data in previous.items()}
+        self.archive_manifest(archive)
+        for name, data in previous.items():
+            (source / name).write_bytes(data)
+        result = PATCHER.apply(source, self.manifest_path, archive)
+        self.assertEqual(result["status"], "migrated")
+        for name, data in self.after.items():
+            self.assertEqual((source / name).read_bytes(), data)
+        self.assertEqual(PATCHER.apply(source, self.manifest_path, archive)["status"], "already-applied")
+
+    def test_previous_profile_mixed_or_modified_bytes_are_never_replaced(self):
+        _outer, source, archive = self.make_archive_source()
+        self.manifest["previous_files_sha256"] = {
+            name: hashlib.sha256(b"previous").hexdigest() for name in self.before}
+        self.archive_manifest(archive)
+        (source / "src/a.rs").write_bytes(b"previous")
+        with self.assertRaisesRegex(PATCHER.PatchError, "mixed before/after"):
+            PATCHER.apply(source, self.manifest_path, archive)
+        self.assertEqual((source / "src/a.rs").read_bytes(), b"previous")
+        (source / "src/b.rs").write_bytes(b"custom edits")
+        with self.assertRaisesRegex(PATCHER.PatchError, "unexpected source hash"):
+            PATCHER.apply(source, self.manifest_path, archive)
+        self.assertEqual((source / "src/b.rs").read_bytes(), b"custom edits")
 
     def test_manifest_symlink_is_rejected_before_resolution(self):
         link = self.root / "manifest-link.json"

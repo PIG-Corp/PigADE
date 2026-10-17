@@ -46,6 +46,8 @@ static unsigned long long parse_u64(const char *s) {
 }
 
 static unsigned long long self_process_start(void);
+static Window verify_app_focus_target(const Args *a, Display *dpy, xcb_connection_t *c, int set_focus);
+static void capture(Display *dpy, const char *path);
 
 static Args parse_args(int argc, char **argv) {
     Args a = {0};
@@ -89,11 +91,26 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "controls-swap") && strcmp(a.stage, "controls-resize-cancel") &&
         strcmp(a.stage, "controls-resize-commit") && strcmp(a.stage, "controls-close") &&
         strcmp(a.stage, "controls-open") && strcmp(a.stage, "controls-select-alt") &&
-        strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled"))
+        strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled") &&
+        strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
+        strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
+        strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
+        strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
+        strcmp(a.stage, "pointer-ime-input") && strcmp(a.stage, "pointer-ime-cancel") &&
+        strcmp(a.stage, "pointer-dialog-hover") && strcmp(a.stage, "pointer-inactive-hold"))
         fail("unsupported stage");
     if (strcmp(a.stage, "preflight") && (!a.app || !a.app_start)) fail("app identity required");
     if (!strcmp(a.stage, "capture") && (!a.output || strncmp(a.output, "/artifacts/", 11)))
         fail("capture path must be under /artifacts");
+    if (!strcmp(a.stage, "pointer-hold-preview") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-drag.ppm")))
+        fail("pointer preview capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-selection-hold") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-selection.ppm")))
+        fail("pointer selection capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-ime-input") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-ime-preedit.ppm")))
+        fail("pointer IME preedit capture path must be the fixed artifact");
     if (strncmp(a.display, ":", 1) || strspn(a.display + 1, "0123456789") != strlen(a.display + 1))
         fail("only a local numeric private display is accepted");
     return a;
@@ -433,6 +450,96 @@ static void controls_drag(Display *dpy, Window app, int button, int escape) {
     XSync(dpy, False);
 }
 
+static void pointer_position(Display *dpy, Window app, int x, int y) {
+    Window child; int root_x, root_y;
+    if (!XTranslateCoordinates(dpy, app, DefaultRootWindow(dpy), x, y,
+                               &root_x, &root_y, &child) ||
+        !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
+        fail("fixed pointer motion failed");
+    XFlush(dpy);
+}
+
+static void pointer_hover(Display *dpy, Window app, int x, int y, int burst) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("pointer hover requires the fixed private 1280x800 app");
+    pointer_position(dpy, app, x, y);
+    if (burst) {
+        struct timespec pause = { .tv_sec = 0, .tv_nsec = 50000000 };
+        nanosleep(&pause, NULL);
+        pointer_position(dpy, app, 1015, 250);
+        nanosleep(&pause, NULL);
+        pointer_position(dpy, app, 485, 250);
+    }
+    XSync(dpy, False);
+    if (burst) {
+        struct timespec settle = { .tv_sec = 0, .tv_nsec = 150000000 };
+        nanosleep(&settle, NULL);
+        const KeySym prompt[] = { XK_p, XK_i, XK_g, XK_a, XK_d, XK_e,
+                                  XK_h, XK_o, XK_v, XK_e, XK_r };
+        for (size_t i = 0; i < sizeof(prompt) / sizeof(prompt[0]); ++i)
+            key(dpy, prompt[i]);
+    }
+}
+
+static void pointer_drag_begin(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("pointer drag requires the fixed private 1280x800 app");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+        fail("pointer drag modifier press failed");
+    pointer_position(dpy, app, 485, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+        fail("pointer drag button press failed");
+    pointer_position(dpy, app, 1015, 250);
+    XSync(dpy, False);
+}
+
+static void pointer_drag_release(Display *dpy, int cancel) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (cancel) key(dpy, XK_Escape);
+    if (!XTestFakeButtonEvent(dpy, 1, False, CurrentTime) || !control ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+        fail("pointer drag release failed");
+    XSync(dpy, False);
+}
+
+static void pointer_selection_hold(Display *dpy, Window app, const char *output) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("pointer selection requires the fixed private 1280x800 app");
+    pointer_position(dpy, app, 485, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime)) fail("selection button press failed");
+    pointer_position(dpy, app, 1015, 250);
+    XSync(dpy, False);
+    struct timespec settle = { .tv_sec = 0, .tv_nsec = 200000000 };
+    nanosleep(&settle, NULL);
+    capture(dpy, output);
+    puts("SELECTING"); fflush(stdout);
+    char response[32];
+    if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RELEASE\n"))
+        fail("pointer selection accepts only fixed release");
+    if (!XTestFakeButtonEvent(dpy, 1, False, CurrentTime)) fail("selection button release failed");
+    XSync(dpy, False);
+}
+
+static void pointer_inactive_hold(const Args *a, Display *dpy, xcb_connection_t *c) {
+    Window app = verify_app_focus_target(a, dpy, c, 0);
+    XSetInputFocus(dpy, DefaultRootWindow(dpy), RevertToParent, CurrentTime);
+    XSync(dpy, False);
+    pointer_position(dpy, app, 1015, 250);
+    XSync(dpy, False);
+    puts("INACTIVE"); fflush(stdout);
+    char response[32];
+    if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RESTORE\n"))
+        fail("inactive pointer stage accepts only fixed focus restoration");
+    XSetInputFocus(dpy, app, RevertToParent, CurrentTime);
+    XSync(dpy, False);
+    pointer_position(dpy, app, 485, 250);
+    XSync(dpy, False);
+}
+
 static void setup_create_sequence(Display *dpy) {
     const KeySym name[] = { XK_d, XK_e, XK_m, XK_o };
     for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
@@ -661,6 +768,9 @@ int main(int argc, char **argv) {
     } else if (!strcmp(a.stage, "focus")) {
         verify_app_focus_target(&a, dpy, c, 1);
         printf("{\"stage\":\"focus\",\"app_pid\":%ld,\"focus_verified\":true}\n", (long)a.app);
+    } else if (!strcmp(a.stage, "pointer-inactive-hold")) {
+        pointer_inactive_hold(&a, dpy, c);
+        puts("{\"stage\":\"pointer-inactive-hold\",\"focus_restored\":true}");
     } else {
         Window app_window = verify_app_focus_target(&a, dpy, c, 1);
         if (!strcmp(a.stage, "compose")) {
@@ -740,6 +850,8 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Alt_L, XK_f);
         } else if (!strcmp(a.stage, "controls-swap")) {
             controls_drag(dpy, app_window, 1, 0);
+        } else if (!strcmp(a.stage, "controls-move")) {
+            controls_drag(dpy, app_window, 1, 0);
         } else if (!strcmp(a.stage, "controls-resize-cancel")) {
             controls_drag(dpy, app_window, 3, 1);
         } else if (!strcmp(a.stage, "controls-resize-commit")) {
@@ -754,6 +866,46 @@ int main(int argc, char **argv) {
             key(dpy, XK_1);
         } else if (!strcmp(a.stage, "controls-select-disabled")) {
             key(dpy, XK_5);
+        } else if (!strcmp(a.stage, "pointer-hover-left")) {
+            pointer_hover(dpy, app_window, 485, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-hover-right")) {
+            pointer_hover(dpy, app_window, 1015, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-hover-input")) {
+            pointer_hover(dpy, app_window, 485, 250, 1);
+        } else if (!strcmp(a.stage, "pointer-hold-preview")) {
+            pointer_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "CANCEL\n"))
+                fail("pointer preview accepts only fixed cancel release");
+            pointer_drag_release(dpy, 1);
+        } else if (!strcmp(a.stage, "pointer-drop")) {
+            pointer_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            pointer_drag_release(dpy, 0);
+        } else if (!strcmp(a.stage, "pointer-undo")) {
+            setup_prefix(dpy, XK_z, 0);
+        } else if (!strcmp(a.stage, "pointer-selection-hold")) {
+            pointer_selection_hold(dpy, app_window, a.output);
+        } else if (!strcmp(a.stage, "pointer-ime-input")) {
+            keyboard_group(dpy, 0);
+            const KeySym preedit[] = { XK_n, XK_i, XK_h, XK_a, XK_o };
+            for (size_t i = 0; i < sizeof(preedit) / sizeof(preedit[0]); ++i) key(dpy, preedit[i]);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            pointer_position(dpy, app_window, 1015, 250);
+            XSync(dpy, False);
+        } else if (!strcmp(a.stage, "pointer-ime-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "pointer-dialog-hover")) {
+            pointer_hover(dpy, app_window, 1015, 250, 0);
         } else if (!strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency")) keyboard_sequence(dpy);
         else key(dpy, XK_space);
         const char *count = !strcmp(a.stage, "compose") ? "5" :
@@ -780,6 +932,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "controls-select-alt") ? "1" :
                             !strcmp(a.stage, "controls-select-control") ? "1" :
                             !strcmp(a.stage, "controls-select-disabled") ? "1" :
+                            !strcmp(a.stage, "pointer-hover-input") ? "11" :
+                            !strcmp(a.stage, "pointer-ime-input") ? "5" :
+                            !strcmp(a.stage, "pointer-undo") ? "2" :
                             !strcmp(a.stage, "setup-open") ? "1" :
                             !strcmp(a.stage, "setup-create") ? "5" :
                             !strcmp(a.stage, "setup-shell") ? "1" :

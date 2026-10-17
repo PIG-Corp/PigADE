@@ -129,8 +129,11 @@ def archive_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_archive_preimages(archive: Path, commit: str, entries: list[dict]) -> None:
-    expected_root = f"zed-{commit}"
+def verify_archive_preimages(archive: Path, commit: str, entries: list[dict],
+                             expected_root: str | None = None) -> dict[str, bytes]:
+    expected_root = expected_root or f"zed-{commit}"
+    require(expected_root in (f"zed-{commit}", f"xim-rs-{commit}"),
+            "unsupported upstream archive root")
     expected = {entry["relative"]: entry for entry in entries}
     found = {}
     members_seen = 0
@@ -179,6 +182,8 @@ def verify_archive_preimages(archive: Path, commit: str, entries: list[dict]) ->
     for relative, entry in expected.items():
         require(sha256_bytes(found[relative]) == entry["before_sha256"],
                 f"manifest before_sha256 does not match upstream archive: {relative}")
+
+    return found
 
 
 def parse_patch_paths(data: bytes, label: str) -> set[str]:
@@ -239,16 +244,20 @@ def run_patch(patch_bin: str, source: Path, patch_path: Path, *, dry_run: bool) 
             f"{result.stdout[-1200:]}")
 
 
-def file_states(source: Path, entries: list[dict]) -> str:
-    before = after = 0
+def file_states(source: Path, entries: list[dict], previous: dict | None = None) -> str:
+    before = after = prior = 0
+    previous = previous or {}
     for entry in entries:
         path = resolve_inside(source, entry["path"], "source file")
         data = read_bounded(path, MAX_SOURCE_FILE_BYTES, "source file")
         digest = sha256_bytes(data)
-        require(digest in (entry["before_sha256"], entry["after_sha256"]),
+        require(digest in (entry["before_sha256"], entry["after_sha256"], previous.get(entry["relative"])),
                 f"unexpected source hash: {entry['relative']}")
         before += digest == entry["before_sha256"]
         after += digest == entry["after_sha256"]
+        prior += digest == previous.get(entry["relative"])
+    if prior == len(entries):
+        return "previous"
     if before == len(entries):
         return "before"
     if after == len(entries):
@@ -305,16 +314,25 @@ def apply(source_arg: Path, manifest_arg: Path, archive_arg: Path | None = None)
             entries.append(entry)
             by_path[key] = entry
 
+        preimages = None
+        previous = manifest.get("previous_files_sha256", {})
+        require(isinstance(previous, dict) and (not previous or previous.keys() == by_path.keys()),
+                "previous profile must contain exactly the manifest source set")
+        require(all(isinstance(value, str) and HEX_SHA256.fullmatch(value) for value in previous.values()),
+                "invalid previous profile hash")
         if archive_arg is not None:
-            require(source.name == f"zed-{manifest['upstream_commit']}",
-                    "archive-mode source directory must be named zed-<upstream_commit>")
+            archive_root = manifest.get("archive_root", f"zed-{manifest['upstream_commit']}")
+            require(archive_root in (f"zed-{manifest['upstream_commit']}", f"xim-rs-{manifest['upstream_commit']}"),
+                    "unsupported upstream archive root")
+            require(source.name == archive_root,
+                    "archive-mode source directory must match the pinned archive root")
             archive_hash = manifest.get("upstream_archive_sha256")
             require(isinstance(archive_hash, str) and HEX_SHA256.fullmatch(archive_hash),
                     "manifest upstream_archive_sha256 is required in archive mode")
             archive = archive_arg
             require(archive_sha256(archive) == archive_hash,
                     "upstream archive SHA-256 differs from manifest")
-            verify_archive_preimages(archive, manifest["upstream_commit"], entries)
+            preimages = verify_archive_preimages(archive, manifest["upstream_commit"], entries, archive_root)
 
         patch_records = []
         covered = set()
@@ -337,7 +355,7 @@ def apply(source_arg: Path, manifest_arg: Path, archive_arg: Path | None = None)
             patch_records.append((patch_path, data))
         require(covered == by_path.keys(), "manifest file set differs from patch targets")
 
-        state = file_states(source, entries)
+        state = file_states(source, entries, previous)
         if state == "after":
             return {"status": "already-applied", "profile": manifest["profile"],
                     "upstream_commit": manifest["upstream_commit"], "files": len(entries),
@@ -353,6 +371,36 @@ def apply(source_arg: Path, manifest_arg: Path, archive_arg: Path | None = None)
             for patch_path, data in patch_records:
                 targets = parse_patch_paths(data, patch_path.name)
                 require(targets <= by_path.keys(), "patch target changed after validation")
+            if state == "previous":
+                require(preimages is not None, "previous profile migration requires verified upstream archive")
+                # Validate the complete successor in isolation before replacing any
+                # exact predecessor bytes. Unknown/local modifications stay intact.
+                with tempfile.TemporaryDirectory(prefix="gpui-profile-upgrade-") as temp:
+                    staged = Path(temp)
+                    for entry in entries:
+                        target = staged / entry["path"]
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(preimages[entry["relative"]])
+                    run_patch(patch_bin, staged, combined_path, dry_run=True)
+                    run_patch(patch_bin, staged, combined_path, dry_run=False)
+                    require(file_states(staged, entries) == "after", "successor profile postimages do not match")
+                    require(file_states(source, entries, previous) == "previous", "previous profile changed during validation")
+                    for entry in entries:
+                        target = resolve_inside(source, entry["path"], "source file")
+                        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".profile-", delete=False) as stream:
+                            replacement = Path(stream.name)
+                            try:
+                                stream.write((staged / entry["path"]).read_bytes())
+                                stream.flush()
+                                os.fchmod(stream.fileno(), target.stat().st_mode & 0o777)
+                                os.fsync(stream.fileno())
+                                os.replace(replacement, target)
+                            finally:
+                                replacement.unlink(missing_ok=True)
+                require(file_states(source, entries) == "after", "migrated profile does not match postimages")
+                return {"status": "migrated", "profile": manifest["profile"],
+                        "upstream_commit": manifest["upstream_commit"], "files": len(entries),
+                        "patches": len(patch_records), "source_kind": "archive"}
             run_patch(patch_bin, source, combined_path, dry_run=True)
             require(file_states(source, entries) == "before",
                     "source preimages changed after dry-run; refusing application")

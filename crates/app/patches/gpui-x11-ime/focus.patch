@@ -1,104 +1,25 @@
-diff --git i/crates/gpui_linux/src/linux/x11/client.rs w/crates/gpui_linux/src/linux/x11/client.rs
-index 601eb93..932c55b 100644
---- i/crates/gpui_linux/src/linux/x11/client.rs
-+++ w/crates/gpui_linux/src/linux/x11/client.rs
-@@ -36,7 +36,7 @@ use x11rb::{
-     wrapper::ConnectionExt as _,
-     xcb_ffi::XCBConnection,
- };
--use xim::{AttributeName, Client, InputStyle, x11rb::X11rbClient};
-+use xim::{Client, x11rb::X11rbClient};
- use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
- use xkbcommon::xkb::{self as xkbc, STATE_LAYOUT_EFFECTIVE};
- 
-@@ -820,40 +820,14 @@ impl X11Client {
-             return;
-         }
- 
--        let Some((mut ximc, xim_handler)) = state.take_xim() else {
-+        let Some((mut ximc, mut xim_handler)) = state.take_xim() else {
-             return;
-         };
--        let mut ic_attributes = ximc
--            .build_ic_attributes()
--            .push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)
--            .push(AttributeName::ClientWindow, xim_handler.window)
--            .push(AttributeName::FocusWindow, xim_handler.window);
--
-         let window_id = state.keyboard_focused_window;
-         drop(state);
-         if let Some(window_id) = window_id {
--            let Some(window) = self.get_window(window_id) else {
--                log::error!("Failed to get window for IME positioning");
--                let mut state = self.0.borrow_mut();
--                state.ximc = Some(ximc);
--                state.xim_handler = Some(xim_handler);
--                return;
--            };
--            if let Some(scaled_area) = window.get_ime_area() {
--                ic_attributes =
--                    ic_attributes.nested_list(xim::AttributeName::PreeditAttributes, |b| {
--                        b.push(
--                            xim::AttributeName::SpotLocation,
--                            xim::Point {
--                                x: u32::from(scaled_area.origin.x + scaled_area.size.width) as i16,
--                                y: u32::from(scaled_area.origin.y + scaled_area.size.height) as i16,
--                            },
--                        );
--                    });
--            }
-+            xim_handler.focus_in(&mut ximc, window_id).log_err();
-         }
--        ximc.create_ic(xim_handler.im_id, ic_attributes.build())
--            .ok();
-         let mut state = self.0.borrow_mut();
-         state.restore_xim(ximc, xim_handler);
-     }
-@@ -1081,7 +1055,13 @@ impl X11Client {
-                 state.pre_edit_text.take();
-                 state.restore_cursor_after_hide();
-                 drop(state);
--                self.reset_ime();
-+                let mut state = self.0.borrow_mut();
-+                state.composing = false;
-+                if let Some((mut ximc, mut handler)) = state.take_xim() {
-+                    handler.focus_out(&mut ximc, event.event).log_err();
-+                    state.restore_xim(ximc, handler);
-+                }
-+                drop(state);
-                 window.handle_ime_delete();
-             }
-             Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
-@@ -1525,6 +1505,20 @@ impl X11Client {
-         match event {
-             Event::KeyPress(event) | Event::KeyRelease(event) => {
-                 let mut state = self.0.borrow_mut();
-+                let focused = state
-+                    .xim_handler
-+                    .as_ref()
-+                    .is_some_and(|handler| handler.is_focused());
-+                if !focused {
-+                    drop(state);
-+                    let event = if event.response_type == xproto::KEY_PRESS_EVENT {
-+                        Event::KeyPress(event)
-+                    } else {
-+                        Event::KeyRelease(event)
-+                    };
-+                    self.handle_event(event);
-+                    return Some(());
-+                }
-                 state.pre_key_char_down = Some(keystroke_from_xkb(
-                     &state.xkb,
-                     state.modifiers,
-diff --git i/crates/gpui_linux/src/linux/x11/xim_handler.rs w/crates/gpui_linux/src/linux/x11/xim_handler.rs
-index 82b7c96..37e498c 100644
 --- i/crates/gpui_linux/src/linux/x11/xim_handler.rs
 +++ w/crates/gpui_linux/src/linux/x11/xim_handler.rs
-@@ -3,6 +3,293 @@ use std::default::Default;
+@@ -2,6 +2,339 @@
+ 
  use x11rb::protocol::{Event, xproto};
  use xim::{AHashMap, AttributeName, Client, ClientError, ClientHandler, InputStyle};
- 
++
 +// BEGIN PIGADE XIM FOCUS STATE
++const REQUIRED_CALLBACK_STYLE: u32 = 2 | 1024;
++
++fn input_style_payload_shape_valid(bytes: &[u8]) -> bool {
++    if bytes.len() < 4 {
++        return false;
++    }
++    let count = u16::from_ne_bytes([bytes[0], bytes[1]]) as usize;
++    count.checked_mul(4).and_then(|length| length.checked_add(4)) == Some(bytes.len())
++}
++
++fn supports_callback_preedit_style(styles: impl IntoIterator<Item = u32>) -> bool {
++    styles.into_iter().any(|style| style == REQUIRED_CALLBACK_STYLE)
++}
++
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +enum ImeIc {
 +    None,
@@ -170,9 +91,9 @@ index 82b7c96..37e498c 100644
 +        }
 +        Vec::new()
 +    }
-+    fn im_ready(&mut self) -> Vec<ImeAction> {
-+        self.ready = true;
-+        self.ensure()
++    fn im_ready(&mut self, supports_callback_preedit: bool) -> Vec<ImeAction> {
++        self.ready = supports_callback_preedit;
++        if self.ready { self.ensure() } else { Vec::new() }
 +    }
 +    fn focus_in(&mut self, window: xproto::Window) -> Vec<ImeAction> {
 +        if window == 0 {
@@ -267,13 +188,45 @@ index 82b7c96..37e498c 100644
 +// BEGIN PIGADE XIM FOCUS TESTS
 +#[cfg(test)]
 +mod pigade_focus_tests {
-+    use super::{ImeAction as A, ImeFocusState as S};
++    use super::{
++        input_style_payload_shape_valid, supports_callback_preedit_style,
++        ImeAction as A, ImeFocusState as S,
++    };
++
++    #[test]
++    fn unsupported_callback_style_never_creates_an_input_context() {
++        let mut s = S::new();
++        assert_eq!(s.focus_in(11), vec![]);
++        assert_eq!(s.im_ready(false), vec![]);
++        assert_eq!(s.focus_in(11), vec![]);
++    }
++
++    #[test]
++    fn callback_style_must_be_exact_composite() {
++        assert!(supports_callback_preedit_style([2 | 1024]));
++        assert!(!supports_callback_preedit_style([2]));
++        assert!(!supports_callback_preedit_style([1024]));
++        assert!(!supports_callback_preedit_style([1 | 1024]));
++        assert!(!supports_callback_preedit_style([2 | 1024 | 4]));
++    }
++
++    #[test]
++    fn input_style_payload_shape_rejects_bad_header_length_and_trailing_bytes() {
++        assert!(input_style_payload_shape_valid(&[1, 0, 0, 0, 2, 4, 0, 0]));
++        assert!(input_style_payload_shape_valid(&[0, 0, 0, 0]));
++        assert!(!input_style_payload_shape_valid(&[]));
++        assert!(!input_style_payload_shape_valid(&[1, 0, 0, 0]));
++        // Protocol padding is unspecified and ignored by the typed decoder.
++        assert!(input_style_payload_shape_valid(&[0, 0, 1, 0]));
++        assert!(input_style_payload_shape_valid(&[1, 0, 255, 127, 2, 4, 0, 0]));
++        assert!(!input_style_payload_shape_valid(&[0, 0, 0, 0, 0]));
++    }
 +
 +    #[test]
 +    fn focus_before_ready_creates_only_after_im_ready_and_repeated_focus_is_idempotent() {
 +        let mut s = S::new();
 +        assert_eq!(s.focus_in(11), vec![]);
-+        assert_eq!(s.im_ready(), vec![A::Create { window: 11 }]);
++        assert_eq!(s.im_ready(true), vec![A::Create { window: 11 }]);
 +        assert_eq!(s.focus_in(11), vec![]);
 +        assert_eq!(s.create_reply(7), vec![A::SetFocus { id: 7 }]);
 +        assert!(s.is_focused(7));
@@ -282,7 +235,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn zero_window_never_creates_an_input_context() {
 +        let mut s = S::new();
-+        assert_eq!(s.im_ready(), vec![]);
++        assert_eq!(s.im_ready(true), vec![]);
 +        assert_eq!(s.focus_in(0), vec![]);
 +        assert_eq!(s.focus_out(0), vec![]);
 +        assert!(!s.is_focused(0));
@@ -291,7 +244,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn create_reply_after_blur_is_destroyed_without_stale_focus() {
 +        let mut s = S::new();
-+        assert_eq!(s.im_ready(), vec![]);
++        assert_eq!(s.im_ready(true), vec![]);
 +        assert_eq!(s.focus_in(11), vec![A::Create { window: 11 }]);
 +        assert_eq!(s.focus_out(11), vec![]);
 +        assert_eq!(s.create_reply(7), vec![A::Destroy { id: 7 }]);
@@ -301,7 +254,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn window_switch_while_create_pending_waits_for_destroy_before_new_create() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        assert_eq!(s.focus_in(11), vec![A::Create { window: 11 }]);
 +        assert_eq!(s.focus_in(22), vec![]);
 +        assert_eq!(s.create_reply(7), vec![A::Destroy { id: 7 }]);
@@ -314,7 +267,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn refocus_reuses_same_ic_and_focus_out_unsets_before_reset() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        assert_eq!(s.focus_in(11), vec![A::Create { window: 11 }]);
 +        assert_eq!(s.create_reply(7), vec![A::SetFocus { id: 7 }]);
 +        assert_eq!(
@@ -328,7 +281,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn focus_change_from_ready_ic_never_reuses_old_window_context() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        s.focus_in(11);
 +        s.create_reply(7);
 +        assert_eq!(
@@ -346,7 +299,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn stale_or_unexpected_ic_ids_are_not_callback_eligible() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        s.focus_in(11);
 +        assert!(!s.accepts_callback(7));
 +        s.create_reply(7);
@@ -360,7 +313,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn failed_set_focus_invalidates_local_focus_and_repeat_focus_out_is_noop() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        s.focus_in(11);
 +        s.create_reply(7);
 +        assert!(s.is_focused(7));
@@ -373,7 +326,7 @@ index 82b7c96..37e498c 100644
 +    #[test]
 +    fn repeated_focus_out_does_not_duplicate_unset_or_reset() {
 +        let mut s = S::new();
-+        s.im_ready();
++        s.im_ready(true);
 +        s.focus_in(11);
 +        s.create_reply(7);
 +        assert_eq!(
@@ -384,11 +337,10 @@ index 82b7c96..37e498c 100644
 +    }
 +}
 +// END PIGADE XIM FOCUS TESTS
-+
+ 
  pub enum XimCallbackEvent {
      XimXEvent(x11rb::protocol::Event),
-     XimPreeditEvent(xproto::Window, String),
-@@ -15,6 +302,7 @@ pub struct XimHandler {
+@@ -15,6 +348,7 @@
      pub connected: bool,
      pub window: xproto::Window,
      pub last_callback_event: Option<XimCallbackEvent>,
@@ -396,13 +348,14 @@ index 82b7c96..37e498c 100644
  }
  
  impl XimHandler {
-@@ -25,8 +313,83 @@ impl XimHandler {
+@@ -25,7 +359,85 @@
              connected: false,
              window: Default::default(),
              last_callback_event: None,
+-        }
 +            focus: ImeFocusState::new(),
-         }
-     }
++        }
++    }
 +
 +    pub(super) fn focus_in<C: Client<XEvent = xproto::KeyPressEvent>>(
 +        &mut self,
@@ -443,7 +396,10 @@ index 82b7c96..37e498c 100644
 +                    self.window = window;
 +                    let attrs = client
 +                        .build_ic_attributes()
-+                        .push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)
++                        .push(
++                            AttributeName::InputStyle,
++                            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
++                        )
 +                        .push(AttributeName::ClientWindow, window)
 +                        .push(AttributeName::FocusWindow, window)
 +                        .build();
@@ -476,18 +432,16 @@ index 82b7c96..37e498c 100644
 +            }
 +        }
 +        first_error.map_or(Ok(()), Err)
-+    }
+     }
  }
  
- impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler {
-@@ -43,36 +406,49 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler
+@@ -43,36 +455,74 @@
      fn handle_get_im_values(
          &mut self,
          client: &mut C,
 -        input_method_id: u16,
-+        _input_method_id: u16,
-         _attributes: AHashMap<AttributeName, Vec<u8>>,
-     ) -> Result<(), ClientError> {
+-        _attributes: AHashMap<AttributeName, Vec<u8>>,
+-    ) -> Result<(), ClientError> {
 -        let ic_attributes = client
 -            .build_ic_attributes()
 -            .push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)
@@ -495,20 +449,46 @@ index 82b7c96..37e498c 100644
 -            .push(AttributeName::FocusWindow, self.window)
 -            .build();
 -        client.create_ic(input_method_id, ic_attributes)
-+        let actions = self.focus.im_ready();
++        _input_method_id: u16,
++        attributes: AHashMap<AttributeName, Vec<u8>>,
++    ) -> Result<(), ClientError> {
++        let style_result = attributes
++            .get(&AttributeName::QueryInputStyle)
++            .ok_or("QueryInputStyle was not returned")
++            .and_then(|bytes| {
++                if !input_style_payload_shape_valid(bytes) {
++                    return Err("QueryInputStyle payload is malformed");
++                }
++                let styles: xim::InputStyleList = xim::read(bytes)
++                    .map_err(|_| "QueryInputStyle payload is malformed")?;
++                Ok(supports_callback_preedit_style(
++                    styles.styles.into_iter().map(|style| style.bits()),
++                ))
++            });
++        let supports_callback_preedit = match style_result {
++            Ok(true) => true,
++            Ok(false) => {
++                eprintln!("PigADE: X11 IME unavailable: server does not advertise callback preedit");
++                false
++            }
++            Err(reason) => {
++                eprintln!("PigADE: X11 IME unavailable: {reason}; style header {:?}",
++                    attributes.get(&AttributeName::QueryInputStyle).map(|bytes| &bytes[..bytes.len().min(8)]));
++                false
++            }
++        };
++        let actions = self.focus.im_ready(supports_callback_preedit);
 +        self.apply_focus_actions(client, actions)
      }
  
      fn handle_create_ic(
-         &mut self,
--        _client: &mut C,
++        &mut self,
 +        client: &mut C,
-         _input_method_id: u16,
-         input_context_id: u16,
-     ) -> Result<(), ClientError> {
-         self.connected = true;
-         self.ic_id = input_context_id;
--        Ok(())
++        _input_method_id: u16,
++        input_context_id: u16,
++    ) -> Result<(), ClientError> {
++        self.connected = true;
++        self.ic_id = input_context_id;
 +        let actions = self.focus.create_reply(input_context_id);
 +        self.apply_focus_actions(client, actions)
 +    }
@@ -525,14 +505,24 @@ index 82b7c96..37e498c 100644
 +        }
 +        let actions = self.focus.destroy_reply(input_context_id);
 +        self.apply_focus_actions(client, actions)
-     }
- 
-     fn handle_commit(
++    }
++
++    fn handle_commit(
          &mut self,
          _client: &mut C,
          _input_method_id: u16,
+         input_context_id: u16,
+-    ) -> Result<(), ClientError> {
+-        self.connected = true;
+-        self.ic_id = input_context_id;
+-        Ok(())
+-    }
+-
+-    fn handle_commit(
+-        &mut self,
+-        _client: &mut C,
+-        _input_method_id: u16,
 -        _input_context_id: u16,
-+        input_context_id: u16,
          text: &str,
      ) -> Result<(), ClientError> {
 +        if !self.accepts_callback(input_context_id) {
@@ -541,7 +531,7 @@ index 82b7c96..37e498c 100644
          self.last_callback_event = Some(XimCallbackEvent::XimCommitEvent(
              self.window,
              String::from(text),
-@@ -84,10 +460,13 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler
+@@ -84,10 +534,13 @@
          &mut self,
          _client: &mut C,
          _input_method_id: u16,
@@ -556,16 +546,36 @@ index 82b7c96..37e498c 100644
          match xev.response_type {
              x11rb::protocol::xproto::KEY_PRESS_EVENT => {
                  self.last_callback_event = Some(XimCallbackEvent::XimXEvent(Event::KeyPress(xev)));
-@@ -109,7 +488,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler
+@@ -105,11 +558,26 @@
+         client.disconnect()
+     }
+ 
+-    fn handle_preedit_draw(
++    fn handle_preedit_done(
          &mut self,
          _client: &mut C,
          _input_method_id: u16,
 -        _input_context_id: u16,
 +        input_context_id: u16,
++    ) -> Result<(), ClientError> {
++        if self.accepts_callback(input_context_id) {
++            self.last_callback_event = Some(XimCallbackEvent::XimPreeditEvent(
++                self.window,
++                String::new(),
++            ));
++        }
++        Ok(())
++    }
++
++    fn handle_preedit_draw(
++        &mut self,
++        _client: &mut C,
++        _input_method_id: u16,
++        input_context_id: u16,
          _caret: i32,
          _chg_first: i32,
          _chg_len: i32,
-@@ -117,6 +496,9 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler
+@@ -117,6 +585,9 @@
          preedit_string: &str,
          _feedbacks: Vec<xim::Feedback>,
      ) -> Result<(), ClientError> {
@@ -575,3 +585,112 @@ index 82b7c96..37e498c 100644
          // XIMReverse: 1, XIMPrimary: 8, XIMTertiary: 32: selected text
          // XIMUnderline: 2, XIMSecondary: 16: underlined text
          // XIMHighlight: 4: normal text
+--- i/crates/gpui_linux/src/linux/x11/client.rs
++++ w/crates/gpui_linux/src/linux/x11/client.rs
+@@ -36,7 +36,7 @@
+     wrapper::ConnectionExt as _,
+     xcb_ffi::XCBConnection,
+ };
+-use xim::{AttributeName, Client, InputStyle, x11rb::X11rbClient};
++use xim::{Client, x11rb::X11rbClient};
+ use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
+ use xkbcommon::xkb::{self as xkbc, STATE_LAYOUT_EFFECTIVE};
+ 
+@@ -297,7 +297,7 @@
+             .build_ic_attributes()
+             .push(
+                 xim::AttributeName::InputStyle,
+-                xim::InputStyle::PREEDIT_CALLBACKS,
++                xim::InputStyle::PREEDIT_CALLBACKS | xim::InputStyle::STATUS_NOTHING,
+             )
+             .push(xim::AttributeName::ClientWindow, xim_handler.window)
+             .push(xim::AttributeName::FocusWindow, xim_handler.window)
+@@ -820,40 +820,14 @@
+             return;
+         }
+ 
+-        let Some((mut ximc, xim_handler)) = state.take_xim() else {
++        let Some((mut ximc, mut xim_handler)) = state.take_xim() else {
+             return;
+         };
+-        let mut ic_attributes = ximc
+-            .build_ic_attributes()
+-            .push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)
+-            .push(AttributeName::ClientWindow, xim_handler.window)
+-            .push(AttributeName::FocusWindow, xim_handler.window);
+-
+         let window_id = state.keyboard_focused_window;
+         drop(state);
+         if let Some(window_id) = window_id {
+-            let Some(window) = self.get_window(window_id) else {
+-                log::error!("Failed to get window for IME positioning");
+-                let mut state = self.0.borrow_mut();
+-                state.ximc = Some(ximc);
+-                state.xim_handler = Some(xim_handler);
+-                return;
+-            };
+-            if let Some(scaled_area) = window.get_ime_area() {
+-                ic_attributes =
+-                    ic_attributes.nested_list(xim::AttributeName::PreeditAttributes, |b| {
+-                        b.push(
+-                            xim::AttributeName::SpotLocation,
+-                            xim::Point {
+-                                x: u32::from(scaled_area.origin.x + scaled_area.size.width) as i16,
+-                                y: u32::from(scaled_area.origin.y + scaled_area.size.height) as i16,
+-                            },
+-                        );
+-                    });
+-            }
+-        }
+-        ximc.create_ic(xim_handler.im_id, ic_attributes.build())
+-            .ok();
++            xim_handler.focus_in(&mut ximc, window_id).log_err();
++        }
+         let mut state = self.0.borrow_mut();
+         state.restore_xim(ximc, xim_handler);
+     }
+@@ -1081,7 +1055,13 @@
+                 state.pre_edit_text.take();
+                 state.restore_cursor_after_hide();
+                 drop(state);
+-                self.reset_ime();
++                let mut state = self.0.borrow_mut();
++                state.composing = false;
++                if let Some((mut ximc, mut handler)) = state.take_xim() {
++                    handler.focus_out(&mut ximc, event.event).log_err();
++                    state.restore_xim(ximc, handler);
++                }
++                drop(state);
+                 window.handle_ime_delete();
+             }
+             Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
+@@ -1525,6 +1505,20 @@
+         match event {
+             Event::KeyPress(event) | Event::KeyRelease(event) => {
+                 let mut state = self.0.borrow_mut();
++                let focused = state
++                    .xim_handler
++                    .as_ref()
++                    .is_some_and(|handler| handler.is_focused());
++                if !focused {
++                    drop(state);
++                    let event = if event.response_type == xproto::KEY_PRESS_EVENT {
++                        Event::KeyPress(event)
++                    } else {
++                        Event::KeyRelease(event)
++                    };
++                    self.handle_event(event);
++                    return Some(());
++                }
+                 state.pre_key_char_down = Some(keystroke_from_xkb(
+                     &state.xkb,
+                     state.modifiers,
+@@ -1581,7 +1575,7 @@
+                 .build_ic_attributes()
+                 .push(
+                     xim::AttributeName::InputStyle,
+-                    xim::InputStyle::PREEDIT_CALLBACKS,
++                    xim::InputStyle::PREEDIT_CALLBACKS | xim::InputStyle::STATUS_NOTHING,
+                 )
+                 .push(xim::AttributeName::ClientWindow, xim_handler.window)
+                 .push(xim::AttributeName::FocusWindow, xim_handler.window)
