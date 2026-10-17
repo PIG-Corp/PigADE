@@ -8,7 +8,7 @@
 use unicode_width::UnicodeWidthChar;
 use vte::ansi::{Handler, Hyperlink, Processor, Timeout};
 
-use crate::grid::{Grid, Row};
+use crate::grid::{Dimensions, Grid, Row};
 use crate::term::cell::{Cell, CellExtra, Hyperlink as TermHyperlink};
 use crate::term::Term;
 use std::collections::HashSet;
@@ -265,6 +265,10 @@ pub struct CensusLimits {
 /// no claim about physical allocator overhead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AllocationCensus {
+    /// Census shape for the currently active grid (primary or alternate).
+    pub active_grid: GridAllocationCensus,
+    /// Census shape for the currently inactive/alternate grid.
+    pub inactive_grid: GridAllocationCensus,
     pub cell_visits: usize,
     pub unique_cell_extras: usize,
     /// Number of visited cells/cursor roots referencing a CellExtra Arc.
@@ -278,8 +282,32 @@ pub struct AllocationCensus {
     pub reference_weighted_zero_width_capacity: usize,
     /// Largest zero-width Vec capacity among referenced CellExtra allocations.
     pub max_single_extra_zero_width_capacity: usize,
+    /// Unique logical zero-width characters, counted once per CellExtra Arc.
+    pub unique_zero_width_chars_len: usize,
+    /// Logical zero-width characters summed for every cell/cursor reference.
+    pub reference_weighted_zero_width_chars_len: usize,
+    /// Largest logical zero-width Vec length among referenced CellExtra Arcs.
+    pub max_single_extra_zero_width_chars_len: usize,
     pub hyperlink_id_bytes_capacity: usize,
     pub hyperlink_uri_bytes_capacity: usize,
+    /// Unique logical UTF-8 bytes in hyperlink identifiers.
+    pub hyperlink_id_bytes_len: usize,
+    /// Unique logical UTF-8 bytes in hyperlink URIs.
+    pub hyperlink_uri_bytes_len: usize,
+    /// Logical byte length of the current title, if present.
+    pub current_title_len_bytes: usize,
+    /// Backing String capacity of the current title, if present.
+    pub current_title_capacity_bytes: usize,
+    /// Number of title stack entries, including empty entries.
+    pub title_stack_count: usize,
+    /// Logical UTF-8 bytes across present title stack entries.
+    pub title_stack_len_bytes: usize,
+    /// Backing String capacities across present title stack entries.
+    pub title_stack_strings_capacity_bytes: usize,
+    /// Largest logical title length across current and stacked titles.
+    pub max_title_len_bytes: usize,
+    /// Largest String capacity across current and stacked titles.
+    pub max_title_capacity_bytes: usize,
     pub title_stack_slots_capacity: usize,
     pub tab_stop_capacity: usize,
     pub keyboard_mode_stack_capacity: usize,
@@ -287,6 +315,25 @@ pub struct AllocationCensus {
     pub damage_line_capacity: usize,
     pub estimated_persistent_owned_bytes: usize,
     pub incomplete: bool,
+}
+
+/// Geometry and retained row-storage shape for one terminal grid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GridAllocationCensus {
+    /// Logical viewport height in rows.
+    pub screen_lines: usize,
+    /// Logical width in columns.
+    pub columns: usize,
+    /// Configured scrollback history limit.
+    pub history_limit: usize,
+    /// Initialized raw rows, including inactive resize-cache rows.
+    pub initialized_rows: usize,
+    /// Outer row-vector capacity.
+    pub outer_row_capacity: usize,
+    /// Sum of backing cell-vector capacities for initialized raw rows.
+    pub cell_capacity: usize,
+    /// Sum of missing columns where initialized row length is below logical width.
+    pub short_row_column_gap: usize,
 }
 
 struct CensusBuilder {
@@ -363,6 +410,16 @@ impl CensusBuilder {
         );
         let (id, uri) = link.allocation_capacities();
         Self::add(
+            &mut self.result.hyperlink_id_bytes_len,
+            link.id().len(),
+            &mut self.result.incomplete,
+        );
+        Self::add(
+            &mut self.result.hyperlink_uri_bytes_len,
+            link.uri().len(),
+            &mut self.result.incomplete,
+        );
+        Self::add(
             &mut self.result.hyperlink_id_bytes_capacity,
             id,
             &mut self.result.incomplete,
@@ -390,6 +447,7 @@ impl CensusBuilder {
             return;
         };
         let (zero_width_capacity, hyperlink) = extra.allocation_parts();
+        let zero_width_len = cell.zerowidth().map_or(0, <[char]>::len);
         Self::add(
             &mut self.result.cell_extra_references,
             1,
@@ -398,6 +456,11 @@ impl CensusBuilder {
         Self::add(
             &mut self.result.reference_weighted_zero_width_capacity,
             zero_width_capacity,
+            &mut self.result.incomplete,
+        );
+        Self::add(
+            &mut self.result.reference_weighted_zero_width_chars_len,
+            zero_width_len,
             &mut self.result.incomplete,
         );
         self.result.max_single_extra_zero_width_capacity = self
@@ -420,6 +483,15 @@ impl CensusBuilder {
                 zero_width_capacity,
                 &mut self.result.incomplete,
             );
+            Self::add(
+                &mut self.result.unique_zero_width_chars_len,
+                zero_width_len,
+                &mut self.result.incomplete,
+            );
+            self.result.max_single_extra_zero_width_chars_len = self
+                .result
+                .max_single_extra_zero_width_chars_len
+                .max(zero_width_len);
             let arc_header = self.product(size_of::<usize>(), 2);
             self.bytes(arc_header);
             self.bytes(size_of::<CellExtra>());
@@ -431,8 +503,16 @@ impl CensusBuilder {
         }
     }
 
-    fn grid(&mut self, grid: &Grid<Cell>) {
+    fn grid(&mut self, grid: &Grid<Cell>) -> GridAllocationCensus {
         let (rows, row_capacity) = grid.allocation_rows();
+        let mut grid_result = GridAllocationCensus {
+            screen_lines: grid.screen_lines(),
+            columns: grid.columns(),
+            history_limit: grid.checkpoint_max_scroll_limit(),
+            initialized_rows: rows.len(),
+            outer_row_capacity: row_capacity,
+            ..GridAllocationCensus::default()
+        };
         Self::add(
             &mut self.result.row_slots_capacity,
             row_capacity,
@@ -443,9 +523,19 @@ impl CensusBuilder {
         for row in rows {
             if self.result.cell_visits >= self.limits.max_cell_visits {
                 self.result.incomplete = true;
-                return;
+                return grid_result;
             }
             let capacity = row.allocation_capacity();
+            Self::add(
+                &mut grid_result.cell_capacity,
+                capacity,
+                &mut self.result.incomplete,
+            );
+            Self::add(
+                &mut grid_result.short_row_column_gap,
+                grid_result.columns.saturating_sub(row.initialized().len()),
+                &mut self.result.incomplete,
+            );
             Self::add(
                 &mut self.result.cell_slots_capacity,
                 capacity,
@@ -456,7 +546,7 @@ impl CensusBuilder {
             for cell in row.initialized() {
                 self.cell(cell);
                 if self.result.incomplete {
-                    return;
+                    return grid_result;
                 }
             }
         }
@@ -464,6 +554,7 @@ impl CensusBuilder {
         if !self.result.incomplete {
             self.cell(&grid.saved_cursor.template);
         }
+        grid_result
     }
 }
 
@@ -480,19 +571,40 @@ pub fn census_terminal_allocations<T>(term: &Term<T>, limits: CensusLimits) -> A
         hyperlinks: HashSet::new(),
     };
     builder.bytes(size_of::<Term<T>>());
-    builder.grid(&term.grid);
+    builder.result.active_grid = builder.grid(&term.grid);
     if !builder.result.incomplete {
-        builder.grid(&term.inactive_grid);
+        builder.result.inactive_grid = builder.grid(&term.inactive_grid);
     }
     if !builder.result.incomplete {
         if let Some(title) = &term.title {
+            builder.result.current_title_len_bytes = title.len();
+            builder.result.current_title_capacity_bytes = title.capacity();
+            builder.result.max_title_len_bytes = title.len();
+            builder.result.max_title_capacity_bytes = title.capacity();
             builder.bytes(title.capacity());
         }
+        builder.result.title_stack_count = term.title_stack.len();
         builder.result.title_stack_slots_capacity = term.title_stack.capacity();
         let title_stack_bytes =
             builder.product(term.title_stack.capacity(), size_of::<Option<String>>());
         builder.bytes(title_stack_bytes);
         for title in term.title_stack.iter().flatten() {
+            CensusBuilder::add(
+                &mut builder.result.title_stack_len_bytes,
+                title.len(),
+                &mut builder.result.incomplete,
+            );
+            CensusBuilder::add(
+                &mut builder.result.title_stack_strings_capacity_bytes,
+                title.capacity(),
+                &mut builder.result.incomplete,
+            );
+            builder.result.max_title_len_bytes =
+                builder.result.max_title_len_bytes.max(title.len());
+            builder.result.max_title_capacity_bytes = builder
+                .result
+                .max_title_capacity_bytes
+                .max(title.capacity());
             builder.bytes(title.capacity());
         }
         builder.bytes(term.config.semantic_escape_chars.capacity());
@@ -762,10 +874,29 @@ mod tests {
         distinct.set_hyperlink(Some(TermHyperlink::new(Some("shared"), "https://x".into())));
         term.inactive_grid[Point::new(Line(0), Column(1))] = distinct;
 
+        let checkpoint = checkpoint_bytes(&term);
         let result = census(&term);
+        assert_eq!(checkpoint_bytes(&term), checkpoint);
         assert!(!result.incomplete);
         assert_eq!(result.unique_cell_extras, baseline.unique_cell_extras + 2);
         assert_eq!(result.unique_hyperlinks, baseline.unique_hyperlinks + 2);
+        assert_eq!(
+            result.unique_zero_width_chars_len,
+            baseline.unique_zero_width_chars_len + 2
+        );
+        assert_eq!(
+            result.reference_weighted_zero_width_chars_len,
+            baseline.reference_weighted_zero_width_chars_len + 4
+        );
+        assert_eq!(result.max_single_extra_zero_width_chars_len, 1);
+        assert_eq!(
+            result.hyperlink_id_bytes_len,
+            baseline.hyperlink_id_bytes_len + 2 * "shared".len()
+        );
+        assert_eq!(
+            result.hyperlink_uri_bytes_len,
+            baseline.hyperlink_uri_bytes_len + 2 * "https://x".len()
+        );
         assert!(result.zero_width_chars_capacity >= baseline.zero_width_chars_capacity + 2);
         assert_eq!(
             result.hyperlink_id_bytes_capacity,
@@ -790,7 +921,8 @@ mod tests {
         term.grid.resize(false, 2, 4);
         term.title = Some(String::from("window"));
         term.title_stack = vec![Some(String::from("older")), None];
-
+        // A shortened initialized row contributes the gap to current columns.
+        let _removed = term.grid[Line(0)].shrink(2);
         let result = census(&term);
         assert!(!result.incomplete);
         assert!(result.row_slots_capacity >= 4);
@@ -800,7 +932,39 @@ mod tests {
         );
         assert!(result.unique_cell_extras >= 2);
         assert!(result.title_stack_slots_capacity >= 2);
+        assert_eq!(result.active_grid.screen_lines, 2);
+        assert_eq!(result.inactive_grid.screen_lines, 4);
+        assert_eq!(result.active_grid.columns, 4);
+        assert_eq!(result.active_grid.initialized_rows, 4);
+        assert!(result.active_grid.outer_row_capacity >= result.active_grid.initialized_rows);
+        assert_eq!(result.active_grid.short_row_column_gap, 2);
+        assert_eq!(result.current_title_len_bytes, "window".len());
+        assert_eq!(
+            result.current_title_capacity_bytes,
+            term.title.as_ref().unwrap().capacity()
+        );
+        assert_eq!(result.title_stack_count, 2);
+        assert_eq!(result.title_stack_len_bytes, "older".len());
+        assert_eq!(
+            result.title_stack_strings_capacity_bytes,
+            term.title_stack[0].as_ref().unwrap().capacity()
+        );
+        assert_eq!(result.max_title_len_bytes, "window".len());
+        assert!(result.max_title_capacity_bytes >= result.max_title_len_bytes);
         assert!(result.estimated_persistent_owned_bytes > 0);
+    }
+
+    #[test]
+    fn allocation_census_title_metrics_preserve_checkpoint_bytes() {
+        let mut term = terminal();
+        term.title = Some(String::from("current title"));
+        term.title_stack = vec![Some(String::from("prior title")), None];
+        let checkpoint = checkpoint_bytes(&term);
+        let result = census(&term);
+        assert_eq!(result.current_title_len_bytes, "current title".len());
+        assert_eq!(result.title_stack_count, 2);
+        assert_eq!(result.title_stack_len_bytes, "prior title".len());
+        assert_eq!(checkpoint_bytes(&term), checkpoint);
     }
 
     #[test]
@@ -838,8 +1002,18 @@ mod tests {
             saved.push_zerowidth(char::from_u32(mark as u32 + 1).unwrap());
             grid.saved_cursor.template = saved;
         }
+        let checkpoint = checkpoint_bytes(&term);
         let result = census(&term);
+        assert_eq!(checkpoint_bytes(&term), checkpoint);
         assert_eq!(result.unique_cell_extras, baseline.unique_cell_extras + 4);
+        assert_eq!(
+            result.unique_zero_width_chars_len,
+            baseline.unique_zero_width_chars_len + 4
+        );
+        assert_eq!(
+            result.reference_weighted_zero_width_chars_len,
+            baseline.reference_weighted_zero_width_chars_len + 4
+        );
         assert!(result.zero_width_chars_capacity >= baseline.zero_width_chars_capacity + 4);
     }
 

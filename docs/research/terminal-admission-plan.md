@@ -52,3 +52,10 @@ checkpoint work. Fresh release measurements must include UI, host/helpers and
 GPU separately. Payload accounting remains a scoped envelope until allocator
 overhead, process baseline and every retained/transient owner are covered and
 the SPEC workloads actually pass.
+
+The next frame-copy repair preserves content deduplication for independently
+allocated equal hyperlinks. First lock that wire behavior with a regression;
+then retain shallow Hyperlink handles as interner keys, replacing the duplicate
+owned `(String,String)` keys. Keep the frame's single owned wire pool and its
+indices unchanged. This removes specific payload copies without claiming that
+frame construction or IPC DTO ownership is globally budgeted.

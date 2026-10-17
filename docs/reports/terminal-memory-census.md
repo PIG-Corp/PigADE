@@ -84,3 +84,36 @@ and early envelope validation are integrated. The measured component RSS
 comparison and exact compatibility evidence are in
 [ADR0009](../adr/0009-borrowed-checkpoint-export.md). These repairs do not close
 the global budget, live growth or transient-reservation gaps above.
+
+The next snapshot adds grid geometry, initialized rows versus outer capacity,
+logical combining/link/title lengths, and no-allocation parser buffer usage:
+[`terminal-allocation-census-shapes.json`](../../benchmarks/results/terminal-allocation-census-shapes.json).
+Its source hashes capture the fixed 1,000-row cache **before** the width-sensitive
+cache repair. The five original unique payload estimates remain equal. The
+processor's 488 inline bytes include its parser/timeout handles; parser inline
+storage must not be added again. Sync storage now starts with zero capacity,
+grows geometrically below the existing flush threshold, and retains capacity
+for reuse. This is not evidence of a 2 MiB RSS reduction: the former eager
+allocation need not have committed all its pages.
+
+The grid cache now targets 256 KiB of newly appended spare cell payload,
+clamped to 1–1,000 rows. Required active rows are never refused or truncated.
+For one 1,024-column Cell row, the regression changes 999 spare rows to 9:
+216 KiB rather than about 24 MiB of spare cell payload. A separate 48-scroll
+oracle compares canonical rows and cursor against an explicit legacy-sized
+cache. Owned/borrowed checkpoint and continuation tests still pass. This target
+does not bound heterogeneous retained row capacities, outer Vec capacity,
+allocator overhead, total hot history or full-process RAM.
+
+Fresh post-change model samples are in
+[`terminal-allocation-census-cache-target.json`](../../benchmarks/results/terminal-allocation-census-cache-target.json).
+The hyperlink fixture drops from 19,663,621 to 17,052,101 estimated payload bytes;
+the full hot-history fixture slightly increases from 29,541,723 to 29,560,283
+because growth/cache alignment differs. The empty and resized fixture estimates
+remain unchanged. Both source snapshots and all 30 timing samples are retained;
+neither proves isolated throughput or the global product budget.
+
+Frame interning also replaces duplicate owned `(id,uri)` map keys with shallow
+Hyperlink handles. Equal contents in distinct model allocations still produce
+one wire-pool entry, verified before and after the repair. No numeric RSS claim
+is attached to that local copy removal.

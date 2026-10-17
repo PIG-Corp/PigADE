@@ -25,6 +25,9 @@
 - Resource census now distinguishes shared allocation size from reference-weighted combining capacity; a checkpoint-import/VTE continuation regression demonstrates copy-on-write fanout. Whole-event/global admission is still open.
 - Checkpoint export borrows the validated grid and payloads while preserving exact schema2 bytes; import checks the borrowed envelope before owned decoding and shares a cell budget across both grids. Model-process RSS measurements and their scope are recorded in ADR0009.
 - The second real-time soak failed after64minutes. A producer bug discarding the next PING after a coalesced RELEASE is reproduced and repaired; failed evidence is retained and the24h gate remains open.
+- Parser sync storage starts empty and grows on demand. Spare grid rows use a width-sensitive payload target; logical rows and checkpoint compatibility are preserved. Numeric censuses expose grid/cache shapes, logical payloads and parser buffers.
+- IPC input arrays are checked before Serde's internally tagged buffering. A response that cannot be encoded returns an explicit unknown-outcome error before any frame header is written; dispatched commands are never retried.
+- Frame hyperlink interning retains shallow handles instead of a second owned copy of every ID/URI, preserving content deduplication and wire indices.
 - User-selectedgpt-6-luna model for all new subagents.
 - Mandatory desktop isolation after a live input automation incident; unsafe smoke tooling removed.
 

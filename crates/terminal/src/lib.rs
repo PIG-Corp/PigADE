@@ -1,6 +1,9 @@
 //! The host is the sole ANSI parser. A Frame is a render replica, NOT a checkpoint.
 pub mod history;
-pub use alacritty_terminal::term::resources::{AllocationCensus, CensusLimits};
+pub use alacritty_terminal::term::resources::{
+    AllocationCensus, CensusLimits, GridAllocationCensus,
+};
+pub use alacritty_terminal::vte::ansi::ProcessorBufferUsage;
 pub use alacritty_terminal::{
     grid::{HistoryObserver, HistoryRetirement, Row as HistoryRow},
     term::cell::{Cell as HistoryCell, Flags as CellFlags},
@@ -218,6 +221,13 @@ impl Terminal {
         alacritty_terminal::term::resources::census_terminal_allocations(&self.term, limits)
     }
 
+    /// Numeric parser backing storage, separate from the Term census. Inline
+    /// bytes already include the parser and timeout handles; allocator overhead
+    /// and any dynamic data owned by a generic timeout are not measured.
+    pub fn parser_buffer_usage(&self) -> ProcessorBufferUsage {
+        self.parser.buffer_usage()
+    }
+
     pub fn new(geometry: Geometry, live: bool) -> Self {
         let listener = Listener::default();
         let config = Config {
@@ -389,10 +399,12 @@ impl Terminal {
                     hyperlink: cell.hyperlink().map(|h| {
                         let identity = (h.id().as_ptr() as usize, h.uri().as_ptr() as usize);
                         *link_index.entry(identity).or_insert_with(|| {
-                            let content = (h.id().to_owned(), h.uri().to_owned());
-                            *link_contents.entry(content.clone()).or_insert_with(|| {
+                            // Hyperlink keys retain a shallow Arc handle and
+                            // compare contents. Only the wire pool owns copies
+                            // of the ID/URI payloads.
+                            *link_contents.entry(h).or_insert_with_key(|link| {
                                 let index = hyperlinks.len() as u32;
-                                hyperlinks.push(content);
+                                hyperlinks.push((link.id().to_owned(), link.uri().to_owned()));
                                 index
                             })
                         })
@@ -496,6 +508,72 @@ mod tests {
                 .contains("title checkpoint budget exceeded")
         );
         assert_eq!(original.checkpoint().unwrap(), saved);
+    }
+
+    #[test]
+    fn parser_buffer_accounting_preserves_checkpoint_bytes_and_continuation() {
+        let fixtures: &[(&[u8], &[u8])] = &[
+            (b"prefix\x1b]2;partial", b" title\x07Z"),
+            (b"prefix\x1b[?2026hbuffered\xc3", b"\xa9\x1b[?2026lZ"),
+            (
+                b"prefix\x1b[?2026h\x1b]8;id=link;https://example",
+                b".test\x1b\\L\x1b[?2026lZ",
+            ),
+        ];
+        for &(prefix, tail) in fixtures {
+            let mut original = term();
+            assert_eq!(original.parser_buffer_usage().sync_buffer_capacity, 0);
+            original.output(prefix);
+            let saved = original.checkpoint().unwrap();
+            let usage = original.parser_buffer_usage();
+            assert!(usage.inline_size_bytes >= usage.parser.inline_size_bytes);
+            assert!(usage.sync_buffer_len <= usage.sync_buffer_capacity);
+            assert_eq!(original.checkpoint().unwrap(), saved);
+            assert_eq!(saved, owned_checkpoint_oracle(&original));
+
+            let mut restored = Terminal::from_checkpoint(&saved, false).unwrap();
+            assert_eq!(
+                restored.parser_buffer_usage().sync_buffer_len,
+                usage.sync_buffer_len
+            );
+            assert_eq!(
+                restored.parser_buffer_usage().parser.pending_osc_len,
+                usage.parser.pending_osc_len
+            );
+            assert_eq!(restored.checkpoint().unwrap(), saved);
+            original.output(tail);
+            restored.output(tail);
+            assert_eq!(
+                original.checkpoint().unwrap(),
+                restored.checkpoint().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn frame_deduplicates_equal_links_from_distinct_model_allocations() {
+        let mut terminal = term();
+        terminal.output(
+            b"\x1b]8;id=same;https://example.test/shared\x07A\x1b]8;;\x07\x1b]8;id=same;https://example.test/shared\x07B\x1b]8;;\x07",
+        );
+        let census = terminal.term_allocation_census(CensusLimits {
+            max_cell_visits: 100_000,
+            max_unique_allocations: 100,
+        });
+        assert!(!census.incomplete);
+        assert_eq!(
+            census.unique_hyperlinks, 2,
+            "fixture lost distinct allocations"
+        );
+        let before = terminal.checkpoint().unwrap();
+        let frame = terminal.frame();
+        assert_eq!(
+            frame.hyperlinks,
+            vec![("same".into(), "https://example.test/shared".into())]
+        );
+        assert_eq!(frame.cells[0].hyperlink, Some(0));
+        assert_eq!(frame.cells[1].hyperlink, Some(0));
+        assert_eq!(terminal.checkpoint().unwrap(), before);
     }
 
     #[test]

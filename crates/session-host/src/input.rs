@@ -13,6 +13,54 @@ use std::thread;
 pub const MAX_INPUT_BYTES: usize = 16 * 1024;
 pub const INPUT_QUEUE_CAPACITY: usize = 8;
 
+/// Enforce the chunk bound during field decoding. IPC additionally scans the
+/// raw request before Serde buffers internally tagged enum content. The writer
+/// checks it again for internal calls.
+pub(crate) fn deserialize_bytes<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<u8>, D::Error> {
+    struct Bytes;
+    struct RejectExtra;
+    impl<'de> serde::de::DeserializeSeed<'de> for RejectExtra {
+        type Value = ();
+        fn deserialize<E: serde::Deserializer<'de>>(self, _: E) -> Result<(), E::Error> {
+            Err(serde::de::Error::custom("PTY input chunk exceeds 16 KiB"))
+        }
+    }
+    impl<'de> serde::de::Visitor<'de> for Bytes {
+        type Value = Vec<u8>;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "at most {MAX_INPUT_BYTES} PTY input bytes")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: A,
+        ) -> Result<Vec<u8>, A::Error> {
+            if sequence
+                .size_hint()
+                .is_some_and(|size| size > MAX_INPUT_BYTES)
+            {
+                return Err(serde::de::Error::custom("PTY input chunk exceeds 16 KiB"));
+            }
+            let mut bytes = Vec::new();
+            while bytes.len() < MAX_INPUT_BYTES {
+                let Some(byte) = sequence.next_element::<u8>()? else {
+                    return Ok(bytes);
+                };
+                bytes.try_reserve(1).map_err(serde::de::Error::custom)?;
+                bytes.push(byte);
+            }
+            // Do not deserialize an extra value, which itself could be a large
+            // malformed object/string. End-of-array does not invoke the seed.
+            if sequence.next_element_seed(RejectExtra)?.is_some() {
+                unreachable!("oversized input must fail before decoding its extra value");
+            }
+            Ok(bytes)
+        }
+    }
+    decoder.deserialize_seq(Bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputWriteError {
     TooLarge,
@@ -91,6 +139,44 @@ mod tests {
     use std::io;
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn request_decode_rejects_oversized_input_before_command_admission() {
+        for length in [0, MAX_INPUT_BYTES, MAX_INPUT_BYTES + 1] {
+            let command = crate::Command::Input {
+                session: uuid::Uuid::new_v4(),
+                generation: uuid::Uuid::new_v4(),
+                bytes: vec![42; length],
+            };
+            let json = serde_json::to_vec(&command).unwrap();
+            let decoded = serde_json::from_slice::<crate::Command>(&json);
+            if length > MAX_INPUT_BYTES {
+                assert!(decoded.is_err(), "oversized input was fully decoded");
+            } else {
+                let crate::Command::Input { bytes, .. } = decoded.unwrap() else {
+                    panic!("input command changed kind");
+                };
+                assert_eq!(bytes, vec![42; length]);
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_input_count_is_rejected_before_reading_first_byte() {
+        struct Oversized;
+        impl Iterator for Oversized {
+            type Item = u8;
+            fn next(&mut self) -> Option<u8> {
+                panic!("an oversized count must be rejected before reading any byte");
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (MAX_INPUT_BYTES + 1, Some(MAX_INPUT_BYTES + 1))
+            }
+        }
+        let decoder =
+            serde::de::value::SeqDeserializer::<_, serde::de::value::Error>::new(Oversized);
+        assert!(deserialize_bytes(decoder).is_err());
+    }
 
     struct BlockedWriter {
         gate: Arc<(Mutex<bool>, Condvar)>,

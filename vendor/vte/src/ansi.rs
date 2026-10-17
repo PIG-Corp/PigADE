@@ -30,13 +30,15 @@ use log::debug;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::{Params, ParamsIter};
+use crate::{Params, ParamsIter, ParserBufferUsage};
 
 /// Maximum time before a synchronized update is aborted.
 const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// Maximum number of bytes read in one synchronized update (2MiB).
 const SYNC_BUFFER_SIZE: usize = 0x20_0000;
+const SYNC_BUFFER_MAX_CAPACITY: usize = SYNC_BUFFER_SIZE - 2;
+const SYNC_BUFFER_INITIAL_CAPACITY: usize = 4096;
 
 /// Number of bytes in the BSU/ESU CSI sequences.
 const SYNC_ESCAPE_LEN: usize = 8;
@@ -280,8 +282,25 @@ struct SyncState<T: Timeout> {
 
 impl<T: Timeout> Default for SyncState<T> {
     fn default() -> Self {
-        Self { buffer: Vec::with_capacity(SYNC_BUFFER_SIZE), timeout: Default::default() }
+        Self { buffer: Vec::new(), timeout: Default::default() }
     }
+}
+
+/// Numeric capacities held by the processor's parser and synchronized buffer.
+/// The generic timeout implementation is intentionally excluded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcessorBufferUsage {
+    pub parser: ParserBufferUsage,
+    /// Total inline size of this processor value, including its parser and
+    /// timeout handle. Add neither parser inline size nor OSC inline capacity
+    /// separately when accounting this field.
+    pub inline_size_bytes: usize,
+    /// Bytes retained while a synchronized update is pending.
+    pub sync_buffer_len: usize,
+    /// Heap capacity of the synchronized-update `Vec`.
+    pub sync_buffer_capacity: usize,
+    /// Inline capacity of the synchronized buffer (always zero; it is a `Vec`).
+    pub sync_buffer_inline_capacity: usize,
 }
 
 /// The processor wraps a `crate::Parser` to ultimately call methods on a
@@ -352,6 +371,17 @@ impl<T: Timeout> Processor<T> {
     /// Synchronized update timeout.
     pub fn sync_timeout(&self) -> &T {
         &self.state.sync_state.timeout
+    }
+
+    /// Report parser and synchronized-buffer usage without allocating.
+    pub fn buffer_usage(&self) -> ProcessorBufferUsage {
+        ProcessorBufferUsage {
+            parser: self.parser.buffer_usage(),
+            inline_size_bytes: core::mem::size_of::<Self>(),
+            sync_buffer_len: self.state.sync_state.buffer.len(),
+            sync_buffer_capacity: self.state.sync_state.buffer.capacity(),
+            sync_buffer_inline_capacity: 0,
+        }
     }
 
     /// Process a new byte from the PTY.
@@ -433,7 +463,9 @@ impl<T: Timeout> Processor<T> {
         H: Handler,
     {
         // Advance sync parser or stop sync if we'd exceed the maximum buffer size.
-        if self.state.sync_state.buffer.len() + bytes.len() >= SYNC_BUFFER_SIZE - 1 {
+        let current_len = self.state.sync_state.buffer.len();
+        let required_len = current_len.saturating_add(bytes.len());
+        if required_len >= SYNC_BUFFER_SIZE - 1 {
             // Terminate the synchronized update.
             self.stop_sync_internal(handler, None);
 
@@ -441,6 +473,7 @@ impl<T: Timeout> Processor<T> {
             let mut performer = Performer::new(&mut self.state, handler);
             self.parser.advance_until_terminated(&mut performer, bytes)
         } else {
+            ensure_sync_buffer_capacity(&mut self.state.sync_state.buffer, required_len);
             self.state.sync_state.buffer.extend(bytes);
             self.advance_sync_csi(handler, bytes.len());
             bytes.len()
@@ -477,6 +510,26 @@ impl<T: Timeout> Processor<T> {
             }
         }
     }
+}
+
+/// Grow geometrically while keeping the requested capacity inside the sync
+/// byte budget. `advance` is infallible today, so allocation failure keeps its
+/// existing allocator/panic behavior rather than being reported as recovery.
+fn ensure_sync_buffer_capacity(buffer: &mut Vec<u8>, required_len: usize) {
+    if buffer.capacity() >= required_len {
+        return;
+    }
+
+    let geometric = if buffer.capacity() == 0 {
+        SYNC_BUFFER_INITIAL_CAPACITY
+    } else {
+        buffer
+            .capacity()
+            .saturating_mul(2)
+            .min(SYNC_BUFFER_MAX_CAPACITY)
+    };
+    let target_capacity = geometric.max(required_len);
+    buffer.reserve_exact(target_capacity.saturating_sub(buffer.len()));
 }
 
 /// Helper type that implements `crate::Perform`.
@@ -2087,7 +2140,7 @@ pub mod C0 {
 mod tests {
     use super::*;
 
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     pub struct TestSyncHandler {
         is_sync: usize,
     }
@@ -2479,6 +2532,90 @@ mod tests {
             assert_eq!(parser.state.sync_state.timeout.is_sync, 0);
             assert!(handler.attr.take().is_some());
         }
+    }
+
+    #[test]
+    fn processor_buffer_usage_starts_lazy_and_reuses_sync_capacity() {
+        let mut processor = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        let idle = processor.buffer_usage();
+        assert_eq!(idle.sync_buffer_len, 0);
+        assert_eq!(
+            idle.inline_size_bytes,
+            core::mem::size_of::<Processor<TestSyncHandler>>()
+        );
+        assert_eq!(idle.sync_buffer_capacity, 0);
+        assert_eq!(idle.sync_buffer_inline_capacity, 0);
+        assert_eq!(idle.parser.pending_osc_heap_capacity, 0);
+
+        processor.advance(&mut handler, b"\x1b]2;pending");
+        let pending_osc = processor.buffer_usage();
+        assert!(pending_osc.parser.pending_osc_len > 0);
+        assert!(
+            pending_osc.parser.pending_osc_heap_capacity
+                + pending_osc.parser.pending_osc_inline_capacity
+                >= pending_osc.parser.pending_osc_len
+        );
+        assert_eq!(pending_osc.sync_buffer_capacity, 0);
+
+        processor.advance(&mut handler, b"\x07");
+        assert_eq!(processor.buffer_usage().parser.pending_osc_len, 0);
+
+        processor.advance(&mut handler, b"\x1b[?2026h");
+        assert_eq!(processor.buffer_usage().sync_buffer_capacity, 0);
+        processor.advance(&mut handler, b"\x1b[31m");
+        let buffered = processor.buffer_usage();
+        assert_eq!(buffered.sync_buffer_len, b"\x1b[31m".len());
+        assert!(buffered.sync_buffer_capacity >= buffered.sync_buffer_len);
+        assert!(buffered.sync_buffer_capacity <= SYNC_BUFFER_MAX_CAPACITY);
+
+        processor.advance(&mut handler, b"\x1b[?2026l");
+        let cleared = processor.buffer_usage();
+        assert_eq!(cleared.sync_buffer_len, 0);
+        assert_eq!(cleared.sync_buffer_capacity, buffered.sync_buffer_capacity);
+        processor.advance(&mut handler, b"\x1b[?2026h");
+        processor.advance(&mut handler, b"\x1b[32m");
+        assert_eq!(
+            processor.buffer_usage().sync_buffer_capacity,
+            buffered.sync_buffer_capacity,
+            "a later sync update should reuse retained capacity"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn imported_non_power_of_two_sync_buffer_grows_within_profile_and_continues() {
+        const IMPORTED_LEN: usize = 1_300_003;
+        let processor = Processor::<TestSyncHandler>::new();
+        let mut snapshot = processor.export_checkpoint();
+        snapshot.timeout.is_sync = 1;
+        snapshot.sync_buffer = vec![b'a'; IMPORTED_LEN];
+
+        let mut restored = Processor::<TestSyncHandler>::from_checkpoint(snapshot).unwrap();
+        let imported = restored.buffer_usage();
+        assert_eq!(imported.sync_buffer_len, IMPORTED_LEN);
+        assert!(imported.sync_buffer_capacity >= IMPORTED_LEN);
+
+        restored.advance(&mut MockHandler::default(), b"\x1b[1m");
+        let continued = restored.buffer_usage();
+        assert_eq!(continued.sync_buffer_len, IMPORTED_LEN + b"\x1b[1m".len());
+        assert!(continued.sync_buffer_capacity >= continued.sync_buffer_len);
+        assert!(continued.sync_buffer_capacity <= SYNC_BUFFER_MAX_CAPACITY);
+
+        let cloned = restored.clone();
+        assert_eq!(
+            restored.export_checkpoint().sync_buffer,
+            cloned.export_checkpoint().sync_buffer
+        );
+        assert_eq!(restored.buffer_usage().sync_buffer_len, cloned.buffer_usage().sync_buffer_len);
+
+        let mut original_output = MockHandler::default();
+        let mut clone_output = MockHandler::default();
+        restored.advance(&mut original_output, b"\x1b[?2026l");
+        let mut cloned = cloned;
+        cloned.advance(&mut clone_output, b"\x1b[?2026l");
+        assert_eq!(original_output.attr, Some(Attr::Bold));
+        assert_eq!(clone_output.attr, original_output.attr);
     }
 
     #[test]

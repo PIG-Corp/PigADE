@@ -14,6 +14,7 @@ pub mod recovery_diagnostics;
 #[cfg(test)]
 mod recovery_tests;
 mod replay_cache;
+mod request_decode;
 pub use recovery_diagnostics::{RecoveryDiagnostics, RecoveryIssue};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -81,6 +82,7 @@ pub enum Command {
     Input {
         session: Uuid,
         generation: Uuid,
+        #[serde(deserialize_with = "input::deserialize_bytes")]
         bytes: Vec<u8>,
     },
     Resize {
@@ -185,21 +187,40 @@ impl Write for MessageBuffer {
     }
 }
 
-pub fn send<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buffer = MessageBuffer(Vec::new());
     serde_json::to_writer(&mut buffer, value)?;
-    let bytes = buffer.0;
+    Ok(buffer.0)
+}
+
+fn send_encoded(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
     stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
-    stream.write_all(&bytes)?;
+    stream.write_all(bytes)?;
     Ok(())
 }
+
+pub fn send<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+    send_encoded(stream, &encode(value)?)
+}
 pub fn receive<T: DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
+    let bytes = receive_bytes(stream)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn receive_bytes(stream: &mut UnixStream) -> Result<Vec<u8>> {
     let mut length = [0; 4];
     stream.read_exact(&mut length)?;
     let length = u32::from_le_bytes(length) as usize;
     ensure!(length > 0 && length <= IPC_LIMIT, "invalid IPC length");
     let mut bytes = vec![0; length];
     stream.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Decode a bounded IPC request after checking Input arrays before Serde buffers enum content.
+pub(crate) fn receive_request(stream: &mut UnixStream) -> Result<Request> {
+    let bytes = receive_bytes(stream)?;
+    request_decode::validate(&bytes)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 pub fn request(socket: &Path, command: Command) -> Result<Response> {

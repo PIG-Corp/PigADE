@@ -11,6 +11,15 @@ use crate::index::Line;
 
 /// Maximum number of buffered lines outside of the grid for performance optimization.
 const MAX_CACHE_SIZE: usize = 1_000;
+/// Target payload of spare row cell buffers. Row/Vec headers and allocator overhead are extra.
+const CACHE_PAYLOAD_TARGET: usize = 256 * 1024;
+
+/// Row-count growth target based on cell payload width, clamped for tiny and huge rows.
+/// This does not account for already-retained rows or rows with differing capacities.
+fn cache_rows<T>(columns: usize) -> usize {
+    let row_payload = columns.saturating_mul(mem::size_of::<T>());
+    CACHE_PAYLOAD_TARGET.checked_div(row_payload).unwrap_or(MAX_CACHE_SIZE).clamp(1, MAX_CACHE_SIZE)
+}
 
 /// A ring buffer for optimizing indexing and rotation.
 ///
@@ -135,7 +144,10 @@ impl<T> Storage<T> {
         self.len -= shrinkage;
 
         // Free memory.
-        if self.inner.len() > self.len + MAX_CACHE_SIZE {
+        // This row width selects the cleanup target; cached rows may have other widths/capacities.
+        let columns = self.inner.get(self.zero).map_or(0, Row::len);
+        let cached_rows = self.inner.len().saturating_sub(self.len);
+        if cached_rows > cache_rows::<T>(columns) {
             self.truncate();
         }
     }
@@ -157,7 +169,7 @@ impl<T> Storage<T> {
         if self.len + additional_rows > self.inner.len() {
             self.rezero();
 
-            let realloc_size = self.inner.len() + max(additional_rows, MAX_CACHE_SIZE);
+            let realloc_size = self.inner.len() + max(additional_rows, cache_rows::<T>(columns));
             self.inner.resize_with(realloc_size, || Row::new(columns));
         }
 
@@ -292,9 +304,10 @@ impl<T> IndexMut<Line> for Storage<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::grid::Grid;
     use crate::grid::GridCell;
     use crate::grid::row::Row;
-    use crate::grid::storage::{MAX_CACHE_SIZE, Storage};
+    use crate::grid::storage::{cache_rows, MAX_CACHE_SIZE, Storage};
     use crate::index::{Column, Line};
     use crate::term::cell::Flags;
 
@@ -854,6 +867,105 @@ mod tests {
         assert_eq!(storage.len, expected_storage.len);
         assert_eq!(storage.zero, expected_storage.zero);
         assert_eq!(storage.inner, expected_storage.inner);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn wide_row_cache_growth_preserves_checkpoint_rows_without_thousand_full_rows() {
+        use crate::term::cell::Cell;
+
+        const CACHE_PAYLOAD_TARGET: usize = 256 * 1024;
+        let columns = 1024;
+        let mut storage = Storage::<Cell>::with_capacity(1, columns);
+        storage[Line(0)][Column(0)].c = 'X';
+        let before: Vec<_> = storage.checkpoint_rows().collect();
+        assert_eq!(before.len(), 1);
+
+        storage.initialize(1, columns);
+
+        let rows: Vec<_> = storage.checkpoint_rows().collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][Column(0)].c, 'X');
+        assert_eq!(rows[1][Column(0)], Cell::default());
+        let mut oracle = storage.clone();
+        oracle.truncate();
+        assert_eq!(
+            serde_json::to_vec(&rows).unwrap(),
+            serde_json::to_vec(&oracle.inner).unwrap(),
+            "checkpoint rows must stay canonical when cache size changes"
+        );
+
+        let bytes_per_row = columns * std::mem::size_of::<Cell>();
+        let row_target = (CACHE_PAYLOAD_TARGET / bytes_per_row).clamp(1, MAX_CACHE_SIZE);
+        assert!(
+            storage.inner.len().saturating_sub(storage.len) <= row_target,
+            "cache should stay near a 256 KiB cell-payload target; target rows={row_target}, actual={}",
+            storage.inner.len().saturating_sub(storage.len)
+        );
+        assert_eq!(
+            storage.inner.len().saturating_sub(storage.len),
+            row_target - 1,
+            "one row was added to an initially empty spare cache"
+        );
+        let cached_cell_slots: usize = storage.inner[storage.len..]
+            .iter()
+            .map(Row::allocation_capacity)
+            .sum();
+        assert!(cached_cell_slots * std::mem::size_of::<Cell>() <= CACHE_PAYLOAD_TARGET);
+
+        // If rows widen later, shrink uses the same width-sensitive policy
+        // and truncates excess old-width cache rows while preserving active data.
+        for row in &mut storage.inner {
+            row.grow(columns * 2);
+        }
+        storage.shrink_lines(1);
+        assert_eq!(storage.inner.len(), storage.len);
+        assert_eq!(storage[Line(0)][Column(0)].c, 'X');
+    }
+
+    #[test]
+    fn cache_row_target_handles_zero_sized_and_extremely_wide_cells() {
+        assert_eq!(cache_rows::<()>(usize::MAX), MAX_CACHE_SIZE);
+        assert_eq!(cache_rows::<u8>(usize::MAX), 1);
+        assert_eq!(cache_rows::<u8>(0), MAX_CACHE_SIZE);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn compact_cache_matches_legacy_cache_through_scroll_continuation() {
+        use crate::grid::Dimensions;
+        use crate::term::cell::Cell;
+
+        let columns = 1024;
+        let mut compact = Grid::<Cell>::new(4, columns, 2000);
+        for line in 0..4 {
+            compact[Line(line)][Column(0)].c = char::from(b'A' + line as u8);
+        }
+
+        // This is the old 1,000-row initialized-cache shape before output.
+        let mut legacy_cache = compact.clone();
+        legacy_cache.raw.rezero();
+        legacy_cache
+            .raw
+            .inner
+            .resize_with(legacy_cache.raw.inner.len() + MAX_CACHE_SIZE, || Row::new(columns));
+
+        for _ in 0..48 {
+            let region = Line(0)..Line(4);
+            compact.scroll_up::<crate::vte::ansi::Color>(&region, 1);
+            legacy_cache.scroll_up::<crate::vte::ansi::Color>(&region, 1);
+
+            let compact_rows: Vec<_> = compact.checkpoint_rows().collect();
+            let legacy_rows: Vec<_> = legacy_cache.checkpoint_rows().collect();
+            assert_eq!(
+                serde_json::to_vec(&compact_rows).unwrap(),
+                serde_json::to_vec(&legacy_rows).unwrap(),
+                "active rows diverged from legacy cache at history size {}",
+                compact.history_size()
+            );
+            assert_eq!(compact.history_size(), legacy_cache.history_size());
+            assert_eq!(compact.cursor.point, legacy_cache.cursor.point);
+        }
     }
 
     #[test]

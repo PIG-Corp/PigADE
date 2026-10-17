@@ -23,3 +23,27 @@ default implementation calls `input` once per repetition, preserving existing
 handler behavior. Counting handlers may override it to aggregate large REP
 counts without expanding a callback vector. This API does not add REP limits or
 change terminal semantics.
+
+## Buffer-capacity accounting and lazy synchronized updates
+
+`Parser::buffer_usage` reports the parser value's inline size, pending OSC
+length, and its reported heap or inline `Vec`/`ArrayVec` capacity.
+`Processor::buffer_usage` reports the processor value's inline size (which
+already includes its parser and timeout handle), plus synchronized buffer
+length, `Vec` capacity, and inline buffer capacity (zero, since the sync buffer
+is a `Vec`). Do not add parser inline size or no-std inline OSC capacity to the
+processor inline size a second time. Heap allocations owned internally by the
+generic timeout implementation are excluded.
+
+An idle processor starts with an empty zero-capacity synchronized buffer.
+Accepted synchronized bytes grow it geometrically, with requested capacity
+clamped to the parser's existing runtime limit (at most `2 MiB - 2` retained
+bytes). Clearing an update retains capacity for reuse. Imported checkpoints
+continue from their existing vector capacity; subsequent growth uses the
+reported capacity rather than assuming a power-of-two history. Existing
+checkpoint size validation and overflow/timeout parsing behavior are unchanged.
+
+The reported capacity is the standard library's `Vec::capacity` or
+`ArrayVec::capacity`, and inline size is `size_of::<Self>()`; neither measures
+allocator overhead or process RSS. The API reports values without allocating;
+it makes no allocator-resident-memory claim.

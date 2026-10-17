@@ -409,7 +409,6 @@ impl<T> Grid<T> {
     }
 
     /// Configured history limit for semantic checkpoint validation.
-    #[cfg(feature = "serde")]
     pub(crate) fn checkpoint_max_scroll_limit(&self) -> usize {
         self.max_scroll_limit
     }

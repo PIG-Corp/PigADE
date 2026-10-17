@@ -73,6 +73,23 @@ pub struct Parser<const OSC_RAW_BUF_SIZE: usize = MAX_OSC_RAW> {
     partial_utf8_len: usize,
 }
 
+/// Numeric capacities held by a parser's pending OSC buffer.
+///
+/// Capacities count the backing buffer reported by `Vec` or `ArrayVec`; they
+/// do not account for allocator bookkeeping or other parser state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParserBufferUsage {
+    /// Total inline size of this parser value. Do not add inline OSC capacity
+    /// again; that capacity is already part of this size in `no_std` builds.
+    pub inline_size_bytes: usize,
+    /// Bytes currently retained for an incomplete OSC sequence.
+    pub pending_osc_len: usize,
+    /// Capacity of the heap-backed OSC buffer (`std` builds).
+    pub pending_osc_heap_capacity: usize,
+    /// Capacity stored inline in the parser (`no_std` builds).
+    pub pending_osc_inline_capacity: usize,
+}
+
 /// Versioned complete parser DTO, including partially collected UTF-8/CSI/OSC.
 /// Fields are private; import validates indexes before exposing executable state.
 #[cfg(all(feature = "std", feature = "serde"))]
@@ -102,7 +119,9 @@ pub(crate) fn deserialize_bounded_bytes<'de,D:serde::Deserializer<'de>,const LIM
         type Value=Vec<u8>;
         fn expecting(&self,f:&mut core::fmt::Formatter)->core::fmt::Result{write!(f,"at most {N} checkpoint bytes")}
         fn visit_seq<A:serde::de::SeqAccess<'de>>(self,mut seq:A)->Result<Self::Value,A::Error>{
-            if seq.size_hint().is_some_and(|n|n>N){return Err(serde::de::Error::custom("checkpoint byte vector exceeds profile"));}
+            if seq.size_hint().map_or(false, |n| n > N) {
+                return Err(serde::de::Error::custom("checkpoint byte vector exceeds profile"));
+            }
             let mut bytes=Vec::with_capacity(seq.size_hint().unwrap_or(0).min(N));
             while let Some(byte)=seq.next_element()?{if bytes.len()==N{return Err(serde::de::Error::custom("checkpoint byte vector exceeds profile"));}bytes.push(byte);}
             Ok(bytes)
@@ -184,6 +203,28 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
     #[cfg(not(feature = "std"))]
     pub fn new_with_size() -> Parser<OSC_RAW_BUF_SIZE> {
         Default::default()
+    }
+
+    /// Report OSC buffer length and backing capacity without allocating.
+    pub fn buffer_usage(&self) -> ParserBufferUsage {
+        #[cfg(feature = "std")]
+        {
+            ParserBufferUsage {
+                inline_size_bytes: core::mem::size_of::<Self>(),
+                pending_osc_len: self.osc_raw.len(),
+                pending_osc_heap_capacity: self.osc_raw.capacity(),
+                pending_osc_inline_capacity: 0,
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            ParserBufferUsage {
+                inline_size_bytes: core::mem::size_of::<Self>(),
+                pending_osc_len: self.osc_raw.len(),
+                pending_osc_heap_capacity: 0,
+                pending_osc_inline_capacity: self.osc_raw.capacity(),
+            }
+        }
     }
 
     #[inline]
@@ -1020,6 +1061,47 @@ mod tests {
             },
             _ => panic!("expected osc sequence"),
         }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn parser_buffer_usage_reports_heap_osc_capacity_and_reuse() {
+        let mut parser = Parser::new();
+        let mut dispatcher = Dispatcher::default();
+        let idle = parser.buffer_usage();
+        assert_eq!(idle.pending_osc_len, 0);
+        assert_eq!(idle.inline_size_bytes, core::mem::size_of::<Parser>());
+        assert_eq!(idle.pending_osc_heap_capacity, 0);
+        assert_eq!(idle.pending_osc_inline_capacity, 0);
+
+        parser.advance(&mut dispatcher, b"\x1b]2;pending title");
+        let pending = parser.buffer_usage();
+        assert_eq!(pending.pending_osc_len, b"2pending title".len());
+        assert!(pending.pending_osc_heap_capacity >= pending.pending_osc_len);
+        assert_eq!(pending.pending_osc_inline_capacity, 0);
+
+        parser.advance(&mut dispatcher, b"\x07");
+        let cleared = parser.buffer_usage();
+        assert_eq!(cleared.pending_osc_len, 0);
+        assert_eq!(cleared.pending_osc_heap_capacity, pending.pending_osc_heap_capacity);
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn parser_buffer_usage_reports_no_std_inline_osc_capacity() {
+        let mut parser = Parser::<32>::new_with_size();
+        let mut dispatcher = Dispatcher::default();
+        let idle = parser.buffer_usage();
+        assert_eq!(idle.pending_osc_len, 0);
+        assert_eq!(idle.inline_size_bytes, core::mem::size_of::<Parser<32>>());
+        assert_eq!(idle.pending_osc_heap_capacity, 0);
+        assert_eq!(idle.pending_osc_inline_capacity, 32);
+
+        parser.advance(&mut dispatcher, b"\x1b]2;pending");
+        let pending = parser.buffer_usage();
+        assert!(pending.pending_osc_len > 0);
+        assert_eq!(pending.pending_osc_heap_capacity, 0);
+        assert_eq!(pending.pending_osc_inline_capacity, 32);
     }
 
     #[test]

@@ -18,7 +18,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 
-use crate::{CommandRejection, PROTOCOL, Request, Response, peer_pid, receive, send};
+use crate::{
+    CommandRejection, PROTOCOL, Request, Response, encode, peer_pid, receive_request, send,
+    send_encoded,
+};
 
 const CONNECTION_LIMIT: usize = 16;
 const JOB_LIMIT: usize = 16;
@@ -123,12 +126,26 @@ fn reply_or_unknown(result: std::result::Result<Response, mpsc::RecvTimeoutError
     }
 }
 
+fn encode_reply(response: Response) -> Result<Vec<u8>> {
+    let encoded = encode(&response);
+    // The worker retains only the bounded encoded buffer during a slow socket
+    // write, rather than also keeping deep copies of terminal cell frames.
+    drop(response);
+    match encoded {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => encode(&error_response(
+            format!("host response encoding failed: {error}; operation outcome may be unknown"),
+            None,
+        )),
+    }
+}
+
 fn process_connection(mut stream: UnixStream, jobs: SyncSender<Job>) -> Result<()> {
     // Validate here too so tests and any future caller cannot bypass peer auth.
     peer_pid(&stream)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let request: Request = match receive(&mut stream) {
+    let request: Request = match receive_request(&mut stream) {
         Ok(request) => request,
         Err(_) => {
             // Do not echo malformed user payloads into diagnostics.
@@ -170,14 +187,17 @@ fn process_connection(mut stream: UnixStream, jobs: SyncSender<Job>) -> Result<(
     // Timeout does not cancel or retry a possibly committed command. Its
     // operation ID remains the caller's reconciliation/idempotency boundary.
     let response = reply_or_unknown(receiver.recv_timeout(REPLY_TIMEOUT));
-    send(&mut stream, &response)?;
+    let bytes = encode_reply(response)?;
+    // Encoding fallback occurs before writing the frame header. A partial I/O
+    // failure must never append another reply to an already-started frame.
+    send_encoded(&mut stream, &bytes)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Command;
+    use crate::{Command, receive};
 
     #[test]
     fn decoded_job_runs_on_receiver_and_replies_without_extra_writer() -> Result<()> {
@@ -270,5 +290,41 @@ mod tests {
         let response = reply_or_unknown(Err(mpsc::RecvTimeoutError::Timeout));
         assert!(response.error.unwrap().contains("outcome may be unknown"));
         assert_eq!(response.rejected_before_admission, None);
+    }
+
+    #[test]
+    fn oversized_dispatched_reply_returns_explicit_unknown_outcome_without_retry() -> Result<()> {
+        let (mut client, server) = UnixStream::pair()?;
+        client.set_read_timeout(Some(IO_TIMEOUT))?;
+        let (jobs, receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || process_connection(server, jobs));
+        send(
+            &mut client,
+            &Request {
+                protocol: PROTOCOL,
+                command: Command::Input {
+                    session: uuid::Uuid::new_v4(),
+                    generation: uuid::Uuid::new_v4(),
+                    bytes: b"synthetic input".to_vec(),
+                },
+            },
+        )?;
+        let job = receiver.recv_timeout(IO_TIMEOUT)?;
+        assert!(matches!(job.request.command, Command::Input { .. }));
+        let mut oversized = error_response("test result", None);
+        oversized.catalog_notice = Some("x".repeat(crate::IPC_LIMIT));
+        job.reply.send(oversized)?;
+        let response: Response = receive(&mut client)?;
+        let error = response.error.context("encoding failure was hidden")?;
+        assert!(error.contains("IPC payload too large"));
+        assert!(error.contains("outcome may be unknown"));
+        assert_eq!(response.rejected_before_admission, None);
+        assert!(response.views.is_empty());
+        worker.join().unwrap()?;
+        assert!(
+            receiver.try_recv().is_err(),
+            "dispatched command was retried"
+        );
+        Ok(())
     }
 }

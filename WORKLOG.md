@@ -873,3 +873,67 @@ Stream validated borrowed checkpoints with exact schema2 bytes, bound envelope/t
 - Files: crates/terminal/src/lib.rs, vendor/alacritty_terminal/src/term/checkpoint.rs, vendor/alacritty_terminal/src/term/checkpoint/borrowed.rs, vendor/alacritty_terminal/src/term/cell.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/grid/checkpoint.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, scripts/soak-pty.py, scripts/test_soak_admission.py, benchmarks/results, docs/adr/0009-borrowed-checkpoint-export.md, docs/research/terminal-admission-plan.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md, docs/reports/terminal-memory-census.md, CHANGELOG.md
 - Verification: Fresh workspace135 tests/fmt/strictClippy/releasebins/examples pass; rootPython29pass; vendor173lib+45ref+no-default pass; vendoralltargetclippy passes with exactlythreeoldtty question_mark forcedwarnings (plainstrictfails, retained). Headerregression failswithoutguard andpassesfixed; fullenvelope matchesownedpathateveryfixturebyte; borrowed135refcuts/poolcursor/ring/grownrow/sourcevalidation paritypass. Tenalternatingfreshprocessesbefore/after showRSSp95 90484/82168KiB, identicalfixtures; no productbudgetclaim. Fixedproducer10.015s real4PTYsmoke passesCRC/fullfaststate+frame+coldoracle; failed3849.40ssoakretained.
 - Risks / next: Commit integration; actualthird24hsoak nowrunning tool44117 at retainedsoak-20261017T000738Z-6244149d, frozenhost67ed712c; fullcorpus tool65474 thirdoracle running. Continue whole-event/global accounting and remainingstage0/platform/CLI/productgates, noMVPcompleteclaim.
+
+## 2026-10-17T00:17:58+00:00 — terminal_memory_budget
+
+Extended persistent terminal allocation census with per-grid geometry/storage shape and logical mark, hyperlink, and title lengths while leaving its existing capacity estimate and admission behavior unchanged.
+
+- Files: vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/PIGADE_PATCH.md
+- Verification: cargo test --manifest-path vendor/alacritty_terminal/Cargo.toml --config patch.crates-io.vte.path=/home/afterburner/Projects/PigADE/vendor/vte term::resources::tests --lib: 16 passed; same patched vendor cargo test --lib: 174 passed; patched cargo check --no-default-features passed; git diff --check passed.
+- Risks / next: Root owns policy integration. Per-grid row cell capacity and short-row gap are partial if census.incomplete; complete census remains an ownership payload report, not a heap/RSS bound.
+
+## 2026-10-17T00:18:46+00:00 — /root/font_render_profile
+
+Added numeric VTE parser/processor buffer usage and lazy bounded sync-buffer growth
+
+- Files: vendor/vte/src/lib.rs, vendor/vte/src/ansi.rs, vendor/vte/PIGADE-PATCH.md
+- Verification: cargo test --offline --manifest-path vendor/vte/Cargo.toml --features ansi,serde: 60 passed; cargo test --offline --manifest-path vendor/vte/Cargo.toml --no-default-features --features ansi: 59 unit + 1 doctest passed; cargo clippy --offline --manifest-path vendor/vte/Cargo.toml --features ansi,serde --all-targets -- -D warnings passed; patched alacritty_terminal term::resources: 16 passed; git diff --check passed.
+- Risks / next: Processor::buffer_usage reports existing Vec capacity and inline size, not allocator overhead/RSS; generic Timeout-owned heap is excluded. No direct VTE Postcard byte oracle is added; root owns the cross-crate byte/continuation test. OOM remains the existing infallible allocator behavior.
+
+## 2026-10-17T00:31:12+00:00 — terminal_memory_budget
+
+Bounded initialized spare-row cache growth and shrink cleanup to a width-sensitive 256 KiB cell-payload target, retaining the existing row ring and checkpoint row representation.
+
+- Files: vendor/alacritty_terminal/src/grid/storage.rs, vendor/alacritty_terminal/PIGADE_PATCH.md
+- Verification: Pre-change target regression failed with 999 inactive rows vs 10-row target; after change targeted storage test passed, proving 9 spare rows plus unchanged active checkpoint rows. Patched vendor storage tests: 18 passed; full patched vendor library suite: 176 passed including owned/borrowed checkpoint corpus; patched no-default-features check passed; diff check passed.
+- Risks / next: Only spare cached row cell payload is targeted. Required active rows, already-retained cache rows, per-row headers, Vec outer capacity, allocator overhead and total scrollback remain outside this local policy; root owns integration and aggregate admission.
+
+## 2026-10-17T00:31:25+00:00 — recovery_slice_review
+
+Preflight IPC request input arrays before Serde internally tagged content buffering
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/input.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host (52 unit, 4 checkpoint retention, 15 recovery integration, 1 slow-input passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; cargo fmt --all -- --check passed
+- Risks / next: Root to review and integrate; IPC preflight scans bounded raw request without Content allocation, rejects oversized Input arrays and preserves normal Request decoding.
+
+## 2026-10-17T00:33:11+00:00 — recovery_slice_review
+
+Extract IPC raw input preflight into dedicated request_decode module
+
+- Files: crates/session-host/src/request_decode.rs, crates/session-host/src/lib.rs, WORKLOG.md
+- Verification: cargo test -p pigade-session-host request_decode::tests --lib (6 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; cargo fmt --all -- --check passed; git diff --check passed
+- Risks / next: Root to review/integrate. Preflight bounds only Input byte arrays; other payload decoding remains under IPC_LIMIT and normal Serde behavior.
+
+## 2026-10-17T00:33:20+00:00 — terminal_memory_budget
+
+Refined the spare-row cache slice by removing incidental rustfmt churn, clarifying the local target is not a global cached-byte cap, and comparing compact cache scroll continuation against an explicit legacy 1,000-row Grid oracle.
+
+- Files: vendor/alacritty_terminal/src/grid/storage.rs, vendor/alacritty_terminal/PIGADE_PATCH.md
+- Verification: Patched vendor grid::storage::tests: 19 passed, including 48-step compact-vs-legacy canonical checkpoint row comparisons; git diff --check passed.
+- Risks / next: The payload target applies to newly appended rows and shrink cleanup uses current ring row width; retained heterogeneous cache rows can exceed it. Root owns final policy integration.
+
+## 2026-10-17T00:36:00+00:00 — /root/font_render_profile
+
+Added plan-only-by-default isolated provider TUI PTY diagnostic with bounded launch, query, resize, and cleanup checks
+
+- Files: scripts/provider-pty.py, scripts/test_provider_pty.py, docs/research/provider-pty-plan.md
+- Verification: python3 scripts/test_provider_pty.py: 9 passed; python3 -m py_compile scripts/provider-pty.py scripts/test_provider_pty.py passed; plan-only runs for codex, claude, opencode reported no process spawn; generated Bubblewrap namespace ran harmless /usr/bin/true with exit 0; git diff --check passed. No provider CLI was launched.
+- Risks / next: Root should review before any live provider run. The harness proves the DSR response using its fixed companion PTY child; provider-specific query receipt, authentication, task execution, resume, GUI presentation and cross-platform behavior remain untested. Resize requires new provider PTY output bytes plus frame geometry, but does not prove semantic repaint correctness.
+
+## 2026-10-17T00:37:02+00:00 — /root
+
+Bound parser/cache growth and IPC input buffering; preserve explicit unknown outcomes and canonical frame/checkpoint behavior
+
+- Files: crates/session-host/src/input.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/lib.rs, crates/session-host/src/request_decode.rs, crates/terminal/src/lib.rs, crates/terminal/examples/allocation_census.rs, vendor/vte/src/ansi.rs, vendor/vte/src/lib.rs, vendor/vte/PIGADE-PATCH.md, vendor/alacritty_terminal/src/grid/storage.rs, vendor/alacritty_terminal/src/grid/mod.rs, vendor/alacritty_terminal/src/term/resources.rs, vendor/alacritty_terminal/PIGADE_PATCH.md, benchmarks/results/terminal-allocation-census-shapes.json, benchmarks/results/terminal-allocation-census-cache-target.json, docs/research/terminal-admission-plan.md, docs/reports/terminal-memory-census.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, CHANGELOG.md
+- Verification: Root workspace146tests/fmt/strictClippy/release pass; Python29 before subsequent UI/provider harness edits. VTE60stdserde +59no-defaultANSI +doctest/strictClippy pass. Vendor177lib +45ref +doctest/no-default pass; new checked-division Clippy failure repaired, focused19storage and strict all-target Clippy with exactly3oldtty forcedwarnings pass. Encoding regression red EOF then green explicitunknown; independent Luna review caught internallytaggedContent preallocation, streaming preflight repaired and6regressions pass. Both source-bound census snapshots retained; cache alignment can slightly increase fullhot payload.
+- Risks / next: Commit coherent backend slice; app IME/localoverlay and provider harness remain separate uncommitted work. Whole-event/global memory budget and remaining stage0 gates open; frozen corpus finaloracle and third actual24h soak stillrunning, no acceptance claim.

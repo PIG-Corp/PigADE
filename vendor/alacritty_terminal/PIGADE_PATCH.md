@@ -226,6 +226,17 @@ Arc-header estimate, but excludes allocator metadata, alignment, fragmentation,
 generic listeners, history observers, parser state and transient copies. A
 complete scan is not an upper bound on terminal or process memory and makes no
 claim about physical allocator overhead or heap/RSS usage.
+The report also exposes active/inactive grid geometry, configured history
+limits, initialized raw rows including the resize cache, row-vector and cell
+vector capacities, and short-row gaps against logical columns. Logical mark
+lengths are reported unique-per-CellExtra and reference-weighted; hyperlink ID
+and URI logical byte totals are unique-per-hyperlink. Current and stacked title
+lengths/capacities, stack entry count, and the largest current-or-stacked title
+are reported separately. These are census inputs for future admission policy;
+they do not change the existing payload-capacity estimate or provide an
+allocator/RSS bound. When the work limit interrupts row traversal, per-grid
+cell capacity and short-row gap fields reflect only visited rows and the
+overall `incomplete` flag must be honored.
 It additionally reports CellExtra reference count, per-reference-weighted mark
 capacity (which intentionally counts shared storage once per reference), and
 the largest single CellExtra mark capacity. A bounded test constructs a shared
@@ -246,3 +257,21 @@ enqueue or answer effects, or invent response-byte bounds. Fixtures cover
 partial OSC continuation, synchronized-timeout drain, title push/pop
 amplification, repeated long OSC 8 updates, query-only CSI/OSC storms, and
 unchanged original processor checkpoints after census.
+
+## Width-sensitive bounded spare-row cache
+
+`Storage::initialize` sizes newly appended spare rows toward 256 KiB of row
+cell payload (`columns * size_of::<T>()` per row), with a minimum of one and a
+maximum of 1,000 rows. Zero-sized cell types use the row-count maximum;
+overflowing or extremely wide row payload calculations select one row.
+`shrink_lines` uses the current ring row width to select a row-count cleanup
+threshold and truncates excess inactive rows. This is a local growth/cleanup
+policy, not a cap on total cached bytes: already-retained rows and cached rows
+with different widths/capacities can exceed the target. The calculation also
+excludes Row/Vec headers, allocator overhead, outer Vec capacity and required
+active rows, and does not bound total grid/history memory. Cache rows are
+excluded from both owned and borrowed schema-2 checkpoint serialization;
+active row order/content is compared stepwise with an explicit legacy
+1,000-row-cache Grid oracle during scroll continuation. A 1,024-column `Cell`
+fixture measures the newly appended spare-row cell capacity and checks active
+checkpoint-row content plus widened-row shrink.

@@ -317,3 +317,32 @@ A third actual24h attempt is now running at
 frozen hostSHA67ed712c…/PID1004612 with boot/start identity in its manifest. At
 120.07s it has23 ACKs and39 resizes perPTY and no admission retries. This does
 not pass24h; do not launch a duplicate. Previous tool86044 is a retained failure.
+
+
+Latest foundation slice: workspace146 tests +29 Python tests, strict workspace
+Clippy/fmt and release bins/examples pass. VTE60 std/serde tests and59 no-default
+ANSI tests plus its doctest pass. The new parser buffer getter preserves complete
+checkpoint bytes and continuation across partial OSC/UTF-8/sync fixtures. The
+spare-row cache uses a width-sensitive 256 KiB new-payload target, with canonical
+row/legacy-cache continuation tests; this is not a global allocator bound.
+Current census snapshots distinguish pre-cache shapes from post-cache payload
+changes. See the memory census report for exact source hashes and exclusions.
+
+Host IPC preflights Input arrays in the bounded raw JSON frame before derived
+internally tagged Command decoding can build Serde Content. Tag ordering and
+duplicate fields are covered. Other command/unknown-field decode amplification
+remains a separate budget issue. Oversized reply encoding produces an explicit
+unknown-outcome response before any header bytes; no dispatched mutation retries,
+and partial socket failure never appends a fallback frame. Deep DTO copies are
+dropped before a potentially slow socket write.
+
+At the latest inspection, all four full corpus journals reached1 GiB plus
+framing; the final oracle is still running, so the corpus is not accepted yet.
+Third actual soak progress at1,140.84s:226 ACKs and375 resizes perPTY, no errors,
+hostRSS210,923,520B. This is a progress sample on frozen67ed712c, not a24h pass
+or verification of newer sources. Do not restart or duplicate these runs.
+
+Root is independently implementing local IME ranges/overlay in app input/main
+and a same-app isolated fixture. Those edits are a subsequent uncommitted slice;
+read git status and the IME plan before touching them. A Luna agent owns new
+provider-pty script/plan files; real provider calls have not been run.
