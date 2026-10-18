@@ -24,6 +24,25 @@ pub(crate) enum Theme {
     Light,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TerminalTheme {
+    #[default]
+    Dark,
+    Light,
+    FollowApp,
+}
+
+impl TerminalTheme {
+    pub(crate) fn resolved(self, app_theme: Theme) -> Theme {
+        match self {
+            Self::Dark => Theme::Dark,
+            Self::Light => Theme::Light,
+            Self::FollowApp => app_theme,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
@@ -33,6 +52,8 @@ pub(crate) struct Config {
     pub(crate) reduced_motion: bool,
     #[serde(default = "default_terminal_font_size")]
     pub(crate) terminal_font_size: u8,
+    #[serde(default)]
+    pub(crate) terminal_theme: TerminalTheme,
 }
 
 fn default_terminal_font_size() -> u8 {
@@ -47,6 +68,7 @@ impl Default for Config {
             theme: Theme::Dark,
             reduced_motion: false,
             terminal_font_size: DEFAULT_TERMINAL_FONT_SIZE,
+            terminal_theme: TerminalTheme::Dark,
         }
     }
 }
@@ -64,6 +86,7 @@ pub(crate) fn save(
     theme: Theme,
     reduced_motion: bool,
     terminal_font_size: u8,
+    terminal_theme: TerminalTheme,
 ) -> Result<Config, String> {
     save_to(
         &config_path()?,
@@ -71,6 +94,7 @@ pub(crate) fn save(
         theme,
         reduced_motion,
         terminal_font_size,
+        terminal_theme,
     )
 }
 
@@ -80,6 +104,7 @@ pub(crate) fn save_to(
     theme: Theme,
     reduced_motion: bool,
     terminal_font_size: u8,
+    terminal_theme: TerminalTheme,
 ) -> Result<Config, String> {
     if expected_revision > MAX_REVISION {
         return Err("appearance revision is out of range".into());
@@ -121,6 +146,7 @@ pub(crate) fn save_to(
         theme,
         reduced_motion,
         terminal_font_size,
+        terminal_theme,
     };
     let bytes = serde_json::to_vec(&next).map_err(|e| format!("encode appearance config: {e}"))?;
     if bytes.len() as u64 > MAX_BYTES {
@@ -315,12 +341,13 @@ mod tests {
         let path = dir.config();
         let absent = load_from(&path).unwrap();
         assert_eq!(absent, Config::default());
-        let saved = save_to(&path, 0, Theme::Light, true, 18).unwrap();
+        let saved = save_to(&path, 0, Theme::Light, true, 18, TerminalTheme::FollowApp).unwrap();
         assert_eq!(saved.revision, 1);
         assert_eq!(saved.terminal_font_size, 18);
+        assert_eq!(saved.terminal_theme, TerminalTheme::FollowApp);
         assert_eq!(load_from(&path).unwrap(), saved);
         assert!(
-            save_to(&path, 0, Theme::Dark, false, 12)
+            save_to(&path, 0, Theme::Dark, false, 12, TerminalTheme::Light)
                 .unwrap_err()
                 .contains("revision conflict")
         );
@@ -339,8 +366,58 @@ mod tests {
         .unwrap();
         let config = load_from(&path).unwrap();
         assert_eq!(config.terminal_font_size, DEFAULT_TERMINAL_FONT_SIZE);
+        assert_eq!(config.terminal_theme, TerminalTheme::Dark);
+        assert_eq!(config.terminal_theme.resolved(Theme::Light), Theme::Dark);
         assert_eq!(config.theme, Theme::Light);
         assert!(config.reduced_motion);
+    }
+
+    #[test]
+    fn terminal_theme_options_round_trip_and_follow_app_resolves() {
+        let dir = TestDir::new();
+        let path = dir.config();
+        let mut revision = 0;
+        for (option, resolved) in [
+            (TerminalTheme::Dark, Theme::Dark),
+            (TerminalTheme::Light, Theme::Light),
+            (TerminalTheme::FollowApp, Theme::Light),
+        ] {
+            let saved = save_to(&path, revision, Theme::Light, true, 18, option).unwrap();
+            revision = saved.revision;
+            assert_eq!(saved.terminal_theme, option);
+            assert_eq!(load_from(&path).unwrap(), saved);
+            assert_eq!(option.resolved(Theme::Light), resolved);
+        }
+        let before = load_from(&path).unwrap();
+        assert!(
+            save_to(
+                &path,
+                revision - 1,
+                Theme::Dark,
+                false,
+                12,
+                TerminalTheme::Dark
+            )
+            .unwrap_err()
+            .contains("revision conflict")
+        );
+        assert_eq!(load_from(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn malformed_terminal_theme_does_not_save_or_change_file() {
+        let dir = TestDir::new();
+        let path = dir.config();
+        let malformed = br#"{"version":1,"revision":1,"theme":"light","reduced_motion":true,"terminal_theme":"system"}"#;
+        fs::write(&path, malformed).unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(
+            load_from(&path)
+                .unwrap_err()
+                .contains("parse appearance config")
+        );
+        assert!(save_to(&path, 1, Theme::Dark, false, 14, TerminalTheme::Dark).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]
@@ -354,7 +431,7 @@ mod tests {
         .unwrap();
         let original = fs::read(&path).unwrap();
         assert!(load_from(&path).unwrap_err().contains("unsupported"));
-        assert!(save_to(&path, 0, Theme::Light, false, 14).is_err());
+        assert!(save_to(&path, 0, Theme::Light, false, 14, TerminalTheme::Light).is_err());
         assert_eq!(fs::read(&path).unwrap(), original);
         fs::write(&path, vec![b' '; MAX_BYTES as usize + 1]).unwrap();
         assert!(load_from(&path).unwrap_err().contains("4096"));
@@ -364,12 +441,22 @@ mod tests {
     fn invalid_font_sizes_are_rejected_without_changing_existing_config() {
         let dir = TestDir::new();
         let path = dir.config();
-        let saved = save_to(&path, 0, Theme::Light, true, 16).unwrap();
+        let saved = save_to(&path, 0, Theme::Light, true, 16, TerminalTheme::Dark).unwrap();
         let original = fs::read(&path).unwrap();
 
         for invalid in [9, 25] {
             assert!(load_font_size_fixture(&dir, invalid).contains("between 10 and 24"));
-            assert!(save_to(&path, saved.revision, Theme::Dark, false, invalid).is_err());
+            assert!(
+                save_to(
+                    &path,
+                    saved.revision,
+                    Theme::Dark,
+                    false,
+                    invalid,
+                    TerminalTheme::Light
+                )
+                .is_err()
+            );
             assert_eq!(fs::read(&path).unwrap(), original);
         }
         assert!(load_font_size_fraction_fixture(&dir).contains("parse appearance config"));
@@ -412,9 +499,16 @@ mod tests {
         symlink(&target, dir.config()).unwrap();
         assert!(load_from(&dir.config()).unwrap_err().contains("symlink"));
         assert!(
-            save_to(&dir.config(), 0, Theme::Light, false, 14)
-                .unwrap_err()
-                .contains("symlink")
+            save_to(
+                &dir.config(),
+                0,
+                Theme::Light,
+                false,
+                14,
+                TerminalTheme::Dark
+            )
+            .unwrap_err()
+            .contains("symlink")
         );
     }
 
@@ -429,7 +523,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             threads.push(std::thread::spawn(move || {
                 barrier.wait();
-                save_to(&path, 0, theme, false, 14)
+                save_to(&path, 0, theme, false, 14, TerminalTheme::Dark)
             }));
         }
         barrier.wait();

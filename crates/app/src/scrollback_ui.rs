@@ -8,8 +8,11 @@ fn identity(view: &View) -> Option<PaneIdentity> {
         generation: view.generation.parse().ok()?,
     })
 }
-fn rgb_spec(value: &str, foreground: bool, palette: &[(u16, [u8; 3])]) -> String {
-    let value = color(value, foreground, palette);
+fn freeze_color(value: &str, palette: &[(u16, [u8; 3])]) -> String {
+    let Some(value) = palette::explicit_color(value, palette) else {
+        // Retain symbolic defaults so the cached page follows local theme changes.
+        return value.to_owned();
+    };
     format!(
         "Spec(Rgb {{ r: {}, g: {}, b: {} }})",
         value >> 16,
@@ -89,12 +92,12 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
                 return Err("Страница истории превышает лимит или содержит неверную ссылку".into());
             }
             let mut cell = cell.clone();
-            cell.fg = rgb_spec(&cell.fg, true, &row.palette_overrides);
-            cell.bg = rgb_spec(&cell.bg, false, &row.palette_overrides);
+            cell.fg = freeze_color(&cell.fg, &row.palette_overrides);
+            cell.bg = freeze_color(&cell.bg, &row.palette_overrides);
             cell.underline = cell
                 .underline
                 .as_ref()
-                .map(|value| rgb_spec(value, true, &row.palette_overrides));
+                .map(|value| freeze_color(value, &row.palette_overrides));
             cells.push(cell);
         }
         if let Some(boundary) = &row.boundary {
@@ -114,8 +117,8 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
         }
         while cells.len() < (index + 1) * usize::from(cols) {
             let mut cell = blank();
-            cell.fg = rgb_spec(&cell.fg, true, &row.palette_overrides);
-            cell.bg = rgb_spec(&cell.bg, false, &row.palette_overrides);
+            cell.fg = freeze_color(&cell.fg, &row.palette_overrides);
+            cell.bg = freeze_color(&cell.bg, &row.palette_overrides);
             cells.push(cell);
         }
     }
@@ -558,6 +561,32 @@ mod tests {
             protocol::CursorPresentationShape::Hidden
         );
         assert_eq!(display.frame.modes, 0);
+    }
+    #[test]
+    fn cached_history_defaults_follow_theme_without_changing_explicit_historical_colors() {
+        use crate::palette::{Profile, color_for};
+        let (base, mut page) = fixture();
+        page.rows[1].cells[0] = blank();
+        let original_page = page.clone();
+        let display = display_page(&base, &page).unwrap();
+        let historical = &display.frame.cells[0];
+        let defaults = &display.frame.cells[2];
+        assert_eq!(defaults.fg, "Named(Foreground)");
+        assert_eq!(defaults.bg, "Named(Background)");
+        for profile in [Profile::Dark, Profile::Light] {
+            assert_eq!(color_for(profile, &historical.fg, true, &[]), 0x010203);
+            assert_eq!(color_for(profile, &historical.bg, false, &[]), 0x040506);
+            assert_eq!(
+                color_for(profile, &defaults.fg, true, &[]),
+                profile.foreground()
+            );
+            assert_eq!(
+                color_for(profile, &defaults.bg, false, &[]),
+                profile.background()
+            );
+        }
+        assert_eq!(page, original_page);
+        assert_eq!(display.sequence, page.sequence);
     }
     #[test]
     fn wrong_generation_unordered_rows_and_dangling_hyperlinks_never_replace_the_display() {

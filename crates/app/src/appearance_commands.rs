@@ -3,6 +3,18 @@ use super::*;
 use product::{Dialog, DialogKind, ProductAction as A};
 
 impl CanvasApp {
+    pub(super) fn terminal_profile(&self) -> palette::Profile {
+        match self
+            .product
+            .appearance
+            .terminal_theme
+            .resolved(self.product.appearance.theme)
+        {
+            appearance::Theme::Dark => palette::Profile::Dark,
+            appearance::Theme::Light => palette::Profile::Light,
+        }
+    }
+
     pub(super) fn appearance_action(
         &mut self,
         action: A,
@@ -34,17 +46,25 @@ impl CanvasApp {
         let (theme, motion) = match action {
             A::SetTheme(theme) => (theme, current.reduced_motion),
             A::ToggleReducedMotion => (current.theme, !current.reduced_motion),
-            A::ReloadAppearance | A::AdjustTerminalFont(_) | A::ResetTerminalFont => {
-                (current.theme, current.reduced_motion)
-            }
+            A::ReloadAppearance
+            | A::AdjustTerminalFont(_)
+            | A::ResetTerminalFont
+            | A::SetTerminalTheme(_) => (current.theme, current.reduced_motion),
             _ => return,
+        };
+        let terminal_theme = match action {
+            A::SetTerminalTheme(value) => value,
+            _ => current.terminal_theme,
         };
         if !reload
             && theme == current.theme
             && motion == current.reduced_motion
             && font_size == current.terminal_font_size
+            && terminal_theme == current.terminal_theme
         {
-            if self.product.dialog.is_none() {
+            if self.product.dialog.is_none()
+                && matches!(action, A::AdjustTerminalFont(_) | A::ResetTerminalFont)
+            {
                 self.product.notice = Some(format!(
                     "Шрифт терминала · {font_size} px · диапазон 10–24 px"
                 ));
@@ -58,7 +78,7 @@ impl CanvasApp {
             if reload {
                 appearance::load()
             } else {
-                appearance::save(current.revision, theme, motion, font_size)
+                appearance::save(current.revision, theme, motion, font_size, terminal_theme)
             }
         });
         cx.spawn_in(window, async move |weak,cx| {
@@ -82,6 +102,13 @@ impl CanvasApp {
                             if this.product.dialog.is_none() {
                                 this.product.notice=Some(format!("Шрифт терминала · {} px",config.terminal_font_size));
                             }
+                        }
+                        if this.product.dialog.is_none() && this.product.appearance.terminal_theme != config.terminal_theme {
+                            this.product.notice=Some(match config.terminal_theme {
+                                appearance::TerminalTheme::Dark => "Терминал · тёмная палитра",
+                                appearance::TerminalTheme::Light => "Терминал · светлая палитра",
+                                appearance::TerminalTheme::FollowApp => "Терминал · палитра как интерфейс",
+                            }.into());
                         }
                         this.product.appearance=config;
                         cx.set_reduce_motion(this.product.appearance.reduced_motion || this.product.motion_forced);

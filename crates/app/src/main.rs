@@ -55,6 +55,7 @@ use gpui_platform::application;
 use mouse_delivery::{
     MouseDelivery, MouseSnapshot, Outcome as DeliveryOutcome, ReceiptEffect, RequestReceipt,
 };
+#[cfg(test)]
 use palette::color;
 use protocol::{
     Cell, CommandFailure, Poll, PollChanges, RecoveryDiagnostics, View, command, request,
@@ -3671,6 +3672,7 @@ impl CanvasApp {
             A::ConfirmTerminalInsert => self.confirm_terminal_insert(window, cx),
             A::OpenAppearance
             | A::SetTheme(_)
+            | A::SetTerminalTheme(_)
             | A::ToggleReducedMotion
             | A::ReloadAppearance
             | A::AdjustTerminalFont(_)
@@ -6873,6 +6875,16 @@ impl CanvasApp {
                 "2" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
                     Some(product::ProductAction::SetTheme(appearance::Theme::Light))
                 }
+                "3" | "4" | "5"
+                    if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform =>
+                {
+                    let theme = match k.key.as_str() {
+                        "3" => appearance::TerminalTheme::Dark,
+                        "4" => appearance::TerminalTheme::Light,
+                        _ => appearance::TerminalTheme::FollowApp,
+                    };
+                    Some(product::ProductAction::SetTerminalTheme(theme))
+                }
                 "r" if k.modifiers.control || k.modifiers.platform => {
                     Some(product::ProductAction::ReloadAppearance)
                 }
@@ -8078,6 +8090,7 @@ impl EntityInputHandler for CanvasApp {
                 face: crate::font::terminal_font(),
                 size: px(f32::from(self.product.appearance.terminal_font_size)),
             },
+            self.terminal_profile().foreground(),
             window,
         );
         let bytes = self.text_input.range_bytes(range);
@@ -8153,6 +8166,7 @@ impl Render for CanvasApp {
         let entity = cx.entity();
         let colors = chrome::colors(self.product.appearance.theme);
         let terminal_font_size = px(f32::from(self.product.appearance.terminal_font_size));
+        let terminal_profile = self.terminal_profile();
         let painter = entity.clone();
         let trace = self.trace.clone();
         let paint_revision = self.state.revision;
@@ -8422,6 +8436,7 @@ impl Render for CanvasApp {
                                                                     && focus.is_focused(window)
                                                                     && window.is_window_active(),
                                                                 cursor_visible,
+                                                                terminal_profile,
                                                                 colors: if Some(index)
                                                                     == dragged_index
                                                                     && invalid_drop
@@ -8444,9 +8459,9 @@ impl Render for CanvasApp {
                                                             paint_preedit(
                                                                 pane,
                                                                 views.get(index),
-                                                                &preedit,
-                                                                preedit_selection.clone(),
+                                                                (&preedit, preedit_selection.clone()),
                                                                 &font,
+                                                                terminal_profile,
                                                                 window,
                                                                 cx,
                                                             );
@@ -8683,14 +8698,19 @@ fn preedit_area(pane: PaneGeometry, view: &View) -> Option<Bounds<Pixels>> {
     ))
 }
 
-fn preedit_line(text: &str, font: &crate::font::TerminalFont, window: &Window) -> ShapedLine {
+fn preedit_line(
+    text: &str,
+    font: &crate::font::TerminalFont,
+    foreground: u32,
+    window: &Window,
+) -> ShapedLine {
     window.text_system().shape_line(
         text.to_owned().into(),
         font.size,
         &[TextRun {
             len: text.len(),
             font: font.face.clone(),
-            color: rgb(0xf2f4f7).into(),
+            color: rgb(foreground).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -8699,26 +8719,38 @@ fn preedit_line(text: &str, font: &crate::font::TerminalFont, window: &Window) -
     )
 }
 
+fn terminal_cursor_color(profile: palette::Profile, focused: bool) -> u32 {
+    match (profile, focused) {
+        (palette::Profile::Dark, true) => 0x7dafff,
+        (palette::Profile::Dark, false) => 0x606875,
+        (palette::Profile::Light, true) => 0x245fa8,
+        (palette::Profile::Light, false) => 0x666b75,
+    }
+}
+
 fn paint_preedit(
     pane: PaneGeometry,
     view: Option<&View>,
-    preedit: &str,
-    selection: Range<usize>,
+    (preedit, selection): (&str, Range<usize>),
     font: &crate::font::TerminalFont,
+    profile: palette::Profile,
     window: &mut Window,
     cx: &mut App,
 ) {
     let Some(area) = view.and_then(|view| preedit_area(pane, view)) else {
         return;
     };
-    let line = preedit_line(preedit, font, window);
+    let line = preedit_line(preedit, font, profile.foreground(), window);
     // This is undelivered IME text. It overlays the acknowledged cursor only;
     // terminal cells and PTY geometry never change during composition.
     window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
         let width = line.width().max(pane.cell.width).min(area.size.width);
         window.paint_quad(fill(
             Bounds::new(area.origin, size(width, area.size.height)),
-            rgb(0x252d39),
+            rgb(match profile {
+                palette::Profile::Dark => 0x252d39,
+                palette::Profile::Light => 0xedf2fa,
+            }),
         ));
         let start = line.x_for_index(selection.start);
         let end = line.x_for_index(selection.end);
@@ -8728,7 +8760,7 @@ fn paint_preedit(
                     area.origin + point(start, px(0.)),
                     size(end - start, area.size.height),
                 ),
-                rgb(0x354c70),
+                rgb(profile.selection()),
             ));
         }
         let _ = line.paint(
@@ -8744,14 +8776,14 @@ fn paint_preedit(
                 area.origin + point(px(0.), pane.cell.height - px(1.)),
                 size(width, px(1.)),
             ),
-            rgb(0x7dafff),
+            rgb(terminal_cursor_color(profile, true)),
         ));
         window.paint_quad(fill(
             Bounds::new(
                 area.origin + point(end, px(0.)),
                 size(px(1.), pane.cell.height),
             ),
-            rgb(0x7dafff),
+            rgb(terminal_cursor_color(profile, true)),
         ));
     });
 }
@@ -8763,6 +8795,7 @@ struct PanelState<'a> {
     attached: bool,
     focused: bool,
     cursor_visible: bool,
+    terminal_profile: palette::Profile,
     colors: chrome::Colors,
 }
 
@@ -8812,6 +8845,7 @@ fn paint_panel(
         attached,
         focused,
         cursor_visible,
+        terminal_profile,
         colors,
     }: PanelState<'_>,
     selection: Option<&selection::CellSelection>,
@@ -8829,7 +8863,7 @@ fn paint_panel(
     window.paint_quad(quad(
         bounds,
         px(7.),
-        rgb(0x111317),
+        rgb(terminal_profile.background()),
         px(1.),
         rgb(border),
         BorderStyle::Solid,
@@ -8944,7 +8978,7 @@ fn paint_panel(
             let rgb = frame.palette_overrides[index].1;
             u32::from(rgb[0]) << 16 | u32::from(rgb[1]) << 8 | u32::from(rgb[2])
         })
-        .unwrap_or(if focused { 0x7dafff } else { 0x606875 });
+        .unwrap_or(terminal_cursor_color(terminal_profile, focused));
     let viewport = Bounds::new(
         bounds.origin + point(px(1.), px(HEADER)),
         size(
@@ -8955,7 +8989,12 @@ fn paint_panel(
     window.with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
         window.paint_quad(fill(
             viewport,
-            rgb(color("Named(Background)", false, &frame.palette_overrides)),
+            rgb(palette::color_for(
+                terminal_profile,
+                "Named(Background)",
+                false,
+                &frame.palette_overrides,
+            )),
         ));
         // Backgrounds must be complete before any cluster is painted. A
         // following spacer/row must never erase wide glyphs or descenders.
@@ -8969,16 +9008,18 @@ fn paint_panel(
                 continue;
             }
             let origin = pane.origin + point(cell.width * x as f32, cell.height * y as f32);
-            let mut fg = color(&c.fg, true, &frame.palette_overrides);
-            let mut bg = color(&c.bg, false, &frame.palette_overrides);
+            let mut fg =
+                palette::color_for(terminal_profile, &c.fg, true, &frame.palette_overrides);
+            let mut bg =
+                palette::color_for(terminal_profile, &c.bg, false, &frame.palette_overrides);
             if c.flags & 1 != 0 {
                 std::mem::swap(&mut fg, &mut bg);
             }
             if selection.is_some_and(|selection| {
                 selection.contains(view, selection::CellPosition { row: y, column: x })
             }) {
-                bg = 0x354c70;
-                fg = 0xf2f4f7;
+                bg = terminal_profile.selection();
+                fg = terminal_profile.foreground();
             }
             (fg, bg) = cursor::cell_colors(cursor, (y, x), (fg, bg), cursor_color);
             match operation {
@@ -9066,7 +9107,14 @@ fn paint_panel(
                             }
                             let underline_color = style
                                 .underline_color
-                                .map(|value| color(value, true, &frame.palette_overrides))
+                                .map(|value| {
+                                    palette::color_for(
+                                        terminal_profile,
+                                        value,
+                                        true,
+                                        &frame.palette_overrides,
+                                    )
+                                })
                                 .unwrap_or(fg);
                             for (line, stroke_color) in style
                                 .underline

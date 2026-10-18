@@ -422,24 +422,43 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertEqual(plan['fixture'], 'controls')
         self.assertIn('four-shell', plan['input']['controls'])
         self.assertIn('Alt+F', plan['input']['controls'])
-        self.assertIn('Appearance settings', plan['input']['controls'])
+        self.assertIn('Appearance persists independent terminal Dark/Light/Follow app palette',
+                      plan['input']['controls'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-move',
                       'controls-resize-cancel', 'controls-resize-commit', 'controls-close',
                       'controls-open', 'controls-select-alt', 'controls-select-control',
                       'controls-select-disabled', 'appearance-open', 'appearance-light',
-                      'appearance-motion', 'appearance-dark', 'appearance-font-increase',
+                      'appearance-motion', 'appearance-dark', 'appearance-terminal-dark',
+                      'appearance-terminal-light', 'appearance-terminal-follow',
+                      'appearance-font-increase',
                       'appearance-font-decrease', 'appearance-font-reset',
                       'appearance-reload', 'appearance-close'):
             self.assertIn(f'"{stage}"', source)
+        helper_sequences = {
+            'appearance-terminal-dark': 'XK_3',
+            'appearance-terminal-light': 'XK_4',
+            'appearance-terminal-follow': 'XK_5',
+        }
+        for stage, key in helper_sequences.items():
+            sequence = source.split(f'}} else if (!strcmp(a.stage, "{stage}")) {{', 1)[1].split(
+                '} else if', 1)[0]
+            self.assertIn(f'key(dpy, {key})', sequence)
         harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         appearance_flow = harness.split("appearance_path = Path('/home/pigade/.config/pigade/appearance.json')", 1)[1].split(
             "report['controls'].update", 1)[0]
-        self.assertIn("'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size'", appearance_flow)
+        self.assertIn("'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size',", appearance_flow)
+        self.assertIn("'terminal_theme'}", appearance_flow)
+        self.assertIn("value.get('terminal_theme') in ('dark', 'light', 'follow_app')", appearance_flow)
         self.assertIn("wait_appearance(1, 'light', False)", appearance_flow)
         self.assertIn("wait_appearance(2, 'light', True)", appearance_flow)
         self.assertIn("wait_appearance(3, 'dark', True)", appearance_flow)
+        self.assertIn("wait_appearance(6, 'dark', True, 'light')", appearance_flow)
+        self.assertIn("wait_appearance(7, 'dark', True, 'follow_app')", appearance_flow)
+        self.assertIn("wait_appearance(8, 'light', True, 'follow_app')", appearance_flow)
+        self.assertIn("wait_appearance(9, 'dark', True, 'follow_app')", appearance_flow)
+        self.assertIn("wait_appearance(10, 'dark', True, 'dark')", appearance_flow)
         self.assertIn("'terminal_font_size': 15", appearance_flow)
         self.assertIn("'terminal_font_size': 14", appearance_flow)
         self.assertIn("def probe_kernel_pty_geometries(label)", appearance_flow)
@@ -462,6 +481,32 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("zip(light_pixel, (255, 255, 255))", harness)
         self.assertIn("zip(dark_pixel, (45, 45, 49))", harness)
         self.assertIn("'appearance_modal_surface_pixel': {'position': [430, 150]", harness)
+        self.assertIn("terminal_pixel_position = (1260, 750)", appearance_flow)
+        self.assertIn("'appearance_terminal_padding_pixel'", harness)
+        self.assertIn('terminal_theme_snapshot = appearance_snapshot()', appearance_flow)
+        self.assertIn('terminal_theme_journals = fixture_journal_hashes(', appearance_flow)
+        self.assertIn('def terminal_theme_invariants(message):', appearance_flow)
+        self.assertIn("/artifacts/appearance-terminal-controls.ppm", appearance_flow)
+        self.assertIn("'reselecting Light terminal theme changed its preference revision'", appearance_flow)
+        self.assertIn("'reselecting Dark terminal theme changed its preference revision'", appearance_flow)
+        for stage in ('appearance-terminal-light', 'appearance-terminal-follow',
+                      'appearance-terminal-dark'):
+            self.assertIn(f"step('{stage}')", appearance_flow)
+        self.assertLess(appearance_flow.index("step('appearance-terminal-light')"),
+                        appearance_flow.index("step('appearance-terminal-follow')"))
+        self.assertIn("capture_terminal_theme('appearance-terminal-light.ppm', (250, 250, 252))",
+                      appearance_flow)
+        self.assertIn("'appearance-terminal-follow-light.ppm', (250, 250, 252)", appearance_flow)
+        self.assertIn("'appearance-terminal-follow-dark.ppm', (17, 19, 23)", appearance_flow)
+        terminal_capture = appearance_flow.split('def capture_terminal_theme(', 1)[1].split(
+            'return pixel', 1)[0]
+        self.assertLess(terminal_capture.index("step('appearance-close')"),
+                        terminal_capture.index("helper_call(config, 'capture'"))
+        self.assertLess(terminal_capture.index("helper_call(config, 'capture'"),
+                        terminal_capture.index("step('appearance-open')"))
+        self.assertIn('appearance_terminal_light_independent_of_dark_chrome', harness)
+        self.assertIn('appearance_follow_app_changed_with_chrome_both_directions', harness)
+        self.assertIn('appearance_terminal_dark_explicitly_restored', harness)
         for action in ('appearance-light', 'appearance-motion', 'appearance-reload',
                        'appearance-close', 'appearance-open', 'appearance-dark'):
             self.assertIn(f"step('{action}')", appearance_flow)

@@ -57,7 +57,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |
 | crates/session-host/tests/project_setup.rs | Real IPC create/reopen, existing-target preservation and bounded provider-version fixture |
 | crates/app/src/chrome.rs, assets/icons | Shared dark/light chrome tokens and embedded original16-icon SVG family; terminal ANSI palette is separate |
-| crates/app/src/appearance.rs, appearance_commands.rs, appearance_ui.rs | Schema1 local CAS preferences for theme, reduced motion and 10–24 px terminal font size; legacy files default to14 px and no-op limits/reset do not write |
+| crates/app/src/appearance.rs, appearance_commands.rs, appearance_ui.rs | Schema1 local CAS preferences for chrome theme, dark/light/follow-app terminal palette, reduced motion and10–24 px font size; legacy files keep dark terminal/14px, no-op choices do not write |
 | docs/design | Imagegen workspace/welcome reference images and exact prompts; design artifacts, not test screenshots |
 | crates/app/src/product.rs | Appearance/header actions, always-visible open/create project controls, task/worktree sheet, detected CLI chooser, compact toolbar/pane menu, context review and editor |
 | crates/app/src/setup_flow.rs | Exact-request project → first shared workspace/tab setup; stale replies do not advance setup or start a CLI |
@@ -69,6 +69,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
 | crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; terminal font metrics drive grid geometry and ordinary PTY resize without process relaunch |
 | crates/app/src/command_worker.rs | Explicit token-bound known-rejection acknowledgement, unknown lock, actual dispatch closure, unsent counts and resize cache; gates are exact session/generation targets |
+| crates/app/src/palette.rs | Pure renderer default palettes; explicit host RGB/OSC overrides and xterm16–255 retain precedence, history freezes only actual per-row overrides |
 | crates/app/src/cell_style.rs | Pure bounded device-pixel underline/strike recipes, wide/hidden/spacer policy and decorated-space foreground admission |
 | crates/app/src/block_glyph.rs | Device-pixel solid Unicode block recipes; shades/ordinary text keep font rendering |
 | crates/app/src/mouse_delivery.rs, main.rs admission | Bounded receipt reservations, optimistic mouse rollback and motion headroom; local saturation never latches input or retries bytes |

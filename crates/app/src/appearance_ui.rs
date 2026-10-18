@@ -22,6 +22,7 @@ impl ProductUi {
             ));
         }
         fields = fields
+            .child(div().text_size(px(12.)).child("Интерфейс"))
             .child(themes)
             .child(self.action_control(
                 "appearance-reduced-motion".into(),
@@ -46,8 +47,65 @@ impl ProductUi {
                     .text_size(px(11.))
                     .text_color(colors.muted)
                     .whitespace_normal()
-                    .child("Тема меняет интерфейс. Палитра CLI остаётся независимой."),
+                    .child("Интерфейс и терминал настраиваются отдельно."),
             );
+        let mut terminal_themes = div().flex().gap_2();
+        for (theme, label) in [
+            (crate::appearance::TerminalTheme::Dark, "Тёмная · 3"),
+            (crate::appearance::TerminalTheme::Light, "Светлая · 4"),
+            (
+                crate::appearance::TerminalTheme::FollowApp,
+                "Как интерфейс · 5",
+            ),
+        ] {
+            terminal_themes = terminal_themes.child(self.action_control(
+                format!("appearance-terminal-{theme:?}"),
+                label.into(),
+                ProductAction::SetTerminalTheme(theme),
+                ControlStyle {
+                    role: Role::Button,
+                    selected: self.appearance.terminal_theme == theme,
+                    compact: false,
+                },
+                cx,
+            ));
+        }
+        let profile = match self
+            .appearance
+            .terminal_theme
+            .resolved(self.appearance.theme)
+        {
+            crate::appearance::Theme::Dark => crate::palette::Profile::Dark,
+            crate::appearance::Theme::Light => crate::palette::Profile::Light,
+        };
+        let mut sample = div()
+            .id("appearance-terminal-sample")
+            .role(Role::Status)
+            .bg(rgb(profile.background()))
+            .text_color(rgb(profile.foreground()))
+            .rounded_md()
+            .p_2()
+            .flex()
+            .gap_3()
+            .text_size(px(12.))
+            .child("Образец · Привет");
+        for (label, color) in [
+            ("Red", "Named(Red)"),
+            ("Green", "Named(Green)"),
+            ("Blue", "Named(Blue)"),
+        ] {
+            sample = sample.child(
+                div()
+                    .text_color(rgb(crate::palette::color_for(profile, color, true, &[])))
+                    .child(label),
+            );
+        }
+        fields = fields
+            .child(div().text_size(px(12.)).child("Терминал"))
+            .child(terminal_themes)
+            .child(sample)
+            .child(div().text_size(px(11.)).text_color(colors.muted).whitespace_normal()
+                .child("Палитра задаёт цвета по умолчанию. Явные RGB и цвета, заданные CLI, сохраняются."));
         let mut font_controls = div().flex().items_center().gap_2();
         for (id, label, name, action) in [
             (

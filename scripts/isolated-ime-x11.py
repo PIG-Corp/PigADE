@@ -1094,12 +1094,14 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
         except (UnicodeDecodeError, ValueError) as error:
             raise RuntimeError('appearance preference is not strict JSON') from error
         require(isinstance(value, dict) and set(value) == {
-                    'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size'} and
+                    'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size',
+                    'terminal_theme'} and
                 type(value.get('version')) is int and value['version'] == 1 and
                 type(value.get('revision')) is int and value['revision'] >= 1 and
                 value.get('theme') in ('light', 'dark') and
                 type(value.get('reduced_motion')) is bool and
                 type(value.get('terminal_font_size')) is int and
+                value.get('terminal_theme') in ('dark', 'light', 'follow_app') and
                 10 <= value['terminal_font_size'] <= 24,
                 'appearance preference schema or value is invalid')
         return value
@@ -1161,9 +1163,10 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                 config_path.read_bytes() == controls_bytes,
                 message)
 
-    def wait_appearance(revision, theme, reduced_motion):
+    def wait_appearance(revision, theme, reduced_motion, terminal_theme='dark'):
         expected = {'version': 1, 'revision': revision, 'theme': theme,
-                    'reduced_motion': reduced_motion, 'terminal_font_size': 14}
+                    'reduced_motion': reduced_motion, 'terminal_font_size': 14,
+                    'terminal_theme': terminal_theme}
         return wait_until(lambda: value if (value := appearance_document()) == expected else None,
                           time.monotonic() + 8)
 
@@ -1297,7 +1300,7 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     font15 = wait_until(
         lambda: value if (value := appearance_document()) == {
             'version': 1, 'revision': 4, 'theme': 'dark', 'reduced_motion': True,
-            'terminal_font_size': 15} else None, time.monotonic() + 8)
+            'terminal_font_size': 15, 'terminal_theme': 'dark'} else None, time.monotonic() + 8)
     increased_geometries = wait_until(
         lambda: value if (value := terminal_geometries()) != original_terminal_geometries else None,
         time.monotonic() + 8)
@@ -1318,7 +1321,7 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     font14 = wait_until(
         lambda: value if (value := appearance_document()) == {
             'version': 1, 'revision': 5, 'theme': 'dark', 'reduced_motion': True,
-            'terminal_font_size': 14} else None, time.monotonic() + 8)
+            'terminal_font_size': 14, 'terminal_theme': 'dark'} else None, time.monotonic() + 8)
     restored_geometries = wait_until(
         lambda: value if (value := terminal_geometries()) == original_terminal_geometries else None,
         time.monotonic() + 8)
@@ -1352,6 +1355,86 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     helper_call(config, 'capture', '/artifacts/appearance-font14.ppm')
     step('appearance-close')
 
+    # Font changes above intentionally resized terminal grids. Freeze a fresh
+    # post-font baseline so later palette checks assert that colors alone do
+    # not mutate those new geometries, frames, sequences, processes, or journals.
+    terminal_theme_generations = fixture_generations()
+    terminal_theme_processes = process_identities()
+    terminal_theme_snapshot = appearance_snapshot()
+    terminal_theme_journals = fixture_journal_hashes(
+        [generation for _, generation in terminal_theme_generations])
+    require(set(terminal_theme_snapshot) == set(terminal_theme_generations),
+            'terminal-theme baseline omitted a live generation')
+
+    def terminal_theme_invariants(message):
+        font_layout_invariants(message)
+        require(fixture_generations() == terminal_theme_generations and
+                process_identities() == terminal_theme_processes and
+                appearance_snapshot() == terminal_theme_snapshot and
+                fixture_journal_hashes([generation for _, generation in terminal_theme_generations]) ==
+                terminal_theme_journals,
+                message)
+
+    # Inspect a blank cell in the fixed lower-right terminal pane, away from
+    # text, border, and modal surfaces. Each sample closes the modal first.
+    terminal_pixel_position = (1260, 750)
+
+    def pixel_matches(pixel, expected_rgb):
+        return all(abs(channel - expected) <= 2
+                   for channel, expected in zip(pixel, expected_rgb))
+
+    def capture_terminal_theme(name, expected_rgb, reopen=True):
+        step('appearance-close')
+        terminal_theme_invariants('closing Appearance changed terminal state, selection, or layout')
+        time.sleep(0.25)
+        helper_call(config, 'capture', f'/artifacts/{name}')
+        pixel = screenshot_pixel(name, *terminal_pixel_position)
+        require(pixel_matches(pixel, expected_rgb),
+                f'terminal padding pixel at {terminal_pixel_position} was {pixel}, expected {expected_rgb}')
+        if reopen:
+            step('appearance-open')
+            terminal_theme_invariants('reopening Appearance changed terminal state, selection, or layout')
+        return pixel
+
+    step('appearance-open')
+    step('appearance-terminal-light')
+    terminal_light = wait_appearance(6, 'dark', True, 'light')
+    terminal_theme_invariants('saving light terminal theme changed live terminal state, geometry, selection, or layout')
+    step('appearance-terminal-light')
+    require(appearance_document() == terminal_light,
+            'reselecting Light terminal theme changed its preference revision')
+    terminal_theme_invariants('reselecting Light terminal theme changed live terminal state, geometry, selection, or layout')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/appearance-terminal-controls.ppm')
+    terminal_light_pixel = capture_terminal_theme('appearance-terminal-light.ppm', (250, 250, 252))
+
+    step('appearance-terminal-follow')
+    terminal_follow_dark = wait_appearance(7, 'dark', True, 'follow_app')
+    terminal_theme_invariants('saving follow-app terminal theme changed live terminal state, geometry, selection, or layout')
+    terminal_follow_dark_pixel = capture_terminal_theme(
+        'appearance-terminal-follow-dark.ppm', (17, 19, 23))
+
+    step('appearance-light')
+    terminal_follow_light = wait_appearance(8, 'light', True, 'follow_app')
+    terminal_theme_invariants('changing chrome to Light altered terminal state, geometry, selection, or layout')
+    terminal_follow_light_pixel = capture_terminal_theme(
+        'appearance-terminal-follow-light.ppm', (250, 250, 252))
+
+    step('appearance-dark')
+    terminal_follow_dark_again = wait_appearance(9, 'dark', True, 'follow_app')
+    terminal_theme_invariants('changing chrome back to Dark altered terminal state, geometry, selection, or layout')
+    terminal_follow_dark_again_pixel = capture_terminal_theme(
+        'appearance-terminal-follow-dark-again.ppm', (17, 19, 23))
+
+    step('appearance-terminal-dark')
+    terminal_dark = wait_appearance(10, 'dark', True, 'dark')
+    step('appearance-terminal-dark')
+    require(appearance_document() == terminal_dark,
+            'reselecting Dark terminal theme changed its preference revision')
+    terminal_theme_invariants('restoring explicit Dark terminal theme changed live terminal state, geometry, selection, or layout')
+    terminal_dark_pixel = capture_terminal_theme(
+        'appearance-terminal-dark.ppm', (17, 19, 23), reopen=False)
+
     report['controls'].update({'modifier_alt_persisted_before_use': True,
                                'alt_focus_mode_restored_exact_layout': True,
                                'modifier_control_persisted': True,
@@ -1362,6 +1445,11 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                                'appearance_dark_saved_revision_3_kept_motion': dark_preference,
                                'appearance_font_size_15_saved_revision_4': font15,
                                'appearance_font_size_14_saved_revision_5': font14,
+                               'appearance_terminal_light_revision_6_under_dark_chrome': terminal_light,
+                               'appearance_terminal_follow_app_revision_7': terminal_follow_dark,
+                               'appearance_chrome_light_follow_app_revision_8': terminal_follow_light,
+                               'appearance_chrome_dark_follow_app_revision_9': terminal_follow_dark_again,
+                               'appearance_terminal_dark_revision_10': terminal_dark,
                                'appearance_kernel_pty_geometry_before': kernel_geometries_before,
                                'appearance_kernel_pty_geometry_at_15': kernel_geometries_increased,
                                'appearance_kernel_pty_geometry_after_14': kernel_geometries_restored,
@@ -1373,15 +1461,43 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                                'appearance_reload_reopen_preserved_font_size_14': True,
                                'appearance_reopen_preserved_light_and_motion': True,
                                'appearance_theme_motion_preserved_terminal_frames_sequences_journals': True,
+                               'appearance_terminal_light_independent_of_dark_chrome':
+                                   terminal_light['theme'] == 'dark' and
+                                   terminal_light['terminal_theme'] == 'light' and
+                                   pixel_matches(terminal_light_pixel, (250, 250, 252)),
+                               'appearance_follow_app_changed_with_chrome_both_directions':
+                                   terminal_follow_dark['theme'] == 'dark' and
+                                   terminal_follow_light['theme'] == 'light' and
+                                   pixel_matches(terminal_follow_dark_pixel, (17, 19, 23)) and
+                                   pixel_matches(terminal_follow_light_pixel, (250, 250, 252)) and
+                                   pixel_matches(terminal_follow_dark_again_pixel, (17, 19, 23)),
+                               'appearance_terminal_dark_explicitly_restored':
+                                   terminal_dark['terminal_theme'] == 'dark' and
+                                   pixel_matches(terminal_dark_pixel, (17, 19, 23)),
                                'appearance_changes_preserved_disabled_modifier_config': True,
                                'appearance_modal_surface_pixel': {'position': [430, 150],
                                                                  'light_rgb': light_pixel,
                                                                  'dark_rgb': dark_pixel},
+                               'appearance_terminal_padding_pixel': {
+                                   'position': list(terminal_pixel_position),
+                                   'terminal_light_under_dark_chrome_rgb': terminal_light_pixel,
+                                   'follow_app_dark_rgb': terminal_follow_dark_pixel,
+                                   'follow_app_light_rgb': terminal_follow_light_pixel,
+                                   'follow_app_dark_restored_rgb': terminal_follow_dark_again_pixel,
+                                   'terminal_dark_rgb': terminal_dark_pixel},
+                               'appearance_terminal_controls_capture':
+                                   'appearance-terminal-controls.ppm',
                                'appearance_restart_recovery_tested': False,
                                'appearance_captures': ['appearance-light.ppm',
                                                        'appearance-dark.ppm',
                                                        'appearance-font15.ppm',
-                                                       'appearance-font14.ppm']})
+                                                       'appearance-font14.ppm',
+                                                       'appearance-terminal-controls.ppm',
+                                                       'appearance-terminal-light.ppm',
+                                                       'appearance-terminal-follow-dark.ppm',
+                                                       'appearance-terminal-follow-light.ppm',
+                                                       'appearance-terminal-follow-dark-again.ppm',
+                                                       'appearance-terminal-dark.ppm']})
     report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
     save()
 
@@ -5967,7 +6083,11 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm',
                   'appearance-light.ppm', 'appearance-dark.ppm',
-                  'appearance-font15.ppm', 'appearance-font14.ppm']
+                  'appearance-font15.ppm', 'appearance-font14.ppm',
+                  'appearance-terminal-controls.ppm',
+                  'appearance-terminal-light.ppm', 'appearance-terminal-follow-dark.ppm',
+                  'appearance-terminal-follow-light.ppm',
+                  'appearance-terminal-follow-dark-again.ppm', 'appearance-terminal-dark.ppm']
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
@@ -6039,7 +6159,7 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
-                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',

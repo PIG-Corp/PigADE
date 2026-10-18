@@ -36,6 +36,7 @@ const ROW_HEIGHT: f32 = 30.0;
 pub(super) enum ProductAction {
     OpenAppearance,
     SetTheme(crate::appearance::Theme),
+    SetTerminalTheme(crate::appearance::TerminalTheme),
     ToggleReducedMotion,
     AdjustTerminalFont(i8),
     ResetTerminalFont,
@@ -604,6 +605,18 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Внешний вид · appearance · тема",
             ProductAction::OpenAppearance,
+        ),
+        (
+            "Терминал · тёмная палитра",
+            ProductAction::SetTerminalTheme(crate::appearance::TerminalTheme::Dark),
+        ),
+        (
+            "Терминал · светлая палитра",
+            ProductAction::SetTerminalTheme(crate::appearance::TerminalTheme::Light),
+        ),
+        (
+            "Терминал · палитра как интерфейс",
+            ProductAction::SetTerminalTheme(crate::appearance::TerminalTheme::FollowApp),
         ),
         (
             "Увеличить шрифт терминала",
@@ -2642,7 +2655,11 @@ impl ProductUi {
             "product-dialog-submit" | "launch-review-confirm" | "resume-review-confirm"
         ) || matches!(&action, ProductAction::OpenLauncher)
             || matches!(&action, ProductAction::AddProject) && style.selected;
-        let toggle = style.role == Role::CheckBox || matches!(&action, ProductAction::SetTheme(_));
+        let toggle = style.role == Role::CheckBox
+            || matches!(
+                &action,
+                ProductAction::SetTheme(_) | ProductAction::SetTerminalTheme(_)
+            );
         let foreground = if primary {
             Hsla::from(rgb(
                 chrome::Colors::for_theme(self.appearance.theme).on_accent
@@ -3527,17 +3544,22 @@ impl ProductUi {
                 cx,
             )
         };
-        let close = self.action_control(
-            "product-dialog-close".into(),
-            "Отмена".into(),
-            ProductAction::CloseDialog,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        );
+        let close = if dialog.kind == DialogKind::Appearance {
+            // Appearance choices are saved immediately, so closing cannot undo them.
+            div().into_any_element()
+        } else {
+            self.action_control(
+                "product-dialog-close".into(),
+                "Отмена".into(),
+                ProductAction::CloseDialog,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            )
+        };
 
         div()
             .id("product-dialog-overlay")

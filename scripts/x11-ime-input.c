@@ -180,6 +180,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled") &&
         strcmp(a.stage, "appearance-open") && strcmp(a.stage, "appearance-light") &&
         strcmp(a.stage, "appearance-motion") && strcmp(a.stage, "appearance-dark") &&
+        strcmp(a.stage, "appearance-terminal-dark") &&
+        strcmp(a.stage, "appearance-terminal-light") &&
+        strcmp(a.stage, "appearance-terminal-follow") &&
         strcmp(a.stage, "appearance-font-increase") && strcmp(a.stage, "appearance-font-decrease") &&
         strcmp(a.stage, "appearance-font-reset") &&
         strcmp(a.stage, "appearance-reload") && strcmp(a.stage, "appearance-close") &&
@@ -1757,6 +1760,12 @@ int main(int argc, char **argv) {
             key(dpy, XK_r);
         } else if (!strcmp(a.stage, "appearance-dark")) {
             key(dpy, XK_1);
+        } else if (!strcmp(a.stage, "appearance-terminal-dark")) {
+            key(dpy, XK_3);
+        } else if (!strcmp(a.stage, "appearance-terminal-light")) {
+            key(dpy, XK_4);
+        } else if (!strcmp(a.stage, "appearance-terminal-follow")) {
+            key(dpy, XK_5);
         } else if (!strcmp(a.stage, "appearance-font-increase")) {
             key(dpy, XK_equal);
         } else if (!strcmp(a.stage, "appearance-font-decrease")) {
@@ -1953,6 +1962,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "appearance-light") ? "1" :
                             !strcmp(a.stage, "appearance-motion") ? "1" :
                             !strcmp(a.stage, "appearance-dark") ? "1" :
+                            !strcmp(a.stage, "appearance-terminal-dark") ? "1" :
+                            !strcmp(a.stage, "appearance-terminal-light") ? "1" :
+                            !strcmp(a.stage, "appearance-terminal-follow") ? "1" :
                             !strcmp(a.stage, "appearance-font-increase") ? "1" :
                             !strcmp(a.stage, "appearance-font-decrease") ? "1" :
                             !strcmp(a.stage, "appearance-font-reset") ? "1" :

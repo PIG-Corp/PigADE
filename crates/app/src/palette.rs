@@ -9,10 +9,45 @@ const ANSI: [u32; 16] = [
     0x111317, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xdcdfe4, 0x5c6370,
     0xff808b, 0xb4e88c, 0xffd68a, 0x88c0ff, 0xdf9fff, 0x7bdde4, 0xffffff,
 ];
+const LIGHT_ANSI: [u32; 16] = [
+    0x3b3e45, 0xb42332, 0x287a3d, 0x805500, 0x245fa8, 0x8248a5, 0x087a83, 0x5b606a, 0x666b75,
+    0x981b2b, 0x17652f, 0x704900, 0x174f91, 0x6b378e, 0x006d76, 0x202025,
+];
 const DEFAULT_FOREGROUND: u32 = 0xf2f4f7;
 const DEFAULT_BACKGROUND: u32 = 0x111317;
+const LIGHT_FOREGROUND: u32 = 0x202025;
+const LIGHT_BACKGROUND: u32 = 0xfafafc;
 const MAX_COLOR_TEXT_BYTES: usize = 64;
 const MAX_NAMED_COLOR_INDEX: u16 = 268;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Profile {
+    Dark,
+    Light,
+}
+
+impl Profile {
+    pub(crate) const fn foreground(self) -> u32 {
+        match self {
+            Self::Dark => DEFAULT_FOREGROUND,
+            Self::Light => LIGHT_FOREGROUND,
+        }
+    }
+
+    pub(crate) const fn background(self) -> u32 {
+        match self {
+            Self::Dark => DEFAULT_BACKGROUND,
+            Self::Light => LIGHT_BACKGROUND,
+        }
+    }
+
+    pub(crate) const fn selection(self) -> u32 {
+        match self {
+            Self::Dark => 0x354c70,
+            Self::Light => 0xcbdcf3,
+        }
+    }
+}
 
 /// Resolve a debug-formatted host cell color into packed `0xRRGGBB`.
 ///
@@ -21,9 +56,19 @@ const MAX_NAMED_COLOR_INDEX: u16 = 268;
 /// strings use the same foreground/background fallback as the original app
 /// renderer. Dim named colors default to their corresponding normal ANSI color
 /// scaled by 66%, while an explicit host override takes precedence.
+#[cfg(test)]
 pub(crate) fn color(value: &str, foreground: bool, overrides: &[(u16, [u8; 3])]) -> u32 {
+    color_for(Profile::Dark, value, foreground, overrides)
+}
+
+pub(crate) fn color_for(
+    profile: Profile,
+    value: &str,
+    foreground: bool,
+    overrides: &[(u16, [u8; 3])],
+) -> u32 {
     if value.len() > MAX_COLOR_TEXT_BYTES {
-        return fallback(foreground);
+        return fallback(profile, foreground);
     }
 
     if let Some(rgb) = parse_spec(value) {
@@ -34,24 +79,37 @@ pub(crate) fn color(value: &str, foreground: bool, overrides: &[(u16, [u8; 3])])
         if let Some(rgb) = override_color(index as u16, overrides) {
             return pack(rgb);
         }
-        return indexed_color(index);
+        return indexed_color(profile, index);
     }
 
     if let Some(index) = parse_named_index(value) {
         if let Some(rgb) = override_color(index, overrides) {
             return pack(rgb);
         }
-        return named_default(index, foreground);
+        return named_default(profile, index, foreground);
     }
 
-    fallback(foreground)
+    fallback(profile, foreground)
 }
 
-fn fallback(foreground: bool) -> u32 {
+/// Return a color only when the host explicitly overrode this symbolic color.
+/// History cells retain the original value when this returns `None`, allowing
+/// the renderer to apply the active built-in profile later.
+pub(crate) fn explicit_color(value: &str, overrides: &[(u16, [u8; 3])]) -> Option<u32> {
+    if value.len() > MAX_COLOR_TEXT_BYTES || parse_spec(value).is_some() {
+        return None;
+    }
+    let index = parse_indexed(value)
+        .map(u16::from)
+        .or_else(|| parse_named_index(value))?;
+    override_color(index, overrides).map(pack)
+}
+
+fn fallback(profile: Profile, foreground: bool) -> u32 {
     if foreground {
-        DEFAULT_FOREGROUND
+        profile.foreground()
     } else {
-        DEFAULT_BACKGROUND
+        profile.background()
     }
 }
 
@@ -130,26 +188,37 @@ fn parse_named_index(value: &str) -> Option<u16> {
     })
 }
 
-fn named_default(index: u16, foreground: bool) -> u32 {
+fn named_default(profile: Profile, index: u16, foreground: bool) -> u32 {
+    let ansi = ansi(profile);
     match index {
-        0..=15 => ANSI[index as usize],
-        256 => DEFAULT_FOREGROUND,
-        257 => DEFAULT_BACKGROUND,
-        259..=266 => dim(ANSI[(index - 259) as usize]),
-        267 => DEFAULT_FOREGROUND,
-        268 => dim(DEFAULT_FOREGROUND),
-        _ => fallback(foreground), // Cursor uses the caller's foreground context.
+        0..=15 => ansi[index as usize],
+        256 => profile.foreground(),
+        257 => profile.background(),
+        259..=266 => dim(profile, ansi[(index - 259) as usize]),
+        267 => profile.foreground(),
+        268 => dim(profile, profile.foreground()),
+        _ => fallback(profile, foreground), // Cursor uses the caller's foreground context.
     }
 }
 
-fn dim(color: u32) -> u32 {
+fn ansi(profile: Profile) -> &'static [u32; 16] {
+    match profile {
+        Profile::Dark => &ANSI,
+        Profile::Light => &LIGHT_ANSI,
+    }
+}
+
+fn dim(profile: Profile, color: u32) -> u32 {
+    if profile == Profile::Light {
+        return blend(color, profile.background(), 1, 3);
+    }
     let scale = |channel: u32| (channel * 66 + 50) / 100;
     (scale((color >> 16) & 0xff) << 16) | (scale((color >> 8) & 0xff) << 8) | scale(color & 0xff)
 }
 
-fn indexed_color(index: u8) -> u32 {
+fn indexed_color(profile: Profile, index: u8) -> u32 {
     match index {
-        0..=15 => ANSI[index as usize],
+        0..=15 => ansi(profile)[index as usize],
         16..=231 => {
             let cube = u32::from(index - 16);
             let channel = |value: u32| if value == 0 { 0 } else { 55 + value * 40 };
@@ -160,6 +229,15 @@ fn indexed_color(index: u8) -> u32 {
             (value << 16) | (value << 8) | value
         }
     }
+}
+
+fn blend(color: u32, toward: u32, numerator: u32, denominator: u32) -> u32 {
+    let channel = |shift: u32| {
+        let from = (color >> shift) & 0xff_u32;
+        let to = (toward >> shift) & 0xff_u32;
+        (from * (denominator - numerator) + to * numerator + denominator / 2) / denominator
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 #[cfg(test)]
@@ -218,10 +296,13 @@ mod tests {
         assert_eq!(color("Named(Foreground)", false, &[]), DEFAULT_FOREGROUND);
         assert_eq!(color("Named(Background)", true, &[]), DEFAULT_BACKGROUND);
         assert_eq!(color("Named(Cursor)", true, &[]), DEFAULT_FOREGROUND);
-        assert_eq!(color("Named(DimRed)", false, &[]), dim(ANSI[1]));
+        assert_eq!(
+            color("Named(DimRed)", false, &[]),
+            dim(Profile::Dark, ANSI[1])
+        );
         assert_eq!(
             color("Named(DimForeground)", false, &[]),
-            dim(DEFAULT_FOREGROUND)
+            dim(Profile::Dark, DEFAULT_FOREGROUND)
         );
         assert_eq!(color("invalid", true, &[]), 0xf2f4f7);
         assert_eq!(color("invalid", false, &[]), 0x111317);
@@ -281,5 +362,128 @@ mod tests {
         assert_eq!(override_color(268, OVERRIDES), Some([40, 41, 42]));
         assert_eq!(override_color(269, OVERRIDES), None);
         assert_eq!(parse_named_index("Named(DimWhite)"), Some(266));
+    }
+
+    #[test]
+    fn dark_profile_preserves_legacy_results_and_color_api() {
+        let values = [
+            "invalid",
+            "Named(Foreground)",
+            "Named(Background)",
+            "Named(Cursor)",
+            "Named(DimRed)",
+            "Named(DimForeground)",
+            "Named(BrightBlue)",
+            "Spec(Rgb { r: 9, g: 8, b: 7 })",
+        ];
+        for value in values {
+            for foreground in [false, true] {
+                assert_eq!(
+                    color_for(Profile::Dark, value, foreground, &[]),
+                    color(value, foreground, &[]),
+                    "{value}"
+                );
+            }
+        }
+        assert_eq!(Profile::Dark.foreground(), 0xf2f4f7);
+        assert_eq!(Profile::Dark.background(), 0x111317);
+        assert_eq!(Profile::Dark.selection(), 0x354c70);
+    }
+
+    #[test]
+    fn explicit_specs_and_host_overrides_win_for_both_profiles() {
+        for profile in [Profile::Dark, Profile::Light] {
+            assert_eq!(color_for(profile, "Named(Red)", true, OVERRIDES), 0x010203);
+            assert_eq!(color_for(profile, "Indexed(1)", false, OVERRIDES), 0x010203);
+            assert_eq!(
+                color_for(profile, "Named(Foreground)", false, OVERRIDES),
+                0x040506
+            );
+            assert_eq!(
+                color_for(profile, "Spec(Rgb { r: 1, g: 2, b: 3 })", true, OVERRIDES),
+                0x010203
+            );
+        }
+    }
+
+    #[test]
+    fn history_explicit_color_only_freezes_host_overrides() {
+        assert_eq!(explicit_color("Named(Red)", OVERRIDES), Some(0x010203));
+        assert_eq!(explicit_color("Indexed(1)", OVERRIDES), Some(0x010203));
+        for symbolic in ["Named(Blue)", "Indexed(4)", "Named(Foreground)"] {
+            assert_eq!(explicit_color(symbolic, &[]), None, "{symbolic}");
+        }
+        assert_eq!(
+            explicit_color("Spec(Rgb { r: 1, g: 2, b: 3 })", OVERRIDES),
+            None
+        );
+        for malformed in [
+            "Indexed(256)",
+            "Named(NotAColor)",
+            "Named(Red)junk",
+            "x".repeat(MAX_COLOR_TEXT_BYTES + 1).as_str(),
+        ] {
+            assert_eq!(explicit_color(malformed, OVERRIDES), None, "{malformed}");
+        }
+
+        // Symbolic historical cells remain profile-sensitive until the host
+        // has actually supplied an override for their color index.
+        assert_eq!(explicit_color("Named(Red)", &[]), None);
+        assert_ne!(
+            color_for(Profile::Dark, "Named(Red)", true, &[]),
+            color_for(Profile::Light, "Named(Red)", true, &[])
+        );
+    }
+
+    #[test]
+    fn xterm_cube_and_gray_ramps_are_profile_independent() {
+        for index in 16..=255 {
+            let value = format!("Indexed({index})");
+            assert_eq!(
+                color_for(Profile::Dark, &value, true, &[]),
+                color_for(Profile::Light, &value, true, &[]),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn profiles_are_pure_and_light_defaults_have_basic_contrast() {
+        assert_eq!(
+            color_for(Profile::Light, "Named(Background)", true, &[]),
+            0xfafafc
+        );
+        assert_eq!(
+            color_for(Profile::Light, "Named(Foreground)", false, &[]),
+            0x202025
+        );
+        assert_eq!(
+            color_for(Profile::Light, "Named(DimRed)", true, &[]),
+            dim(Profile::Light, LIGHT_ANSI[1])
+        );
+        assert_eq!(Profile::Light.selection(), 0xcbdcf3);
+        for (index, color) in LIGHT_ANSI.iter().enumerate() {
+            assert!(contrast(*color, LIGHT_BACKGROUND) >= 4.5, "ANSI {index}");
+        }
+    }
+
+    fn contrast(foreground: u32, background: u32) -> f64 {
+        fn luminance(rgb: u32) -> f64 {
+            let linear = |shift: u32| {
+                let channel = f64::from((rgb >> shift) & 0xff_u32) / 255.0;
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0)
+        }
+        let (high, low) = if luminance(foreground) > luminance(background) {
+            (luminance(foreground), luminance(background))
+        } else {
+            (luminance(background), luminance(foreground))
+        };
+        (high + 0.05) / (low + 0.05)
     }
 }

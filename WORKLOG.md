@@ -4165,3 +4165,67 @@ Revalidate cursor-follow focus and immediate modifier Dwindle dragging on the fi
 - Files: docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 20 pointer_layout tests pass. Private /tmp/pigade-hover-pointer-20261018-final exits0 with pass-private-x11-pointer-layout-fixture; complete hover/activation/input/drag/gutter/undo/cross-tab/IME/file/clipboard flow passed. Root visually inspected header hover, held drag and gutter drop captures. No active-desktop input or configuration mutation.
 - Risks / next: Commit the integrated history block; pointer behavior was already implemented in5e42377/2d598f9 and remains verified. Actual Hyprland/Wayland pointer runtime certification remains open.
+
+## 2026-10-18T06:34:40+00:00 — /root/terminal_palette_luna
+
+Added dark and light built-in terminal palette profiles while preserving the legacy dark color resolver, explicit RGB and host override precedence, xterm extended colors, and dark/light dim behavior; added pure profile tests.
+
+- Files: crates/app/src/palette.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/palette.rs and git diff --check passed. Cargo was not run; root owns app-wide verification.
+- Risks / next: Root should run the app test/build lane and wire Profile into renderer/theme selection. No runtime theme-state changes in this slice.
+
+## 2026-10-18T06:34:53+00:00 — terminal_theme_config_luna
+
+Added a version-1 terminal theme preference with dark legacy fallback and revisioned atomic persistence.
+
+- Files: crates/app/src/appearance.rs
+- Verification: rustfmt --edition 2024 crates/app/src/appearance.rs and git diff --check passed; Cargo tests intentionally not run per task ownership.
+- Risks / next: Update appearance save callers with the appended TerminalTheme argument, then root runs app tests/build.
+
+## 2026-10-18T06:35:21+00:00 — /root/terminal_palette_luna
+
+Added explicit_color for history-cell snapshotting: it resolves only a matching host palette override and leaves truecolor, defaults, malformed, and oversized values unresolved. Corrected the dark selection default to the existing renderer value.
+
+- Files: crates/app/src/palette.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/palette.rs and git diff --check passed. Cargo was not run per root app-lane ownership.
+- Risks / next: Root can use explicit_color to freeze only override-driven history colors; symbolic defaults remain available to resolve against the active Profile.
+
+## 2026-10-18T06:37:09+00:00 — git_commit_research_luna
+
+Extended the controls fixture for additive schema-1 terminal_theme preferences: fixed Dark/Light/Follow app hotkey stages, revision/value assertions, terminal-frame/selection/layout/process/journal invariants, and modal-free terminal-padding pixel captures proving independent Light and Follow app in both directions before restoring Dark.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (35 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to build/run existing controls fixture and inspect terminal padding captures at the fixed lower-right pane coordinate.
+
+## 2026-10-18T06:39:07+00:00 — /root/terminal_palette_luna
+
+Fixed palette blend and contrast-test channel mask type inference reported by the app test compiler.
+
+- Files: crates/app/src/palette.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/palette.rs and git diff --check passed. Cargo was not run; the reported app test compiler errors were addressed by explicitly typing shift and mask values.
+- Risks / next: Root should rerun the app test target and report any further diagnostics.
+
+## 2026-10-18T06:40:04+00:00 — git_commit_research_luna
+
+Fixed appearance fixture post-font comparison by freezing fresh terminal frame/sequence/journal/process snapshots before palette tests; corrected terminal padding sample to canvas coordinate y=750, captured the selected Light terminal controls sheet, and asserted repeated Light/Dark choices do not increment revision.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (35 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to run native controls fixture and inspect the new settings and terminal captures.
+
+## 2026-10-18T06:41:17+00:00 — /root
+
+Integrate independent terminal dark/light/follow-app themes across live cells, cached history, cursor, selection and IME; add settings preview and palette commands
+
+- Files: AGENTS.md, DESIGN.md, README.md, SPEC.md, crates/app/src/appearance_commands.rs, crates/app/src/appearance_ui.rs, crates/app/src/main.rs, crates/app/src/palette.rs, crates/app/src/product.rs, crates/app/src/scrollback_ui.rs, docs/PROJECT_MAP.md
+- Verification: 323 app tests pass; strict app Clippy and debug build pass. Strengthened light ANSI contrast test to4.5 (measured minimum4.89). Pure history regression preserves explicit chronological colors and theme-sensitive defaults; read-only Luna integration review found no blockers. Release build running; native controls/history checks pending. First compile found palette mask inference, corrected; strict Clippy range-loop corrected. App fmt --all accidentally formatted2 pinned cache files; reconstructed verified archive+patch bytes and proved exact rustfmt-only changes before restoring only those2. AGENTS now requires app fmt --package pigade-app; no user config/process changed.
+- Risks / next: Finish release, isolated existing controls/history fixtures and visual review; retain explicit CLI colors, old-config dark default, no host restart or dependencies; do not claim full platform/accessibility/MVP gates.
+
+## 2026-10-18T06:46:06+00:00 — /root
+
+Complete independent terminal palette feature and final native visual verification; remove misleading Appearance Cancel button
+
+- Files: crates/app/src/product.rs, docs/AGENT_HANDOFF.md, docs/adr/0018-in-pane-cell-history.md, WORKLOG.md
+- Verification: Final323 app tests, strict app Clippy, first-party app fmt, debug/release builds, version and diff checks pass;35 harness tests and strict C compile passed in Luna lane. Native controls02 exits0: independent Light, follow-app both directions, explicit Dark, exact background pixels, no-op saves and unchanged post-font terminal models/journals/geometry/PIDs/layout. Inspected final settings and light canvas. Native history01 exits0 with exact colors/readonly input/live-return proofs before footer-only change; earlier controls01 passed too. Original compile/lint/cache-format issues recorded above and repaired.
+- Risks / next: Commit this product block; no full native Wayland/GPU/a11y/MVP claim. Preserve unrelated research/stress/GPUI dirt and stash0; broader BridgeMind-priority goal stays active.
