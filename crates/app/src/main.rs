@@ -34,6 +34,7 @@ mod template_commands;
 mod template_flow;
 mod text_edit;
 mod tiling;
+mod transfer_flow;
 mod viewport;
 mod wake_signal;
 mod workspace_git;
@@ -1153,6 +1154,13 @@ struct CatalogEdit {
     notice: String,
 }
 
+#[derive(Clone, Copy)]
+struct TransferReload {
+    request: uuid::Uuid,
+    dialog: uuid::Uuid,
+    source: transfer_flow::Source,
+}
+
 struct CanvasApp {
     product: product::ProductUi,
     editor_layouts: std::collections::BTreeMap<usize, edit_field::FieldLayout>,
@@ -1167,6 +1175,7 @@ struct CanvasApp {
     prompt_reload: Option<uuid::Uuid>,
     profile_prepare: Option<profile_flow::Pending>,
     profile_reload: Option<(uuid::Uuid, uuid::Uuid)>,
+    transfer_reload: Option<TransferReload>,
     template_flow: template_flow::RunFlow,
     deferred_product_action: Option<product::ProductAction>,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
@@ -1363,18 +1372,25 @@ impl CanvasApp {
                                         if prompt_refresh { this.prompt_reload=None; }
                                         let profile_refresh=this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==ui_request);
                                         if profile_refresh { this.profile_reload=None; }
+                                        let transfer_pending = if this.transfer_reload.is_some_and(|pending| Some(pending.request) == ui_request) { this.transfer_reload.take() } else { None };
+                                        let transfer_refresh = transfer_pending.is_some();
+                                        let transfer_source = transfer_pending.map(|pending| pending.source);
                                         let edit = if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==ui_request) {this.catalog_edit.take()} else {None};
                                         let keep_local = (focus_reply || edit.is_some()) && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
                                         let same_dialog=edit.as_ref().is_some_and(|edit|edit.dialog == this.product.dialog.as_ref().map(|dialog|dialog.id));
                                         let current_dialog=this.product.dialog.clone();
+                                        let transfer_dialog_live = transfer_pending.is_some_and(|pending| current_dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::Transfer));
+                                        let source_is_current = transfer_source.is_some_and(|source| transfer_flow::capture(&catalog, source.pane).ok() == Some(source));
                                         if focus_reply {
                                             let saved=catalog.selection.tab_id.and_then(|tab|catalog.tabs.iter().find(|value|value.id==tab).and_then(|value|serde_json::from_str::<pigade_layout::TabLayout>(&value.layout_json).ok()).and_then(|layout|layout.focused.map(|pane|pointer_layout::FocusIntent{tab,pane})));
                                             this.focus_queue.complete(reply.ui_request.expect("matching focus request"),saved);
                                         }
                                         this.product.catalog = Some(catalog);
                                         if !keep_local {
-                                            this.product.notice = None;
-                                            this.product.dialog = None;
+                                            if !transfer_refresh {
+                                                this.product.notice = None;
+                                                this.product.dialog = None;
+                                            }
                                             this.sync_product_selection(window, cx);
                                         }
                                         if let Some(edit)=edit {
@@ -1388,8 +1404,15 @@ impl CanvasApp {
                                             }
                                             this.product.notice=Some(if changed {"Сохранено; новые правки ещё не сохранены".into()} else {edit.notice});
                                             this.product.dialog=if same_dialog && !changed {edit.return_dialog.or_else(||edit.return_to.map(product::Dialog::new))} else {current_dialog};
-                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply {
+                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply || transfer_refresh {
                                             this.product.dialog=current_dialog;
+                                            if transfer_dialog_live {
+                                                this.product.notice = if source_is_current {
+                                                    None
+                                                } else {
+                                                    Some("Источник изменился после обновления. Закройте окно и выберите панель снова.".into())
+                                                };
+                                            }
                                         }
                                         this.receive_tab_close(ui_request);
                                     }
@@ -1471,6 +1494,13 @@ impl CanvasApp {
                                 Err(error) => {
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
                                     this.tab_close_failed(error.ui_request);
+                                    let transfer_error = this.transfer_reload.is_some_and(|pending| Some(pending.request) == error.ui_request);
+                                    let transfer_error_live = if transfer_error {
+                                        let pending = this.transfer_reload.take().expect("matched transfer refresh");
+                                        this.product.dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::Transfer)
+                                    } else {
+                                        false
+                                    };
                                     let template_error=error.message.clone();
                                     let navigation_error=error.message.clone();
                                     if focus_reply {
@@ -1503,9 +1533,11 @@ impl CanvasApp {
                                         this.product_launch_unknown = false;
                                         this.pending_launch = None;
                                     }
-                                    this.product.notice = Some(if error.providers_request {
-                                        this.product.provider_error.clone().unwrap_or(error.message)
-                                    } else { error.message });
+                                    if !transfer_error || transfer_error_live {
+                                        this.product.notice = Some(if error.providers_request {
+                                            this.product.provider_error.clone().unwrap_or(error.message)
+                                        } else { error.message });
+                                    }
                                     if let Some(pending)=template_pending {this.template_request_failed(pending,template_error,cx);}
                                     if let Some(pending)=navigation_pending {this.navigation_failed(pending,navigation_error,cx);}
                                 }
@@ -1694,6 +1726,7 @@ impl CanvasApp {
             prompt_reload: None,
             profile_prepare: None,
             profile_reload: None,
+            transfer_reload: None,
             template_flow: Default::default(),
             deferred_product_action: None,
             pending_launch: None,
@@ -2638,6 +2671,29 @@ impl CanvasApp {
     fn sync_editor_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let scope = self.product.dialog.as_ref().map(|dialog| dialog.id);
         if scope != self.editor_dialog {
+            let transfer_dialog = self
+                .product
+                .dialog
+                .as_ref()
+                .filter(|dialog| dialog.kind == product::DialogKind::Transfer);
+            if let Some(dialog) = transfer_dialog {
+                self.product.transfer_index = 0;
+                self.product.transfer_offset = 0;
+                self.product.transfer_query_revision = Some((
+                    dialog.id,
+                    dialog
+                        .fields
+                        .first()
+                        .map_or(0, text_edit::EditBuffer::revision),
+                ));
+                self.product.transfer_scroll.scroll_to_item(0);
+            } else {
+                self.product.transfer_source = None;
+                self.product.transfer_index = 0;
+                self.product.transfer_offset = 0;
+                self.product.transfer_query_revision = None;
+                self.product.transfer_scroll.scroll_to_item(0);
+            }
             self.editor_dialog = scope;
             self.editor_preferred_x = None;
             self.editor_layouts.clear();
@@ -2724,6 +2780,24 @@ impl CanvasApp {
 
     fn editor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.service_panel_search(cx);
+        if let Some(dialog) = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == product::DialogKind::Transfer)
+        {
+            let revision = dialog
+                .fields
+                .first()
+                .map_or(0, text_edit::EditBuffer::revision);
+            let query_revision = (dialog.id, revision);
+            if self.product.transfer_query_revision != Some(query_revision) {
+                self.product.transfer_query_revision = Some(query_revision);
+                self.product.transfer_index = 0;
+                self.product.transfer_offset = 0;
+                self.product.transfer_scroll.scroll_to_item(0);
+            }
+        }
         let query = self.product.dialog.as_ref().and_then(|dialog| {
             (dialog.kind == product::DialogKind::History)
                 .then(|| dialog.fields.first().map(|field| field.text().to_owned()))
@@ -3378,6 +3452,8 @@ impl CanvasApp {
         if matches!(
             action,
             A::SubmitDialog
+                | A::TransferTo(_)
+                | A::RefreshTransfer
                 | A::ConfirmCloseTab
                 | A::ConfirmPreparedLaunch
                 | A::RefreshLaunchPreview
@@ -3939,21 +4015,102 @@ impl CanvasApp {
                 self.product.dialog = Some(Dialog::new(DialogKind::Palette));
                 self.service_panel_search(cx);
             }
-            A::OpenTransfer => self.product.dialog = Some(Dialog::new(DialogKind::Transfer)),
-            A::TransferTo(to_tab) => {
-                if let Some(pane) = self.selected_pane() {
-                    self.product.dialog = None;
-                    self.layout_command(
-                        pigade_layout::Command::Transfer {
-                            pane,
-                            to_tab,
-                            target: None,
-                            side: pigade_layout::Direction::Right,
-                            split: uuid::Uuid::new_v4(),
-                        },
-                        cx,
-                    );
+            A::OpenTransfer => {
+                let source = self.product.catalog.as_ref().and_then(|catalog| {
+                    self.selected_pane()
+                        .and_then(|pane| transfer_flow::capture(catalog, pane).ok())
+                });
+                if let Some(source) = source {
+                    self.product.notice = None;
+                    self.product.transfer_source = Some(source);
+                    self.product.transfer_index = 0;
+                    self.product.transfer_offset = 0;
+                    self.product.transfer_scroll.scroll_to_item(0);
+                    self.product.dialog = Some(Dialog::new(DialogKind::Transfer));
+                } else {
+                    self.product.notice = Some("Сначала выберите панель в готовой вкладке".into());
                 }
+            }
+            A::RefreshTransfer => {
+                let Some(dialog) = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == DialogKind::Transfer)
+                else {
+                    return;
+                };
+                let Some(source) = self.product.transfer_source else {
+                    self.product.notice = Some(
+                        "Источник больше недоступен. Закройте окно и выберите панель снова.".into(),
+                    );
+                    return;
+                };
+                let request = uuid::Uuid::new_v4();
+                let dialog_id = dialog.id;
+                if self.try_product_command(json!({"command":"catalog","_ui_request":request}), cx)
+                {
+                    self.transfer_reload = Some(TransferReload {
+                        request,
+                        dialog: dialog_id,
+                        source,
+                    });
+                }
+            }
+            A::TransferPage(offset) => {
+                let Some(dialog) = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == DialogKind::Transfer)
+                else {
+                    return;
+                };
+                let revision = dialog
+                    .fields
+                    .first()
+                    .map_or(0, text_edit::EditBuffer::revision);
+                self.product.transfer_query_revision = Some((dialog.id, revision));
+                self.product.transfer_offset =
+                    offset / transfer_flow::PAGE_SIZE * transfer_flow::PAGE_SIZE;
+                self.product.transfer_index = 0;
+                self.product.transfer_scroll.scroll_to_item(0);
+            }
+            A::TransferTo(to_tab) => {
+                if self.product.busy {
+                    return;
+                }
+                let picker = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::Transfer);
+                let source = if picker {
+                    self.product.transfer_source
+                } else {
+                    self.product.catalog.as_ref().and_then(|catalog| {
+                        self.selected_pane()
+                            .and_then(|pane| transfer_flow::capture(catalog, pane).ok())
+                    })
+                };
+                let Some(source) = source else {
+                    self.product.notice =
+                        Some("Источник больше недоступен. Выберите панель снова.".into());
+                    cx.notify();
+                    return;
+                };
+                let Some(catalog) = self.product.catalog.as_ref() else {
+                    return;
+                };
+                let command =
+                    match transfer_flow::command(catalog, &source, to_tab, uuid::Uuid::new_v4()) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            self.product.notice = Some(format!("Перенос недоступен: {error}"));
+                            return;
+                        }
+                    };
+                self.layout_command(command, cx);
             }
             A::CloseDialog => {
                 self.template_flow.pause();
@@ -4248,6 +4405,35 @@ impl CanvasApp {
                 }
                 if kind == DialogKind::CloseTab {
                     self.tab_close_action(A::ConfirmCloseTab, cx);
+                    return;
+                }
+                if kind == DialogKind::Transfer {
+                    let target = self
+                        .product
+                        .catalog
+                        .as_ref()
+                        .zip(self.product.transfer_source.as_ref())
+                        .and_then(|(catalog, source)| {
+                            let page = transfer_flow::targets(
+                                catalog,
+                                source,
+                                field(0),
+                                self.product.transfer_offset,
+                            );
+                            page.items
+                                .get(
+                                    self.product
+                                        .transfer_index
+                                        .min(page.items.len().saturating_sub(1)),
+                                )
+                                .map(|item| item.tab)
+                        });
+                    if let Some(target) = target {
+                        self.product_action(A::TransferTo(target), window, cx);
+                    } else {
+                        self.product.notice =
+                            Some("Нет доступных вкладок для переноса этой панели".into());
+                    }
                     return;
                 }
                 if self.submit_prompt_dialog(kind, &fields, cx) {
@@ -5692,6 +5878,106 @@ impl CanvasApp {
             cx.notify();
             cx.stop_propagation();
             return;
+        }
+        if let Some(dialog) = self.product.dialog.as_ref().filter(|dialog| {
+            dialog.kind == product::DialogKind::Transfer
+                && self.text_input.preedit.is_empty()
+                && dialog.fields.iter().all(|field| field.marked().is_none())
+        }) {
+            let control = k.modifiers.control || k.modifiers.platform;
+            let query = dialog
+                .fields
+                .first()
+                .map_or("", text_edit::EditBuffer::text);
+            let page = self
+                .product
+                .catalog
+                .as_ref()
+                .zip(self.product.transfer_source.as_ref())
+                .map(|(catalog, source)| {
+                    transfer_flow::targets(catalog, source, query, self.product.transfer_offset)
+                });
+            match k.key.as_str() {
+                "escape" if !event.is_held => {
+                    self.product_action(product::ProductAction::CloseDialog, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                "r" if control && !k.modifiers.alt && !event.is_held => {
+                    self.product_action(product::ProductAction::RefreshTransfer, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                "up" | "down" if !control && !k.modifiers.alt && !k.modifiers.platform => {
+                    if event.is_held {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let count = page.as_ref().map_or(0, |page| page.items.len());
+                    if count > 0 {
+                        let index = self.product.transfer_index.min(count - 1);
+                        self.product.transfer_index = if k.key == "up" {
+                            index.saturating_sub(1)
+                        } else {
+                            (index + 1).min(count - 1)
+                        };
+                        self.product
+                            .transfer_scroll
+                            .scroll_to_item(self.product.transfer_index);
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                "pageup" | "pagedown" if !control && !k.modifiers.alt && !k.modifiers.platform => {
+                    if !self.product.busy {
+                        let offset = if k.key == "pageup" {
+                            self.product
+                                .transfer_offset
+                                .saturating_sub(transfer_flow::PAGE_SIZE)
+                        } else if page.as_ref().is_some_and(|page| page.has_more) {
+                            self.product
+                                .transfer_offset
+                                .saturating_add(transfer_flow::PAGE_SIZE)
+                        } else {
+                            self.product.transfer_offset
+                        };
+                        self.product_action(
+                            product::ProductAction::TransferPage(offset),
+                            window,
+                            cx,
+                        );
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                "enter" if !control && !k.modifiers.alt && !k.modifiers.platform => {
+                    if event.is_held {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if let Some(target) = page
+                        .as_ref()
+                        .and_then(|page| {
+                            page.items.get(
+                                self.product
+                                    .transfer_index
+                                    .min(page.items.len().saturating_sub(1)),
+                            )
+                        })
+                        .map(|target| target.tab)
+                    {
+                        self.product_action(product::ProductAction::TransferTo(target), window, cx);
+                    } else {
+                        self.product.notice =
+                            Some("Нет доступных вкладок для переноса этой панели".into());
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => (),
+            }
         }
         if self
             .product

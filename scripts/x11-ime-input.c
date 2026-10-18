@@ -149,6 +149,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
         strcmp(a.stage, "pointer-create-transfer-tab") && strcmp(a.stage, "pointer-select-first-tab") &&
+        strcmp(a.stage, "pointer-hotkey-transfer") && strcmp(a.stage, "pointer-picker-transfer") &&
+        strcmp(a.stage, "pointer-picker-confirm") &&
         strcmp(a.stage, "pointer-tab-drop-cancel") && strcmp(a.stage, "pointer-tab-drop") &&
         strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
         strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
@@ -447,6 +449,19 @@ static void setup_prefix(Display *dpy, KeySym final_key, int shift_final) {
     if (!XTestFakeKeyEvent(dpy,control,False,CurrentTime) ||
         !XTestFakeKeyEvent(dpy,shift,False,CurrentTime)) fail("setup prefix release failed");
     if (shift_final) modified_key(dpy,XK_Shift_L,final_key); else key(dpy,final_key);
+}
+
+static void control_shift_key(Display *dpy, KeySym sym) {
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime))
+        fail("fixed Ctrl+Shift key press failed");
+    key(dpy, sym);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+        fail("fixed Ctrl+Shift key release failed");
+    XSync(dpy, False);
 }
 
 static void catalog_rename_tab(Display *dpy, Window app) {
@@ -1327,6 +1342,17 @@ int main(int argc, char **argv) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "pointer-select-first-tab")) {
             modified_key(dpy, XK_Control_L, XK_1);
+        } else if (!strcmp(a.stage, "pointer-hotkey-transfer")) {
+            control_shift_key(dpy, XK_2);
+        } else if (!strcmp(a.stage, "pointer-picker-transfer")) {
+            setup_prefix(dpy, XK_m, 0);
+            const KeySym query[] = { XK_t, XK_r, XK_a, XK_n, XK_s, XK_f, XK_e, XK_r };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            key(dpy, XK_Down);
+            key(dpy, XK_Up);
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "pointer-picker-confirm")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "pointer-tab-drop-cancel") ||
                    !strcmp(a.stage, "pointer-tab-drop") ||
                    !strcmp(a.stage, "pointer-tab-drop-populated-preview")) {

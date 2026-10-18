@@ -3520,3 +3520,69 @@ Integrate direct pane-to-tab drag preview and atomic destination activation with
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/pointer_layout.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 348 workspace and227 app tests pass; final12 pointer helper tests and32 harness tests pass. Strict workspace/appClippy, locked release builds, fmt/version/diff checks pass. Native private pointer04 passes empty/populated destination preview/cancel/transfer/activation/exactundo with unchanged process generations/PIDs; captures inspected. Root repaired helper import/test UUID collision, thumbnail colors/height, removed width-shifting target badge and Arc-cached preview. Native01-03 fixture-only observer errors are retained and explained in handoff; no weakened preview/model/process checks.
 - Risks / next: Full MVP/Wayland/performance/accessibility gates open. Next: fix legacy TransferTo targetNone for occupied tabs while preserving keyboard no-follow semantics. Preserve unrelated dirty files and stash0.
+
+## 2026-10-18T02:19:28+00:00 — /root/appearance_colors_luna
+
+Guard ordinary pane transfers against missing or unavailable source and destination workspaces.
+
+- Files: crates/session-host/src/catalog.rs
+- Verification: cargo fmt completed; cargo test -p pigade-session-host explicit_transfer -- --nocapture passed (2 tests): Ready cross-workspace transfer to occupied target preserves selection/window and undoes once; archived source and destination reject without writes.
+- Risks / next: Root owns broader application and picker integration checks.
+
+## 2026-10-18T02:20:01+00:00 — /root/pointer_review_luna
+
+Add pure searchable transfer-to-tab catalog flow
+
+- Files: crates/app/src/transfer_flow.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/transfer_flow.rs passed; git diff --check -- crates/app/src/transfer_flow.rs passed; Cargo tests not run because app Cargo was excluded
+- Risks / next: Root wires module, keyboard picker and transfer command, then owns app test/build verification
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Replace transfer destination list with a searchable, bounded target picker
+
+- Files: crates/app/src/product.rs
+- Verification: `rustfmt --edition 2024 --check crates/app/src/product.rs` and `git diff --check` passed. App/Cargo/native checks remain in the root lane.
+- Risks / next: Main must initialize the frozen `transfer_source`, update `transfer_query_revision` and index/offset for query and keyboard changes, and handle `ProductAction::TransferPage`; root was notified. UI reads targets from the pure `transfer_flow::targets` page and uses the provided query field layout cache.
+- Picker controls also include compact refresh with Ctrl+R guidance; main owns the readonly refresh receipt and stale-source handling.
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Wire the frozen-source transfer picker to validated layout commands and request-bound catalog refresh
+
+- Files: crates/app/src/main.rs
+- Verification: `git diff --check` passed. App Cargo/build/native checks were not run per parent lane boundary.
+- Behavior: picker captures the current tab/pane once; query edits reset the page and selected row; refresh responses are correlated to the originating request and dialog while preserving the latest live query. A refresh after cancellation never reopens the picker. Source changes are reported after refresh. Confirmation uses `transfer_flow::command`'s exact occupied-target plan and an ordinary layout Apply command, so destination activation is not coupled to pane transfer. Errors leave the picker and draft open, and marked IME text blocks transfer confirmation.
+- Risks / next: Parent owns app compile/tests and native picker checks.
+
+## 2026-10-18T02:27:45+00:00 — pointer_review_luna
+
+Extended private pointer fixture with Ctrl+Shift+2 and searchable keyboard transfers into an occupied tab, exact Right-sibling/history/undo checks, source-selection retention, process identities and observable cwd stability.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (32 passed); git diff --check passed. No native/Cargo/X11 run.
+- Risks / next: Root owns app integration and isolated fixture execution in its already-private run; C helper compilation and desktop behavior remain unverified here.
+
+## 2026-10-18T02:28:53+00:00 — pointer_review_luna
+
+Split searchable transfer picker fixture into query/refresh inspection and explicit Enter confirmation, capturing the visible picker before commit and asserting unchanged host/process state while open.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (32 passed); scoped git diff --check passed. No native/Cargo/X11 run.
+- Risks / next: Root owns helper compilation and private isolated fixture run; inspect pointer-transfer-picker-search.ppm to verify query presentation.
+
+## 2026-10-18T02:32:51+00:00 — /root
+
+Complete exact keyboard/menu pane transfer routing and verify hover/Hyprland-style pointer flow in fresh isolated release
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/transfer_flow.rs, crates/app/src/controls.rs, crates/session-host/src/catalog.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 234 app,350 workspace and32 harness tests passed; strict workspace/app Clippy, fmt/version/diff checks and locked releases passed. Private native02 passes hover/input, grip/drop/cancel/focus-mode, direct tab drops and exact occupied-target hotkey/picker transfers plus undo, stable generations/PIDs/cwd; captures inspected. Native01 exposed real shifted-US-digit routing bug, fixed. Final pane-count copy helper tests pass; final copy release rebuild pending.
+- Risks / next: Complete final copy-only release rebuild and commit. Native Wayland, non-US shifted-digit management mappings and full MVP gates remain open. Preserve unrelated dirt and stash0.
+
+## 2026-10-18T02:33:35+00:00 — /root
+
+Finish copy-only release rebuild after visual review
+
+- Files: crates/app/src/transfer_flow.rs
+- Verification: Final six transfer helper tests, strict app Clippy, locked release rebuild, first-party fmt/version/diff checks passed. Full private native02 preceded only the pane-count wording change; no behavioral delta followed it.
+- Risks / next: Commit integrated tiling block; full MVP/platform gates remain open.

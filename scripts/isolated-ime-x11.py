@@ -1310,6 +1310,15 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                 'pointer fixture omitted a process identity')
         return result
 
+    def cwd_snapshot(processes):
+        result = {}
+        for session, generation, pid in processes:
+            try:
+                result[(session, generation, pid)] = os.readlink(f'/proc/{pid}/cwd')
+            except OSError:
+                continue
+        return result
+
     def live_unchanged(expected_generations, expected_processes):
         current = fixture_generations()
         if current != expected_generations or process_snapshot() != expected_processes:
@@ -1827,6 +1836,99 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     time.sleep(0.35)
     helper_call(config, 'capture', '/artifacts/pointer-tab-drop-populated-undo.ppm')
 
+    # Exercise both keyboard transfer paths against the same occupied target.
+    # Each transfer must preserve source-tab selection and make exactly one
+    # undoable Right-sibling insertion without changing live process identity.
+    def keyboard_transfer(stage, capture_name, prepare_stage=None, search_capture=None):
+        before_catalog = host_request({'command': 'catalog'})['catalog']
+        require(before_catalog['selection'].get('tab_id') == tab_id,
+                f'{stage} did not begin with the source tab selected')
+        before_source = tab_layout(before_catalog, tab_id)
+        before_destination = tab_layout(before_catalog, destination_id)
+        before_history = json.loads(before_catalog['layout']['json'])
+        before_generations = fixture_generations()
+        before_processes = process_snapshot()
+        before_cwds = cwd_snapshot(before_processes)
+        source_ids = set(pane_ids(before_source.get('root')))
+        destination_ids = set(pane_ids(before_destination.get('root')))
+        moved = before_source.get('focused')
+        require(moved in source_ids and destination_ids == {destination_session},
+                f'{stage} source/occupied destination state was not exact')
+
+        if prepare_stage is not None:
+            step(prepare_stage)
+            # Let the correlated Ctrl+R catalog response and repaint settle with
+            # the picker still open so its query/selection can be inspected.
+            time.sleep(0.6)
+            pending_catalog = host_request({'command': 'catalog'})['catalog']
+            require(tab_layout(pending_catalog, tab_id) == before_source and
+                    tab_layout(pending_catalog, destination_id) == before_destination and
+                    pending_catalog.get('layout') == before_catalog.get('layout') and
+                    pending_catalog.get('selection') == before_catalog.get('selection') and
+                    live_unchanged(before_generations, before_processes) and
+                    cwd_snapshot(before_processes) == before_cwds,
+                    f'{prepare_stage} changed host layout, selection, or process identity before confirmation')
+            helper_call(config, 'capture', search_capture)
+            require(0 < Path(search_capture).stat().st_size <= MAX_CAPTURE_BYTES,
+                    'open searchable transfer picker capture is missing or oversized')
+            step(stage)
+        else:
+            step(stage)
+        committed = wait_until(
+            lambda: (catalog if moved in pane_ids(tab_layout(catalog, destination_id).get('root')) and
+                     moved not in pane_ids(tab_layout(catalog, tab_id).get('root'))
+                     else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+            time.monotonic() + 8)
+        committed_source = tab_layout(committed, tab_id)
+        committed_destination = tab_layout(committed, destination_id)
+        committed_history = json.loads(committed['layout']['json'])
+        siblings = direct_move_sibling_split(committed_destination.get('root'),
+                                             source=moved, target=destination_session)
+        require(siblings == ('Horizontal', [destination_session, moved]) and
+                set(pane_ids(committed_source.get('root'))) == source_ids - {moved} and
+                set(pane_ids(committed_destination.get('root'))) == destination_ids | {moved} and
+                committed['selection'].get('tab_id') == tab_id and
+                committed['layout']['revision'] == before_catalog['layout']['revision'] + 1 and
+                len(committed_history.get('undo', [])) == len(before_history.get('undo', [])) + 1 and
+                committed_history.get('redo', []) == [] and
+                committed_history['undo'][-1]['before']['tabs'][tab_id]['root'] ==
+                before_source.get('root') and
+                committed_history['undo'][-1]['before']['tabs'][destination_id]['root'] ==
+                before_destination.get('root') and
+                committed_history['undo'][-1]['after']['tabs'][tab_id]['root'] ==
+                committed_source.get('root') and
+                committed_history['undo'][-1]['after']['tabs'][destination_id]['root'] ==
+                committed_destination.get('root') and
+                live_unchanged(before_generations, before_processes) and
+                cwd_snapshot(before_processes) == before_cwds,
+                f'{stage} was not one exact Right-sibling transfer preserving source selection/processes')
+        time.sleep(0.35)
+        helper_call(config, 'capture', capture_name)
+        step('pointer-undo')
+        restored = wait_until(
+            lambda: (catalog if tab_layout(catalog, tab_id) == before_source and
+                     tab_layout(catalog, destination_id) == before_destination
+                     else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+            time.monotonic() + 8)
+        require(restored['selection'].get('tab_id') == tab_id and
+                live_unchanged(before_generations, before_processes) and
+                cwd_snapshot(before_processes) == before_cwds,
+                f'{stage} undo did not restore both trees with source selected and process identity intact')
+
+    # We are still selected on the populated destination after its drag undo.
+    # Select the source explicitly, then transfer its focused pane with Ctrl+Shift+2.
+    step('pointer-select-first-tab')
+    wait_until(lambda: (catalog if catalog['selection'].get('tab_id') == tab_id
+                        else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+               time.monotonic() + 5)
+    keyboard_transfer('pointer-hotkey-transfer', '/artifacts/pointer-transfer-hotkey.ppm')
+
+    # Prefix M opens the searchable transfer picker. Its fixed query chooses
+    # the only tab named Transfer; arrow navigation and Enter commit it.
+    keyboard_transfer('pointer-picker-confirm', '/artifacts/pointer-transfer-picker.ppm',
+                      prepare_stage='pointer-picker-transfer',
+                      search_capture='/artifacts/pointer-transfer-picker-search.ppm')
+
     report['pointer'] = {
         'four_pane_ids_preserved': sorted(original_ids),
         'process_generations_and_pids_unchanged': True,
@@ -1847,6 +1949,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'tab_transfer_history_contains_exact_before_and_after_for_both_tabs': True,
         'tab_transfer_undo_restored_both_trees_and_kept_destination_selected': True,
         'populated_destination_received_source_as_right_sibling_and_undo_restored_it': True,
+        'ctrl_shift_2_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees': True,
+        'searchable_transfer_picker_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees': True,
         'one_fixture_shell_was_explicitly_added_before_populated_transfer': destination_pair,
         'captures': ['pointer-hover.ppm', 'pointer-subthreshold-before.ppm',
                      'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
@@ -1857,7 +1961,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                      'pointer-tab-drop-committed.ppm', 'pointer-tab-drop-undo.ppm',
                      'pointer-tab-drop-populated-before.ppm',
                      'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
-                     'pointer-tab-drop-populated-undo.ppm']}
+                     'pointer-tab-drop-populated-undo.ppm', 'pointer-transfer-hotkey.ppm',
+                     'pointer-transfer-picker-search.ppm', 'pointer-transfer-picker.ppm']}
     report.update({'status': POINTER_PASS, 'stage': 'complete'})
     save()
 
@@ -4996,7 +5101,9 @@ def outer_run(args) -> dict:
                   'pointer-tab-drop-preview.ppm', 'pointer-tab-drop-committed.ppm',
                   'pointer-tab-drop-undo.ppm', 'pointer-tab-drop-populated-before.ppm',
                   'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
-                  'pointer-tab-drop-populated-undo.ppm'] if args.fixture == 'pointer' else
+                  'pointer-tab-drop-populated-undo.ppm', 'pointer-transfer-hotkey.ppm',
+                  'pointer-transfer-picker-search.ppm',
+                  'pointer-transfer-picker.ppm'] if args.fixture == 'pointer' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
@@ -5040,7 +5147,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

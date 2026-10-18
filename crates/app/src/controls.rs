@@ -103,6 +103,23 @@ pub fn classify(modifier: Modifier, key: &str, state: Modifiers) -> Option<Actio
     if !modifier.matches(state) {
         return None;
     }
+    // GPUI's Linux XKB adapter emits the US shifted digit symbol and removes
+    // Shift from punctuation keystrokes. Recover only our explicit transfer
+    // bindings here; terminal input and dialog editors keep their native keys.
+    if let Some(number) = match key {
+        "!" => Some(1),
+        "@" => Some(2),
+        "#" => Some(3),
+        "$" => Some(4),
+        "%" => Some(5),
+        "^" => Some(6),
+        "&" => Some(7),
+        "*" => Some(8),
+        "(" => Some(9),
+        _ => None,
+    } {
+        return Some(Action::TransferToTab(number));
+    }
     if shifted {
         return match key {
             "up" => Some(Action::Swap(Direction::Up)),
@@ -364,6 +381,42 @@ mod tests {
         }
         assert_eq!(
             classify(Modifier::Control, "q", mods(true, false, true, false)),
+            None
+        );
+    }
+
+    #[test]
+    fn gpui_shifted_digit_symbols_select_transfer_without_rewriting_terminal_keys() {
+        for (index, key) in ["!", "@", "#", "$", "%", "^", "&", "*", "("]
+            .into_iter()
+            .enumerate()
+        {
+            for shift in [false, true] {
+                assert_eq!(
+                    classify(Modifier::Control, key, mods(true, false, shift, false)),
+                    Some(Action::TransferToTab(index as u8 + 1))
+                );
+            }
+            assert_eq!(
+                classify(Modifier::Control, key, mods(false, false, false, false)),
+                None
+            );
+            assert_eq!(
+                classify(Modifier::Control, key, mods(true, true, false, false)),
+                None
+            );
+            assert_eq!(
+                classify(Modifier::Disabled, key, mods(true, false, false, false)),
+                None
+            );
+        }
+        // Do not guess ambiguous RU punctuation or consume arbitrary Ctrl keys.
+        assert_eq!(
+            classify(Modifier::Control, ";", mods(true, false, false, false)),
+            Some(Action::ResizeLeft)
+        );
+        assert_eq!(
+            classify(Modifier::Control, "0", mods(true, false, true, false)),
             None
         );
     }

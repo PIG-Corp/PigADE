@@ -110,7 +110,9 @@ pub(super) enum ProductAction {
     DeleteLayout(Uuid),
     RefreshCatalog,
     OpenTransfer,
+    RefreshTransfer,
     TransferTo(Uuid),
+    TransferPage(usize),
     OpenSessions,
     RefreshSessions,
     AttachSession(Uuid),
@@ -298,7 +300,7 @@ impl DialogKind {
             Self::SessionContext => &[],
             Self::Conversation => &["Точный ID диалога CLI"],
             Self::Generations => &["Номер строки или «текущее»"],
-            Self::Transfer => &[],
+            Self::Transfer => &["Найти проект, воркспейс или вкладку"],
             Self::Sessions => &[],
             Self::History => &["Найти текст", "История"],
         }
@@ -368,6 +370,11 @@ impl Dialog {
 #[derive(Default)]
 pub(super) struct ProductUi {
     pub(super) tab_drop_target: Option<Uuid>,
+    pub(super) transfer_source: Option<crate::transfer_flow::Source>,
+    pub(super) transfer_index: usize,
+    pub(super) transfer_offset: usize,
+    pub(super) transfer_query_revision: Option<(Uuid, u64)>,
+    pub(super) transfer_scroll: gpui::ScrollHandle,
     pub(super) panel_directory: Option<protocol::PanelDirectory>,
     pub(super) palette_index: usize,
     pub(super) palette_after: Option<Uuid>,
@@ -2659,7 +2666,7 @@ impl ProductUi {
             return self.launcher_overlay(cx);
         }
         if dialog.kind == DialogKind::Transfer {
-            return self.transfer_overlay(cx);
+            return self.transfer_overlay(dialog, layouts, cx);
         }
         if dialog.kind == DialogKind::WorkspaceGit {
             return self.git_overlay(cx);
@@ -4558,24 +4565,64 @@ impl ProductUi {
             .into_any_element()
     }
 
-    fn transfer_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+    fn transfer_overlay(
+        &self,
+        dialog: &Dialog,
+        layouts: &BTreeMap<usize, FieldLayout>,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
         let colors = self.colors();
-        let current_tab = self.catalog.as_ref().and_then(selected_tab);
+        let query_buffer = dialog.fields.first();
+        let query = query_buffer.map(EditBuffer::text).unwrap_or("");
+        let query_revision = query_buffer.map(EditBuffer::revision).unwrap_or(0);
+        let current_query = Some((dialog.id, query_revision));
+        let query_is_current = self.transfer_query_revision == current_query;
+        let offset = if query_is_current {
+            self.transfer_offset
+        } else {
+            0
+        };
+        let selected_index = if query_is_current {
+            self.transfer_index
+        } else {
+            0
+        };
         let source_label = self
-            .catalog
-            .as_ref()
-            .and_then(|catalog| {
-                let tab = catalog
-                    .tabs
-                    .iter()
-                    .find(|tab| Some(tab.id) == current_tab)?;
+            .transfer_source
+            .and_then(|source| {
+                let catalog = self.catalog.as_ref()?;
+                let tab = catalog.tabs.iter().find(|tab| tab.id == source.tab)?;
                 let workspace = catalog
                     .workspaces
                     .iter()
                     .find(|workspace| workspace.id == tab.workspace_id)?;
-                Some(format!("Из: {} · {}", workspace_name(workspace), tab.name))
+                let project = catalog
+                    .projects
+                    .iter()
+                    .find(|project| project.id == workspace.project_id)?;
+                let pane_title = self
+                    .sessions
+                    .iter()
+                    .find(|session| session.session == source.pane.to_string())
+                    .map(|session| session.title.as_str())
+                    .unwrap_or("панель");
+                Some(format!(
+                    "Источник: {} • {} • {} · {}",
+                    project.name,
+                    workspace_name(workspace),
+                    tab.name,
+                    pane_title
+                ))
             })
-            .unwrap_or_else(|| "Сначала выберите вкладку для переноса.".into());
+            .unwrap_or_else(|| {
+                "Источник больше недоступен. Закройте окно и выберите панель снова.".into()
+            });
+
+        let page = self
+            .catalog
+            .as_ref()
+            .zip(self.transfer_source.as_ref())
+            .map(|(catalog, source)| crate::transfer_flow::targets(catalog, source, query, offset));
         let mut targets = div()
             .id("transfer-target-list")
             .role(Role::List)
@@ -4583,62 +4630,217 @@ impl ProductUi {
             .flex()
             .flex_col()
             .gap_1()
-            .mt(px(14.))
-            .max_h(px(360.))
-            .overflow_y_scroll();
-
-        let mut target_count = 0;
-        if let Some(catalog) = &self.catalog
-            && current_tab.is_some()
-        {
-            for tab in catalog
-                .tabs
-                .iter()
-                .filter(|tab| Some(tab.id) != current_tab)
-            {
-                let workspace_label = catalog
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.id == tab.workspace_id)
-                    .map(workspace_name)
-                    .unwrap_or_else(|| "Воркспейс недоступен".into());
-                targets = targets.child(self.action_control_with_accessible_name(
-                    format!("transfer-target-{}", tab.id),
-                    format!("{workspace_label} · {}", tab.name),
-                    format!(
-                        "Перенести в воркспейс {workspace_label}, вкладка {}",
-                        tab.name
-                    ),
-                    ProductAction::TransferTo(tab.id),
-                    ControlStyle {
-                        role: Role::Button,
-                        selected: false,
-                        compact: false,
-                    },
-                    cx,
-                ));
-                target_count += 1;
+            .max_h(px(300.))
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.transfer_scroll);
+        if let Some(page) = &page {
+            for (index, target) in page.items.iter().enumerate() {
+                let selected = index == selected_index;
+                let target_tab = target.tab;
+                let title = target.title.replace(" / ", " • ");
+                let subtitle = target.subtitle.clone();
+                targets = targets.child(
+                    div()
+                        .id(format!("transfer-target-{}", target.tab))
+                        .role(Role::Button)
+                        .aria_label(if subtitle.is_empty() {
+                            title.clone()
+                        } else {
+                            format!("{} · {}", title, subtitle)
+                        })
+                        .aria_selected(selected)
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(6.))
+                        .bg(if selected {
+                            colors.selected
+                        } else {
+                            colors.raised
+                        })
+                        .hover(|style| style.bg(colors.hover))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_color(colors.text)
+                        .child(div().text_size(px(13.)).child(title))
+                        .when(!subtitle.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(colors.muted)
+                                    .child(subtitle),
+                            )
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            if !this.product.busy {
+                                this.product_action(
+                                    ProductAction::TransferTo(target_tab),
+                                    window,
+                                    cx,
+                                );
+                            }
+                            cx.stop_propagation();
+                        })),
+                );
             }
-        }
-        if target_count == 0 {
-            let message = if current_tab.is_none() {
-                "Сначала выберите вкладку для переноса."
-            } else {
-                "Нет других вкладок, куда можно перенести эту вкладку."
-            };
+            if page.items.is_empty() {
+                let message = if self.transfer_source.is_none() {
+                    "Сначала выберите панель, которую нужно перенести."
+                } else if query.trim().is_empty() {
+                    "Нет доступных вкладок для переноса этой панели."
+                } else {
+                    "По этому запросу ничего не найдено."
+                };
+                targets = targets.child(
+                    div()
+                        .id("transfer-targets-empty")
+                        .role(Role::Status)
+                        .px(px(10.))
+                        .py(px(12.))
+                        .text_color(colors.muted)
+                        .child(message),
+                );
+            }
+        } else {
             targets = targets.child(
                 div()
-                    .id("transfer-targets-empty")
+                    .id("transfer-targets-unavailable")
+                    .role(Role::Status)
                     .px(px(10.))
                     .py(px(12.))
                     .text_color(colors.muted)
-                    .child(message),
+                    .child(if self.catalog.is_none() {
+                        "Каталог недоступен. Обновите данные host и повторите попытку."
+                    } else {
+                        "Сначала выберите панель, которую нужно перенести."
+                    }),
             );
         }
 
+        let query_field = div()
+            .id("transfer-query-field")
+            .role(Role::TextInput)
+            .aria_label("Найти проект, воркспейс или вкладку")
+            .w_full()
+            .h(px(40.))
+            .mt(px(12.))
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if dialog.active_field == 0 {
+                colors.accent
+            } else {
+                colors.border
+            })
+            .bg(colors.base)
+            .text_color(colors.text)
+            .overflow_hidden()
+            .child(crate::edit_field::content(
+                &dialog.fields[0],
+                crate::edit_field::FieldOptions {
+                    cache: layouts.get(&0),
+                    dialog_id: dialog.id,
+                    index: 0,
+                    active: dialog.active_field == 0,
+                    multiline: false,
+                    placeholder: "Найти проект, воркспейс или вкладку",
+                    accent: colors.accent,
+                    muted: colors.muted,
+                },
+                cx,
+            ))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    this.editor_pointer_down(0, event, window, cx);
+                }),
+            );
+        let mut pagination = div()
+            .id("transfer-pagination")
+            .flex()
+            .items_center()
+            .justify_between()
+            .mt(px(8.));
+        let page_offset = page.as_ref().map(|page| page.offset).unwrap_or(offset);
+        let has_more = page.as_ref().is_some_and(|page| page.has_more);
+        let previous = self.action_control(
+            "transfer-page-previous".into(),
+            "Назад".into(),
+            ProductAction::TransferPage(
+                page_offset.saturating_sub(crate::transfer_flow::PAGE_SIZE),
+            ),
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        pagination = pagination.child(if page_offset > 0 && !self.busy {
+            previous
+        } else {
+            div()
+                .id("transfer-page-previous-disabled")
+                .role(Role::Status)
+                .h(px(28.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("Назад")
+                .into_any_element()
+        });
+        let shown = page.as_ref().map_or(0, |page| page.items.len());
+        pagination = pagination.child(
+            div()
+                .id("transfer-page-count")
+                .role(Role::Status)
+                .text_size(px(11.))
+                .text_color(colors.muted)
+                .child(if shown == 0 {
+                    "0 результатов".to_owned()
+                } else {
+                    format!(
+                        "{}–{}",
+                        page_offset.saturating_add(1),
+                        page_offset.saturating_add(shown)
+                    )
+                }),
+        );
+        let next = self.action_control(
+            "transfer-page-next".into(),
+            "Дальше".into(),
+            ProductAction::TransferPage(
+                page_offset.saturating_add(crate::transfer_flow::PAGE_SIZE),
+            ),
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        pagination = pagination.child(if has_more && !self.busy {
+            next
+        } else {
+            div()
+                .id("transfer-page-next-disabled")
+                .role(Role::Status)
+                .h(px(28.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .text_color(colors.muted)
+                .child("Дальше")
+                .into_any_element()
+        });
         let close = self.action_control(
             "transfer-dialog-close".into(),
-            "Отмена".into(),
+            "Закрыть".into(),
             ProductAction::CloseDialog,
             ControlStyle {
                 role: Role::Button,
@@ -4647,6 +4849,96 @@ impl ProductUi {
             },
             cx,
         );
+        let refresh = self.action_control(
+            "transfer-refresh".into(),
+            "Обновить".into(),
+            ProductAction::RefreshTransfer,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let mut card = div()
+            .id("transfer-dialog")
+            .role(Role::Dialog)
+            .aria_label("Перенести панель")
+            .w_full()
+            .max_w(px(560.))
+            .mx(px(16.))
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.raised)
+            .px(px(20.))
+            .py(px(18.))
+            .text_color(colors.text)
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .id("transfer-dialog-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Перенести панель"),
+                    )
+                    .child(if self.busy {
+                        div()
+                            .id("transfer-refresh-disabled")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child("Обновление…")
+                            .into_any_element()
+                    } else {
+                        refresh
+                    }),
+            )
+            .child(query_field)
+            .child(
+                div()
+                    .mt(px(8.))
+                    .text_size(px(12.))
+                    .text_color(colors.muted)
+                    .child(source_label),
+            )
+            .child(targets)
+            .child(pagination)
+            .child(
+                div()
+                    .mt(px(8.))
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("Справа от выбранной панели. Текущая вкладка, рабочая папка и контекст CLI сохраняются."),
+            )
+            .child(
+                div()
+                    .mt(px(6.))
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("↑/↓ — выбрать · Enter — перенести · Ctrl+R — обновить · Esc — закрыть"),
+            );
+        if let Some(notice) = &self.notice {
+            card = card.child(
+                div()
+                    .id("transfer-notice")
+                    .role(Role::Status)
+                    .mt(px(6.))
+                    .text_size(px(11.))
+                    .text_color(colors.accent)
+                    .child(notice.clone()),
+            );
+        }
+        card = card.child(div().flex().justify_end().mt(px(12.)).child(close));
         div()
             .id("transfer-dialog-overlay")
             .accessibility_id("transfer-dialog-overlay")
@@ -4661,43 +4953,7 @@ impl ProductUi {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.product_action(ProductAction::CloseDialog, window, cx);
             }))
-            .child(
-                div()
-                    .id("transfer-dialog")
-                    .role(Role::Dialog)
-                    .aria_label("Перенести панель")
-                    .w_full()
-                    .max_w(px(480.))
-                    .mx(px(16.))
-                    .flex()
-                    .flex_col()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(colors.border)
-                    .bg(colors.raised)
-                    .px(px(20.))
-                    .py(px(18.))
-                    .text_color(colors.text)
-                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
-                    .child(
-                        div()
-                            .id("transfer-dialog-title")
-                            .role(Role::Heading)
-                            .aria_level(2)
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Перенести панель"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(6.))
-                            .text_size(px(12.))
-                            .text_color(colors.muted)
-                            .child(source_label),
-                    )
-                    .child(targets)
-                    .child(div().flex().justify_end().mt(px(12.)).child(close)),
-            )
+            .child(card)
             .into_any_element()
     }
 

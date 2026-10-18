@@ -2,6 +2,10 @@
 
 ## 0.0.1-dev — in development
 
+- Linux GPUI shifted US digit symbols now reach explicit panel-transfer bindings instead of falling through to the CLI.
+
+- Keyboard/menu pane transfers now resolve occupied destinations exactly, preserve source selection, and offer searchable Ready project/workspace/tab targets with paging and explicit refresh. Archived-source/destination transfers are rejected before catalog writes.
+
 - Direct pane drop onto another visible tab: destination layout preview, atomic transfer and selection, empty/populated targets, exact placement undo and unchanged CLI processes.
 
 - Pointer controls:10px drag activation without click tear-out; nearest gutter target, focus-mode drag reveal/cancel, and stable per-session geometry prevent focus-mode input/resize misrouting.

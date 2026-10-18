@@ -418,6 +418,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('subthreshold modifier drag preserves placement', plan['input']['pointer'])
         self.assertIn('focus-mode drag preview/cancel from nonzero pane index', plan['input']['pointer'])
         self.assertIn('cross-tab pane drag preview/cancel and atomic transfer undo', plan['input']['pointer'])
+        self.assertIn('Ctrl+Shift+2 and searchable-prefix keyboard transfers', plan['input']['pointer'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
@@ -429,6 +430,8 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'pointer-create-transfer-tab', 'pointer-select-first-tab',
                       'pointer-tab-drop-cancel', 'pointer-tab-drop',
                       'pointer-tab-drop-populated-preview',
+                      'pointer-hotkey-transfer', 'pointer-picker-transfer',
+                      'pointer-picker-confirm',
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
@@ -460,8 +463,28 @@ class IsolatedImePlanTests(unittest.TestCase):
         for evidence in ('tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes',
                          'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination',
                          'tab_transfer_history_contains_exact_before_and_after_for_both_tabs',
-                         'tab_transfer_undo_restored_both_trees_and_kept_destination_selected'):
+                         'tab_transfer_undo_restored_both_trees_and_kept_destination_selected',
+                         'ctrl_shift_2_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees',
+                         'searchable_transfer_picker_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees'):
             self.assertIn(evidence, fixture)
+        hotkey_stage = source.split('} else if (!strcmp(a.stage, "pointer-hotkey-transfer")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-picker-transfer")) {', 1)[0]
+        self.assertIn('control_shift_key(dpy, XK_2)', hotkey_stage)
+        self.assertIn("step('pointer-select-first-tab')", fixture)
+        picker_stage = source.split('} else if (!strcmp(a.stage, "pointer-picker-transfer")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-picker-confirm")) {', 1)[0]
+        self.assertIn('setup_prefix(dpy, XK_m, 0)', picker_stage)
+        self.assertIn('key(dpy, XK_Down)', picker_stage)
+        self.assertIn('key(dpy, XK_Up)', picker_stage)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_r)', picker_stage)
+        confirm_stage = source.split('} else if (!strcmp(a.stage, "pointer-picker-confirm")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-tab-drop-cancel")', 1)[0]
+        self.assertIn('key(dpy, XK_Return)', confirm_stage)
+        self.assertIn("cwd_snapshot(before_processes) == before_cwds", fixture)
+        self.assertIn("'/artifacts/pointer-transfer-hotkey.ppm'", fixture)
+        self.assertIn("'/artifacts/pointer-transfer-picker-search.ppm'", fixture)
+        self.assertIn("'/artifacts/pointer-transfer-picker.ppm'", fixture)
+        self.assertIn("prepare_stage='pointer-picker-transfer'", fixture)
         self.assertIn("pointer_position(dpy, app, 405, 57)", source)
         tab_drag = source.split('static void pointer_tab_drag_begin', 1)[1].split(
             'static void pointer_no_motion_begin', 1)[0]

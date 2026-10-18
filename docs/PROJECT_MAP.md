@@ -29,6 +29,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
 | crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |
+| crates/app/src/transfer_flow.rs | Frozen source validation and bounded searchable Ready project/workspace/tab destination pages; shared exact empty/populated transfer construction, preserving no-follow selection |
 | crates/app/src/pointer_layout.rs | Pure 10px Dwindle drag threshold, nearest gutter target, relative grab retention and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots, temporarily polls the focus-mode remainder, and provides clipped cross-tab drop previews with atomic TransferAndActivate |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |
