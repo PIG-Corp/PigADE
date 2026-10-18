@@ -159,3 +159,5 @@ not live memory admission; see ADR0013 and the resource-refusal report.
 [ADR0014](adr/0014-diff-bound-git-index-actions.md) records per-file index action durability and refusal boundaries. Git dialog control focus and pagination policy live in `crates/app/src/workspace_git.rs`; `git_status_ui.rs` renders the same control/page state.
 
 [ADR0015](adr/0015-guarded-native-git-commit.md) records native commit publication guards, original hook delegation, signing, host-restart identity and Unknown receipts. Real IPC coverage is in `crates/session-host/tests/project_setup.rs`; existing isolated catalog fixture includes commit review and confirmation after its Stage/Unstage checks.
+
+Native close protection: `crates/app/src/close_flow.rs` owns review/flush/deadline states; `close_ui.rs` binds WM close, modal input and ACK-driven pending resources; `dirty_documents.rs` inventories active/suspended authored drafts without including their text. The existing isolated context fixture tests WM_DELETE_WINDOW cancel/discard with an independent host. See [ADR0017](adr/0017-native-window-close-review.md).

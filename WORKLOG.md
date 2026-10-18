@@ -4021,3 +4021,59 @@ Integrated persistent agent profile pinning/order, schema14 migration and identi
 - Files: crates/storage/src/agent_profile_roster.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/storage/src/prompt.rs, crates/session-host/src/lib.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/session-host/tests/project_setup.rs, crates/app/src/profile_roster.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0016-agent-profile-roster.md
 - Verification: Full workspace passes including88 storage and10 real IPC tests; app288 plus12 targeted profile tests pass; strict workspace/app Clippy, formats/version/diff and debug/release builds pass;34 harness tests pass. Existing private release catalog03 passes exact pin/order revisions, UUID selection and reopen with unchanged profile content, layout, terminal frames/journal hashes and process identities, plus existing Git/tab scenarios. Final/reopened640px library visually reviewed.
 - Risks / next: Old hosts retain original profile order without new controls. Metadata schema14 requires pre-v14 backup for downgrade; no running user host/PTY was restarted. Native Wayland/a11y/reboot/soak/performance and full MVP gates remain open. Original unrelated dirt and stash0 preserved.
+
+## 2026-10-18T05:49:27+00:00 — git_commit_ui_luna
+
+Added read-only bounded dirty document inventory for active and suspended product drafts
+
+- Files: crates/app/src/dirty_documents.rs, WORKLOG.md
+- Verification: git diff --check passed. Added unit tests for clean saved versus edited prompt, deduplicated suspended context draft, and exclusion of empty creation/search state. Cargo, rustfmt, and desktop tests not run per root-owned lane.
+- Risks / next: Root must register dirty_documents in main.rs and run app formatting/tests; path-only CreateProject edits and RenamePane clearing-to-empty cannot be distinguished because ProductUi stores no original baseline.
+
+## 2026-10-18T05:53:51+00:00 — git_commit_ui_luna
+
+Hardened dirty document collection to follow live draft ownership and include remembered Git messages
+
+- Files: crates/app/src/dirty_documents.rs, WORKLOG.md
+- Verification: git diff --check passed. Added cases for stale-origin exclusion, exact pane-alias clearing, project-parent initial-value comparison, and remembered Git draft labels without message text. Cargo/fmt/native were not run per root lane.
+- Risks / next: Root should register the module and call collect(&product, &git_flow, rename_alias_baseline, create_project_parent_baseline); add the ProductUi CreateProject parent baseline at dialog construction if path-only changes must be protected. Ensure Flow dirty_commit_workspaces accessor is landed, then run app format/build/tests.
+
+## 2026-10-18T05:53:52+00:00 — git_commit_research_luna
+
+Added a fixed WM_DELETE_WINDOW stage to the isolated X11 helper and extended the existing context fixture to verify close-review cancel preserves a dirty draft, while explicit discard closes only the app and retains host/session/saved state.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to run the native close-review integration fixture and verify actual overlay strings/behavior.
+
+## 2026-10-18T05:54:08+00:00 — git_commit_ui_luna
+
+Tightened live unsaved-document detection and added exact UI baselines and remembered Git draft collection
+
+- Files: crates/app/src/dirty_documents.rs, WORKLOG.md
+- Verification: git diff --check passed. Added focused tests for active versus stale suspended origins, exact RenamePane alias clearing, CreateProject parent comparison, and remembered Git message redaction. Cargo/fmt/desktop not run per root lane.
+- Risks / next: Root now has ProductUi parent baseline and registered module; integrate collect with four arguments plus navigation alias baseline and Flow::dirty_commit_workspaces accessor, then run app tests.
+
+## 2026-10-18T05:56:44+00:00 — git_commit_ui_luna
+
+Addressed dirty-document collector clippy findings and protect frozen Save Layout geometry drafts
+
+- Files: crates/app/src/dirty_documents.rs, WORKLOG.md
+- Verification: git diff --check passed. Collapsed the three reported nested conditions, initialized the empty-dialog test fixture structurally, and added a pure test for a frozen geometry draft with an unchanged suggested name. Cargo and formatting remain root-owned.
+- Risks / next: Root should rerun its recorded Clippy check and app tests; no source outside the assigned module and WORKLOG changed.
+
+## 2026-10-18T05:59:18+00:00 — git_commit_research_luna
+
+Added a fixed 350 ms render-settle before both native close-review captures because XSync does not guarantee a GPUI paint frame; this is fixture synchronization only.
+
+- Files: scripts/isolated-ime-x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed)
+- Risks / next: Root reruns the native close fixture and inspects both review captures.
+
+## 2026-10-18T06:02:54+00:00 — /root
+
+Protect native window close with dirty-draft review, ACK-driven flush and explicit uncertain-outcome handling; preserve original editors and independent CLI lifetime
+
+- Files: crates/app/src/close_flow.rs, crates/app/src/close_ui.rs, crates/app/src/dirty_documents.rs, crates/app/src/main.rs, crates/app/src/workspace_git.rs, crates/app/src/mouse_delivery.rs, crates/app/src/appearance_commands.rs, crates/app/src/navigation.rs, crates/app/src/product.rs, crates/app/src/terminal_insert_commands.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0017-native-window-close-review.md
+- Verification: 301 app tests; strict app Clippy; app fmt; debug/release builds; 34 harness tests incl strict C compile; version/diff checks pass. Private release context02 passes native close cancel exact draft, discard UI-only exit, stable saved context/host/PID/generation/frame/layout/journal; both settled review captures inspected. context01 state pass but capture stale. Readonly Luna review found3 blockers, fixed and rechecked. Duplicate waiting Cargo child terminated by exact pid/ppid/cmdline; canonical final build passed.
+- Risks / next: Commit coherent close block. Native error injection, active-preedit close, Wayland/Hyprland runtime and broad MVP reboot/soak/performance/a11y remain open. Ordinary-close protection does not autosave on crash. Preserve unrelated dirt/stash0 and user host/PTYs.

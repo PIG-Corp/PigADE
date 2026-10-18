@@ -52,6 +52,30 @@ static unsigned long long self_process_start(void);
 static Window verify_app_focus_target(const Args *a, Display *dpy, xcb_connection_t *c, int set_focus);
 static void capture(Display *dpy, const char *path);
 
+static void request_wm_delete(Display *dpy, Window app) {
+    Atom protocols = XInternAtom(dpy, "WM_PROTOCOLS", False);
+    Atom delete_window = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+    Atom *supported = NULL;
+    int count = 0;
+    if (!XGetWMProtocols(dpy, app, &supported, &count))
+        fail("verified app window does not advertise WM protocols");
+    int accepts_delete = 0;
+    for (int i = 0; i < count; ++i)
+        if (supported[i] == delete_window) accepts_delete = 1;
+    if (supported) XFree(supported);
+    if (!accepts_delete) fail("verified app window does not advertise WM_DELETE_WINDOW");
+    XEvent event = {0};
+    event.xclient.type = ClientMessage;
+    event.xclient.window = app;
+    event.xclient.message_type = protocols;
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = (long)delete_window;
+    event.xclient.data.l[1] = (long)CurrentTime;
+    if (!XSendEvent(dpy, app, False, NoEventMask, &event))
+        fail("private WM_DELETE_WINDOW event send failed");
+    XSync(dpy, False);
+}
+
 static Args parse_args(int argc, char **argv) {
     Args a = {0};
     for (int i = 1; i < argc; i += 2) {
@@ -78,6 +102,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency") &&
         strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
         strcmp(a.stage, "context-save") && strcmp(a.stage, "context-close") &&
+        strcmp(a.stage, "context-close-confirm") && strcmp(a.stage, "wm-close") &&
         strcmp(a.stage, "prompts-open") && strcmp(a.stage, "prompt-new") &&
         strcmp(a.stage, "prompt-create-fields") && strcmp(a.stage, "prompt-save") &&
         strcmp(a.stage, "prompt-select-first") && strcmp(a.stage, "prompt-edit") &&
@@ -1317,6 +1342,10 @@ int main(int argc, char **argv) {
             context_edit_sequence(dpy);
         } else if (!strcmp(a.stage, "context-save")) {
             modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "context-close-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "wm-close")) {
+            request_wm_delete(dpy, app_window);
         } else if (!strcmp(a.stage, "context-close") ||
                    !strcmp(a.stage, "prompt-close") ||
                    !strcmp(a.stage, "prompt-delete-cancel")) {
@@ -1970,7 +1999,8 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "profile-confirm-delete") ? "1" :
                             !strcmp(a.stage, "prompt-create-fields") ? "34" :
                             !strcmp(a.stage, "prompt-rename") ? "15" :
-                            !strcmp(a.stage, "context-edit") ? "7" : "1";
+                            !strcmp(a.stage, "context-edit") ? "7" :
+                            !strcmp(a.stage, "wm-close") ? "0" : "1";
         if (!strcmp(a.stage, "pointer-clipboard-paste")) {
             printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s,"
                    "\"selection_transfer\":true,\"payload_bytes\":%zu}\n",

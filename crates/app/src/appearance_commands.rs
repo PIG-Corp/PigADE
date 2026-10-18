@@ -89,6 +89,7 @@ impl CanvasApp {
                     Err(error)=> {
                         let message=format!("Не удалось подтвердить настройку: {error}. Обновите состояние перед повторным сохранением.");
                         if this.product.dialog.is_none() { this.product.notice=Some(message.clone()); }
+                        this.close_flow.fail(message.clone());
                         this.product.appearance_error=Some(message);
                     },
                 }

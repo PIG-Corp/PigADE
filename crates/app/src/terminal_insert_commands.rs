@@ -44,6 +44,9 @@ impl CanvasApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         let started = !self.external_file_drag;
         if started {
             self.input_epoch = self.input_epoch.wrapping_add(1);
@@ -79,6 +82,9 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         let index = self.file_target_at(window.mouse_position());
         self.clear_external_files(cx);
         if let Some(index) = index {

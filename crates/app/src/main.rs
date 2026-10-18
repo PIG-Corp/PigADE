@@ -5,9 +5,12 @@ mod block_glyph;
 mod catalog_flow;
 mod cell_style;
 mod chrome;
+mod close_flow;
+mod close_ui;
 mod command_worker;
 mod controls;
 mod cursor;
+mod dirty_documents;
 mod edit_field;
 mod font;
 mod history_view;
@@ -1210,7 +1213,7 @@ struct CanvasApp {
     canvas_dirty: std::collections::BTreeSet<uuid::Uuid>,
     canvas_save_at: Option<Instant>,
     canvas_saving: Option<(uuid::Uuid, pigade_storage::CanvasOffset)>,
-    canvas_close_requested: bool,
+    close_flow: close_flow::CloseFlow,
     canvas_tab: Option<uuid::Uuid>,
     canvas_focus_mode: bool,
     canvas_focus_offset: pigade_storage::CanvasOffset,
@@ -1279,19 +1282,9 @@ impl CanvasApp {
         let ui_trace = trace.clone();
         let focus = cx.focus_handle();
         let close_target = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
             close_target
-                .update(cx, |this, cx| {
-                    if this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
-                        return true;
-                    }
-                    this.canvas_close_requested = true;
-                    this.canvas_drag = None;
-                    this.canvas_save_at = Some(Instant::now());
-                    this.flush_canvas_offset(cx);
-                    cx.notify();
-                    false
-                })
+                .update(cx, |this, cx| this.request_window_close(window, cx))
                 .unwrap_or(true)
         });
         let input_subscriptions = vec![
@@ -1541,6 +1534,7 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    this.close_flow.fail(format!("Операция session host не подтверждена: {}", error.message));
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
                                     this.tab_close_failed(error.ui_request);
                                     let transfer_error = this.transfer_reload.is_some_and(|pending| Some(pending.request) == error.ui_request);
@@ -1722,10 +1716,7 @@ impl CanvasApp {
                         this.flush_canvas_offset(cx);
                         this.service_panel_search(cx);
                         this.service_stops(cx);
-                        if this.canvas_close_requested && this.canvas_dirty.is_empty() && this.canvas_saving.is_none() {
-                            window.remove_window();
-                            return;
-                        }
+                        if this.service_window_close(window, cx) { return; }
                         let blinking = this.state.error.is_none()
                             && this.state.views.get(this.selected).is_some_and(|view| {
                                 view.state == "running"
@@ -1815,7 +1806,7 @@ impl CanvasApp {
             canvas_dirty: Default::default(),
             canvas_save_at: None,
             canvas_saving: None,
-            canvas_close_requested: false,
+            close_flow: Default::default(),
             canvas_tab: None,
             canvas_focus_mode: false,
             canvas_focus_offset: Default::default(),
@@ -2791,6 +2782,9 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         let Some(dialog) = &mut self.product.dialog else {
             return;
         };
@@ -2838,6 +2832,9 @@ impl CanvasApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if let Some(layout) = self.editor_layouts.get(&index)
             && self
                 .product
@@ -3541,6 +3538,9 @@ impl CanvasApp {
         cx: &mut Context<Self>,
     ) {
         use product::{Dialog, DialogKind, ProductAction as A};
+        if self.close_flow.active() {
+            return;
+        }
         self.focus.focus(window, cx);
         // A real hover may have just queued a focus CAS. Keep one explicit
         // user action and build its metadata batch only after that ACK.
@@ -3908,6 +3908,8 @@ impl CanvasApp {
                                 window.notify_text_input_changed(&this.focus);
                             }
                             Err(error) => {
+                                this.close_flow
+                                    .fail(format!("Клавиша управления не сохранена: {error}"));
                                 this.product.notice = Some(format!(
                                     "Не удалось подтвердить сохранение клавиши: {error}"
                                 ))
@@ -4084,6 +4086,8 @@ impl CanvasApp {
                     .to_string_lossy()
                     .into_owned()
                     .into();
+                self.product.create_project_parent_baseline =
+                    Some(dialog.fields[1].text().to_owned());
                 self.product.dialog = Some(dialog);
             }
             A::ChooseProjectParent => self.pick_project_folder(true, cx),
@@ -5152,6 +5156,9 @@ impl CanvasApp {
     fn apply_worker_receipt(&mut self, receipt: WorkerReceipt) {
         match receipt {
             WorkerReceipt::Request(receipt) => {
+                if receipt.outcome != DeliveryOutcome::Accepted {
+                    self.close_flow.fail("Приём последнего ввода терминалом не подтверждён. Ввод не повторяется; возвращение позволяет проверить состояние панели.");
+                }
                 if let ReceiptEffect::Rollback {
                     target, confirmed, ..
                 } = self.mouse_delivery.request_receipt(receipt)
@@ -5452,6 +5459,9 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.is_some() {
             return;
         }
@@ -5682,6 +5692,9 @@ impl CanvasApp {
         }
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.external_file_drag {
             self.clear_external_files(cx);
             cx.stop_propagation();
@@ -5754,7 +5767,8 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.product.dialog.is_some()
+        if self.close_flow.active()
+            || self.product.dialog.is_some()
             || self.external_file_drag
             || self.pane_drag.is_some()
             || self.resize_gesture.is_some()
@@ -5799,6 +5813,9 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         // Only real pointer movement changes hover focus. Repaint/layout changes
         // beneath a stationary cursor must not undo a keyboard focus command.
         let moved = self.hover_focus.motion(
@@ -5905,6 +5922,9 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.is_some() {
             return;
         }
@@ -5990,6 +6010,9 @@ impl CanvasApp {
         }
     }
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.is_some()
             || self.external_file_drag
             || self.pane_drag.is_some()
@@ -6027,6 +6050,9 @@ impl CanvasApp {
         cx.notify();
     }
     fn request_paste(&mut self, cx: &mut Context<Self>) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.clipboard_pending {
             return;
         }
@@ -6111,6 +6137,9 @@ impl CanvasApp {
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_key(event, window, cx) {
+            return;
+        }
         self.reset_cursor_blink(cx);
         if self.input_notice.take().is_some() {
             cx.notify();
@@ -6611,16 +6640,6 @@ impl CanvasApp {
                     cx,
                 );
             }
-            cx.stop_propagation();
-            return;
-        }
-        if self.canvas_close_requested && k.key == "escape" {
-            if k.modifiers.control && k.modifiers.shift {
-                window.remove_window();
-            } else {
-                self.canvas_close_requested = false;
-            }
-            cx.notify();
             cx.stop_propagation();
             return;
         }
@@ -7638,6 +7657,9 @@ fn project_panels(bounds: Bounds<Pixels>, count: usize, scale: f32) -> Vec<Bound
 }
 impl EntityInputHandler for CanvasApp {
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        if self.close_flow.active() {
+            return false;
+        }
         if self.product.dialog.is_some() {
             return !self.product.dialog.as_ref().is_some_and(|dialog| {
                 dialog.kind == product::DialogKind::History && dialog.active_field == 1
@@ -7692,6 +7714,9 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.is_some() {
             if let Some(buffer) = self.product.selection_editor_mut() {
                 buffer.select_utf16(range);
@@ -7723,6 +7748,9 @@ impl EntityInputHandler for CanvasApp {
         self.text_input.marked()
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.is_some() {
             if let Some(buffer) = self.product.active_editor_mut() {
                 buffer.unmark();
@@ -7744,6 +7772,9 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.as_ref().is_some_and(|dialog| {
             dialog.kind == product::DialogKind::History && dialog.active_field == 1
         }) {
@@ -7796,6 +7827,9 @@ impl EntityInputHandler for CanvasApp {
         }
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.as_ref().is_some_and(|dialog| {
             dialog.kind == product::DialogKind::History && dialog.active_field == 1
         }) {
@@ -7822,6 +7856,9 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_flow.active() {
+            return;
+        }
         if self.product.dialog.as_ref().is_some_and(|dialog| {
             dialog.kind == product::DialogKind::History && dialog.active_field == 1
         }) {
@@ -7929,7 +7966,9 @@ impl Render for CanvasApp {
             .is_some_and(|catalog| catalog.selection.workspace_id.is_some());
         let tabbar = self.product.tabbar(cx).into_any_element();
         let toolbar = self.product.toolbar(cx).into_any_element();
-        let overlay = self.product.overlay(&self.editor_layouts, cx);
+        let overlay = self
+            .close_overlay(cx)
+            .or_else(|| self.product.overlay(&self.editor_layouts, cx));
         let tab_drop_card = self
             .pane_drag
             .as_ref()
@@ -8312,24 +8351,6 @@ impl Render for CanvasApp {
                                 .border_t_1()
                                 .border_color(rgb(colors.border))
                                 .child(div().flex_1().min_w_0().truncate().child(status));
-                            if self.canvas_close_requested {
-                                status_row = status_row.child(
-                                    div()
-                                        .id("close-without-canvas-position")
-                                        .role(Role::Button)
-                                        .aria_label("Закрыть без сохранения положения canvas")
-                                        .px(px(8.))
-                                        .h(px(24.))
-                                        .child("Закрыть без сохранения · Ctrl+Shift+Esc")
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|_, _, window, cx| {
-                                                window.remove_window();
-                                                cx.stop_propagation();
-                                            }),
-                                        ),
-                                );
-                            }
                             if let Some((target, token, needs_release)) = acknowledgement {
                                 let label = if needs_release {
                                     "Подтвердить и отпустить кнопку мыши"

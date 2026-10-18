@@ -51,13 +51,16 @@ class IsolatedImePlanTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['fixture'], 'context')
         self.assertFalse(plan['input']['arbitrary_text_argument'])
+        self.assertIn('native WM_DELETE_WINDOW close review cancels with Escape and explicitly discards an unsaved draft with Ctrl+Enter',
+                      plan['input']['context'])
         self.assertIn('Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft',
                       plan['input']['context'])
         self.assertIn('no terminal input', plan['input']['context'])
 
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         harness = SCRIPT.read_text()
-        stages = ('context-close', 'prompts-open', 'prompt-new', 'prompt-create-fields',
+        stages = ('context-close', 'context-close-confirm', 'wm-close',
+                  'prompts-open', 'prompt-new', 'prompt-create-fields',
                   'prompt-save', 'prompt-select-first', 'prompt-edit', 'prompt-rename',
                   'prompt-save-edit', 'prompt-close', 'prompt-insert-open', 'prompt-use-first',
                   'prompt-delete', 'prompt-delete-cancel', 'prompt-confirm-delete')
@@ -70,6 +73,28 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("fixture_journal_hashes([generation]) == baseline_journal", harness)
         context_flow = harness.split('def run_context_fixture(', 1)[1].split(
             '\ndef run_latency_fixture(', 1)[0]
+        dirty_close = context_flow.split("helper_call(config, 'context-edit')", 1)[1].split(
+            "helper_call(config, 'context-save')", 1)[0]
+        self.assertLess(dirty_close.index("helper_call(config, 'wm-close')"),
+                        dirty_close.index("helper_call(config, 'context-close')"))
+        self.assertIn("'/artifacts/context-close-cancel-review.ppm'", dirty_close)
+        self.assertIn("'/artifacts/context-close-cancelled.ppm'", dirty_close)
+        discard_close = context_flow.split('# End with a second unsaved draft.', 1)[1]
+        self.assertLess(discard_close.index("helper_call(config, 'wm-close')"),
+                        discard_close.index("helper_call(config, 'context-close-confirm')"))
+        self.assertIn('app.wait(timeout=12)', discard_close)
+        self.assertIn('process_identity(host.pid) == discard_host_identity', discard_close)
+        self.assertIn('get_context() == inserted', discard_close)
+        self.assertIn("retained_view.get('state') == 'running'", discard_close)
+        self.assertIn('fixture_panel_pin(session) == baseline_pin', discard_close)
+        self.assertIn("'/artifacts/context-close-discard-review.ppm'", discard_close)
+        close_helper = source.split('static void request_wm_delete(', 1)[1].split('\n}', 1)[0]
+        self.assertIn('XGetWMProtocols(dpy, app', close_helper)
+        self.assertIn('WM_DELETE_WINDOW', close_helper)
+        self.assertIn('event.xclient.message_type = protocols', close_helper)
+        self.assertIn('event.xclient.data.l[0] = (long)delete_window', close_helper)
+        self.assertIn('XSendEvent(dpy, app, False, NoEventMask, &event)', close_helper)
+        self.assertIn('request_wm_delete(dpy, app_window)', source)
         self.assertNotIn('control.sendall', context_flow)
         self.assertIn("'context-prompt-inserted.ppm'", harness)
         self.assertIn("'context-prompt-delete-review.ppm'", harness)

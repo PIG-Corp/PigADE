@@ -68,6 +68,11 @@ pub(crate) struct Cleanup {
 }
 
 impl MouseDelivery {
+    /// Admission receipts are distinct from durable metadata saves.
+    pub fn has_pending_receipts(&self) -> bool {
+        !self.pending.is_empty() || !self.cleanup_waiting.is_empty()
+    }
+
     pub fn stage(
         &mut self,
         id: u64,

@@ -101,6 +101,10 @@ pub(crate) struct Navigation {
 }
 
 impl Navigation {
+    pub fn rename_session(&self) -> Option<uuid::Uuid> {
+        self.rename.map(|(session, _)| session)
+    }
+
     pub fn take_reply(&mut self, id: Option<uuid::Uuid>) -> Option<Pending> {
         if self
             .pending

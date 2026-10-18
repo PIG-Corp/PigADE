@@ -3790,7 +3790,7 @@ def run_setup_fixture(config, report, control, app, env, save):
                      'four-panels.ppm', 'four-panels-compact.ppm']}
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
     save()
-def run_context_fixture(config, report, env, save):
+def run_context_fixture(config, report, env, save, app, host):
     report['stage'] = 'workspace-context-editor'
     save()
     workspace = report['fixture']['workspace']
@@ -3815,6 +3815,19 @@ def run_context_fixture(config, report, env, save):
     before_save = get_context()
     require(before_save['revision'] == 0 and before_save['instructions'] == '',
             'workspace context changed before explicit save')
+    # Request native window close while the editor contains its exact unsaved
+    # draft. Escape must cancel the overlay and leave the same editor/draft open.
+    helper_call(config, 'wm-close')
+    # XSync orders the X request but does not wait for the GPUI render frame.
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/context-close-cancel-review.ppm')
+    require(app.poll() is None and get_context() == before_save,
+            'WM_DELETE_WINDOW closed the app or persisted the dirty context before review')
+    helper_call(config, 'context-close')
+    time.sleep(.2)
+    helper_call(config, 'capture', '/artifacts/context-close-cancelled.ppm')
+    require(app.poll() is None and get_context() == before_save,
+            'Escape from native close review lost the draft or closed the app')
     helper_call(config, 'context-save')
     expected = '你好xb'
     saved = wait_until(lambda: (document if (document := get_context())['revision'] == 1
@@ -3950,6 +3963,49 @@ def run_context_fixture(config, report, env, save):
     require_live_unchanged()
     time.sleep(.2)
     capture('context-prompts-deleted.ppm')
+
+    # End with a second unsaved draft. Only Ctrl+Enter in the explicit close
+    # review may discard it and exit the app; the host and PTY remain live.
+    helper_call(config, 'prompt-close')
+    helper_call(config, 'context-open')
+    time.sleep(.3)
+    helper_call(config, 'context-edit')
+    time.sleep(.2)
+    discard_baseline = get_context()
+    require(discard_baseline == inserted,
+            'final dirty context draft changed the saved context before close review')
+    catalog_before_discard = host_request({'command': 'catalog'})['catalog']
+    discard_host_identity = process_identity(host.pid)
+    require(host.poll() is None and process_identity(app.pid) ==
+            (config['boot_id'], config['app_start']),
+            'close-discard fixture lost the private app or host process identity')
+    helper_call(config, 'wm-close')
+    # XSync orders the X request but does not wait for the GPUI render frame.
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/context-close-discard-review.ppm')
+    require(app.poll() is None and get_context() == discard_baseline,
+            'WM_DELETE_WINDOW skipped explicit discard review or changed saved context')
+    helper_call(config, 'context-close-confirm')
+    try:
+        app_status = app.wait(timeout=12)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError('confirmed native close did not exit the private app') from error
+    retained_view = fixture_session_models(session).get(generation)
+    require(app_status == 0 and host.poll() is None and
+            process_identity(host.pid) == discard_host_identity and
+            get_context() == inserted and fixture_generations() == baseline_generations and
+            retained_view is not None and retained_view.get('state') == 'running' and
+            retained_view.get('pid') == baseline_view.get('pid') and
+            retained_view.get('frame') == baseline_view.get('frame') and
+            fixture_panel_pin(session) == baseline_pin and
+            fixture_journal_hashes([generation]) == baseline_journal,
+            'confirmed discard failed to close only PigADE while preserving host, session and saved context')
+    catalog_after_discard = host_request({'command': 'catalog'})['catalog']
+    require(catalog_after_discard.get('selection') == catalog_before_discard.get('selection') and
+            catalog_after_discard.get('tabs') == catalog_before_discard.get('tabs'),
+            'native close changed catalog selection or workspace layout')
+    captures.extend(['context-close-cancel-review.ppm', 'context-close-cancelled.ppm',
+                     'context-close-discard-review.ppm'])
     report['contextEditor'] = {
         'workspace': workspace, 'initialRevision': initial['revision'],
         'unsavedRevisionRemainedZero': True, 'savedRevision': saved['revision'],
@@ -3962,6 +4018,9 @@ def run_context_fixture(config, report, env, save):
         'role_and_memory_preserved': True, 'prompt_delete_cancel_preserved_record': True,
         'prompt_delete_confirm_removed_record_only': True,
         'generation_pid_frame_and_journal_unchanged': True,
+        'native_close_escape_preserved_exact_dirty_context_draft': True,
+        'native_close_ctrl_enter_discarded_only_unsaved_draft_and_exited_app': True,
+        'native_close_preserved_host_session_process_identity_and_saved_context': True,
         'captures': captures,
         'privateInputMethod': active_im,
         'capture': 'context-editor.ppm', 'scope': 'private Xvfb window; isolated host metadata only',
@@ -5614,7 +5673,7 @@ def inside_run() -> int:
             run_keyboard_fixture(config, report, control, app, fcitx, app_env, artifacts, save)
             return 0
         if config.get('fixture') == 'context':
-            run_context_fixture(config, report, app_env, save)
+            run_context_fixture(config, report, app_env, save, app, host)
             return 0
         if config.get('fixture') == 'memory':
             run_memory_fixture(config, report, app_env, save)
@@ -5764,7 +5823,9 @@ def outer_run(args) -> dict:
             'app_sha256': sha256(app), 'host_sha256': sha256(host),
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
-                (['context-editor.ppm', 'context-prompts-empty.ppm',
+                (['context-editor.ppm', 'context-close-cancel-review.ppm',
+                  'context-close-cancelled.ppm', 'context-close-discard-review.ppm',
+                  'context-prompts-empty.ppm',
                   'context-prompt-editor.ppm', 'context-prompt-editor-filled.ppm',
                   'context-prompts-created.ppm', 'context-prompt-edit.ppm',
                   'context-prompts-renamed.ppm', 'context-prompts-insertion-library.ppm',
@@ -5847,7 +5908,7 @@ def plan(args) -> dict:
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
-                  'context': 'fixed private shortcut and Pinyin editing; create/rename/delete-cancel/delete a prompt through the palette, then Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft; no terminal input',
+                  'context': 'fixed private shortcut and Pinyin editing; native WM_DELETE_WINDOW close review cancels with Escape and explicitly discards an unsaved draft with Ctrl+Enter; create/rename/delete-cancel/delete a prompt through the palette, then Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft; no terminal input',
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',

@@ -393,6 +393,7 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) create_project_parent_baseline: Option<String>,
     pub(super) tab_drop_target: Option<Uuid>,
     pub(super) transfer_source: Option<crate::transfer_flow::Source>,
     pub(super) transfer_index: usize,

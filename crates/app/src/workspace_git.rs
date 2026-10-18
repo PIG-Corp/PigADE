@@ -442,6 +442,7 @@ pub(crate) struct Flow {
     index: Option<IndexOperation>,
     commit: Option<CommitOperation>,
     commit_drafts: Vec<(Uuid, String)>,
+    submitted_draft: Option<(Uuid, Uuid, String)>,
     commit_plan: Option<(Target, protocol::WorkspaceGitCommitPlan)>,
     last_commit_inspect: Option<Instant>,
 }
@@ -510,6 +511,59 @@ impl CommitOperation {
 }
 
 impl Flow {
+    pub(crate) fn unresolved_resources(&self) -> Vec<&'static str> {
+        let mut resources = Vec::new();
+        if self
+            .commit
+            .as_ref()
+            .is_some_and(CommitOperation::unresolved)
+        {
+            resources.push("Итог отправленного Git-коммита");
+        }
+        if self.index.as_ref().is_some_and(IndexOperation::unresolved) {
+            resources.push("Итог изменения Git-индекса");
+        }
+        resources
+    }
+    pub(crate) fn close_uncertainty(&self) -> Option<&'static str> {
+        if self.commit.as_ref().is_some_and(|operation| {
+            matches!(
+                operation.state.phase,
+                protocol::GitCommitPhase::Unknown | protocol::GitCommitPhase::Unavailable
+            )
+        }) || self.index.as_ref().is_some_and(|operation| {
+            matches!(
+                operation.state.phase,
+                IndexPhase::Unknown | IndexPhase::Unavailable
+            )
+        }) {
+            Some(
+                "Исход отправленной операции Git неизвестен. Вернитесь в Git для проверки квитанции; операция не повторяется. Закрытие UI не отменяет её.",
+            )
+        } else {
+            None
+        }
+    }
+    pub(crate) fn request_pending(&self) -> bool {
+        self.pending.is_some() || self.next.is_some() || self.after_read.is_some()
+    }
+    pub(crate) fn dirty_commit_workspaces(&self) -> Vec<Uuid> {
+        self.commit_drafts
+            .iter()
+            .filter(|(_, text)| !text.trim().is_empty())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+    fn commit_applied(&mut self, workspace: Uuid, ticket: Uuid) {
+        if let Some((id, submitted_ticket, text)) = &self.submitted_draft
+            && *id == workspace
+            && *submitted_ticket == ticket
+        {
+            self.commit_drafts
+                .retain(|(id, draft)| *id != workspace || draft != text);
+            self.submitted_draft = None;
+        }
+    }
     pub(crate) fn commit_draft(&self, workspace: Uuid) -> String {
         self.commit_drafts
             .iter()
@@ -1128,6 +1182,7 @@ impl CanvasApp {
         }
         self.git_flow
             .remember_commit_draft(target.workspace, &message);
+        self.git_flow.submitted_draft = Some((target.workspace, plan.ticket, message));
         self.git_flow.commit = Some(operation);
         self.git_flow.last_commit_inspect = Some(Instant::now());
         self.git_flow.commit_plan = None;
@@ -1264,17 +1319,19 @@ impl CanvasApp {
 
     pub(crate) fn service_workspace_git(&mut self, cx: &mut Context<Self>) {
         if self.git_flow.pending.is_none()
-            && self
+            && (self
                 .product
                 .dialog
                 .as_ref()
                 .is_some_and(|dialog| dialog.kind == DialogKind::WorkspaceGit)
+                || self.close_flow.active())
             && let Some(operation) = self.git_flow.commit.as_ref()
             && operation.state.phase == protocol::GitCommitPhase::Running
-            && self.product.git_sheet.as_ref().is_some_and(|sheet| {
-                sheet.target.same_scope(&operation.target)
-                    && sheet.target.current(self.product.catalog.as_ref())
-            })
+            && (self.close_flow.active()
+                || self.product.git_sheet.as_ref().is_some_and(|sheet| {
+                    sheet.target.same_scope(&operation.target)
+                        && sheet.target.current(self.product.catalog.as_ref())
+                }))
             && self
                 .git_flow
                 .last_commit_inspect
@@ -1299,6 +1356,10 @@ impl CanvasApp {
             return;
         }
         let pending = self.git_flow.pending.take().expect("matching Git request");
+        if let Err(error) = &reply {
+            self.close_flow
+                .fail(format!("Операция Git не подтверждена: {}", error.message));
+        }
         if matches!(pending.kind, Kind::CommitPrepare | Kind::Commit { .. }) {
             match pending.kind {
                 Kind::CommitPrepare => {
@@ -1395,6 +1456,8 @@ impl CanvasApp {
                         }
                     }
                     if applied_transition {
+                        self.git_flow
+                            .commit_applied(pending.target.workspace, ticket);
                         self.queue_commit_snapshot_refresh(&pending);
                     }
                 }
@@ -2058,6 +2121,66 @@ mod tests {
         assert!(!pending.current(&sheet, Some(&catalog)));
         sheet.receive_diff(&pending, Some(&catalog), Ok(result));
         assert!(sheet.diff.as_ref().unwrap().result.is_none());
+    }
+
+    #[test]
+    fn close_retains_durable_git_work_across_transport_gaps_and_unknown_outcomes() {
+        let (index, _) = index_fixture();
+        let mut flow = Flow {
+            index: Some(index),
+            ..Default::default()
+        };
+        assert!(!flow.request_pending());
+        assert_eq!(
+            flow.unresolved_resources(),
+            vec!["Итог изменения Git-индекса"]
+        );
+        flow.index.as_mut().unwrap().state.phase = IndexPhase::Unknown;
+        assert!(flow.close_uncertainty().is_some());
+        flow.index.as_mut().unwrap().state.phase = IndexPhase::Applied;
+        assert!(flow.unresolved_resources().is_empty());
+        assert!(flow.close_uncertainty().is_none());
+        let (_, sheet, _) = fixture();
+        flow.commit = Some(CommitOperation {
+            target: sheet.target.clone(),
+            state: protocol::WorkspaceGitCommitResult {
+                ticket: Uuid::new_v4(),
+                workspace_id: sheet.target.workspace,
+                workspace_revision: sheet.target.revision,
+                project_id: sheet.target.project,
+                cwd: sheet.target.cwd.clone(),
+                phase: protocol::GitCommitPhase::Running,
+                commit: None,
+                acknowledged: false,
+                message: None,
+            },
+        });
+        assert!(!flow.request_pending());
+        assert_eq!(
+            flow.unresolved_resources(),
+            vec!["Итог отправленного Git-коммита"]
+        );
+        flow.commit.as_mut().unwrap().state.phase = protocol::GitCommitPhase::Unknown;
+        assert!(flow.close_uncertainty().is_some());
+        flow.commit.as_mut().unwrap().state.phase = protocol::GitCommitPhase::Applied;
+        assert!(flow.unresolved_resources().is_empty());
+    }
+
+    #[test]
+    fn applied_commit_clears_only_its_exact_submitted_draft() {
+        let workspace = Uuid::from_u128(1);
+        let ticket = Uuid::from_u128(2);
+        let mut flow = Flow::default();
+        flow.remember_commit_draft(workspace, "first");
+        flow.submitted_draft = Some((workspace, ticket, "first".into()));
+        flow.commit_applied(workspace, Uuid::nil());
+        assert_eq!(flow.dirty_commit_workspaces(), vec![workspace]);
+        flow.remember_commit_draft(workspace, "new unsaved text");
+        flow.commit_applied(workspace, ticket);
+        assert_eq!(flow.commit_draft(workspace), "new unsaved text");
+        flow.submitted_draft = Some((workspace, ticket, "new unsaved text".into()));
+        flow.commit_applied(workspace, ticket);
+        assert!(flow.dirty_commit_workspaces().is_empty());
     }
 
     #[test]
