@@ -4629,3 +4629,67 @@ Correct final Ctrl+Enter build duration in prior history entry
 - Files: WORKLOG.md
 - Verification: Authoritative /tmp/pigade-ctrl-enter-build.log reports Finished release in35.69s, not1m39s stated in the preceding entry. Build exit0 and other recorded results are unchanged.
 - Risks / next: Original live Wayland shortcut cause remains unconfirmed; pending exact-screen clarification. Broad product goal remains active.
+
+## 2026-10-18T08:27:51+00:00 — handoff_format_luna
+
+Added a bounded, sanitized visible-terminal handoff formatter with source metadata, truncation markers, and focused unit tests.
+
+- Files: crates/app/src/handoff.rs
+- Verification: rustfmt --edition 2024 crates/app/src/handoff.rs; git diff --check -- crates/app/src/handoff.rs passed. App tests not run per task handoff; root owns integrated Cargo verification.
+- Risks / next: Root to wire or leave module unwired as appropriate and run integrated app verification.
+
+## 2026-10-18T08:28:46+00:00 — handoff_format_luna
+
+Preserved emoji and Indic shaping characters in sanitized handoff text, localized formatter errors, and avoided a second transcript-tail copy.
+
+- Files: crates/app/src/handoff.rs
+- Verification: rustfmt --edition 2024 crates/app/src/handoff.rs; git diff --check -- crates/app/src/handoff.rs passed. App Cargo tests not run per root ownership.
+- Risks / next: Root to run app integration verification; C1 controls are deliberately rejected in addition to ESC, while other C0 controls are filtered except LF and tab.
+
+## 2026-10-18T08:29:15+00:00 — handoff_format_luna
+
+Fixed formatter helper shadowing and rejected budgets that fit only the wrapper and truncation marker; added budget-edge test.
+
+- Files: crates/app/src/handoff.rs
+- Verification: rustfmt --edition 2024 crates/app/src/handoff.rs; git diff --check -- crates/app/src/handoff.rs passed. App Cargo tests not run per root ownership.
+- Risks / next: Root to run integrated app tests.
+
+## 2026-10-18T08:30:04+00:00 — /root/handoff_ui_luna
+
+Add native agent handoff review sheet with editable source/request fields, provider selection, bounded complete preview, and guarded launch controls.
+
+- Files: crates/app/src/handoff_ui.rs, WORKLOG.md
+- Verification: crates/app/bootstrap.sh fmt --package pigade-app -- --check passed; rustfmt --edition 2024 crates/app/src/handoff_ui.rs passed; git diff --no-index --check /dev/null crates/app/src/handoff_ui.rs passed. Full compile deferred until parent wires module/actions.
+- Risks / next: Root should wire handoff_overlay and confirm expected handoff sheet/action API; then integrate and compile.
+
+## 2026-10-18T08:31:47+00:00 — /root/handoff_ui_luna
+
+Align handoff review UI with integrated frozen-plan API, avoid prompt formatting for unchanged fields/provider, and render complete effective context text separately.
+
+- Files: crates/app/src/handoff_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/handoff_ui.rs passed; git diff --no-index --check /dev/null crates/app/src/handoff_ui.rs reported no whitespace errors (exit 1 is expected for untracked-file diff). No Cargo/build run in this scoped update.
+- Risks / next: Root owns package compile and integration verification; stale launch remains hidden until exact prepared fields/provider pass handoff_ready().
+
+## 2026-10-18T08:33:14+00:00 — handoff_format_luna
+
+Installed a user-local PigADE QuickShell application launcher pointing at the current repository release build through a stable wrapper.
+
+- Files: scripts/install-desktop.py, scripts/run-desktop.sh, crates/app/assets/desktop/org.pigade.app.svg
+- Verification: bash -n scripts/run-desktop.sh; python3 -m py_compile scripts/install-desktop.py; installer ran twice idempotently; desktop-file-validate exited 0 with the expected multi-category hint for requested Development;Utility; metadata; readlink resolved ~/.local/bin/pigade to the repository wrapper; git diff --check passed.
+- Risks / next: Root to verify registered launcher entry read-only; app was not launched and running Quickshell was not restarted.
+
+## 2026-10-18T08:33:34+00:00 — ctrl_enter_review_luna
+
+Extend private setup fixture with prepare-only and explicit-confirm visible-context handoff coverage
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 -v (37 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; compile_helper for scripts/x11-ime-input.c succeeded with strict flags; git diff --check passed
+- Risks / next: Root to run private setup fixture against current build; no native app or desktop input was run by this agent
+
+## 2026-10-18T08:34:15+00:00 — /root
+
+Integrate and register latest-release PigADE launcher in the user application menu
+
+- Files: scripts/install-desktop.py, scripts/run-desktop.sh, crates/app/assets/desktop/org.pigade.app.svg, README.md
+- Verification: Installed user-local org.pigade.app.desktop/icon and stable pigade symlink. Root caught quoted TryExec hiding entry (GIO constructor NULL), removed shell quotes from TryExec and duplicate main category, reinstalled. GIO now resolves PigADE and should_show=True, correct Exec. Actual Omarchy AppLibrary uses DesktopEntries.applications and watches valuesChanged. No app launch or desktop/host restart; wrapper resolves current release path on each invocation.
+- Risks / next: Run final syntax/desktop validation and commit launcher separately. Handoff product work is still pending integration; broad goal active. Running older UI/hosts untouched.
