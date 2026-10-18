@@ -2291,6 +2291,7 @@ mod tests {
             tab_close_schema: None,
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
+            history_grid_schema: Some(1),
         };
         assert!(target(&catalog, workspace_id, 3).is_err());
         assert_eq!(target(&catalog, workspace_id, 4)?.workspace_revision, 4);

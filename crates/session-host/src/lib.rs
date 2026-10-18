@@ -1012,12 +1012,17 @@ fn restore_model_through(
 }
 impl Host {
     fn history_view_source(&self, query: &history_view::Query) -> Result<Option<(PathBuf, u64)>> {
-        let history_view::Query::Open {
-            session,
-            generation,
-        } = query
-        else {
-            return Ok(None);
+        let (session, generation) = match query {
+            history_view::Query::Open {
+                session,
+                generation,
+            }
+            | history_view::Query::OpenGrid {
+                session,
+                generation,
+                ..
+            } => (session, generation),
+            _ => return Ok(None),
         };
         for candidate in &self.sessions {
             let view = candidate.view.lock().expect("view lock");

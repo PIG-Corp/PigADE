@@ -29,6 +29,8 @@ mod prompt_commands;
 mod prompt_flow;
 mod protocol;
 mod publication_trace;
+mod scrollback;
+mod scrollback_ui;
 mod selection;
 mod session_control;
 mod setup_flow;
@@ -1135,6 +1137,7 @@ mod focus_placement_tests {
             tab_close_schema: None,
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
+            history_grid_schema: Some(1),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1231,6 +1234,12 @@ struct CanvasApp {
     navigation: navigation::Navigation,
     stop_control: session_control::StopControl,
     git_flow: workspace_git::Flow,
+    scrollback: scrollback::HistoryViewport,
+    scrollback_request: Option<uuid::Uuid>,
+    scrollback_display: Option<View>,
+    scrollback_selection: Option<selection::CellSelection>,
+    scrollback_dragging: bool,
+    scrollback_wheel: mouse::WheelAccumulator,
     deferred_placement: Option<pigade_layout::Command>,
     focus: FocusHandle,
     selected: usize,
@@ -1349,7 +1358,7 @@ impl CanvasApp {
                             };
                             if !provider_reply { this.product.busy = false; }
                             match reply {
-                                Ok(reply) => {
+                                Ok(mut reply) => {
                                     let ui_request = reply.ui_request;
                                     if let Some(pending)=stop_pending { this.receive_stop(pending,reply.process_view,cx); }
                                     if let Some(providers) = reply.providers {
@@ -1357,7 +1366,9 @@ impl CanvasApp {
                                         this.product.provider_error = None;
                                     }
                                     if reply.history_view_request {
-                                        this.apply_history_reply(reply.history_view.clone(), cx);
+                                        if reply.ui_request.is_some() && reply.ui_request==this.scrollback_request {
+                                            this.receive_scrollback(reply.ui_request,reply.history_view.take(),cx);
+                                        } else { this.apply_history_reply(reply.history_view.take(), cx); }
                                     }
                                     if let Some(selection) = reply.selection {
                                         let generation_changed = this.product.catalog.as_ref().is_some_and(|catalog| catalog.selection.window.panel_generations != selection.window.panel_generations);
@@ -1534,6 +1545,7 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if this.fail_scrollback(error.ui_request,&error.message,cx) { continue; }
                                     this.close_flow.fail(format!("Операция session host не подтверждена: {}", error.message));
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
                                     this.tab_close_failed(error.ui_request);
@@ -1716,10 +1728,11 @@ impl CanvasApp {
                         this.flush_canvas_offset(cx);
                         this.service_panel_search(cx);
                         this.service_stops(cx);
+                        this.service_scrollback(window,cx);
                         if this.service_window_close(window, cx) { return; }
                         let blinking = this.state.error.is_none()
                             && this.state.views.get(this.selected).is_some_and(|view| {
-                                view.state == "running"
+                                view.state == "running" && !this.history_target(view)
                                     && cursor::plan(
                                         &view.frame,
                                         view.frame.geometry.rows,
@@ -1777,6 +1790,12 @@ impl CanvasApp {
             product_rx,
             git_worker,
             git_flow: Default::default(),
+            scrollback: Default::default(),
+            scrollback_request: None,
+            scrollback_display: None,
+            scrollback_selection: None,
+            scrollback_dragging: false,
+            scrollback_wheel: Default::default(),
             product_launch_unknown: false,
             catalog_edit: None,
             prompt_reload: None,
@@ -2659,9 +2678,9 @@ impl CanvasApp {
                     self.product.history_sheet = None;
                 }
             }
-            None => {
+            Some(protocol::HistoryViewReply::Grid { .. }) | None => {
                 if let Some(history) = &mut self.product.history_sheet {
-                    history.error = Some("Host returned no history response".into());
+                    history.error = Some("Host returned no text history response".into());
                     history.status = "История недоступна; можно обновить снимок".into();
                     history.pending = None;
                 }
@@ -4960,7 +4979,8 @@ impl CanvasApp {
         self.send_to(self.selected, bytes, cx);
     }
     fn target_can_send(&self, view: &View) -> bool {
-        can_send_to_view(view, &self.state, self.input_error.as_deref())
+        !self.history_target(view)
+            && can_send_to_view(view, &self.state, self.input_error.as_deref())
             && !self.mouse_delivery.awaiting_cleanup(&CommandTarget {
                 session: view.session.clone(),
                 generation: view.generation.clone(),
@@ -5416,6 +5436,26 @@ impl CanvasApp {
         }
     }
     fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        if self.selected_history() {
+            if let (Some(selection), Some(view)) =
+                (&self.scrollback_selection, &self.scrollback_display)
+            {
+                let widths = self.scrollback.displayed_page().map(|page| {
+                    page.rows
+                        .iter()
+                        .map(|row| row.source_columns)
+                        .collect::<Vec<_>>()
+                });
+                let text = widths.as_deref().map_or_else(
+                    || selection.text(view),
+                    |widths| selection.text_with_row_widths(view, widths),
+                );
+                if let Ok(text) = text {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            return;
+        }
         if self.clipboard_pending {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
@@ -5439,6 +5479,21 @@ impl CanvasApp {
         }
     }
     fn select_visible(&mut self, cx: &mut Context<Self>) {
+        if self.selected_history() {
+            if let Some(view) = &self.scrollback_display {
+                self.scrollback_selection = selection::CellSelection::new(
+                    view,
+                    selection::CellPosition { row: 0, column: 0 },
+                    selection::CellPosition {
+                        row: usize::from(view.frame.geometry.rows) - 1,
+                        column: usize::from(view.frame.geometry.cols) - 1,
+                    },
+                )
+                .ok();
+            }
+            cx.notify();
+            return;
+        }
         if let Some(view) = self.state.views.get(self.selected) {
             self.selection = selection::CellSelection::new(
                 view,
@@ -5651,6 +5706,27 @@ impl CanvasApp {
                 cx.notify();
                 return;
             }
+            if self.history_target(&self.state.views[index]) {
+                if event.button == MouseButton::Left {
+                    self.scrollback_selection = self.scrollback_display.as_ref().and_then(|view| {
+                        let position = self.panes[index].pointer_position(
+                            event.position,
+                            &view.frame.geometry,
+                            false,
+                        )?;
+                        let position = selection::CellPosition {
+                            row: position.row,
+                            column: position.column,
+                        };
+                        selection::CellSelection::new(view, position, position).ok()
+                    });
+                    self.scrollback_dragging = self.scrollback_selection.is_some();
+                }
+                self.persist_focus(cx);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
             if event.button == MouseButton::Left
                 && !self.prefix
                 && !self
@@ -5693,6 +5769,11 @@ impl CanvasApp {
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.close_flow.active() {
+            return;
+        }
+        if self.scrollback_dragging {
+            self.scrollback_dragging = false;
+            cx.stop_propagation();
             return;
         }
         if self.external_file_drag {
@@ -5814,6 +5895,35 @@ impl CanvasApp {
         cx: &mut Context<Self>,
     ) {
         if self.close_flow.active() {
+            return;
+        }
+        if self.product.dialog.is_some() {
+            self.scrollback_dragging = false;
+        }
+        if self.scrollback_dragging {
+            if event.pressed_button == Some(MouseButton::Left) {
+                if let (Some(view), Some(selection)) =
+                    (&self.scrollback_display, &mut self.scrollback_selection)
+                    && let Some(index) = self.state.views.iter().position(|live| {
+                        live.session == view.session && live.generation == view.generation
+                    })
+                    && let Some(pane) = self.panes.get(index)
+                    && let Some(position) =
+                        pane.pointer_position(event.position, &view.frame.geometry, true)
+                {
+                    let _ = selection.set_focus(
+                        view,
+                        selection::CellPosition {
+                            row: position.row,
+                            column: position.column,
+                        },
+                    );
+                }
+            } else {
+                self.scrollback_dragging = false;
+            }
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         // Only real pointer movement changes hover focus. Repaint/layout changes
@@ -5962,6 +6072,38 @@ impl CanvasApp {
         let Some((index, position)) = self.pointer_hit(event.position) else {
             return;
         };
+        let lines = match event.delta {
+            ScrollDelta::Lines(delta) => delta.y,
+            ScrollDelta::Pixels(delta) => {
+                f32::from(delta.y) / f32::from(self.panes[index].cell.height)
+            }
+        };
+        let modes = self.state.views[index].frame.modes;
+        if self.history_target(&self.state.views[index]) {
+            let rows = self.state.views[index].frame.geometry.rows;
+            let cols = self.state.views[index].frame.geometry.cols;
+            let steps = self
+                .scrollback_wheel
+                .take_steps(lines)
+                .into_iter()
+                .map(|step| if step == mouse::Wheel::Up { 1i64 } else { -1 })
+                .sum::<i64>();
+            if steps != 0 {
+                self.scrollback.scroll_lines(steps, rows, cols);
+                self.service_scrollback(window, cx);
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if modes & (mouse::MOUSE_REPORT_CLICK | mouse::MOUSE_DRAG | mouse::MOUSE_MOTION | (1 << 12))
+            == 0
+            && lines > 0.
+        {
+            self.open_scrollback(index, lines.ceil().clamp(1., 128.) as u64, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         let view = &self.state.views[index];
         if !self.target_can_send(view) {
             return;
@@ -6138,6 +6280,9 @@ impl CanvasApp {
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.close_key(event, window, cx) {
+            return;
+        }
+        if self.scrollback_key(event, window, cx) {
             return;
         }
         self.reset_cursor_blink(cx);
@@ -7772,6 +7917,9 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.product.dialog.is_none() && self.selected_history() {
+            return;
+        }
         if self.close_flow.active() {
             return;
         }
@@ -7827,6 +7975,9 @@ impl EntityInputHandler for CanvasApp {
         }
     }
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        if self.product.dialog.is_none() && self.selected_history() {
+            return;
+        }
         if self.close_flow.active() {
             return;
         }
@@ -7856,6 +8007,9 @@ impl EntityInputHandler for CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.product.dialog.is_none() && self.selected_history() {
+            return;
+        }
         if self.close_flow.active() {
             return;
         }
@@ -8002,7 +8156,14 @@ impl Render for CanvasApp {
         let painter = entity.clone();
         let trace = self.trace.clone();
         let paint_revision = self.state.revision;
-        let views = self.state.views.clone();
+        let mut views = self.state.views.clone();
+        if let Some(history) = &self.scrollback_display
+            && let Some(view) = views.iter_mut().find(|view| {
+                view.session == history.session && view.generation == history.generation
+            })
+        {
+            *view = history.clone();
+        }
         let pane_titles = views
             .iter()
             .map(|view| self.product.pane_title(view).to_owned())
@@ -8013,6 +8174,8 @@ impl Render for CanvasApp {
         let file_drop_target = self.file_drop_target.clone();
         let cursor_visible = self.cursor_phase_visible;
         let selection = self.selection.clone();
+        let history_selection = self.scrollback_selection.clone();
+        let history_identity = self.scrollback.active_identity();
         let drop_preview = self
             .pane_drag
             .as_ref()
@@ -8030,6 +8193,7 @@ impl Render for CanvasApp {
         let terminal_label = self.state.views.get(selected).map_or_else(
             || "Терминал: нет выбранной сессии".to_owned(),
             |view| {
+                if self.history_target(view) { return format!("История терминала {}. Только чтение. End или Escape возвращает текущий вывод.",self.product.pane_title(view)); }
                 format!(
                     "Терминал {} · {}",
                     self.product.pane_title(view),
@@ -8037,7 +8201,7 @@ impl Render for CanvasApp {
                 )
             },
         );
-        let status = self.error()
+        let status = self.error().or_else(||self.scrollback_status())
             .or_else(|| self.state.poll_backpressured.then(|| "Обновление терминала задержано".into()))
             .or_else(|| self.input_notice.clone()).unwrap_or_else(|| {
             if self.prefix {
@@ -8270,7 +8434,7 @@ impl Render for CanvasApp {
                                                                     colors
                                                                 },
                                                             },
-                                                            selection.as_ref(),
+                                                            if views.get(index).is_some_and(|view| history_identity.is_some_and(|id| view.session==id.session.to_string() && view.generation==id.generation.to_string())) { history_selection.as_ref() } else { selection.as_ref() },
                                                             &font,
                                                             window,
                                                             cx,
@@ -8351,6 +8515,11 @@ impl Render for CanvasApp {
                                 .border_t_1()
                                 .border_color(rgb(colors.border))
                                 .child(div().flex_1().min_w_0().truncate().child(status));
+                            if !self.scrollback.is_live() {
+                                status_row=status_row.child(div().id("scrollback-live").role(Role::Button).aria_label("К текущему выводу")
+                                    .px(px(8.)).text_color(rgb(colors.accent)).child("К текущему выводу")
+                                    .on_mouse_down(MouseButton::Left,cx.listener(|this,_,window,cx| {if !this.close_flow.active() {this.return_to_live(window,cx);}cx.stop_propagation();})));
+                            }
                             if let Some((target, token, needs_release)) = acknowledgement {
                                 let label = if needs_release {
                                     "Подтвердить и отпустить кнопку мыши"

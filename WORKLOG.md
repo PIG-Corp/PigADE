@@ -4077,3 +4077,91 @@ Protect native window close with dirty-draft review, ACK-driven flush and explic
 - Files: crates/app/src/close_flow.rs, crates/app/src/close_ui.rs, crates/app/src/dirty_documents.rs, crates/app/src/main.rs, crates/app/src/workspace_git.rs, crates/app/src/mouse_delivery.rs, crates/app/src/appearance_commands.rs, crates/app/src/navigation.rs, crates/app/src/product.rs, crates/app/src/terminal_insert_commands.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0017-native-window-close-review.md
 - Verification: 301 app tests; strict app Clippy; app fmt; debug/release builds; 34 harness tests incl strict C compile; version/diff checks pass. Private release context02 passes native close cancel exact draft, discard UI-only exit, stable saved context/host/PID/generation/frame/layout/journal; both settled review captures inspected. context01 state pass but capture stale. Readonly Luna review found3 blockers, fixed and rechecked. Duplicate waiting Cargo child terminated by exact pid/ppid/cmdline; canonical final build passed.
 - Risks / next: Commit coherent close block. Native error injection, active-preedit close, Wayland/Hyprland runtime and broad MVP reboot/soak/performance/a11y remain open. Ordinary-close protection does not autosave on crash. Preserve unrelated dirt/stash0 and user host/PTYs.
+
+## 2026-10-18T06:07:14+00:00 — git_commit_engine_luna
+
+Add bounded colored physical-cell history grid projection over cold and hot terminal rows
+
+- Files: crates/terminal/src/history_grid.rs, crates/terminal/src/lib.rs, crates/session-host/src/history_view.rs
+- Verification: rustfmt --edition 2024 on owned Rust files passed; git diff --check on owned files passed; Cargo/tests not run per root workspace verification lane
+- Risks / next: Root updates session-host source routing and UI protocol integration, then runs targeted/workspace verification.
+
+## 2026-10-18T06:08:19+00:00 — git_commit_ui_luna
+
+Added bounded single-pane scrollback viewport state and asynchronous grid query correlation
+
+- Files: crates/app/src/scrollback.rs, WORKLOG.md
+- Verification: git diff --check passed. Added pure state tests for stale open cleanup, switching targets while a request is pending, generation mismatch, bounded dimensions, wheel burst coalescing, end-live cleanup, and errors without automatic retries. Cargo/rustfmt/native were not run; root owns app verification.
+- Risks / next: Root should register mod scrollback and integrate query scheduling, accepted HistoryGridPage -> display frame conversion, viewport-key input blocking, and host Close replies. Root owns Cargo/fmt/native.
+
+## 2026-10-18T06:08:38+00:00 — git_commit_engine_luna
+
+Strengthen history-grid regression coverage for hot/cold style equivalence, palette, clipping, bounds, cache stability and payload refusal
+
+- Files: crates/terminal/src/history_grid.rs, crates/session-host/src/history_view.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; Cargo/tests not run per root workspace verification lane
+- Risks / next: Root runs workspace checks after routing/UI integration; fix any compile or assertion issue found there.
+
+## 2026-10-18T06:09:57+00:00 — git_commit_research_luna
+
+Extended the existing history fixture with 256 fixed ANSI truecolor/named-red Unicode PTY rows, fixed unmodified-wheel and keyboard scrollback stages, blocked-input checks, live-return exact-once marker verification, and unchanged host/frame/generation/layout/journal snapshots; retained the textual history-sheet checks.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (35 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to run the native history fixture and inspect the retained colored scrollback captures.
+
+## 2026-10-18T06:10:47+00:00 — git_commit_engine_luna
+
+Fix history-grid compiler inference and unused import findings
+
+- Files: crates/terminal/src/history_grid.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; Cargo not rerun per root instruction
+- Risks / next: Root continues workspace build and reports any remaining integration failures.
+
+## 2026-10-18T06:11:51+00:00 — git_commit_ui_luna
+
+Fixed history viewport anchor accounting: removed the one-million-row navigation cap, clamp accepted host responses when no newer scroll intent exists, and preserve top anchoring across Home/down input. Added regression tests for top/overscroll movement, large history offsets, and one-shot coalescing without query loops.
+
+- Files: crates/app/src/scrollback.rs, WORKLOG.md
+- Verification: git diff --check passed; Cargo and rustfmt not run per root lane ownership
+- Risks / next: Root should run app formatting/tests and inspect integration behavior; scrollback-only changes remain uncompiled here.
+
+## 2026-10-18T06:14:03+00:00 — git_commit_research_luna
+
+Corrected the colored scrollback marker assertion to test joined rendered frame text rather than expecting an entire marker in a single cell; retained truecolor/named-red checks and added a fixed resize-settle before freezing the baseline frame.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (35 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to run native history fixture and inspect screenshots.
+
+## 2026-10-18T06:15:51+00:00 — git_commit_engine_luna
+
+Raise history-grid viewport wire budget to 4 MiB with realistic raw-copy accounting and fullscreen regression
+
+- Files: crates/session-host/src/history_view.rs, crates/terminal/src/history_grid.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; Cargo not run per root instruction
+- Risks / next: Root UI uses matching 4 MiB bound and runs targeted workspace tests.
+
+## 2026-10-18T06:20:32+00:00 — git_commit_research_luna
+
+Moved the live xyz/COLLECT proof after both the scrollback checks and existing text-history assertions, closing the text sheet before sending the marker; fixed the exited-view wait result to compare its direct pid and verify generation membership.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (35 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c
+- Risks / next: Root to run native history fixture.
+
+## 2026-10-18T06:32:28+00:00 — /root
+
+Integrate immutable colored terminal scrollback with bounded host pages, readonly input isolation and source-width-correct copy; verify existing Hyprland pointer behavior
+
+- Files: crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/selection.rs, crates/app/src/scrollback.rs, crates/app/src/scrollback_ui.rs, crates/terminal/src/history_grid.rs, crates/terminal/src/lib.rs, crates/session-host/src/history_view.rs, crates/session-host/src/lib.rs, crates/session-host/tests/history_view.rs, crates/storage/src/catalog.rs, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0018-in-pane-cell-history.md
+- Verification: Full locked workspace suite, 315 app tests, strict workspace/app Clippy, fmt/version/diff checks, workspace release and app debug/release builds passed;35 harness tests passed. Final native history03 passed immutable cells/model/journal, blocked input and exact-once live return; inspected top/live images.20 pointer-layout tests freshly pass; final private pointer fixture running. Initial compile, fixture and maximum-geometry failures corrected before passing runs.
+- Risks / next: Finish private pointer regression and commit only this feature; wider-row clipping, horizontal panning/reflow, persistent scroll offsets and full MVP/platform/performance gates remain open; preserve unrelated research/stress/GPUI dirt and stash0.
+
+## 2026-10-18T06:32:58+00:00 — /root
+
+Revalidate cursor-follow focus and immediate modifier Dwindle dragging on the final release build; correct pointer map wording
+
+- Files: docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 20 pointer_layout tests pass. Private /tmp/pigade-hover-pointer-20261018-final exits0 with pass-private-x11-pointer-layout-fixture; complete hover/activation/input/drag/gutter/undo/cross-tab/IME/file/clipboard flow passed. Root visually inspected header hover, held drag and gutter drop captures. No active-desktop input or configuration mutation.
+- Risks / next: Commit the integrated history block; pointer behavior was already implemented in5e42377/2d598f9 and remains verified. Actual Hyprland/Wayland pointer runtime certification remains open.

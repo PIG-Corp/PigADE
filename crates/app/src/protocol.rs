@@ -729,6 +729,19 @@ pub struct HistoryCursor {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum HistoryViewQuery {
+    OpenGrid {
+        session: uuid::Uuid,
+        generation: uuid::Uuid,
+        rows: u16,
+        cols: u16,
+        back: u64,
+    },
+    Grid {
+        snapshot: uuid::Uuid,
+        start: u64,
+        rows: u16,
+        cols: u16,
+    },
     Open {
         session: uuid::Uuid,
         generation: uuid::Uuid,
@@ -788,9 +801,34 @@ pub struct HistorySearchResult {
     pub scanned_bytes: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct HistoryGridRow {
+    pub row: u64,
+    pub source_columns: u16,
+    pub boundary: Option<String>,
+    pub cells: Vec<Cell>,
+    #[serde(default, deserialize_with = "deserialize_palette_overrides")]
+    pub palette_overrides: Vec<(u16, [u8; 3])>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct HistoryGridPage {
+    pub snapshot: uuid::Uuid,
+    pub session: uuid::Uuid,
+    pub generation: uuid::Uuid,
+    pub sequence: u64,
+    pub total_rows: u64,
+    pub start: u64,
+    pub rows_requested: u16,
+    pub rows: Vec<HistoryGridRow>,
+    pub hyperlinks: Vec<(String, String)>,
+    pub cols: u16,
+    pub horizontal_clipped: bool,
+    pub warnings: Vec<String>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HistoryViewReply {
+    Grid { page: HistoryGridPage },
     Page { page: HistoryPage },
     Search { result: HistorySearchResult },
     Closed { snapshot: uuid::Uuid },

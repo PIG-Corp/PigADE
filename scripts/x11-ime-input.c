@@ -115,7 +115,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
         strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
-        strcmp(a.stage, "history-readonly") && strcmp(a.stage, "catalog-open-library") &&
+        strcmp(a.stage, "history-readonly") && strcmp(a.stage, "scrollback-open") &&
+        strcmp(a.stage, "scrollback-wheel") && strcmp(a.stage, "scrollback-top") &&
+        strcmp(a.stage, "scrollback-newer") &&
+        strcmp(a.stage, "scrollback-end") && strcmp(a.stage, "scrollback-close") &&
+        strcmp(a.stage, "scrollback-probe-input") && strcmp(a.stage, "scrollback-live-input") &&
+        strcmp(a.stage, "catalog-open-library") &&
         strcmp(a.stage, "catalog-close-library") && strcmp(a.stage, "catalog-open-save") &&
         strcmp(a.stage, "catalog-save") &&
         strcmp(a.stage, "catalog-apply") && strcmp(a.stage, "catalog-undo") &&
@@ -632,6 +637,19 @@ static void pointer_position(Display *dpy, Window app, int x, int y) {
         !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
         fail("fixed pointer motion failed");
     XFlush(dpy);
+}
+
+static void scrollback_wheel(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("scrollback wheel requires the fixed private 1280x800 app");
+    pointer_position(dpy, app, 640, 400);
+    for (int i = 0; i < 4; ++i) {
+        if (!XTestFakeButtonEvent(dpy, 4, True, CurrentTime) ||
+            !XTestFakeButtonEvent(dpy, 4, False, CurrentTime))
+            fail("fixed unmodified scrollback wheel event failed");
+    }
+    XSync(dpy, False);
 }
 
 static void pointer_hover(Display *dpy, Window app, int x, int y, int burst) {
@@ -1430,6 +1448,22 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_c);
             key(dpy, XK_BackSpace);
             key(dpy, XK_Tab);
+        } else if (!strcmp(a.stage, "scrollback-open")) {
+            modified_key(dpy, XK_Shift_L, XK_Page_Up);
+        } else if (!strcmp(a.stage, "scrollback-wheel")) {
+            scrollback_wheel(dpy, app_window);
+        } else if (!strcmp(a.stage, "scrollback-top")) {
+            key(dpy, XK_Home);
+        } else if (!strcmp(a.stage, "scrollback-newer")) {
+            modified_key(dpy, XK_Shift_L, XK_Page_Down);
+        } else if (!strcmp(a.stage, "scrollback-end")) {
+            key(dpy, XK_End);
+        } else if (!strcmp(a.stage, "scrollback-close")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "scrollback-probe-input")) {
+            key(dpy, XK_x); key(dpy, XK_y); key(dpy, XK_z);
+        } else if (!strcmp(a.stage, "scrollback-live-input")) {
+            key(dpy, XK_x); key(dpy, XK_y); key(dpy, XK_z);
         } else if (!strcmp(a.stage, "catalog-open-library")) {
             setup_prefix(dpy, XK_d, 0);
         } else if (!strcmp(a.stage, "catalog-close-library")) {
@@ -1899,6 +1933,11 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "history-open") ? "2" :
                             !strcmp(a.stage, "history-search") ? "6" :
                             !strcmp(a.stage, "history-readonly") ? "6" :
+                            !strcmp(a.stage, "scrollback-open") ? "2" :
+                            !strcmp(a.stage, "scrollback-wheel") ? "0" :
+                            !strcmp(a.stage, "scrollback-newer") ? "2" :
+                            !strcmp(a.stage, "scrollback-probe-input") ? "3" :
+                            !strcmp(a.stage, "scrollback-live-input") ? "3" :
                             !strcmp(a.stage, "opencode-input") ? "16" :
                             !strcmp(a.stage, "controls-focus-toggle") ? "2" :
                             !strcmp(a.stage, "controls-focus-right") ? "2" :

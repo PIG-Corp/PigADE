@@ -20,6 +20,10 @@ const SNAPSHOT_LIMIT: usize = 2;
 const SNAPSHOT_IDLE: Duration = Duration::from_secs(120);
 const PAGE_ROW_LIMIT: usize = 128;
 const PAGE_BYTE_LIMIT: usize = 64 * 1024;
+const GRID_ROW_LIMIT: usize = 128;
+const GRID_COL_LIMIT: u16 = 1024;
+const GRID_BYTE_LIMIT: usize = 4 * 1024 * 1024;
+const GRID_COPY_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_CHUNK_LIMIT: usize = 32 * 1024;
 const SEARCH_ROW_LIMIT: usize = 128;
 const SEARCH_BYTE_LIMIT: usize = 256 * 1024;
@@ -42,6 +46,19 @@ pub enum Query {
         snapshot: Uuid,
         start: Cursor,
     },
+    OpenGrid {
+        session: Uuid,
+        generation: Uuid,
+        rows: u16,
+        cols: u16,
+        back: u64,
+    },
+    Grid {
+        snapshot: Uuid,
+        start: u64,
+        rows: u16,
+        cols: u16,
+    },
     Search {
         snapshot: Uuid,
         text: String,
@@ -52,12 +69,38 @@ pub enum Query {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reply {
     Page { page: Page },
+    Grid { page: GridPage },
     Search { result: SearchResult },
     Closed { snapshot: Uuid },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GridPage {
+    pub snapshot: Uuid,
+    pub session: Uuid,
+    pub generation: Uuid,
+    pub sequence: u64,
+    pub total_rows: u64,
+    pub start: u64,
+    pub rows: Vec<GridRow>,
+    pub rows_requested: u16,
+    pub hyperlinks: Vec<(String, String)>,
+    pub cols: u16,
+    pub horizontal_clipped: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GridRow {
+    pub row: u64,
+    pub source_columns: u16,
+    pub boundary: Option<String>,
+    pub cells: Vec<pigade_terminal::Cell>,
+    pub palette_overrides: Vec<(u16, [u8; 3])>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +363,60 @@ fn process(
                 Err(e) => error(&e),
             }
         }
+        Query::OpenGrid {
+            session,
+            generation,
+            rows,
+            cols,
+            back,
+        } => {
+            let Some((path, sequence)) = source else {
+                return error("open grid requires a validated snapshot source");
+            };
+            if let Err(error) = validate_grid_request(rows, cols) {
+                return self::error(&error.to_string());
+            }
+            if snapshots.len() == SNAPSHOT_LIMIT {
+                snapshots.pop_front();
+            }
+            match validate_grid_request(rows, cols)
+                .and_then(|()| open_snapshot(&path, session, generation, sequence))
+            {
+                Ok(mut snapshot) => {
+                    let end = snapshot.total_rows.saturating_sub(back);
+                    let start = end.saturating_sub(u64::from(rows));
+                    let result = grid_page(&mut snapshot, start, rows, cols);
+                    snapshots.push_back(snapshot);
+                    result
+                        .map(|page| response(Some(Reply::Grid { page }), None, None))
+                        .unwrap_or_else(|e| error(&format!("history grid open failed: {e:#}")))
+                }
+                Err(e) => error(&format!("history grid restore failed: {e:#}")),
+            }
+        }
+        Query::Grid {
+            snapshot,
+            start,
+            rows,
+            cols,
+        } => {
+            if source.is_some() {
+                return error("grid cannot supply a new source");
+            }
+            if let Err(e) = validate_grid_request(rows, cols) {
+                return error(&format!("history grid request invalid: {e:#}"));
+            }
+            match take_snapshot(snapshots, snapshot) {
+                Ok(mut s) => {
+                    let result = grid_page(&mut s, start, rows, cols);
+                    snapshots.push_back(s);
+                    result
+                        .map(|page| response(Some(Reply::Grid { page }), None, None))
+                        .unwrap_or_else(|e| error(&format!("history grid failed: {e:#}")))
+                }
+                Err(e) => error(&e),
+            }
+        }
         Query::Search {
             snapshot,
             text,
@@ -349,6 +446,185 @@ fn process(
             snapshots.remove(index);
             response(Some(Reply::Closed { snapshot }), None, None)
         }
+    }
+}
+
+fn validate_grid_request(rows: u16, cols: u16) -> Result<()> {
+    ensure!(
+        (1..=GRID_ROW_LIMIT as u16).contains(&rows),
+        "history grid rows outside 1..=128"
+    );
+    ensure!(
+        (1..=GRID_COL_LIMIT).contains(&cols),
+        "history grid columns outside 1..=1024"
+    );
+    ensure!(
+        usize::from(rows)
+            .checked_mul(usize::from(cols))
+            .is_some_and(|cells| cells <= 32_768),
+        "history grid viewport exceeds 32768 cells"
+    );
+    Ok(())
+}
+
+fn grid_page(snapshot: &mut Snapshot, start: u64, rows: u16, cols: u16) -> Result<GridPage> {
+    validate_grid_request(rows, cols)?;
+    ensure!(
+        start <= snapshot.total_rows,
+        "history grid start outside snapshot"
+    );
+    let end = start
+        .saturating_add(u64::from(rows))
+        .min(snapshot.total_rows);
+    let capacity = usize::try_from(end - start)?;
+    let mut output_rows = Vec::new();
+    output_rows.try_reserve_exact(capacity)?;
+    let mut hyperlinks = Vec::<(String, String)>::new();
+    let mut clipped = false;
+    let mut estimated_bytes = 256usize;
+    let cold_rows = snapshot.history.summary().records;
+    for row_index in start..end {
+        let (source_columns, boundary, cells, palette, links, row_clipped) =
+            if row_index < cold_rows {
+                let (metadata, decoded) = cold_record(snapshot, row_index)?;
+                match decoded {
+                    Some(decoded) => {
+                        let projected = pigade_terminal::history_grid::decoded_row(decoded, cols)?;
+                        (
+                            projected.source_columns,
+                            None,
+                            projected.cells,
+                            metadata.palette.clone(),
+                            projected.hyperlinks,
+                            projected.horizontal_clipped,
+                        )
+                    }
+                    None => (
+                        0,
+                        Some(metadata.reason.clone()),
+                        Vec::new(),
+                        metadata.palette.clone(),
+                        Vec::new(),
+                        false,
+                    ),
+                }
+            } else {
+                let hot_index = usize::try_from(row_index - cold_rows)?;
+                let projected = snapshot.terminal.normal_history_grid_row(hot_index, cols)?;
+                let palette = snapshot.terminal.normal_history_palette();
+                (
+                    projected.source_columns,
+                    None,
+                    projected.cells,
+                    palette,
+                    projected.hyperlinks,
+                    projected.horizontal_clipped,
+                )
+            };
+        let hyperlink_base = u32::try_from(hyperlinks.len())?;
+        let mut row_cost = std::mem::size_of::<GridRow>() + 32;
+        for cell in &cells {
+            row_cost = row_cost
+                .checked_add(std::mem::size_of::<pigade_terminal::Cell>() + 16)
+                .and_then(|n| n.checked_add(cell.text.len()))
+                .and_then(|n| n.checked_add(cell.fg.len()))
+                .and_then(|n| n.checked_add(cell.bg.len()))
+                .and_then(|n| n.checked_add(cell.underline.as_ref().map_or(0, String::len)))
+                .ok_or_else(|| anyhow::anyhow!("grid page size overflow"))?;
+        }
+        for (id, uri) in &links {
+            row_cost = row_cost
+                .checked_add(std::mem::size_of::<(String, String)>())
+                .and_then(|n| n.checked_add(id.len()))
+                .and_then(|n| n.checked_add(uri.len()))
+                .ok_or_else(|| anyhow::anyhow!("grid hyperlink size overflow"))?;
+        }
+        row_cost = row_cost
+            .checked_add(
+                palette
+                    .len()
+                    .saturating_mul(std::mem::size_of::<(u16, [u8; 3])>()),
+            )
+            .ok_or_else(|| anyhow::anyhow!("grid palette size overflow"))?;
+        estimated_bytes = estimated_bytes
+            .checked_add(row_cost)
+            .ok_or_else(|| anyhow::anyhow!("grid page size overflow"))?;
+        ensure!(
+            estimated_bytes <= GRID_COPY_LIMIT,
+            "history grid page raw-copy budget exceeds 8 MiB"
+        );
+        for cell in &cells {
+            ensure!(
+                cell.hyperlink
+                    .is_none_or(|index| usize::try_from(index).is_ok_and(|i| i < links.len())),
+                "grid hyperlink index outside row pool"
+            );
+        }
+        let mut remapped = cells;
+        for cell in &mut remapped {
+            if let Some(index) = cell.hyperlink {
+                cell.hyperlink = Some(
+                    hyperlink_base
+                        .checked_add(index)
+                        .ok_or_else(|| anyhow::anyhow!("grid hyperlink index overflow"))?,
+                );
+            }
+        }
+        hyperlinks.try_reserve(links.len())?;
+        hyperlinks.extend(links);
+        clipped |= row_clipped;
+        output_rows.push(GridRow {
+            row: row_index,
+            source_columns,
+            boundary,
+            cells: remapped,
+            palette_overrides: palette,
+        });
+    }
+    let page = GridPage {
+        snapshot: snapshot.id,
+        session: snapshot.session,
+        generation: snapshot.generation,
+        sequence: snapshot.sequence,
+        total_rows: snapshot.total_rows,
+        start,
+        rows: output_rows,
+        rows_requested: rows,
+        hyperlinks,
+        cols,
+        horizontal_clipped: clipped,
+        warnings: snapshot.warnings.clone(),
+    };
+    let mut bounded = BoundedJson { bytes: 0 };
+    serde_json::to_writer(&mut bounded, &page)?;
+    ensure!(
+        bounded.bytes <= GRID_BYTE_LIMIT,
+        "history grid page exceeds 4 MiB serialized limit"
+    );
+    snapshot.last_used = Instant::now();
+    Ok(page)
+}
+
+struct BoundedJson {
+    bytes: usize,
+}
+impl std::io::Write for BoundedJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let Some(wanted) = self.bytes.checked_add(bytes.len()) else {
+            return Err(std::io::Error::other(
+                "history grid serialized size overflow",
+            ));
+        };
+        if wanted > GRID_BYTE_LIMIT {
+            return Err(std::io::Error::other(
+                "history grid serialized page exceeds 4 MiB",
+            ));
+        }
+        self.bytes = wanted;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -708,6 +984,43 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_fullscreen_grid_fits_the_four_mib_budget() -> Result<()> {
+        use pigade_storage::JournalHeader;
+        use pigade_terminal::{CORE_PROFILE, Geometry, Terminal};
+
+        let directory = tempfile::tempdir()?;
+        let session = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let header = JournalHeader {
+            session_id: session,
+            generation,
+            profile: CORE_PROFILE.into(),
+            initial_rows: 128,
+            initial_cols: 256,
+        };
+        let history = history::History::live(directory.path(), &header)?;
+        let terminal = Terminal::new(Geometry::new(128, 256)?, false);
+        let mut snapshot = Snapshot {
+            id: Uuid::new_v4(),
+            session,
+            generation,
+            sequence: 1,
+            terminal,
+            history,
+            warnings: Vec::new(),
+            total_rows: 128,
+            last_used: Instant::now(),
+            decoded: None,
+            search: None,
+        };
+        let page = grid_page(&mut snapshot, 0, 128, 256)?;
+        assert_eq!(page.rows.len(), 128);
+        assert_eq!(page.rows[0].cells.len(), 256);
+        assert_eq!(page.rows[127].cells.len(), 256);
+        Ok(())
+    }
+
+    #[test]
     fn page_projects_cold_rows_boundary_and_hot_rows_without_materializing_history() -> Result<()> {
         use pigade_storage::JournalHeader;
         use pigade_terminal::{
@@ -728,7 +1041,7 @@ mod tests {
         let mut terminal = Terminal::new(Geometry::new(2, 8)?, false);
         terminal.set_history_observer(Some(history.clone()));
         history.begin(1)?;
-        terminal.output(b"COLD_TEXT_MARKER\r\n");
+        terminal.output(b"\x1b]4;1;rgb:11/22/33\x07COLD_TEXT_MARKER\r\n");
         let mut output = Vec::with_capacity(80 * 1024);
         for _ in 0..10_050 {
             output.extend_from_slice(b"filler\r\n");
@@ -772,6 +1085,64 @@ mod tests {
             page.rows
                 .iter()
                 .any(|row| row.row < cold && row.chunk.total_bytes > 0)
+        );
+        let grid = grid_page(&mut snapshot, cold.saturating_sub(1), 2, 8)?;
+        assert_eq!(grid.rows_requested, 2);
+        assert_eq!(grid.rows.len(), 2);
+        assert_eq!(grid.rows[0].boundary.as_deref(), Some("clear"));
+        assert_eq!(grid.rows[1].row, cold);
+        let expected_hot = snapshot.terminal.normal_history_grid_row(0, 8)?;
+        assert_eq!(grid.rows[1].cells, expected_hot.cells);
+        assert!(!grid.horizontal_clipped);
+        assert_eq!(
+            grid,
+            grid_page(&mut snapshot, cold.saturating_sub(1), 2, 8)?
+        );
+        assert!(
+            grid.rows[0]
+                .palette_overrides
+                .contains(&(1, [0x11, 0x22, 0x33]))
+        );
+        assert!(grid_page(&mut snapshot, 0, 129, 8).is_err());
+        assert!(grid_page(&mut snapshot, 0, 1, 1025).is_err());
+        assert!(validate_grid_request(128, 1024).is_err());
+
+        let invalid_open = process(
+            &mut VecDeque::new(),
+            Query::OpenGrid {
+                session,
+                generation,
+                rows: 129,
+                cols: 8,
+                back: 0,
+            },
+            Some((directory.path().join("does-not-exist"), 1)),
+        );
+        assert!(invalid_open.error.unwrap().contains("rows outside"));
+
+        let (metadata, Some(mut oversized)) = history::decode_record(&snapshot.history.record(0)?)?
+        else {
+            anyhow::bail!("expected typed row in output-budget fixture");
+        };
+        oversized.cells[0].zerowidth = vec!['x'; 1_100_000];
+        snapshot.decoded = Some((0, metadata, Some(oversized)));
+        assert!(
+            grid_page(&mut snapshot, 0, 1, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds 1 MiB")
+        );
+        let (metadata, Some(mut escaped)) = history::decode_record(&snapshot.history.record(0)?)?
+        else {
+            anyhow::bail!("expected typed row in output-budget fixture");
+        };
+        escaped.cells[0].zerowidth = vec!['\u{1}'; 700_000];
+        snapshot.decoded = Some((0, metadata, Some(escaped)));
+        assert!(
+            grid_page(&mut snapshot, 0, 1, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("4 MiB")
         );
         Ok(())
     }

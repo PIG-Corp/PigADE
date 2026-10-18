@@ -360,6 +360,9 @@ pub struct Catalog {
     /// `None` means the connected host predates atomic pane-to-tab drops.
     #[serde(default)]
     pub pane_tab_drop_schema: Option<u16>,
+    /// Host-owned, immutable colored scrollback pages. No database migration.
+    #[serde(default)]
+    pub history_grid_schema: Option<u16>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabClose {
@@ -1412,6 +1415,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         tab_close_schema: Some(1),
         engine_options_schema: Some(1),
         pane_tab_drop_schema: Some(1),
+        history_grid_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing

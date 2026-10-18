@@ -70,12 +70,24 @@ FIXTURE = r'''import json, os, select, socket, sys, termios, time, tty
 control_path = sys.argv[1]
 expected = bytes.fromhex(sys.argv[2])
 assert 0 < len(expected) <= 128
+history_rows = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+assert history_rows in (0, 256)
 fd = sys.stdin.fileno()
 original = termios.tcgetattr(fd)
 control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 control.connect(control_path)
 try:
     tty.setraw(fd, termios.TCSANOW)
+    if history_rows:
+        for row in range(history_rows):
+            line = (f"\x1b[38;2;231;72;86mSCROLLBACK_{row:03d}\x1b[0m "
+                    f"\x1b[31mANSI_RED\x1b[0m Привет 界 e\u0301\r\n")
+            pending = memoryview(line.encode("utf-8"))
+            while pending:
+                written = os.write(1, pending)
+                if not written:
+                    raise RuntimeError("private history fixture PTY write made no progress")
+                pending = pending[written:]
     os.write(1, b"PIGADE-IME-READY\r\n")
     control.sendall(b"READY\n")
     while True:
@@ -707,6 +719,86 @@ def run_history_fixture(config, report, control, env, save):
     baseline_generations = fixture_generations()
     baseline_layout = host_request({'command': 'catalog'})['catalog']['layout']
     source_hashes = fixture_journal_hashes([generation])
+
+    def invariant_snapshot(expected_models, expected_generations, expected_journals):
+        require(fixture_session_models(session) == expected_models and
+                fixture_generations() == expected_generations and
+                fixture_journal_hashes([generation]) == expected_journals and
+                host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+                'scrollback view changed terminal state, process generations, journal, or layout')
+
+    populated = wait_until(lambda: (view if (view := fixture_session_models(session).get(
+        generation)) and 'SCROLLBACK_255' in view_text(view) and
+        'PIGADE-IME-READY' in view_text(view) else None), time.monotonic() + 8)
+    # Let the initial app-driven PTY resize settle before freezing the frame
+    # and sequence used to prove the history view is read-only.
+    time.sleep(.35)
+    populated = fixture_session_models(session)[generation]
+    frame = populated.get('frame', {})
+    screen_text = view_text(populated)
+    cells = frame.get('cells', [])
+    colored = [cell for cell in cells if isinstance(cell, dict) and
+               cell.get('fg') not in (None, 'Named(Foreground)')]
+    foregrounds = {cell.get('fg') for cell in colored}
+    truecolor = any(isinstance(fg, str) and 'r: 231' in fg and 'g: 72' in fg and 'b: 86' in fg
+                    for fg in foregrounds)
+    named_red = 'Named(Red)' in foregrounds
+    require(frame.get('history_lines', 0) >= 160 and colored and
+            truecolor and named_red and
+            'SCROLLBACK_255' in screen_text,
+            'history fixture did not produce the fixed truecolor/named-color cells and more than 160 history rows')
+    screen_models = fixture_session_models(session)
+    screen_generations = fixture_generations()
+    screen_journals = fixture_journal_hashes([generation])
+
+    def check_cli_input_absent():
+        control.sendall(b'CHECK\n')
+        require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+                'historical scrollback keyboard/wheel input reached the CLI')
+
+    # Unmodified wheel is exercised over the verified live pane first.
+    helper_call(config, 'scrollback-wheel')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-wheel.ppm')
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    check_cli_input_absent()
+    helper_call(config, 'scrollback-open')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-open.ppm')
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-probe-input')
+    check_cli_input_absent()
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-top')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-top.ppm')
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-newer')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-newer.ppm')
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-close')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-escape-live.ppm')
+    check_cli_input_absent()
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-open')
+    time.sleep(.35)
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-top')
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'scrollback-end')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-live.ppm')
+    check_cli_input_absent()
+    invariant_snapshot(screen_models, screen_generations, screen_journals)
+    require(window_verified(helper_call(config, 'probe-window')),
+            'app window disappeared while leaving terminal scrollback')
+    live_pid = screen_models[generation].get('pid')
+    baseline_models = screen_models
+    baseline_generations = screen_generations
+    source_hashes = screen_journals
+
     helper_call(config, 'history-open')
     time.sleep(0.8)
     helper_call(config, 'capture', '/artifacts/history-open.ppm')
@@ -729,10 +821,39 @@ def run_history_fixture(config, report, control, env, save):
             'history viewer changed terminal model, journal or process generations')
     require(host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
             'history viewer changed the layout')
+    # The original textual history checks run before the child is allowed to
+    # finish, preserving its private control channel for the no-input proof.
+    helper_call(config, 'context-close')
+    check_cli_input_absent()
+    require(window_verified(helper_call(config, 'probe-window')),
+            'app window disappeared after closing the text history sheet')
+    invariant_snapshot(baseline_models, baseline_generations, source_hashes)
+
+    helper_call(config, 'scrollback-live-input')
+    control.sendall(b'COLLECT\n')
+    live_result = json.loads(json_line(control, timeout=5).removeprefix('RESULT:'))
+    require(live_result.get('exact_once') is True and
+            bytes.fromhex(live_result.get('synthetic_fixture_payload_hex', '')) == b'xyz' and
+            live_result.get('extra_bytes') == 0,
+            'ordinary input after live return did not reach only the live PTY exactly once')
+    live_after = wait_until(lambda: (view if (view := fixture_session_models(session).get(
+        generation)) and view.get('state') == 'exited' and
+        '__PIGADE_IME_CHILD_ACK_20261017__' in view_text(view) else None),
+        time.monotonic() + 8)
+    require(live_after.get('pid') == live_pid and
+            fixture_generations() == baseline_generations,
+            'live marker changed PTY process identity or generation membership')
     report['history'] = {'session': session, 'generation': generation,
         'cli_input_absent': True, 'model_and_journal_unchanged': True,
+        'scrollback_rows': frame.get('history_lines'), 'colored_live_cells': len(colored),
+        'truecolor_rgb_verified': truecolor, 'named_red_verified': named_red,
+        'scrollback_input_blocked': True, 'unmodified_wheel_and_history_navigation_verified': True,
+        'live_input_after_return_exactly_once': True,
         'new_processes': False,
-        'captures': ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'],
+        'captures': ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
+                     'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
+                     'scrollback-live.ppm', 'history-open.ppm',
+                     'history-search.ppm', 'history-readonly.ppm'],
         'scope': 'fixed private X11 history sheet; visual search/selection need image review'}
     report.update({'status': HISTORY_PASS, 'stage': 'complete'})
     save()
@@ -5620,7 +5741,9 @@ def inside_run() -> int:
         spec = {'session': session, 'generation': generation, 'operation': operation,
                 'executable': '/usr/bin/python3', 'args': ['-c', LATENCY_FIXTURE if config.get('fixture') == 'latency' else FIXTURE, str(control_path),
                     (LATENCY_KEYS if config.get('fixture') == 'latency' else
-                     KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else '你好'.encode()).hex()],
+                     KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else
+                     b'xyz' if config.get('fixture') == 'history' else '你好'.encode()).hex(),
+                    '256' if config.get('fixture') == 'history' else '0'],
                 'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
         launch = host_request({'command': 'launch', 'spec': spec})
         require(launch.get('error') is None, 'private fixture launch failed')
@@ -5835,7 +5958,9 @@ def outer_run(args) -> dict:
                  ['generations-picker.ppm', 'generation-pinned-old.ppm',
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
                  ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
-                 ['history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
+                 ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
+                  'scrollback-newer.ppm', 'scrollback-escape-live.ppm', 'scrollback-live.ppm',
+                  'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
@@ -5912,7 +6037,7 @@ def plan(args) -> dict:
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
-                  'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
+                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
@@ -5933,7 +6058,7 @@ def plan(args) -> dict:
                        if args.fixture == 'generations' else
                        'private fake Codex only; resume review is captured before explicit confirmation'
                        if args.fixture == 'resume' else
-                       'history view opens, selects/copies without mutation, and searches READY; no PTY input is allowed'
+                       'colored 256-row pane scrollback is navigated without PTY input, return routes one fixed marker to live PTY, and existing history sheet selects/copies/searches without mutation'
                        if args.fixture == 'history' else
                        'fresh project becomes shared workspace Основной with Development tab and no automatic CLI; explicit shell action creates one shell'),
                       'host display/session/device paths and inherited desktop variables absent'],

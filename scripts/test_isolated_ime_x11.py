@@ -99,6 +99,52 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'context-prompt-inserted.ppm'", harness)
         self.assertIn("'context-prompt-delete-review.ppm'", harness)
 
+    def test_history_fixture_covers_colored_scrollback_and_live_return_without_native_run(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'history']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'history')
+        self.assertIn('256 ANSI truecolor/named-color Unicode rows', plan['input']['history'])
+        self.assertIn('reaches the live PTY exactly once after return', plan['input']['history'])
+
+        harness = SCRIPT.read_text()
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        self.assertIn('history_rows = int(sys.argv[3]) if len(sys.argv) > 3 else 0', harness)
+        self.assertIn('history_rows in (0, 256)', harness)
+        self.assertIn('\\x1b[38;2;231;72;86mSCROLLBACK_', harness)
+        self.assertIn('\\x1b[31mANSI_RED', harness)
+        self.assertIn("b'xyz' if config.get('fixture') == 'history'", harness)
+        self.assertIn("'256' if config.get('fixture') == 'history' else '0'", harness)
+        self.assertIn("'SCROLLBACK_255' in screen_text", harness)
+        self.assertIn("'Named(Red)' in foregrounds", harness)
+        self.assertIn("'r: 231' in fg and 'g: 72' in fg and 'b: 86' in fg", harness)
+
+        history_flow = harness.split('def run_history_fixture(', 1)[1].split(
+            '\ndef run_resume_fixture(', 1)[0]
+        stages = ('scrollback-open', 'scrollback-probe-input', 'scrollback-wheel',
+                  'scrollback-top', 'scrollback-newer', 'scrollback-close',
+                  'scrollback-end', 'scrollback-live-input')
+        for stage in stages:
+            self.assertIn(f'helper_call(config, \'{stage}\')', history_flow)
+            self.assertIn(f'"{stage}"', helper)
+        self.assertLess(history_flow.index("helper_call(config, 'scrollback-wheel')"),
+                        history_flow.index("helper_call(config, 'scrollback-open')"))
+        probe_at = history_flow.index("helper_call(config, 'scrollback-probe-input')")
+        self.assertGreater(history_flow.index('check_cli_input_absent()', probe_at), probe_at)
+        self.assertIn("control.sendall(b'COLLECT\\n')", history_flow)
+        self.assertIn("bytes.fromhex(live_result.get('synthetic_fixture_payload_hex', '')) == b'xyz'",
+                      history_flow)
+        for capture in ('scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
+                        'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
+                        'scrollback-live.ppm'):
+            self.assertIn(capture, harness)
+        self.assertIn('fixture_journal_hashes([generation]) == expected_journals', history_flow)
+        self.assertIn('XTestFakeButtonEvent(dpy, 4, True, CurrentTime)', helper)
+        self.assertIn('pointer_position(dpy, app, 640, 400)', helper)
+
     def test_private_host_rejection_reports_bounded_escaped_protocol_error(self):
         reader, writer = socket.socketpair()
         try:

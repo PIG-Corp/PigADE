@@ -1,5 +1,6 @@
 //! The host is the sole ANSI parser. A Frame is a render replica, NOT a checkpoint.
 pub mod history;
+pub mod history_grid;
 pub mod history_text;
 pub use alacritty_terminal::term::resources::{
     AllocationCensus, CensusLimits, GridAllocationCensus, ResourceCensus,
@@ -10,6 +11,7 @@ pub use alacritty_terminal::{
     term::cell::{Cell as HistoryCell, Flags as CellFlags},
     vte::ansi::Rgb as PaletteRgb,
 };
+pub use history_grid::HistoryGridRow;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

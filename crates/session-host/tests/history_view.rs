@@ -18,7 +18,7 @@ use uuid::Uuid;
 const WAIT: Duration = Duration::from_secs(30);
 const FIXTURE: &str = r#"
 import sys
-sys.stdout.write("COLD_OLD_MARKER_界\r\n")
+sys.stdout.write("\x1b[38;2;12;34;56m\x1b]8;;https://example.test/history\x07COLD_OLD_MARKER_界\x1b]8;;\x07\x1b[0m\r\n")
 sys.stdout.write("".join(f"FILLER_{i:05d}\r\n" for i in range(10050)))
 sys.stdout.write("SOFTWRAP_UTF8_界_MARKER\r\nCURRENT_HOT_MARKER\r\nREADY_HIST_VIEW\r\n")
 sys.stdout.flush()
@@ -454,5 +454,102 @@ fn real_pty_history_pages_searches_and_keeps_open_snapshots_immutable() -> Resul
             .as_deref()
             .is_some_and(|error| error.contains("expired or closed"))
     );
+    Ok(())
+}
+
+#[test]
+fn colored_grid_is_bounded_readonly_and_frozen_across_new_output() -> Result<()> {
+    let mut host = TestHost::start()?;
+    let spec = host.launch()?;
+    let before = host.wait_view(&spec, |view| {
+        view.history
+            .as_ref()
+            .is_some_and(|summary| summary.retired_rows > 0)
+            && compact_frame(view).contains("READY_HIST_VIEW")
+    })?;
+    let reply = success(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::OpenGrid {
+                session: spec.session,
+                generation: spec.generation,
+                rows: 8,
+                cols: 16,
+                back: 0,
+            },
+        },
+    )?;
+    let history_view::Reply::Grid { page: opened } = history_reply(reply)? else {
+        bail!("expected colored history page")
+    };
+    ensure!(opened.sequence == before.sequence && opened.total_rows > 10000);
+    let query = history_view::Query::Grid {
+        snapshot: opened.snapshot,
+        start: 0,
+        rows: 4,
+        cols: 16,
+    };
+    let history_view::Reply::Grid { page: first } = history_reply(success(
+        &host.socket(),
+        Command::HistoryView {
+            query: query.clone(),
+        },
+    )?)?
+    else {
+        bail!("expected cold cells")
+    };
+    ensure!(first.start == 0 && first.rows[0].row == 0);
+    ensure!(
+        first
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.fg == "Spec(Rgb { r: 12, g: 34, b: 56 })")
+    );
+    ensure!(
+        first
+            .hyperlinks
+            .iter()
+            .any(|(_, uri)| uri == "https://example.test/history")
+    );
+    let readonly = host.view(&spec)?;
+    ensure!(
+        readonly.sequence == before.sequence
+            && readonly.frame == before.frame
+            && readonly.pid == before.pid
+    );
+    success(
+        &host.socket(),
+        Command::Input {
+            session: spec.session,
+            generation: spec.generation,
+            bytes: vec![b'\n'],
+        },
+    )?;
+    host.wait_view(&spec, |view| {
+        compact_frame(view).contains("AFTER_SNAPSHOT_MARKER")
+    })?;
+    let reread = history_reply(success(&host.socket(), Command::HistoryView { query })?)?;
+    ensure!(matches!(reread,history_view::Reply::Grid{page} if page==first));
+    let invalid = exchange(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::Grid {
+                snapshot: opened.snapshot,
+                start: 0,
+                rows: 128,
+                cols: 1024,
+            },
+        },
+    )?;
+    ensure!(invalid.error.is_some());
+    success(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::Close {
+                snapshot: opened.snapshot,
+            },
+        },
+    )?;
     Ok(())
 }
