@@ -224,7 +224,10 @@ mod tests {
 
         let error = detect_with_binary(&binary.path, Duration::from_millis(150)).unwrap_err();
 
-        assert!(error.contains("временной лимит"));
+        assert!(
+            error.contains("временной лимит"),
+            "unexpected helper error: {error}"
+        );
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 

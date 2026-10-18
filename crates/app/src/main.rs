@@ -55,6 +55,9 @@ mod transfer_flow;
 mod viewport;
 mod wake_signal;
 mod workspace_git;
+mod workspace_nav_store;
+mod workspace_navigation;
+mod workspace_navigation_commands;
 use command_worker::{
     CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
     confirmed_ended_state,
@@ -486,6 +489,7 @@ fn catalog_panel_targets_for(
 }
 
 struct WorkerConnection {
+    workspace_nav_writer: workspace_navigation::Writer,
     host_socket: PathBuf,
     managed_host: bool,
     activity_writer: activity_commands::Writer,
@@ -507,6 +511,7 @@ fn ipc(socket: PathBuf, trace: Trace, managed_host: bool) -> WorkerConnection {
     let output = shared.clone();
     let wake = WakeSignal::default();
     let activity_writer = activity_commands::Writer::new(&socket, wake.clone());
+    let workspace_nav_writer = workspace_navigation::Writer::new(&socket, wake.clone());
     let worker_wake = wake.clone();
     let (product_tx, product_commands) = mpsc::sync_channel(8);
     let (product_results, product_rx) = mpsc::sync_channel(8);
@@ -728,6 +733,7 @@ fn ipc(socket: PathBuf, trace: Trace, managed_host: bool) -> WorkerConnection {
         trace.clone(),
     );
     WorkerConnection {
+        workspace_nav_writer,
         host_socket,
         managed_host,
         activity_writer,
@@ -1211,6 +1217,10 @@ struct TransferReload {
 }
 
 struct CanvasApp {
+    workspace_nav_writer: workspace_navigation::Writer,
+    workspace_nav_reload: Option<(uuid::Uuid, uuid::Uuid)>,
+    workspace_nav_select: Option<(uuid::Uuid, uuid::Uuid)>,
+    workspace_last_confirmed: Option<workspace_nav_store::Visit>,
     host_socket: PathBuf,
     activity_writer: activity_commands::Writer,
     activity_sample: Option<activity::Snapshot>,
@@ -1315,6 +1325,7 @@ impl CanvasApp {
         diagnostic_selection: bool,
     ) -> Self {
         let WorkerConnection {
+            workspace_nav_writer,
             host_socket,
             managed_host,
             activity_writer,
@@ -1434,6 +1445,11 @@ impl CanvasApp {
                                         this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
+                                        let workspace_refresh = this.workspace_nav_reload.filter(|(request,_)|Some(*request) == ui_request);
+                                        if workspace_refresh.is_some() {this.workspace_nav_reload=None;}
+                                        let workspace_selected = this.workspace_nav_select.filter(|(request,_)|Some(*request) == ui_request);
+                                        if workspace_selected.is_some() {this.workspace_nav_select=None;}
+                                        let preserve_workspace_dialog = workspace_refresh.is_some() || workspace_selected.is_some_and(|(_,origin)|this.product.dialog.as_ref().map(|dialog|dialog.id) != Some(origin));
                                         let close_reply=this.product.tab_close_sheet.as_ref().is_some_and(|sheet|sheet.request.is_some() && sheet.request==ui_request);
                                         let prompt_refresh=this.prompt_reload.is_some_and(|request|Some(request)==ui_request);
                                         if prompt_refresh { this.prompt_reload=None; }
@@ -1454,8 +1470,9 @@ impl CanvasApp {
                                             this.focus_queue.complete(reply.ui_request.expect("matching focus request"),saved);
                                         }
                                         this.product.catalog = Some(catalog);
+                                        this.workspace_catalog_changed();
                                         if !keep_local && roster_write.is_none() && profile_reload.is_none() {
-                                            if !transfer_refresh {
+                                            if !transfer_refresh && !preserve_workspace_dialog {
                                                 this.product.notice = None;
                                                 this.product.dialog = None;
                                             }
@@ -1586,6 +1603,8 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    if this.workspace_nav_reload.is_some_and(|(request,_)|Some(request) == error.ui_request) { this.workspace_nav_reload=None; }
+                                    if this.workspace_nav_select.is_some_and(|(request,_)|Some(request) == error.ui_request) { this.workspace_nav_select=None; }
                                     this.receive_handoff(error.ui_request,None,None,false,Some(&error.message));
                                     if this.fail_scrollback(error.ui_request,&error.message,cx) { continue; }
                                     this.close_flow.fail(format!("Операция session host не подтверждена: {}", error.message));
@@ -1772,6 +1791,7 @@ impl CanvasApp {
                         this.service_stops(cx);
                         this.service_scrollback(window,cx);
                         this.service_activity(cx);
+                        this.service_workspace_navigation(cx);
                         if this.service_window_close(window, cx) { return; }
                         let blinking = this.state.error.is_none()
                             && this.state.views.get(this.selected).is_some_and(|view| {
@@ -1825,8 +1845,14 @@ impl CanvasApp {
             .skip(2)
             .any(|arg| arg == "--reduced-motion");
         cx.set_reduce_motion(product.appearance.reduced_motion || product.motion_forced);
+        product.workspace_navigation.config = workspace_nav_writer.initial.clone();
+        product.workspace_navigation.error = workspace_nav_writer.initial_error.clone();
         product.maintenance.managed = managed_host;
         Self {
+            workspace_nav_reload: None,
+            workspace_nav_select: None,
+            workspace_last_confirmed: None,
+            workspace_nav_writer,
             host_socket,
             activity_writer,
             activity_sample: None,
@@ -3717,6 +3743,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::SubmitDialog
+                | A::ChooseWorkspace(_)
                 | A::TransferTo(_)
                 | A::RefreshTransfer
                 | A::ConfirmCloseTab
@@ -3755,6 +3782,7 @@ impl CanvasApp {
             A::CloseDialog
                 | A::OpenActivity
                 | A::OpenHostMaintenance
+                | A::OpenWorkspaceSwitcher
                 | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
@@ -3792,6 +3820,11 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenWorkspaceSwitcher
+            | A::ChooseWorkspace(_)
+            | A::ToggleProjectFold(_)
+            | A::WorkspacePage(_)
+            | A::RefreshWorkspaceNavigation => self.workspace_navigation_action(action, window, cx),
             A::OpenHostMaintenance | A::InspectHost | A::UpdateHost | A::ReconcileHost => {
                 self.host_maintenance_action(action, window, cx)
             }
@@ -4709,13 +4742,41 @@ impl CanvasApp {
                 if let Some(catalog) = &self.product.catalog {
                     let mut selection = catalog.selection.clone();
                     selection.project_id = Some(id);
-                    selection.workspace_id = catalog_flow::first_active_workspace(catalog, id)
-                        .map(|workspace| workspace.id);
-                    selection.tab_id = catalog
-                        .tabs
-                        .iter()
-                        .find(|tab| Some(tab.workspace_id) == selection.workspace_id)
-                        .map(|tab| tab.id);
+                    selection.workspace_id = selection
+                        .workspace_id
+                        .filter(|workspace| {
+                            catalog.workspaces.iter().any(|w| {
+                                w.id == *workspace
+                                    && w.project_id == id
+                                    && w.status == pigade_storage::WorkspaceStatus::Ready
+                            })
+                        })
+                        .or_else(|| {
+                            self.product
+                                .workspace_navigation
+                                .config
+                                .recent
+                                .iter()
+                                .find(|visit| {
+                                    catalog.workspaces.iter().any(|w| {
+                                        w.id == visit.workspace
+                                            && w.project_id == id
+                                            && w.status == pigade_storage::WorkspaceStatus::Ready
+                                    })
+                                })
+                                .map(|visit| visit.workspace)
+                        })
+                        .or_else(|| {
+                            catalog_flow::first_active_workspace(catalog, id)
+                                .map(|workspace| workspace.id)
+                        });
+                    selection.tab_id = selection.workspace_id.and_then(|workspace| {
+                        workspace_navigation::target_tab(
+                            catalog,
+                            &self.product.workspace_navigation.config,
+                            workspace,
+                        )
+                    });
                     let revision = selection.revision;
                     self.product_command(json!({"command":"catalog_apply","batch":{"projects":[],"workspaces":[],"tabs":[],"selection":{"value":selection,"expected_revision":revision},"layout":null}}),cx);
                 }
@@ -4727,13 +4788,34 @@ impl CanvasApp {
                     let mut selection = catalog.selection.clone();
                     selection.project_id = Some(workspace.project_id);
                     selection.workspace_id = Some(id);
-                    selection.tab_id = catalog
-                        .tabs
-                        .iter()
-                        .find(|t| t.workspace_id == id)
-                        .map(|t| t.id);
+                    selection.tab_id = workspace_navigation::target_tab(
+                        catalog,
+                        &self.product.workspace_navigation.config,
+                        id,
+                    );
+                    if selection == catalog.selection {
+                        if self
+                            .product
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.kind == DialogKind::WorkspaceSwitcher)
+                        {
+                            self.product.dialog = None;
+                        }
+                        cx.notify();
+                        return;
+                    }
                     let revision = selection.revision;
-                    self.product_command(json!({"command":"catalog_apply","batch":{"projects":[],"workspaces":[],"tabs":[],"selection":{"value":selection,"expected_revision":revision},"layout":null}}),cx);
+                    let origin = self
+                        .product
+                        .dialog
+                        .as_ref()
+                        .filter(|dialog| dialog.kind == DialogKind::WorkspaceSwitcher)
+                        .map(|dialog| dialog.id);
+                    let request = uuid::Uuid::new_v4();
+                    if self.try_product_command(json!({"command":"catalog_apply","_ui_request":request,"batch":{"projects":[],"workspaces":[],"tabs":[],"selection":{"value":selection,"expected_revision":revision},"layout":null}}),cx) {
+                        self.workspace_nav_select=origin.map(|dialog|(request,dialog));
+                    }
                 }
             }
             A::SelectTab(id) => {
@@ -4992,6 +5074,18 @@ impl CanvasApp {
                             A::PrepareHandoff
                         };
                         self.handoff_action(action, cx);
+                    }
+                    DialogKind::WorkspaceSwitcher => {
+                        self.product
+                            .workspace_navigation
+                            .refresh(self.product.catalog.as_ref(), self.product.dialog.as_ref());
+                        if let Some(workspace) = self.product.workspace_navigation.selected {
+                            self.workspace_navigation_action(
+                                A::ChooseWorkspace(workspace),
+                                window,
+                                cx,
+                            );
+                        }
                     }
                     DialogKind::History => self.history_search(None, cx),
                     DialogKind::Launcher | DialogKind::Controls | DialogKind::HostMaintenance => {
@@ -6549,6 +6643,77 @@ impl CanvasApp {
             .product
             .dialog
             .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceSwitcher)
+        {
+            self.product
+                .workspace_navigation
+                .refresh(self.product.catalog.as_ref(), self.product.dialog.as_ref());
+            if !event.is_held
+                && self.text_input.preedit.is_empty()
+                && !self.product.dialog.as_ref().is_some_and(|dialog| {
+                    dialog.fields.iter().any(|field| field.marked().is_some())
+                })
+            {
+                use product::ProductAction as A;
+                let control = k.modifiers.control || k.modifiers.platform;
+                let mut handled = true;
+                match k.key.as_str() {
+                    "escape" => self.product_action(A::CloseDialog, window, cx),
+                    "enter" if !k.modifiers.alt && !k.modifiers.shift => {
+                        if let Some(id) = self.product.workspace_navigation.selected {
+                            self.product_action(A::ChooseWorkspace(id), window, cx);
+                        }
+                    }
+                    "up" | "down" if !control && !k.modifiers.alt => self
+                        .product
+                        .workspace_navigation
+                        .move_by(if k.key == "up" { -1 } else { 1 }),
+                    "pageup" | "pagedown" if !control && !k.modifiers.alt => self
+                        .product
+                        .workspace_navigation
+                        .move_by(if k.key == "pageup" {
+                            -(workspace_navigation::PAGE as isize)
+                        } else {
+                            workspace_navigation::PAGE as isize
+                        }),
+                    "r" if control && !k.modifiers.alt && !k.modifiers.shift => {
+                        self.product_action(A::RefreshWorkspaceNavigation, window, cx)
+                    }
+                    "left" | "right" if k.modifiers.alt && !control => {
+                        if let Some(row) =
+                            self.product.workspace_navigation.rows.iter().find(|row| {
+                                Some(row.workspace) == self.product.workspace_navigation.selected
+                            })
+                        {
+                            let folded = self
+                                .product
+                                .workspace_navigation
+                                .config
+                                .collapsed_projects
+                                .contains(&row.project);
+                            if folded != (k.key == "left") {
+                                self.product_action(A::ToggleProjectFold(row.project), window, cx);
+                            }
+                        }
+                    }
+                    _ => handled = false,
+                }
+                if handled {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+            } else if self.text_input.preedit.is_empty()
+                && matches!(k.key.as_str(), "enter" | "escape")
+            {
+                cx.stop_propagation();
+                return;
+            }
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
             .is_some_and(|dialog| dialog.kind == product::DialogKind::HostMaintenance)
         {
             if !event.is_held && self.text_input.preedit.is_empty() {
@@ -7809,6 +7974,7 @@ impl CanvasApp {
                 return;
             }
             let action = match k.key.as_str() {
+                "a" => Some(product::ProductAction::OpenWorkspaceSwitcher),
                 "p" => Some(product::ProductAction::OpenPalette),
                 "e" => Some(if k.modifiers.shift {
                     product::ProductAction::EditProjectContext
@@ -8614,6 +8780,7 @@ impl EntityInputHandler for CanvasApp {
 }
 impl Render for CanvasApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.service_workspace_navigation(cx);
         self.tab_drop_bounds.clear();
         self.product.refresh_activity_badges();
         let width = f32::from(window.viewport_size().width);

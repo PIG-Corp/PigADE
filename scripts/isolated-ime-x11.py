@@ -4872,7 +4872,8 @@ def run_setup_fixture(config, report, control, app, env, save):
         'handoff_prepare_then_confirm_once': True,
         'handoff_cancel_and_source_immutable': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                     'agent-picker.ppm', 'agent-direct.ppm', 'host-maintenance.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
+                     'workspace-switcher-filtered.ppm', 'workspace-switcher-recent.ppm', 'workspace-switcher-refreshed.ppm', 'workspace-switcher-folded.ppm',
+                  'agent-picker.ppm', 'agent-direct.ppm', 'host-maintenance.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
                      'welcome-compact.ppm', 'workspace-compact.ppm',
                      'four-panels.ppm', 'four-panels-compact.ppm']}
     report['setup']['captures'].extend([
@@ -4887,7 +4888,97 @@ def run_setup_fixture(config, report, control, app, env, save):
         'existing_journal_prefix_preserved': True}
     if report.get('profile_access'):
         report['setup']['captures'].extend(report['profile_access']['captures'])
+    run_workspace_navigation_fixture(config, report, env, save)
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
+    save()
+
+
+def run_workspace_navigation_fixture(config, report, env, save):
+    report['stage'] = 'workspace-navigation'
+    save()
+    baseline = host_request({'command': 'catalog'})['catalog']
+    source_workspace = baseline['selection']['workspace_id']
+    project = baseline['selection']['project_id']
+    generations = fixture_generations()
+    identities = sorted((v['session'], v['generation'], v.get('pid'))
+                        for v in host_request({'command': 'list'})['views'])
+    layouts = {t['id']: t['layout_json'] for t in baseline['tabs']}
+    prepared = prepared_launches_read_only()
+    response = host_request({'command': 'create_workspace', 'project': project,
+                             'task': 'NavSecond', 'worktree': False})
+    second = next(w for w in response['catalog']['workspaces'] if w['task'] == 'NavSecond')
+    remembered = str(uuid.uuid4())
+    second_tab = next(tab['id'] for tab in response['catalog']['tabs']
+                      if tab['workspace_id'] == second['id'])
+    empty = 'null'
+    restored_selection = dict(response['catalog']['selection'])
+    restored_selection.update(project_id=project, workspace_id=source_workspace,
+                              tab_id=baseline['selection']['tab_id'])
+    host_request({'command': 'catalog_apply', 'batch': {'projects': [], 'workspaces': [],
+        'selection': {'value': restored_selection, 'expected_revision': restored_selection['revision']},
+        'layout': None, 'tabs': [
+        {'value': {'id': remembered, 'workspace_id': source_workspace, 'name': 'Remembered',
+                   'layout_json': empty, 'active_pane': None, 'revision': 0}, 'expected_revision': None}]}})
+    nav_file = Path('/home/pigade/.config/pigade/workspace-navigation') / (
+        'nav-' + b'/artifacts/state/host.sock'.hex() + '.json')
+    def saved():
+        if not nav_file.exists(): return None
+        require(nav_file.stat().st_size <= 32768 and not nav_file.is_symlink(),
+                'navigation preferences are oversized or a symlink')
+        return json.loads(nav_file.read_text())
+    def selected(workspace, tab):
+        value = host_request({'command': 'catalog'})['catalog']
+        return value if (value['selection']['workspace_id'], value['selection']['tab_id']) == (workspace, tab) else None
+    def settle(stage):
+        helper_call(config, stage)
+        time.sleep(.35)
+    settle('workspace-switcher-open')
+    settle('workspace-switcher-refresh')
+    helper_call(config, 'setup-close')
+    settle('workspace-remembered-tab')
+    wait_until(lambda: selected(source_workspace, remembered), time.monotonic() + 6)
+    wait_until(lambda: (value if (value := saved()) and value['recent'][0] ==
+                       {'workspace': source_workspace, 'tab': remembered} else None), time.monotonic() + 6)
+    settle('workspace-switcher-open')
+    settle('workspace-switcher-query-second')
+    helper_call(config, 'capture', '/artifacts/workspace-switcher-filtered.ppm')
+    settle('workspace-switcher-choose')
+    wait_until(lambda: selected(second['id'], second_tab), time.monotonic() + 6)
+    settle('workspace-switcher-open')
+    helper_call(config, 'capture', '/artifacts/workspace-switcher-recent.ppm')
+    settle('workspace-switcher-choose')
+    wait_until(lambda: selected(source_workspace, remembered), time.monotonic() + 6)
+    settle('workspace-switcher-open')
+    settle('workspace-switcher-no-match')
+    settle('workspace-switcher-choose')
+    require(selected(source_workspace, remembered), 'empty workspace search changed selection')
+    settle('workspace-switcher-clear')
+    settle('workspace-switcher-query-second')
+    settle('workspace-switcher-refresh')
+    helper_call(config, 'capture', '/artifacts/workspace-switcher-refreshed.ppm')
+    settle('workspace-switcher-choose')
+    wait_until(lambda: selected(second['id'], second_tab), time.monotonic() + 6)
+    settle('workspace-switcher-open')
+    settle('workspace-switcher-fold')
+    wait_until(lambda: project in (value['collapsed_projects'] if (value := saved()) else []),
+               time.monotonic() + 6)
+    helper_call(config, 'capture', '/artifacts/workspace-switcher-folded.ppm')
+    settle('workspace-switcher-unfold')
+    wait_until(lambda: project not in (value['collapsed_projects'] if (value := saved()) else [project]),
+               time.monotonic() + 6)
+    helper_call(config, 'setup-close')
+    final = host_request({'command': 'catalog'})['catalog']
+    require(fixture_generations() == generations and prepared_launches_read_only() == prepared and
+            sorted((v['session'], v['generation'], v.get('pid'))
+                   for v in host_request({'command': 'list'})['views']) == identities and
+            all(next(t for t in final['tabs'] if t['id'] == tab)['layout_json'] == layout
+                for tab, layout in layouts.items()),
+            'workspace navigation launched a CLI, changed process identity or rewrote an existing layout')
+    report['workspace_navigation'] = {'last_tab_restored': True, 'search_and_refresh_preserve_target': True,
+        'empty_search_does_not_navigate': True, 'fold_preferences_persisted': True,
+        'existing_generations_processes_and_layouts_unchanged': True}
+    report['setup']['captures'].extend(['workspace-switcher-filtered.ppm', 'workspace-switcher-recent.ppm',
+                                       'workspace-switcher-refreshed.ppm', 'workspace-switcher-folded.ppm'])
     save()
 
 

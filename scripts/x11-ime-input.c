@@ -184,6 +184,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "custom-reopen-profiles") &&
         strcmp(a.stage, "custom-review-enter") && strcmp(a.stage, "custom-review-cancel") &&
         strcmp(a.stage, "custom-confirm") &&
+        strcmp(a.stage, "workspace-switcher-open") && strcmp(a.stage, "workspace-switcher-refresh") &&
+        strcmp(a.stage, "workspace-switcher-query-second") && strcmp(a.stage, "workspace-switcher-clear") &&
+        strcmp(a.stage, "workspace-switcher-choose") && strcmp(a.stage, "workspace-switcher-fold") &&
+        strcmp(a.stage, "workspace-switcher-unfold") && strcmp(a.stage, "workspace-remembered-tab") &&
+        strcmp(a.stage, "workspace-switcher-no-match") &&
         strcmp(a.stage, "host-maintenance-open") && strcmp(a.stage, "host-maintenance-refresh") &&
         strcmp(a.stage, "host-maintenance-confirm") &&
         strcmp(a.stage, "handoff-open") && strcmp(a.stage, "handoff-type-ask") &&
@@ -1850,6 +1855,24 @@ int main(int argc, char **argv) {
             key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "custom-confirm")) {
             modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-switcher-open")) {
+            setup_prefix(dpy, XK_a, 0);
+        } else if (!strcmp(a.stage, "workspace-switcher-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "workspace-switcher-query-second")) {
+            custom_ascii(dpy, "NavSecond");
+        } else if (!strcmp(a.stage, "workspace-switcher-no-match")) {
+            custom_ascii(dpy, "NoWorkspaceMatch");
+        } else if (!strcmp(a.stage, "workspace-switcher-clear")) {
+            modified_key(dpy, XK_Control_L, XK_a); key(dpy, XK_BackSpace);
+        } else if (!strcmp(a.stage, "workspace-switcher-choose")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-switcher-fold")) {
+            modified_key(dpy, XK_Alt_L, XK_Left);
+        } else if (!strcmp(a.stage, "workspace-switcher-unfold")) {
+            modified_key(dpy, XK_Alt_L, XK_Right);
+        } else if (!strcmp(a.stage, "workspace-remembered-tab")) {
+            modified_key(dpy, XK_Control_L, XK_2);
         } else if (!strcmp(a.stage, "host-maintenance-open")) {
             setup_prefix(dpy, XK_p, 0);
             custom_ascii(dpy, "host");

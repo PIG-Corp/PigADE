@@ -74,6 +74,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/edit_field.rs | Native GPUI wrapped text fields, cached shaping, caret/selection/IME geometry, horizontal and vertical reveal |
 | crates/app/src/host_maintenance.rs, host_maintenance_commands.rs, host_maintenance_ui.rs | Explicit local host build inspection, frozen update receipt and unknown-outcome reconciliation; background helper only, default socket ownership retained; no CLI restart |
 | crates/session-host/src/maintenance.rs, maintenance_client.rs | Metadata-only status, exact-incarnation idle shutdown, authenticated peer/socket/image inspection and read-only process reconciliation CLI; actor barrier refuses active/degraded/unresolved work |
+| crates/app/src/workspace_nav_store.rs | Bounded per-socket UUID-only recent workspace/tab and collapsed-project preferences; locked semantic merge, private atomic sync and malformed-source preservation |
+| crates/app/src/workspace_navigation.rs, workspace_navigation_commands.rs, workspace_switcher_ui.rs | Cached searchable registry, stable-ID paging, last confirmed tab restoration, local fold controls and background preference writer; selection uses existing host CAS, no CLI launch |
 | crates/app/src/startup.rs | Private local host discovery/startup, version-derived paths, host-lock-mediated stale-endpoint recovery; explicit sockets never auto-start |
 | crates/app/src/viewport.rs | Pure device-aligned canvas translation/reveal, scrollbars and thumb dragging; per-tab offsets persist independently of layout undo |
 | crates/app/src/tiling.rs | Pure split-boundary resize helpers used by keyboard/mouse previews |

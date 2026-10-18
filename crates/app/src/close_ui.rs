@@ -47,6 +47,9 @@ impl CanvasApp {
         if !self.canvas_dirty.is_empty() || self.canvas_saving.is_some() {
             pending.push("Положение canvas");
         }
+        if self.workspace_nav_writer.pending() {
+            pending.push("Последние воркспейсы и дерево проектов");
+        }
         if self.product.controls_saving {
             pending.push("Клавиша управления");
         }

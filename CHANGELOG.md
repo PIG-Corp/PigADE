@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Searchable workspace switcher from the breadcrumb, palette or Prefix,A, with recent destinations and restoration of the last confirmed tab. Project folding and recent UUID-only preferences merge in bounded per-host files; navigation leaves CLI generations and layouts intact. Startup now waits through a cooperative host shutdown and the socket-unlinked/lock-held gap.
+
 - Optional host service sheet shows the active versus installed build and active sessions. Explicit idle-only replacement authenticates and freezes the peer/socket/helper, seals command admission, refuses active or unresolved work, and reconnects through existing writer locks without starting CLI. Unknown outcomes remain frozen for read-only reconciliation; legacy and explicit-socket hosts stay read-only.
 
 - Persistent agent profile pinning and order with an independent roster revision: Ctrl+P pins, Alt+Up/Down moves within a group, selected profile identity survives rearrangement. Schema14 migrates the existing order with a durable backup; metadata-only CAS updates preserve live terminals, launch settings and layouts.

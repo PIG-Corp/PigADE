@@ -38,12 +38,19 @@ mod prompt_ui;
 mod session_control_ui;
 #[path = "template_ui.rs"]
 mod template_ui;
+#[path = "workspace_switcher_ui.rs"]
+mod workspace_switcher_ui;
 
 const SIDEBAR_WIDTH: f32 = 220.0;
 const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenWorkspaceSwitcher,
+    ChooseWorkspace(Uuid),
+    ToggleProjectFold(Uuid),
+    WorkspacePage(i32),
+    RefreshWorkspaceNavigation,
     OpenHostMaintenance,
     InspectHost,
     UpdateHost,
@@ -207,6 +214,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    WorkspaceSwitcher,
     HostMaintenance,
     Activity,
     Appearance,
@@ -261,6 +269,7 @@ impl DialogKind {
     fn title(self) -> &'static str {
         match self {
             Self::Handoff => "Передать контекст",
+            Self::WorkspaceSwitcher => "Переключить воркспейс",
             Self::HostMaintenance => "Служба PigADE",
             Self::Activity => "Активность",
             Self::Appearance => "Внешний вид",
@@ -317,6 +326,7 @@ impl DialogKind {
                 "Видимый текст · можно отредактировать",
                 "Запрос новому агенту",
             ],
+            Self::WorkspaceSwitcher => &["Проект, задача или путь…"],
             Self::HostMaintenance | Self::Activity => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
@@ -378,6 +388,7 @@ impl DialogKind {
     fn submit_label(self) -> &'static str {
         match self {
             Self::Handoff => "Проверить запуск",
+            Self::WorkspaceSwitcher => "Перейти",
             Self::HostMaintenance | Self::Activity => "Закрыть",
             Self::Appearance => "Готово",
             Self::CloseTab => "Закрыть вкладку",
@@ -445,6 +456,7 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) workspace_navigation: crate::workspace_navigation::Model,
     pub(super) maintenance: crate::host_maintenance::Model,
     pub(super) activity: crate::activity::Tracker,
     pub(super) activity_error: Option<String>,
@@ -667,6 +679,10 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
+        (
+            "Переключить воркспейс · workspaces · switch",
+            ProductAction::OpenWorkspaceSwitcher,
+        ),
         (
             "Служба PigADE · обновление host · version",
             ProductAction::OpenHostMaintenance,
@@ -1513,7 +1529,22 @@ impl ProductUi {
                     .text_size(px(12.))
                     .text_color(colors.muted)
                     .truncate()
-                    .child(location),
+                    .child(self.action_control_with_accessible_name(
+                        "workspace-switcher-open".into(),
+                        if location.is_empty() {
+                            "Воркспейсы ▾".into()
+                        } else {
+                            format!("{location} ▾")
+                        },
+                        "Переключить воркспейс · Ctrl+Shift+Space, A".into(),
+                        ProductAction::OpenWorkspaceSwitcher,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    )),
             )
             .child(self.icon_control(
                 "header-commands",
@@ -1578,6 +1609,30 @@ impl ProductUi {
                         .flex()
                         .items_center()
                         .gap_1()
+                        .child(
+                            self.action_control_with_accessible_name(
+                                format!("project-fold-{}", project.id),
+                                if self
+                                    .workspace_navigation
+                                    .config
+                                    .collapsed_projects
+                                    .contains(&project.id)
+                                {
+                                    "›"
+                                } else {
+                                    "⌄"
+                                }
+                                .into(),
+                                format!("Свернуть / развернуть проект {}", project.name),
+                                ProductAction::ToggleProjectFold(project.id),
+                                ControlStyle {
+                                    role: Role::Button,
+                                    selected: false,
+                                    compact: true,
+                                },
+                                cx,
+                            ),
+                        )
                         .child(div().flex_1().min_w_0().child(self.action_control(
                             format!("project-{}", project.id),
                             project.name.clone(),
@@ -1607,7 +1662,12 @@ impl ProductUi {
                 };
                 tree = tree.child(div().mt(px(5.)).child(row));
                 for workspace in catalog.workspaces.iter().filter(|value| {
-                    value.project_id == project.id
+                    !self
+                        .workspace_navigation
+                        .config
+                        .collapsed_projects
+                        .contains(&project.id)
+                        && value.project_id == project.id
                         && (self.show_archived || value.status != WorkspaceStatus::Archived)
                 }) {
                     let selected = selected_workspace(catalog) == Some(workspace.id);
@@ -3341,6 +3401,9 @@ impl ProductUi {
                 cx,
             ));
         }
+        if dialog.kind == DialogKind::WorkspaceSwitcher {
+            fields = self.workspace_switcher_fields(fields, cx);
+        }
         if dialog.kind == DialogKind::Appearance {
             fields = self.appearance_fields(fields, cx);
         }
@@ -3677,6 +3740,8 @@ impl ProductUi {
                     .is_some()
             });
         let can_submit = can_bind
+            && (dialog.kind != DialogKind::WorkspaceSwitcher
+                || self.workspace_navigation.selected.is_some())
             && profile_selected
             && (dialog.kind != DialogKind::WorkspaceGitCommit || self.git_commit_plan.is_some());
         let submit = if !can_submit || close_blocked {
@@ -3752,7 +3817,8 @@ impl ProductUi {
                         640.
                     } else if matches!(
                         dialog.kind,
-                        DialogKind::Layouts
+                        DialogKind::WorkspaceSwitcher
+                            | DialogKind::Layouts
                             | DialogKind::Recipe
                             | DialogKind::RecipeProfiles
                             | DialogKind::NewTemplateTab
