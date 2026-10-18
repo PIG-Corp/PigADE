@@ -5573,3 +5573,11 @@ Rebuilt the public README as a concise product introduction with a generated Pig
 - Files: README.md, docs/USAGE.md, docs/assets/readme-hero.png, docs/design/README.md, WORKLOG.md
 - Verification: Generated hero visually inspected and copied without edits; PNG integrity and dimensions verified. Relative Markdown/image links resolve. GitHub Markdown API renders one hero, seven headings and the controls table. Version and diff checks pass; documentation-only change, no product tests/build claims.
 - Risks / next: Commit and push README/assets to PIG-Corp/PigADE; broad development remains paused and published feature WIP remains explicitly documented.
+
+## 2026-10-18T16:56:08+00:00 — root
+
+Translated the public README into English, including cover alt text, features, setup, first-use steps, controls and development status. Preserved commands, links, illustration and explicit WIP limitations; noted the current Russian UI and linked documents.
+
+- Files: README.md, WORKLOG.md
+- Verification: No Cyrillic remains in README; local link/image targets resolve; GitHub Markdown API renders the cover, controls table and seven headings. Documentation-only change; no product build or tests required.
+- Risks / next: Commit and push English README to PIG-Corp/PigADE; broad development remains paused.

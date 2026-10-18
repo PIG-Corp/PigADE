@@ -1,32 +1,32 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="PigADE — Agentic Development Environment. Иллюстрация терминальных панелей с небольшим фарфоровым поросёнком." width="100%">
+  <img src="docs/assets/readme-hero.png" alt="PigADE — Agentic Development Environment. Terminal panels and a small porcelain pig." width="100%">
 </p>
 
 <h1 align="center">PigADE</h1>
-<p align="center"><strong>CLI-агенты. Один рабочий стол.</strong></p>
+<p align="center"><strong>CLI agents. One workspace.</strong></p>
 <p align="center">Claude Code · Codex · OpenCode · Shell</p>
 <p align="center"><code>dev 0.0.1</code> · Linux · Rust + GPUI</p>
 
 ---
 
-PigADE — настольная среда для работы с несколькими CLI-агентами в одном проекте. Откройте репозиторий, создайте воркспейс под задачу и разместите терминалы так, как удобно вам.
+PigADE is a desktop environment for working with multiple CLI agents in the same project. Open a repository, create a workspace for your task, and arrange your terminals the way you work.
 
-**Проект → Воркспейс → Вкладки → Терминальные панели**
+**Project → Workspace → Tabs → Terminal panels**
 
-## Что внутри
+## Features
 
-- **Настоящие терминалы.** Каждый агент работает в собственной CLI-сессии со своим интерфейсом и авторизацией.
-- **Tiling.** Разделяйте, перемещайте и меняйте размеры панелей. Есть focus mode, undo/redo и перенос между вкладками и воркспейсами.
-- **Работа по задачам.** Несколько проектов, общая папка или отдельный Git worktree для воркспейса.
-- **Общий контекст.** Инструкции проекта, роли и версионированная память с явным выбором того, что передать агенту.
-- **История и продолжение.** Просмотр сохранённого вывода и отдельных поколений сессии; подтверждаемое продолжение конкретного диалога средствами CLI.
-- **Инструменты рядом.** Профили агентов, библиотека промптов, сохранённые раскладки и просмотр изменений Git со stage/unstage и коммитом.
+- **Real terminals.** Each agent runs in its own CLI session, using its own interface and authentication.
+- **Tiling.** Split, move, and resize panels. Use focus mode, undo/redo, and move sessions between tabs and workspaces.
+- **Task-based workspaces.** Work across multiple projects, using a shared checkout or a separate Git worktree for each workspace.
+- **Shared context.** Project instructions, individual roles, and versioned memory, with explicit control over what reaches each agent.
+- **History and continuation.** Browse saved output and previous process generations; explicitly resume a specific conversation through the CLI's native capabilities.
+- **Tools close at hand.** Agent profiles, a prompt library, saved layouts, and Git change review with staging, unstaging, and commits.
 
-## Попробовать
+## Try it
 
-Пока это **экспериментальная Linux-версия**, без готового установщика. В `main` есть незавершённые изменения; для знакомства используйте последний проверенный срез `87f40c0`.
+PigADE is currently an **experimental Linux development build**, with no packaged installer. The `main` branch includes unfinished changes; use the last verified snapshot, `87f40c0`, to try the application.
 
-Нужны Rust/Cargo, C/C++ toolchain и системные зависимости GPUI. Проверенная среда — Linux x86_64, Rust 1.98.1. Подробности сборки — в [руководстве приложения](crates/app/README.md).
+You need Rust/Cargo, a C/C++ toolchain, and GPUI's system dependencies. The verified development environment is Linux x86_64 with Rust 1.98.1. See the [application guide](crates/app/README.md) for build details.
 
 ```sh
 git clone https://github.com/PIG-Corp/PigADE.git
@@ -39,50 +39,50 @@ crates/app/bootstrap.sh build --locked --release
 ./crates/app/target/release/pigade-app
 ```
 
-Приложение само запускает локальный session host. Claude Code, Codex и OpenCode устанавливаются и авторизуются отдельно; доступные возможности и проверенные версии перечислены в [матрице CLI](docs/compatibility/CLI.md).
+The application starts its local session host automatically. Install and authenticate Claude Code, Codex, and OpenCode separately. Supported capabilities and verified versions are listed in the [CLI compatibility matrix](docs/compatibility/CLI.md).
 
-После сборки можно добавить PigADE в меню приложений, включая Quickshell:
+After building, add PigADE to your application launcher, including Quickshell:
 
 ```sh
 python3 scripts/install-desktop.py
 ```
 
-Ярлык использует последний собранный release-бинарник из этого репозитория.
+The launcher uses the latest release binary built in this repository.
 
-## Первые пять минут
+## Your first five minutes
 
-1. Нажмите **«Открыть папку»** для существующего Git-репозитория или **«Создать проект»** для новой папки.
-2. Воркспейс **«Основной»** и первая вкладка появятся автоматически.
-3. Откройте **«Терминал»** или выберите CLI через **«Добавить агента»**.
-4. Соберите раскладку через меню панели, мышь или клавиатуру.
-5. Для отдельной задачи создайте новый воркспейс; при необходимости выберите worktree.
+1. Open an existing Git repository or create a new project folder from the start screen.
+2. A default workspace and the first tab are created automatically.
+3. Open a shell or choose a CLI from the agent picker.
+4. Arrange your panels using their menus, the mouse, or keyboard controls.
+5. Create another workspace for a separate task, optionally using a Git worktree.
 
-Обычный запуск открывает CLI без передачи общего контекста. Роль, память и инструкции можно явно настроить через команды **«Настроить запуск…»** в палитре.
+A normal launch starts the CLI without delivering shared context. Use the explicit launch configuration actions in the command palette to choose roles, memory, and instructions.
 
-## Управление
+## Controls
 
-| Действие | По умолчанию |
+| Action | Default |
 | --- | --- |
-| Палитра команд | `Ctrl+Shift+Space`, затем `P` |
-| Новый shell / новая вкладка | `Ctrl+Enter` / режим PigADE, затем `T` |
-| Переместить панель | `Ctrl` + перетаскивание ЛКМ |
-| Изменить размер панели | `Ctrl` + ПКМ или перетаскивание границы |
-| Активная панель | Следует за курсором |
-| Скопировать выделение | `Ctrl+Shift+C` |
+| Command palette | `Ctrl+Shift+Space`, then `P` |
+| New shell / new tab | `Ctrl+Enter` / PigADE mode, then `T` |
+| Move a panel | Hold `Ctrl` and drag with the left mouse button |
+| Resize a panel | Hold `Ctrl` and drag with the right mouse button, or drag a divider |
+| Focus a panel | Move the pointer over it |
+| Copy selected text | `Ctrl+Shift+C` |
 
-Клавишу управления панелями можно изменить в настройках. Полный список действий — в [руководстве](docs/USAGE.md).
+The panel management modifier is configurable in settings. See the [user guide](docs/USAGE.md) for the complete controls.
 
-## Статус разработки
+## Development status
 
-**dev 0.0.1 — ещё не MVP и не beta.** Терминальный фундамент и основные сценарии реализованы, но проверка платформ, доступности, производительности и полного восстановления ещё не завершена. Исторический вывод обозначается отдельно от живого процесса; прежний процесс после перезагрузки ОС не считается работающим.
+**dev 0.0.1 is not an MVP or beta release yet.** The terminal foundation and core workflows are implemented, but platform coverage, accessibility, performance, and complete recovery acceptance remain unfinished. Historical output is identified separately from a live process; a process from before an OS reboot is not treated as still running.
 
-Текущий `main` также содержит WIP порядка вкладок и исследовательские патчи. Известные проблемы и точка продолжения — в [handoff](docs/AGENT_HANDOFF.md). Обложка выше — иллюстрация, а не скриншот приложения.
+The current `main` branch also includes unfinished tab ordering and research patches. Known issues and the next steps are recorded in the [development handoff](docs/AGENT_HANDOFF.md). The cover above is an illustration, not an application screenshot.
 
-## Документация
+## Documentation
 
-- [Руководство пользователя и команды](docs/USAGE.md)
-- [Спецификация](SPEC.md) · [Дизайн](DESIGN.md) · [Архитектура](docs/PROJECT_MAP.md)
-- [Совместимость CLI](docs/compatibility/CLI.md) · [Архитектурные решения](docs/adr/)
-- [Изменения](CHANGELOG.md) · [Состояние разработки](docs/AGENT_HANDOFF.md)
+- [User guide and commands](docs/USAGE.md)
+- [Specification](SPEC.md) · [Design](DESIGN.md) · [Architecture](docs/PROJECT_MAP.md)
+- [CLI compatibility](docs/compatibility/CLI.md) · [Architecture decisions](docs/adr/)
+- [Changelog](CHANGELOG.md) · [Development handoff](docs/AGENT_HANDOFF.md)
 
-Для изменений кода начните с [AGENTS.md](AGENTS.md). Лицензия проекта пока не выбрана; лицензии сторонних компонентов сохранены в репозитории.
+The development UI and some linked documents are currently in Russian. Before contributing code, read [AGENTS.md](AGENTS.md). A project license has not been selected yet; third-party licenses are preserved in the repository.
