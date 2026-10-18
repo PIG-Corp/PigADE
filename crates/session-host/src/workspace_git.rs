@@ -4,7 +4,11 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
@@ -18,6 +22,9 @@ use pigade_storage::{Catalog, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "workspace_git_index.rs"]
+mod index;
+
 const OUTPUT_LIMIT: usize = 256 * 1024;
 // Each identity-validation phase and the status command receive a fresh
 // bounded deadline, so a timed-out status can still be revalidated and
@@ -28,6 +35,19 @@ const MAX_ENTRIES: usize = 128;
 const DIFF_OUTPUT_LIMIT: usize = 128 * 1024;
 const DIFF_LINE_LIMIT: usize = 2000;
 const MAX_DIFF_PATH_BYTES: usize = 4096;
+const MAX_NOTICE_BYTES: usize = 1024;
+
+pub(super) fn bounded_notice(value: impl AsRef<str>) -> String {
+    let value = value.as_ref();
+    if value.len() <= MAX_NOTICE_BYTES {
+        return value.to_owned();
+    }
+    let mut end = MAX_NOTICE_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceGitSnapshot {
@@ -40,6 +60,10 @@ pub struct WorkspaceGitSnapshot {
     pub detached: bool,
     pub entries: Vec<WorkspaceGitEntry>,
     pub truncated: bool,
+    #[serde(default)]
+    pub index_operation: Option<WorkspaceGitIndexResult>,
+    #[serde(default)]
+    pub index_operation_unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -72,6 +96,48 @@ pub struct WorkspaceGitDiff {
     pub text: String,
     pub truncated: bool,
     pub binary: bool,
+    #[serde(default)]
+    pub index_ticket: Option<GitIndexTicket>,
+    #[serde(default)]
+    pub index_unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitIndexAction {
+    Stage,
+    Unstage,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitIndexTicket {
+    pub id: Uuid,
+    pub action: GitIndexAction,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitIndexPhase {
+    Applied,
+    Rejected,
+    Unknown,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitIndexResult {
+    pub ticket: Uuid,
+    pub workspace_id: Uuid,
+    pub workspace_revision: u64,
+    pub project_id: Uuid,
+    pub cwd: PathBuf,
+    pub path: String,
+    pub side: GitDiffSide,
+    pub action: GitIndexAction,
+    pub phase: GitIndexPhase,
+    #[serde(default)]
+    pub acknowledged: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,20 +162,35 @@ enum Task {
         side: GitDiffSide,
         reply: mpsc::SyncSender<crate::Response>,
     },
+    Index {
+        target: Target,
+        ticket: Uuid,
+        inspect: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
+    IndexAck {
+        target: Target,
+        ticket: Uuid,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
 }
 
 pub(crate) struct Reader {
     sender: mpsc::SyncSender<Task>,
+    index_busy: Arc<AtomicBool>,
 }
 
 impl Reader {
-    pub(crate) fn new() -> Result<Self> {
+    pub(crate) fn new(root: PathBuf) -> Result<Self> {
         let (sender, receiver) = mpsc::sync_channel::<Task>(1);
+        let index_busy = Arc::new(AtomicBool::new(false));
+        let worker_busy = index_busy.clone();
         let receiver = Arc::new(Mutex::new(receiver));
         let worker_receiver = receiver.clone();
         thread::Builder::new()
             .name("pigade-workspace-git".into())
             .spawn(move || {
+                let mut index = index::Engine::new(root);
                 loop {
                     let task = worker_receiver
                         .lock()
@@ -118,8 +199,14 @@ impl Reader {
                     let Ok(task) = task else { break };
                     match task {
                         Task::Snapshot { target, reply } => {
-                            let response = match snapshot(target) {
-                                Ok(snapshot) => response(Some(snapshot), None),
+                            let response = match snapshot(target.clone()) {
+                                Ok(mut snapshot) => {
+                                    match index.pending_for_target(&target) {
+                                        Ok(operation) => snapshot.index_operation = operation,
+                                        Err(error) => snapshot.index_operation_unavailable_reason = Some(bounded_notice(format!("Git index operation status unavailable: {error:#}"))),
+                                    }
+                                    response(Some(snapshot), None)
+                                }
                                 Err(error) => response(
                                     None,
                                     Some(format!("workspace Git status unavailable: {error:#}")),
@@ -133,7 +220,7 @@ impl Reader {
                             side,
                             reply,
                         } => {
-                            let response = match diff(target, path, side) {
+                            let response = match diff(target, path, side, &mut index) {
                                 Ok(diff) => diff_response(Some(diff), None),
                                 Err(error) => diff_response(
                                     None,
@@ -142,10 +229,29 @@ impl Reader {
                             };
                             let _ = reply.try_send(response);
                         }
+                        Task::Index { target, ticket, inspect, reply } => {
+                            let result = index.request(target, ticket, inspect);
+                            let mut response = response(None, None);
+                            response.workspace_git_index = Some(result);
+                            let _ = reply.try_send(response);
+                            if !inspect {
+                                worker_busy.store(false, Ordering::Release);
+                            }
+                        }
+                        Task::IndexAck { target, ticket, reply } => {
+                            let result = index.acknowledge(&target, ticket);
+                            let mut response = response(None, None);
+                            response.workspace_git_index = Some(result);
+                            let _ = reply.try_send(response);
+                        }
                     }
                 }
             })?;
-        Ok(Self { sender })
+        Ok(Self { sender, index_busy })
+    }
+
+    pub(crate) fn index_busy(&self) -> bool {
+        self.index_busy.load(Ordering::Acquire)
     }
 
     pub(crate) fn submit(&self, target: Target, reply: mpsc::SyncSender<crate::Response>) {
@@ -174,6 +280,9 @@ impl Reader {
                     None,
                     Some("workspace Git status worker unavailable".into()),
                 ));
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                unreachable!("task variant changed")
             }
         }
     }
@@ -205,6 +314,96 @@ impl Reader {
                     None,
                     Some("workspace Git diff worker unavailable".into()),
                 ));
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                unreachable!("task variant changed")
+            }
+        }
+    }
+
+    pub(crate) fn submit_index(
+        &self,
+        target: Target,
+        ticket: Uuid,
+        inspect: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        if !inspect
+            && self
+                .index_busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            let mut response = response(None, None);
+            response.workspace_git_index = Some(index::unavailable_result(
+                &target,
+                ticket,
+                "another Git index operation is in progress".into(),
+            ));
+            let _ = reply.try_send(response);
+            return;
+        }
+        match self.sender.try_send(Task::Index {
+            target,
+            ticket,
+            inspect,
+            reply,
+        }) {
+            Ok(()) => (),
+            Err(mpsc::TrySendError::Full(Task::Index { target, reply, .. })) => {
+                if !inspect {
+                    self.index_busy.store(false, Ordering::Release);
+                }
+                let mut response = response(None, None);
+                response.workspace_git_index = Some(index::unavailable_result(
+                    &target,
+                    ticket,
+                    "workspace Git index queue is full".into(),
+                ));
+                let _ = reply.try_send(response);
+            }
+            Err(mpsc::TrySendError::Disconnected(Task::Index { target, reply, .. })) => {
+                if !inspect {
+                    self.index_busy.store(false, Ordering::Release);
+                }
+                let mut response = response(None, None);
+                response.workspace_git_index = Some(index::unavailable_result(
+                    &target,
+                    ticket,
+                    "workspace Git index worker unavailable".into(),
+                ));
+                let _ = reply.try_send(response);
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                unreachable!("task variant changed")
+            }
+        }
+    }
+
+    pub(crate) fn submit_index_ack(
+        &self,
+        target: Target,
+        ticket: Uuid,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        match self.sender.try_send(Task::IndexAck {
+            target,
+            ticket,
+            reply,
+        }) {
+            Ok(()) => (),
+            Err(mpsc::TrySendError::Full(Task::IndexAck { target, reply, .. }))
+            | Err(mpsc::TrySendError::Disconnected(Task::IndexAck { target, reply, .. })) => {
+                let mut response = response(None, None);
+                response.workspace_git_index = Some(index::unavailable_result(
+                    &target,
+                    ticket,
+                    "workspace Git index acknowledgement unavailable".into(),
+                ));
+                let _ = reply.try_send(response);
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                unreachable!("task variant changed")
             }
         }
     }
@@ -273,10 +472,17 @@ fn snapshot(target: Target) -> Result<WorkspaceGitSnapshot> {
         detached: parsed.detached,
         entries: parsed.entries,
         truncated: truncated || parsed.truncated,
+        index_operation: None,
+        index_operation_unavailable_reason: None,
     })
 }
 
-fn diff(target: Target, path: String, side: GitDiffSide) -> Result<WorkspaceGitDiff> {
+fn diff(
+    target: Target,
+    path: String,
+    side: GitDiffSide,
+    index: &mut index::Engine,
+) -> Result<WorkspaceGitDiff> {
     validate_diff_path(&path)?;
     ensure!(
         !path.contains('\u{fffd}'),
@@ -307,7 +513,12 @@ fn diff(target: Target, path: String, side: GitDiffSide) -> Result<WorkspaceGitD
             }
         }
         GitDiffSide::Worktree if entry.index_status != 'D' => {
-            ensure_index_file_mode(&identity.cwd, &path)?;
+            let index_path = if matches!(entry.worktree_status, 'R' | 'C') {
+                entry.original_path.as_deref().unwrap_or(&path)
+            } else {
+                &path
+            };
+            ensure_index_file_mode(&identity.cwd, index_path)?;
         }
         GitDiffSide::Worktree | GitDiffSide::Untracked | GitDiffSide::Conflict => (),
     }
@@ -335,6 +546,8 @@ fn diff(target: Target, path: String, side: GitDiffSide) -> Result<WorkspaceGitD
         after_old == old && after_new == new,
         "workspace diff inputs changed during diff; refresh and retry"
     );
+    let (index_ticket, index_unavailable_reason) =
+        index.ticket_for_diff(&target, &identity, &before, entry, side, (&old, &new));
     Ok(WorkspaceGitDiff {
         workspace_id: target.workspace_id,
         workspace_revision: target.workspace_revision,
@@ -345,6 +558,8 @@ fn diff(target: Target, path: String, side: GitDiffSide) -> Result<WorkspaceGitD
         text,
         truncated,
         binary,
+        index_ticket,
+        index_unavailable_reason: index_unavailable_reason.map(bounded_notice),
     })
 }
 
@@ -435,29 +650,35 @@ fn diff_contents(
             let new = if entry.index_status == 'D' {
                 Vec::new()
             } else {
-                git_blob(cwd, &format!(":{path}"))?
+                git_blob(cwd, &format!(":0:{path}"))?
             };
             Ok((old, new))
         }
         GitDiffSide::Worktree => {
+            let old_path = if matches!(entry.worktree_status, 'R' | 'C') {
+                entry.original_path.as_deref().unwrap_or(path)
+            } else {
+                path
+            };
+            validate_diff_path(old_path)?;
             let old = if entry.index_status == 'D' {
                 Vec::new()
             } else {
-                git_blob(cwd, &format!(":{path}"))?
+                git_blob(cwd, &format!(":0:{old_path}"))?
             };
             let new = read_worktree_file(cwd, path)?;
-            Ok((old, new.unwrap_or_default()))
+            Ok((old, new.map(|file| file.bytes).unwrap_or_default()))
         }
         GitDiffSide::Untracked => {
             let new = read_worktree_file(cwd, path)?;
             Ok((
                 Vec::new(),
-                new.context("untracked path is not a regular file")?,
+                new.context("untracked path is not a regular file")?.bytes,
             ))
         }
         GitDiffSide::Conflict => {
             let new = read_worktree_file(cwd, path)?;
-            Ok((Vec::new(), new.unwrap_or_default()))
+            Ok((Vec::new(), new.map(|file| file.bytes).unwrap_or_default()))
         }
     }
 }
@@ -590,7 +811,13 @@ fn render_diff(old: &[u8], new: &[u8]) -> Result<(String, bool)> {
 }
 
 #[cfg(unix)]
-fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>> {
+pub(super) struct WorktreeFile {
+    pub bytes: Vec<u8>,
+    pub mode: u32,
+}
+
+#[cfg(unix)]
+pub(super) fn read_worktree_file(root: &Path, path: &str) -> Result<Option<WorktreeFile>> {
     let components = path.split('/').collect::<Vec<_>>();
     let root_fd = open_path(root, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC)
         .context("cannot open workspace root for safe file read")?;
@@ -661,7 +888,12 @@ fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>> {
     // while the bytes were being read.
     let current_stamp = stat_at(parent.as_raw_fd(), &leaf)?;
     ensure!(current_stamp == after, "workspace file changed during diff");
-    Ok(Some(bytes))
+    let mode = if after.mode & 0o111 != 0 {
+        0o100755
+    } else {
+        0o100644
+    };
+    Ok(Some(WorktreeFile { bytes, mode }))
 }
 
 #[cfg(unix)]
@@ -675,6 +907,7 @@ struct FileStamp {
     ctime: i64,
     ctime_nsec: i64,
     regular: bool,
+    mode: u32,
 }
 
 #[cfg(unix)]
@@ -690,6 +923,7 @@ impl FileStamp {
             ctime: metadata.ctime(),
             ctime_nsec: metadata.ctime_nsec(),
             regular: file_type.is_file(),
+            mode: metadata.mode() & 0o7777,
         }
     }
 }
@@ -728,6 +962,7 @@ fn stat_at(parent_fd: libc::c_int, leaf: &CString) -> Result<FileStamp> {
         ctime: metadata.st_ctime,
         ctime_nsec: metadata.st_ctime_nsec,
         regular: (metadata.st_mode & libc::S_IFMT) == libc::S_IFREG,
+        mode: metadata.st_mode as u32 & 0o7777,
     })
 }
 
@@ -906,7 +1141,6 @@ fn run_status(cwd: &Path, deadline: Instant) -> Result<(Vec<u8>, bool)> {
             "--branch",
             "--untracked-files=all",
             "--ignore-submodules=none",
-            "--no-renames",
             "--no-ahead-behind",
         ],
         OUTPUT_LIMIT,
@@ -1117,7 +1351,6 @@ fn run_status_bounded(
             "--branch",
             "--untracked-files=all",
             "--ignore-submodules=none",
-            "--no-renames",
             "--no-ahead-behind",
         ],
         output_limit,
@@ -1216,10 +1449,31 @@ fn parse_entry<'a>(
     ensure!(tag == [kind], "Git status record type mismatch");
     let xy = split.next().context("Git status record lacks XY state")?;
     ensure!(xy.len() == 2, "invalid Git XY status");
-    let path = split
-        .nth(columns - 3)
-        .context("Git status record lacks path")?;
-    let original_path = if rename {
+    let (path, rename_kind) = if rename {
+        let score = split
+            .nth(columns - 4)
+            .context("renamed Git status record lacks rename/copy score")?;
+        ensure!(
+            score
+                .first()
+                .is_some_and(|kind| matches!(*kind, b'R' | b'C')),
+            "unsupported Git rename/copy score"
+        );
+        (
+            split
+                .next()
+                .context("renamed Git status record lacks path")?,
+            score[0] as char,
+        )
+    } else {
+        (
+            split
+                .nth(columns - 3)
+                .context("Git status record lacks path")?,
+            '\0',
+        )
+    };
+    let original_path = if matches!(rename_kind, 'R' | 'C') {
         Some(display(
             fields
                 .next()
@@ -1273,6 +1527,7 @@ pub(crate) fn response(
         panel_directory: None,
         workspace_git_snapshot: snapshot,
         workspace_git_diff: None,
+        workspace_git_index: None,
     }
 }
 
@@ -1334,7 +1589,8 @@ mod tests {
     }
 
     fn git_diff(repo: &Path, path: &str, side: GitDiffSide) -> Result<WorkspaceGitDiff> {
-        diff(target_for(repo, repo)?, path.to_owned(), side)
+        let mut engine = index::Engine::new(std::env::temp_dir().join("pigade-workspace-git-test"));
+        diff(target_for(repo, repo)?, path.to_owned(), side, &mut engine)
     }
 
     fn assert_patch(diff: &WorkspaceGitDiff, removed: &str, added: &str) {
@@ -1360,6 +1616,7 @@ mod tests {
             "# branch.upstream origin/feature/test\0",
             "1 M. N... 100644 100644 100644 abc abc tracked\nwith-newline\0",
             "2 R. N... 100644 100644 100644 abc def R100 moved name\0old name\0",
+            "2 C. N... 100644 100644 100644 abc def C100 copied name\0source name\0",
             "u UU N... 100644 100644 100644 100644 a b c conflict\0",
             "? untracked file\0",
         )
@@ -1368,12 +1625,18 @@ mod tests {
         assert_eq!(parsed.branch.as_deref(), Some("feature/test"));
         assert_eq!(parsed.head.as_deref(), Some("abc123"));
         assert!(!parsed.detached);
-        assert_eq!(parsed.entries.len(), 4);
+        assert_eq!(parsed.entries.len(), 5);
         assert_eq!(parsed.entries[0].path, "tracked\nwith-newline");
         assert_eq!(parsed.entries[1].path, "moved name");
         assert_eq!(parsed.entries[1].original_path.as_deref(), Some("old name"));
-        assert!(parsed.entries[2].unmerged);
-        assert!(parsed.entries[3].untracked);
+        assert_eq!(parsed.entries[2].path, "copied name");
+        assert_eq!(parsed.entries[2].index_status, 'C');
+        assert_eq!(
+            parsed.entries[2].original_path.as_deref(),
+            Some("source name")
+        );
+        assert!(parsed.entries[3].unmerged);
+        assert!(parsed.entries[4].untracked);
         Ok(())
     }
 
@@ -1477,6 +1740,22 @@ mod tests {
         let staged_delete = git_diff(&repo, "deleted.txt", GitDiffSide::Index)?;
         assert!(staged_delete.text.contains("-remove me"));
         assert!(staged_delete.text.contains("@@ -1 +0,0 @@"));
+        Ok(())
+    }
+
+    #[test]
+    fn index_blob_lookup_handles_colon_digit_filename() -> Result<()> {
+        let root = TempDir::new()?;
+        let repo = root.path().join("repo");
+        init_repo(&repo)?;
+        fs::write(repo.join("1:foo"), "before\n")?;
+        parse_git_fixture(&repo, &["add", "1:foo"])?;
+        parse_git_fixture(&repo, &["commit", "-m", "colon filename"])?;
+        fs::write(repo.join("1:foo"), "after\n")?;
+        parse_git_fixture(&repo, &["add", "1:foo"])?;
+
+        let diff = git_diff(&repo, "1:foo", GitDiffSide::Index)?;
+        assert_patch(&diff, "-before", "+after");
         Ok(())
     }
 

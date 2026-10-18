@@ -55,7 +55,10 @@ pub use prepared::{LaunchPreview, PrepareRequest, ResumeSource};
 pub use template_run::{
     TemplateRunRequest, TemplateRunSlotView, TemplateRunSource, TemplateRunView,
 };
-pub use workspace_git::{GitDiffSide, WorkspaceGitDiff, WorkspaceGitEntry, WorkspaceGitSnapshot};
+pub use workspace_git::{
+    GitDiffSide, GitIndexAction, GitIndexPhase, GitIndexTicket, WorkspaceGitDiff,
+    WorkspaceGitEntry, WorkspaceGitIndexResult, WorkspaceGitSnapshot,
+};
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
@@ -242,6 +245,17 @@ pub enum Command {
         path: String,
         side: GitDiffSide,
     },
+    WorkspaceGitIndex {
+        workspace: Uuid,
+        expected_revision: u64,
+        ticket: Uuid,
+        inspect: bool,
+    },
+    WorkspaceGitIndexAcknowledge {
+        workspace: Uuid,
+        expected_revision: u64,
+        ticket: Uuid,
+    },
     CatalogApply {
         batch: Box<pigade_storage::CatalogBatch>,
     },
@@ -354,6 +368,8 @@ pub struct Response {
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_git_index: Option<WorkspaceGitIndexResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -715,6 +731,7 @@ fn provider_response(
         panel_directory: None,
         workspace_git_snapshot: None,
         workspace_git_diff: None,
+        workspace_git_index: None,
     }
 }
 
@@ -1042,6 +1059,7 @@ impl Host {
                 panel_directory: None,
                 workspace_git_snapshot: None,
                 workspace_git_diff: None,
+                workspace_git_index: None,
             });
         }
         if matches!(
@@ -1091,6 +1109,7 @@ impl Host {
                 panel_directory: None,
                 workspace_git_snapshot: None,
                 workspace_git_diff: None,
+                workspace_git_index: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -1119,6 +1138,7 @@ impl Host {
                 panel_directory: None,
                 workspace_git_snapshot: None,
                 workspace_git_diff: None,
+                workspace_git_index: None,
             });
         }
         match &command {
@@ -1157,6 +1177,7 @@ impl Host {
                     panel_directory: None,
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
             Command::SearchPanels { query, after } => {
@@ -1186,6 +1207,7 @@ impl Host {
                     panel_directory: Some(directory),
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
             Command::ActivatePane {
@@ -1223,6 +1245,7 @@ impl Host {
                     panel_directory: None,
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
             Command::Generations { session, before } => {
@@ -1251,6 +1274,7 @@ impl Host {
                     panel_directory: None,
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
             Command::SelectGeneration {
@@ -1283,6 +1307,7 @@ impl Host {
                     panel_directory: None,
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -1374,7 +1399,10 @@ impl Host {
         }
         let catalog = match command {
             Command::DetectProviders => unreachable!("provider request routed to worker"),
-            Command::WorkspaceGitSnapshot { .. } | Command::WorkspaceGitDiff { .. } => {
+            Command::WorkspaceGitSnapshot { .. }
+            | Command::WorkspaceGitDiff { .. }
+            | Command::WorkspaceGitIndex { .. }
+            | Command::WorkspaceGitIndexAcknowledge { .. } => {
                 unreachable!("workspace Git status request routed to worker")
             }
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
@@ -1442,6 +1470,7 @@ impl Host {
                     panel_directory: None,
                     workspace_git_snapshot: None,
                     workspace_git_diff: None,
+                    workspace_git_index: None,
                 });
             }
         };
@@ -1469,6 +1498,7 @@ impl Host {
             panel_directory: None,
             workspace_git_snapshot: None,
             workspace_git_diff: None,
+            workspace_git_index: None,
         })
     }
     fn launch_response(
@@ -1501,6 +1531,7 @@ impl Host {
             panel_directory: None,
             workspace_git_snapshot: None,
             workspace_git_diff: None,
+            workspace_git_index: None,
         }
     }
     fn template_run_response(
@@ -1533,6 +1564,7 @@ impl Host {
             panel_directory: None,
             workspace_git_snapshot: None,
             workspace_git_diff: None,
+            workspace_git_index: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -2659,7 +2691,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     let resume_reader = resume_probe::Reader::new(internal_jobs)?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
-    let workspace_git_reader = workspace_git::Reader::new()?;
+    let workspace_git_reader = workspace_git::Reader::new(root.clone())?;
     let provider_detector = ProviderDetector::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
@@ -2699,6 +2731,73 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
         }
         if let Command::DetectProviders = job.request.command {
             provider_detector.submit(job.reply);
+            continue;
+        }
+        if matches!(&job.request.command, Command::CatalogApply { .. })
+            && workspace_git_reader.index_busy()
+        {
+            let _ = job.reply.try_send(workspace_git::response(
+                None,
+                Some("Git index operation is in progress; metadata edit was not applied".into()),
+            ));
+            continue;
+        }
+        let index_command = match &job.request.command {
+            Command::WorkspaceGitIndex {
+                workspace,
+                expected_revision,
+                ticket,
+                inspect,
+            } => Some((workspace, expected_revision, ticket, *inspect, false)),
+            Command::WorkspaceGitIndexAcknowledge {
+                workspace,
+                expected_revision,
+                ticket,
+            } => Some((workspace, expected_revision, ticket, true, true)),
+            _ => None,
+        };
+        if let Some((workspace, expected_revision, ticket, inspect, acknowledge)) = index_command {
+            let target = host.metadata.catalog().and_then(|catalog| {
+                // Receipt inspection is read-only and remains possible after a
+                // metadata rename/archive; it never revives a write lease.
+                if inspect {
+                    let current = catalog
+                        .workspaces
+                        .iter()
+                        .find(|value| value.id == *workspace)
+                        .ok_or_else(|| anyhow::anyhow!("workspace does not exist"))?;
+                    let project = catalog
+                        .projects
+                        .iter()
+                        .find(|value| value.id == current.project_id)
+                        .ok_or_else(|| anyhow::anyhow!("workspace project does not exist"))?;
+                    Ok(workspace_git::Target {
+                        workspace_id: *workspace,
+                        workspace_revision: *expected_revision,
+                        project_id: current.project_id,
+                        cwd: current.cwd.clone(),
+                        project_root: project.canonical_path.clone(),
+                        git_common_dir: project.git_common_dir.clone(),
+                    })
+                } else {
+                    workspace_git::target(&catalog, *workspace, *expected_revision)
+                }
+            });
+            match target {
+                Ok(target) => {
+                    if acknowledge {
+                        workspace_git_reader.submit_index_ack(target, *ticket, job.reply);
+                    } else {
+                        workspace_git_reader.submit_index(target, *ticket, inspect, job.reply);
+                    }
+                }
+                Err(error) => {
+                    let _ = job.reply.try_send(workspace_git::response(
+                        None,
+                        Some(format!("workspace Git index unavailable: {error:#}")),
+                    ));
+                }
+            }
             continue;
         }
         if let Command::WorkspaceGitDiff {
@@ -2794,6 +2893,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 panel_directory: None,
                 workspace_git_snapshot: None,
                 workspace_git_diff: None,
+                workspace_git_index: None,
             },
         };
         let _ = job.reply.try_send(response);

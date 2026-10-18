@@ -264,6 +264,7 @@ fn response(
         panel_directory: None,
         workspace_git_snapshot: None,
         workspace_git_diff: None,
+        workspace_git_index: None,
     }
 }
 

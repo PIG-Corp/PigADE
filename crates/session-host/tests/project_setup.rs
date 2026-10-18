@@ -1,6 +1,8 @@
 //! Real-host coverage for project creation and bounded provider detection.
 use anyhow::{Context, Result, bail, ensure};
-use pigade_session_host::{Command, GitDiffSide, PROTOCOL, Request, Response, receive, send};
+use pigade_session_host::{
+    Command, GitDiffSide, GitIndexPhase, PROTOCOL, Request, Response, receive, send,
+};
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, process::CommandExt},
@@ -450,6 +452,228 @@ fn workspace_git_snapshot_isolated_from_host_commands_and_read_only() -> Result<
     ensure!(
         host.child.as_ref().context("host process missing")?.id() == host_pid,
         "Git read changed the host process"
+    );
+    Ok(())
+}
+
+#[test]
+fn index_actions_bind_preview_and_survive_host_restart_without_repeating_filters() -> Result<()> {
+    let mut host = HostFixture::new()?;
+    let parent = host.state().join("index-parent");
+    fs::create_dir(&parent)?;
+    let project = exchange(
+        &host.socket(),
+        Command::CreateProject {
+            parent,
+            name: "IndexRepo".into(),
+        },
+    )?
+    .catalog
+    .context("project catalog missing")?
+    .projects
+    .into_iter()
+    .next()
+    .context("project missing")?;
+    let catalog = exchange(
+        &host.socket(),
+        Command::CreateWorkspace {
+            project: project.id,
+            task: "index workflow".into(),
+            worktree: false,
+        },
+    )?
+    .catalog
+    .context("workspace catalog missing")?;
+    let workspace = catalog
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.project_id == project.id)
+        .context("workspace missing")?
+        .clone();
+    let path = "safe stage.txt";
+    let file = workspace.cwd.join(path);
+    fs::write(&file, "reviewed content\n")?;
+    let preview = |host: &HostFixture, side| -> Result<_> {
+        exchange(
+            &host.socket(),
+            Command::WorkspaceGitDiff {
+                workspace: workspace.id,
+                expected_revision: workspace.revision,
+                path: path.into(),
+                side,
+            },
+        )?
+        .workspace_git_diff
+        .context("diff missing")
+    };
+    let apply = |host: &HostFixture, ticket, inspect| -> Result<_> {
+        exchange(
+            &host.socket(),
+            Command::WorkspaceGitIndex {
+                workspace: workspace.id,
+                expected_revision: workspace.revision,
+                ticket,
+                inspect,
+            },
+        )?
+        .workspace_git_index
+        .context("index receipt missing")
+    };
+    let private_git = |args: &[&str]| -> Result<Vec<u8>> {
+        let output = ProcessCommand::new("/usr/bin/git")
+            .arg("--no-optional-locks")
+            .arg("-C")
+            .arg(&workspace.cwd)
+            .args(args)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "private Git fixture failed: {:?}",
+            args
+        );
+        Ok(output.stdout)
+    };
+    let index = workspace.cwd.join(".git/index");
+    let stale = preview(&host, GitDiffSide::Untracked)?
+        .index_ticket
+        .context("stage ticket missing")?;
+    fs::write(&file, "new content after preview\n")?;
+    let rejected = apply(&host, stale.id, false)?;
+    ensure!(
+        rejected.phase == GitIndexPhase::Rejected,
+        "stale preview was not rejected"
+    );
+    ensure!(!index.exists(), "stale preview changed the unborn index");
+
+    let ticket = preview(&host, GitDiffSide::Untracked)?
+        .index_ticket
+        .context("fresh stage ticket missing")?;
+    let staged = apply(&host, ticket.id, false)?;
+    ensure!(
+        staged.phase == GitIndexPhase::Applied,
+        "stage failed: {:?}",
+        staged
+    );
+    ensure!(private_git(&["show", ":0:safe stage.txt"])? == fs::read(&file)?);
+    let staged_index = fs::read(&index)?;
+    ensure!(
+        apply(&host, ticket.id, false)? == staged,
+        "same-ticket retry changed its receipt"
+    );
+    ensure!(
+        fs::read(&index)? == staged_index,
+        "duplicate stage rewrote the index"
+    );
+    host.restart()?;
+    ensure!(
+        apply(&host, ticket.id, true)? == staged,
+        "restart inspection lost the durable receipt"
+    );
+    ensure!(
+        apply(&host, ticket.id, false)? == staged,
+        "restart replay repeated a completed action"
+    );
+    ensure!(fs::read(&index)? == staged_index);
+
+    let unstage = preview(&host, GitDiffSide::Index)?
+        .index_ticket
+        .context("unstage ticket missing")?;
+    let unstaged = apply(&host, unstage.id, false)?;
+    ensure!(
+        unstaged.phase == GitIndexPhase::Applied,
+        "unstage failed: {:?}",
+        unstaged
+    );
+    ensure!(private_git(&["ls-files", "--stage", "-z"])?.is_empty());
+    ensure!(fs::read_to_string(&file)? == "new content after preview\n");
+
+    private_git(&[
+        "config",
+        "--local",
+        "filter.pigade-index-fixture.clean",
+        "sh -c 'printf x >> .git/pigade-filter-calls; exit 1'",
+    ])?;
+    private_git(&[
+        "config",
+        "--local",
+        "filter.pigade-index-fixture.required",
+        "true",
+    ])?;
+    fs::write(
+        workspace.cwd.join(".gitattributes"),
+        "*.txt filter=pigade-index-fixture\n",
+    )?;
+    let unknown_ticket = preview(&host, GitDiffSide::Untracked)?
+        .index_ticket
+        .context("filter stage ticket missing")?;
+    let before_unknown = fs::read(&index)?;
+    let unknown = apply(&host, unknown_ticket.id, false)?;
+    ensure!(
+        unknown.phase == GitIndexPhase::Unknown,
+        "failed external filter did not retain Unknown: {:?}",
+        unknown
+    );
+    let calls = workspace.cwd.join(".git/pigade-filter-calls");
+    ensure!(fs::read(&calls)? == b"x", "filter did not run exactly once");
+    ensure!(
+        fs::read(&index)? == before_unknown,
+        "failed filter changed index"
+    );
+    let pending = exchange(
+        &host.socket(),
+        Command::WorkspaceGitSnapshot {
+            workspace: workspace.id,
+            expected_revision: workspace.revision,
+        },
+    )?
+    .workspace_git_snapshot
+    .context("snapshot missing")?;
+    ensure!(
+        pending
+            .index_operation
+            .as_ref()
+            .is_some_and(|operation| operation.ticket == unknown_ticket.id
+                && operation.phase == GitIndexPhase::Unknown
+                && !operation.acknowledged)
+    );
+    ensure!(
+        preview(&host, GitDiffSide::Untracked)?
+            .index_ticket
+            .is_none(),
+        "unresolved outcome issued a new write ticket"
+    );
+    host.restart()?;
+    ensure!(apply(&host, unknown_ticket.id, true)?.phase == GitIndexPhase::Unknown);
+    ensure!(apply(&host, unknown_ticket.id, false)?.phase == GitIndexPhase::Unknown);
+    ensure!(
+        fs::read(&calls)? == b"x",
+        "inspection/replay reran the external filter"
+    );
+    let ack = exchange(
+        &host.socket(),
+        Command::WorkspaceGitIndexAcknowledge {
+            workspace: workspace.id,
+            expected_revision: workspace.revision,
+            ticket: unknown_ticket.id,
+        },
+    )?
+    .workspace_git_index
+    .context("ack receipt missing")?;
+    ensure!(
+        ack.phase == GitIndexPhase::Unknown && ack.acknowledged,
+        "acknowledgement invented an applied outcome"
+    );
+    ensure!(
+        preview(&host, GitDiffSide::Untracked)?
+            .index_ticket
+            .is_some(),
+        "explicit acknowledgement did not release the blocker"
+    );
+    ensure!(fs::read(&calls)? == b"x" && fs::read(&index)? == before_unknown);
+    ensure!(exchange(&host.socket(), Command::Catalog)?.catalog == Some(catalog));
+    ensure!(
+        exchange(&host.socket(), Command::List)?.views.is_empty(),
+        "index operation launched a terminal"
     );
     Ok(())
 }

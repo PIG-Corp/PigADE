@@ -3853,3 +3853,19 @@ Match modifier pane grabs to Hyprland zero-threshold behavior; retain hover focu
 - Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md
 - Verification: 263 app tests,20 layout tests, strict app Clippy, debug/release builds, version and diff checks passed. Luna ran34 private harness tests including strict C compilation. Root private release pointer fixture /tmp/pigade-hypr-pointer-20261018-01 passes immediate pickup/no-motion release,5px cancel, hover/header/input, focus-mode reveal, Move/Undo and existing transfer/file/paste cases; captures visually inspected. No live-desktop automation/config changes.
 - Risks / next: Commit only pointer changes, preserving pending Git-index and unrelated research/stress/GPUI work. Actual Hyprland/Wayland pointer and broad MVP acceptance remain open.
+
+## 2026-10-18T04:16:41+00:00 — /root/git_docs_luna
+
+Documented bounded per-file Git Stage/Unstage behavior, safety checks, persistence, limits and remaining MVP gaps.
+
+- Files: README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: git diff --check -- README.md SPEC.md DESIGN.md CHANGELOG.md crates/app/README.md docs/PROJECT_MAP.md docs/AGENT_HANDOFF.md passed; documentation claims cross-checked against supplied feature implementation; no tests run (root owns verification).
+- Risks / next: Root to run feature tests/native review; keep historical handoff entries intact.
+
+## 2026-10-18T04:31:07+00:00 — /root
+
+Integrate durable per-file Git Stage/Unstage from reviewed diff tickets, preserve Unknown outcomes across restart, and repair Git keyboard control navigation
+
+- Files: crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/protocol.rs, crates/app/src/main.rs, crates/app/src/product.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0014-diff-bound-git-index-actions.md
+- Verification: 372 full workspace tests serially passed; final31 Git module tests and5 real IPC tests passed after signature cleanup.266 app tests and34 harness tests passed; strict workspace/app Clippy, formats, version/diff checks, release workspace bins/examples and app debug/release builds passed. Private catalog02 passes four UI Stage/Unstage transitions, exact index/HEAD/worktree preservation, process/metadata invariants and subsequent Close Tab/reattach; captures inspected. Catalog01 passed Git transitions but exposed Tab/Enter interception; repaired with explicit action focus and disabled-page exclusion. Initial Clippy/compile defects were corrected and are not passing evidence.
+- Risks / next: Commit this coherent Git slice. Next Git work is commit with correct native hooks/signing and reviewed-HEAD/index protection, then Stage All/watchers/receipt maintenance. Full platform, power-loss and MVP gates remain open; preserve unrelated dirt and stash0.

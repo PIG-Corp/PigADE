@@ -109,6 +109,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-hidden-stop-review") && strcmp(a.stage, "catalog-hidden-stop-confirm") &&
         strcmp(a.stage, "catalog-git-open") && strcmp(a.stage, "catalog-git-query") &&
         strcmp(a.stage, "catalog-git-refresh") && strcmp(a.stage, "catalog-git-close") &&
+        strcmp(a.stage, "catalog-git-diff-first") &&
+        strcmp(a.stage, "catalog-git-diff-second") &&
+        strcmp(a.stage, "catalog-git-index-apply") &&
         strcmp(a.stage, "catalog-close-open") && strcmp(a.stage, "catalog-close-query") &&
         strcmp(a.stage, "catalog-close-inspect") && strcmp(a.stage, "catalog-close-cancel") &&
         strcmp(a.stage, "catalog-close-confirm") &&
@@ -1452,8 +1455,16 @@ int main(int argc, char **argv) {
             capture(dpy, "/artifacts/catalog-git-query.ppm");
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-git-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "catalog-git-diff-first")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-diff-second")) {
+            key(dpy, XK_Down);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-index-apply")) {
+            modified_key(dpy, XK_Control_L, XK_s);
         } else if (!strcmp(a.stage, "catalog-git-close")) {
+            key(dpy, XK_Tab);
             key(dpy, XK_Tab);
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-close-open")) {
@@ -1852,8 +1863,11 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2" :
                             !strcmp(a.stage, "catalog-git-open") ? "4" :
                             !strcmp(a.stage, "catalog-git-query") ? "8" :
-                            !strcmp(a.stage, "catalog-git-refresh") ? "1" :
-                            !strcmp(a.stage, "catalog-git-close") ? "2" :
+                            !strcmp(a.stage, "catalog-git-refresh") ? "2" :
+                            !strcmp(a.stage, "catalog-git-diff-first") ? "1" :
+                            !strcmp(a.stage, "catalog-git-diff-second") ? "2" :
+                            !strcmp(a.stage, "catalog-git-index-apply") ? "2" :
+                            !strcmp(a.stage, "catalog-git-close") ? "3" :
                             !strcmp(a.stage, "catalog-close-open") ? "4" :
                             !strcmp(a.stage, "catalog-close-query") ? "10" :
                             !strcmp(a.stage, "catalog-close-inspect") ? "2" :

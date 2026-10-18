@@ -1,8 +1,9 @@
-//! Read-only workspace Git snapshot overlay.
+//! Workspace Git snapshot, diff and explicit index-action controls.
 use super::*;
 
-const DIFF_PAGE_LINES: usize = 200;
-const MAX_DIFF_LINES: usize = 2000;
+#[cfg(test)]
+use crate::workspace_git::diff_line_count;
+use crate::workspace_git::{DIFF_PAGE_LINES, MAX_DIFF_LINES, diff_page_count};
 
 fn safe_path(value: &str, limit: usize) -> String {
     let mut result = String::new();
@@ -129,13 +130,6 @@ fn visible_diff_line(value: &str) -> String {
     visible
 }
 
-fn diff_line_count(text: &str) -> usize {
-    text.lines()
-        .take(MAX_DIFF_LINES + 1)
-        .count()
-        .min(MAX_DIFF_LINES)
-}
-
 fn diff_page(text: &str, page: usize) -> Vec<String> {
     text.lines()
         .skip(page.saturating_mul(DIFF_PAGE_LINES))
@@ -208,6 +202,134 @@ fn git_entry_row(
 }
 
 impl ProductUi {
+    fn git_index_banner(
+        &self,
+        notice: &crate::workspace_git::IndexNotice,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = self.colors();
+        let (label, detail) = match notice.state.phase {
+            crate::workspace_git::IndexPhase::Ready => (
+                "Индекс готов",
+                notice
+                    .state
+                    .message
+                    .as_deref()
+                    .unwrap_or("Операция ещё не запущена."),
+            ),
+            crate::workspace_git::IndexPhase::Applying => {
+                ("Изменяем индекс…", "Дождитесь результата операции.")
+            }
+            crate::workspace_git::IndexPhase::Applied => {
+                ("Индекс обновлён", "Изменение индекса подтверждено.")
+            }
+            crate::workspace_git::IndexPhase::Rejected => (
+                "Операция с индексом отклонена",
+                notice
+                    .state
+                    .message
+                    .as_deref()
+                    .unwrap_or("Снимок оставлен без изменений."),
+            ),
+            crate::workspace_git::IndexPhase::Unknown => (
+                "Результат операции неизвестен",
+                notice
+                    .state
+                    .message
+                    .as_deref()
+                    .unwrap_or("Проверьте результат перед новой операцией."),
+            ),
+            crate::workspace_git::IndexPhase::Unavailable => (
+                "Операция с индексом недоступна",
+                notice
+                    .state
+                    .message
+                    .as_deref()
+                    .unwrap_or("Обновите снимок Git."),
+            ),
+        };
+        let mut banner = div()
+            .id("workspace-git-index-banner")
+            .role(Role::Group)
+            .aria_label("Результат операции с индексом")
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.base)
+            .p(px(8.))
+            .child(
+                div()
+                    .id("workspace-git-index-banner-label")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(
+                        if matches!(
+                            notice.state.phase,
+                            crate::workspace_git::IndexPhase::Rejected
+                                | crate::workspace_git::IndexPhase::Unknown
+                                | crate::workspace_git::IndexPhase::Unavailable
+                        ) {
+                            colors.accent
+                        } else {
+                            colors.text
+                        },
+                    )
+                    .child(label),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(format!(
+                        "{} · {} · {}",
+                        safe_path(&notice.path, 140),
+                        safe_path(&notice.workspace, 100),
+                        safe_path(detail, 220)
+                    )),
+            );
+        if matches!(
+            notice.state.phase,
+            crate::workspace_git::IndexPhase::Unknown
+        ) {
+            let inspect = self.action_control(
+                "workspace-git-index-banner-inspect".into(),
+                "Проверить результат".into(),
+                ProductAction::GitInspectIndex,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            );
+            banner = banner.child(inspect);
+        }
+        if matches!(
+            notice.state.phase,
+            crate::workspace_git::IndexPhase::Unknown
+                | crate::workspace_git::IndexPhase::Unavailable
+        ) {
+            banner = banner.child(self.action_control(
+                "workspace-git-index-banner-dismiss".into(),
+                "Понятно, обновить".into(),
+                ProductAction::GitDismissIndexOutcome,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
+        banner.into_any_element()
+    }
+
     pub(crate) fn git_entry_count(&self) -> usize {
         self.git_sheet
             .as_ref()
@@ -237,6 +359,12 @@ impl ProductUi {
         let [staged, unstaged, untracked, conflicts] = grouped_entries(&snapshot.entries);
         let groups = [staged, unstaged, untracked, conflicts];
         let mut offset = 1; // snapshot branch heading
+        if sheet.last_index.is_some() {
+            offset += 1;
+        }
+        if snapshot.index_operation_unavailable_reason.is_some() {
+            offset += 1;
+        }
         if sheet.loading {
             offset += 1;
         }
@@ -292,17 +420,30 @@ impl ProductUi {
         } else {
             "Обновить снимок"
         };
-        let refresh = self.action_control(
-            "workspace-git-refresh".into(),
-            refresh_label.into(),
-            ProductAction::RefreshWorkspaceGit,
-            ControlStyle {
-                role: Role::Button,
-                selected: selected(0),
-                compact: true,
-            },
-            cx,
-        );
+        let refresh =
+            if sheet.last_index.as_ref().is_some_and(|notice| {
+                notice.state.phase == crate::workspace_git::IndexPhase::Applying
+            }) {
+                div()
+                    .id("workspace-git-refresh-pending")
+                    .role(Role::Status)
+                    .text_size(px(10.))
+                    .text_color(colors.muted)
+                    .child("Обновление доступно после завершения операции")
+                    .into_any_element()
+            } else {
+                self.action_control(
+                    "workspace-git-refresh".into(),
+                    refresh_label.into(),
+                    ProductAction::RefreshWorkspaceGit,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: selected(0),
+                        compact: true,
+                    },
+                    cx,
+                )
+            };
         let close = self.action_control(
             "workspace-git-close".into(),
             "Закрыть".into(),
@@ -328,6 +469,28 @@ impl ProductUi {
             .flex_shrink(1.)
             .overflow_y_scroll()
             .track_scroll(&self.git_scroll);
+
+        if let Some(notice) = &sheet.last_index {
+            body = body.child(self.git_index_banner(notice, cx));
+        }
+        if let Some(reason) = sheet
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.index_operation_unavailable_reason.as_deref())
+        {
+            body = body.child(
+                div()
+                    .id("workspace-git-index-store-unavailable")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(format!(
+                        "Изменение индекса недоступно: {}",
+                        safe_path(reason, 400)
+                    )),
+            );
+        }
 
         if sheet.loading {
             body = body.child(
@@ -624,8 +787,7 @@ impl ProductUi {
         }
 
         if let Some(result) = &diff_sheet.result {
-            let total_lines = diff_line_count(&result.text);
-            let pages = total_lines.div_ceil(DIFF_PAGE_LINES).max(1);
+            let pages = diff_page_count(&result.text);
             let page = diff_sheet.page.min(pages - 1);
             if result.binary {
                 body = body.child(
@@ -726,17 +888,39 @@ impl ProductUi {
             },
             cx,
         );
-        let refresh = self.action_control(
-            "workspace-git-diff-refresh".into(),
-            "Обновить сравнение".into(),
-            ProductAction::GitRefreshDiff,
-            ControlStyle {
-                role: Role::Button,
-                selected: false,
-                compact: true,
-            },
-            cx,
-        );
+        let index_applying =
+            diff_sheet.index_state.as_ref().is_some_and(|state| {
+                matches!(state.phase, crate::workspace_git::IndexPhase::Applying)
+            }) || sheet.last_index.as_ref().is_some_and(|notice| {
+                notice.state.phase == crate::workspace_git::IndexPhase::Applying
+            });
+        let refresh = if index_applying {
+            div()
+                .id("workspace-git-diff-refresh-pending")
+                .role(Role::Status)
+                .text_size(px(10.))
+                .text_color(colors.muted)
+                .child("Обновление доступно после завершения операции")
+                .into_any_element()
+        } else {
+            self.action_control(
+                "workspace-git-diff-refresh".into(),
+                if diff_sheet.index_state.as_ref().is_some_and(|state| {
+                    matches!(state.phase, crate::workspace_git::IndexPhase::Applied)
+                }) {
+                    "Обновить после операции".into()
+                } else {
+                    "Обновить сравнение".into()
+                },
+                ProductAction::GitRefreshDiff,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            )
+        };
         let copy = self.action_control(
             "workspace-git-diff-copy".into(),
             "Копировать снимок".into(),
@@ -759,12 +943,161 @@ impl ProductUi {
             },
             cx,
         );
-        let lines = diff_sheet
+        let index_state = diff_sheet.index_state.as_ref();
+        let ticket_matches = diff_sheet
             .result
             .as_ref()
-            .map(|result| diff_line_count(&result.text))
-            .unwrap_or(0);
-        let pages = lines.div_ceil(DIFF_PAGE_LINES).max(1);
+            .and_then(|result| result.index_ticket.as_ref())
+            .zip(index_state.map(|state| &state.ticket))
+            .is_some_and(|(result, state)| {
+                let action_matches = match diff_sheet.side {
+                    protocol::GitDiffSide::Index => {
+                        result.action == protocol::GitIndexAction::Unstage
+                    }
+                    protocol::GitDiffSide::Worktree | protocol::GitDiffSide::Untracked => {
+                        result.action == protocol::GitIndexAction::Stage
+                    }
+                    protocol::GitDiffSide::Conflict => false,
+                };
+                result == state && action_matches
+            });
+        let index_notice = if let Some(state) = index_state.filter(|state| {
+            !sheet
+                .last_index
+                .as_ref()
+                .is_some_and(|notice| notice.state.ticket == state.ticket)
+        }) {
+            let (label, message) = match &state.phase {
+                crate::workspace_git::IndexPhase::Ready => (
+                    "workspace-git-index-ready",
+                    state
+                        .message
+                        .as_deref()
+                        .unwrap_or("Действие для этого просмотра ещё не выполнено."),
+                ),
+                crate::workspace_git::IndexPhase::Applying => {
+                    ("workspace-git-index-applying", "Изменяем индекс…")
+                }
+                crate::workspace_git::IndexPhase::Applied => (
+                    "workspace-git-index-applied",
+                    "Индекс обновлён. Снимок сравнения устарел; обновите его.",
+                ),
+                crate::workspace_git::IndexPhase::Rejected => (
+                    "workspace-git-index-rejected",
+                    state
+                        .message
+                        .as_deref()
+                        .unwrap_or("Операция с индексом отклонена. Обновите сравнение."),
+                ),
+                crate::workspace_git::IndexPhase::Unknown => (
+                    "workspace-git-index-unknown",
+                    state
+                        .message
+                        .as_deref()
+                        .unwrap_or("Результат операции неизвестен. Проверьте его перед повтором."),
+                ),
+                crate::workspace_git::IndexPhase::Unavailable => (
+                    "workspace-git-index-unavailable",
+                    state
+                        .message
+                        .as_deref()
+                        .unwrap_or("Операция с индексом недоступна для этого снимка."),
+                ),
+            };
+            Some((label, message.to_owned()))
+        } else if index_state.is_some() {
+            // The persistent banner above already owns this ticket's outcome.
+            // Do not also claim that the host failed to provide a ticket.
+            None
+        } else {
+            Some((
+                "workspace-git-index-unavailable",
+                diff_sheet
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.index_unavailable_reason.as_deref())
+                    .unwrap_or("Этот host не предоставил безопасный билет для изменения индекса.")
+                    .to_owned(),
+            ))
+        };
+        let index_control = match index_state.map(|state| &state.phase) {
+            Some(crate::workspace_git::IndexPhase::Ready)
+                if ticket_matches
+                    && !diff_sheet.loading
+                    && diff_sheet.error.is_none()
+                    && diff_sheet.side != protocol::GitDiffSide::Conflict
+                    && !sheet.last_index.as_ref().is_some_and(|notice| {
+                        matches!(
+                            notice.state.phase,
+                            crate::workspace_git::IndexPhase::Applying
+                                | crate::workspace_git::IndexPhase::Unknown
+                                | crate::workspace_git::IndexPhase::Unavailable
+                        )
+                    }) =>
+            {
+                Some(self.action_control(
+                    "workspace-git-index-apply".into(),
+                    match diff_sheet.side {
+                        protocol::GitDiffSide::Index => "Убрать из индекса".into(),
+                        protocol::GitDiffSide::Worktree | protocol::GitDiffSide::Untracked => {
+                            "Подготовить файл".into()
+                        }
+                        protocol::GitDiffSide::Conflict => unreachable!(),
+                    },
+                    ProductAction::GitApplyIndex,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ))
+            }
+            Some(crate::workspace_git::IndexPhase::Unknown)
+                if !sheet.last_index.as_ref().is_some_and(|notice| {
+                    index_state.is_some_and(|state| notice.state.ticket == state.ticket)
+                }) =>
+            {
+                Some(self.action_control(
+                    "workspace-git-index-inspect".into(),
+                    "Проверить результат".into(),
+                    ProductAction::GitInspectIndex,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ))
+            }
+            _ => None,
+        };
+        let index_status = index_notice.map(|(id, message)| {
+            div()
+                .id(id)
+                .role(Role::Status)
+                .text_size(px(11.))
+                .text_color(
+                    if index_state.is_some_and(|state| {
+                        matches!(
+                            &state.phase,
+                            crate::workspace_git::IndexPhase::Rejected
+                                | crate::workspace_git::IndexPhase::Unknown
+                        )
+                    }) {
+                        colors.accent
+                    } else {
+                        colors.muted
+                    },
+                )
+                .whitespace_normal()
+                .child(message)
+                .into_any_element()
+        });
+        let pages = diff_sheet
+            .result
+            .as_ref()
+            .map_or(1, |result| diff_page_count(&result.text));
         let page = diff_sheet.page.min(pages - 1);
         let previous = self.action_control(
             "workspace-git-diff-previous".into(),
@@ -835,7 +1168,7 @@ impl ProductUi {
                             .role(Role::Status)
                             .text_size(px(11.))
                             .text_color(colors.muted)
-                            .child("Сравнение относится к последнему полученному снимку, а не к живому содержимому."),
+                            .child("Ctrl+S — индекс · Ctrl+R — обновить / проверить · Ctrl+Shift+R — подтвердить просмотр исхода"),
                     )
                     .child(
                         div()
@@ -853,6 +1186,9 @@ impl ProductUi {
                             .text_color(colors.muted)
                             .child(comparison),
                     )
+                    .when_some(sheet.last_index.as_ref(), |view, notice| {
+                        view.child(self.git_index_banner(notice, cx))
+                    })
                     .when_some(conflict_note, |view, text| {
                         view.child(
                             div()
@@ -864,6 +1200,7 @@ impl ProductUi {
                                 .child(text),
                         )
                     })
+                    .when_some(index_status, |view, status| view.child(status))
                     .child(body)
                     .child(div().id("workspace-git-diff-pages").flex().items_center().justify_between()
                         .child(if page > 0 && !diff_sheet.loading {
@@ -887,7 +1224,10 @@ impl ProductUi {
                             .flex_wrap()
                             .justify_end()
                             .gap_2()
-                            .children([back, refresh, copy, close]),
+                            .children([back, refresh, copy, close])
+                            .when_some(index_control, |actions, control| {
+                                actions.child(control)
+                            }),
                     ),
             )
             .into_any_element()
@@ -957,6 +1297,8 @@ mod tests {
                 entry("conflict.rs", 'U', 'U', false, true),
             ],
             truncated: false,
+            index_operation: None,
+            index_operation_unavailable_reason: None,
         };
         let rows = ordered_entries(&snapshot);
         assert_eq!(

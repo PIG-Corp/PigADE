@@ -672,6 +672,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('exact-generation stop action', plan['input']['catalog'])
         self.assertIn('stop hidden bootstrap through Sessions', plan['input']['catalog'])
         self.assertIn('open/refresh private workspace Git', plan['input']['catalog'])
+        self.assertIn('stage/unstage four fixed per-file diffs through Git UI', plan['input']['catalog'])
         self.assertIn('review/cancel/confirm Close Tab', plan['input']['catalog'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
@@ -689,6 +690,17 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('current_panes == process_sessions - {bootstrap_key[0]}', source)
         self.assertIn('workspace_git_snapshot_covers_staged_unstaged_and_untracked', source)
         self.assertIn('workspace_git_refresh_reflects_private_file_removal', source)
+        self.assertIn('workspace_git_index_actions_used_fixed_ui_and_restored_exact_index', source)
+        self.assertIn("private_git(['ls-files', '--stage', '-z']) == index_baseline", source)
+        self.assertIn("private_git(['diff', '--cached', '--raw', '-z']) == cached_baseline", source)
+        index_flow = source.split('# Exercise each one-file index ticket only through the dialog\'s fixed UI', 1)[1].split(
+            "report['stage'] = 'catalog-git-close'", 1)[0]
+        self.assertEqual(index_flow.count("helper_call(config, 'catalog-git-index-apply')"), 4)
+        second_open = index_flow.index("helper_call(config, 'catalog-git-diff-second')")
+        self.assertLess(
+            second_open,
+            index_flow.index("helper_call(config, 'catalog-git-index-apply')", second_open),
+        )
         self.assertIn("'refresh_invoked_by_fixed_keyboard_stage': 'catalog-git-refresh'", source)
         self.assertIn("'command': 'workspace_git_snapshot'", source)
         self.assertIn("untracked_name = 'untracked space\\nline.txt'", source)
@@ -729,7 +741,8 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-stop-confirm', 'catalog-sessions-open',
                       'catalog-sessions-action', 'catalog-hidden-stop-review',
                       'catalog-hidden-stop-confirm', 'catalog-git-open',
-                      'catalog-git-query', 'catalog-git-refresh', 'catalog-git-close',
+                      'catalog-git-query', 'catalog-git-refresh', 'catalog-git-diff-first',
+                      'catalog-git-diff-second', 'catalog-git-index-apply', 'catalog-git-close',
                       'catalog-close-open', 'catalog-close-query', 'catalog-close-inspect',
                       'catalog-close-cancel', 'catalog-close-confirm'):
             self.assertIn(f'\"{stage}\"', helper)
@@ -775,9 +788,27 @@ class IsolatedImePlanTests(unittest.TestCase):
         git_close = helper.split('} else if (!strcmp(a.stage, "catalog-git-close")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
         self.assertLess(git_close.index('key(dpy, XK_Tab)'), git_close.index('key(dpy, XK_Return)'))
+        self.assertEqual(git_close.count('key(dpy, XK_Tab)'), 2)
+        git_refresh = helper.split('} else if (!strcmp(a.stage, "catalog-git-refresh")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-git-diff-first")) {', 1)[0]
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_r)', git_refresh)
+        git_diff_first = helper.split('} else if (!strcmp(a.stage, "catalog-git-diff-first")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-git-diff-second")) {', 1)[0]
+        self.assertIn('key(dpy, XK_Return)', git_diff_first)
+        git_diff_second = helper.split('} else if (!strcmp(a.stage, "catalog-git-diff-second")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-git-index-apply")) {', 1)[0]
+        self.assertLess(git_diff_second.index('key(dpy, XK_Down)'), git_diff_second.index('key(dpy, XK_Return)'))
+        git_index_apply = helper.split('} else if (!strcmp(a.stage, "catalog-git-index-apply")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-git-close")) {', 1)[0]
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_s)', git_index_apply)
         for artifact in ('catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
                          'catalog-git-refreshed.ppm', 'catalog-close-tab-review.ppm',
                          'catalog-close-tab-fallback.ppm'):
+            self.assertIn(artifact, source)
+        for artifact in ('catalog-git-index-staged-review.ppm',
+                         'catalog-git-worktree-review.ppm',
+                         'catalog-git-index-tracked-review.ppm',
+                         'catalog-git-untracked-review.ppm'):
             self.assertIn(artifact, source)
         close_query = helper.split('} else if (!strcmp(a.stage, "catalog-close-query")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "catalog-close-cancel")) {', 1)[0]

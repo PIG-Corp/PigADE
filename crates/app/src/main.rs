@@ -3491,6 +3491,9 @@ impl CanvasApp {
                 | A::GitRefreshDiff
                 | A::GitCopyDiff
                 | A::GitDiffPage(_)
+                | A::GitApplyIndex
+                | A::GitInspectIndex
+                | A::GitDismissIndexOutcome
                 | A::FocusPane(_)
                 | A::ToggleSidebar
                 | A::ToggleArchived
@@ -3612,7 +3615,10 @@ impl CanvasApp {
             | A::GitBack
             | A::GitRefreshDiff
             | A::GitCopyDiff
-            | A::GitDiffPage(_) => self.workspace_git_action(action, cx),
+            | A::GitDiffPage(_)
+            | A::GitApplyIndex
+            | A::GitInspectIndex
+            | A::GitDismissIndexOutcome => self.workspace_git_action(action, cx),
             A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
                 self.session_control_action(action, cx)
             }
@@ -6164,17 +6170,36 @@ impl CanvasApp {
                 .is_some_and(|sheet| sheet.diff.is_some());
             let control = k.modifiers.control || k.modifiers.platform;
             let action = match k.key.as_str() {
+                "tab" if !control && !k.modifiers.alt => {
+                    if let Some(sheet) = &mut self.product.git_sheet {
+                        sheet.cycle_action(k.modifiers.shift);
+                    }
+                    cx.notify();
+                    None
+                }
                 "escape" if !event.is_held => Some(if diff { A::GitBack } else { A::CloseDialog }),
+                "r" if control && k.modifiers.shift && !event.is_held => {
+                    Some(A::GitDismissIndexOutcome)
+                }
                 "r" if control && !event.is_held => Some(if diff {
                     A::GitRefreshDiff
                 } else {
                     A::RefreshWorkspaceGit
                 }),
                 "c" if control && diff && !event.is_held => Some(A::GitCopyDiff),
-                "enter" if !diff && !event.is_held => self
-                    .product
-                    .git_selected_target()
-                    .map(|(path, side)| A::GitOpen(path, side)),
+                "s" if control && diff && !event.is_held => Some(A::GitApplyIndex),
+                "enter" if !control && !k.modifiers.alt && !event.is_held => {
+                    let sheet = self.product.git_sheet.as_ref();
+                    if let Some(action) = sheet.and_then(|sheet| sheet.focused_action()) {
+                        Some(action)
+                    } else if !diff && sheet.is_some_and(|sheet| sheet.action_focus.is_none()) {
+                        self.product
+                            .git_selected_target()
+                            .map(|(path, side)| A::GitOpen(path, side))
+                    } else {
+                        None
+                    }
+                }
                 "up" | "down" if !diff => {
                     let index = self
                         .product

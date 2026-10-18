@@ -211,6 +211,8 @@ struct Response {
     workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     #[serde(default)]
     workspace_git_diff: Option<WorkspaceGitDiff>,
+    #[serde(default)]
+    workspace_git_index: Option<WorkspaceGitIndexResult>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -224,6 +226,10 @@ pub struct WorkspaceGitSnapshot {
     pub detached: bool,
     pub entries: Vec<WorkspaceGitEntry>,
     pub truncated: bool,
+    #[serde(default)]
+    pub index_operation: Option<WorkspaceGitIndexResult>,
+    #[serde(default)]
+    pub index_operation_unavailable_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -248,6 +254,10 @@ impl WorkspaceGitSnapshot {
             || self.head.as_ref().is_some_and(|value| {
                 value.len() > 128 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
+            || self
+                .index_operation_unavailable_reason
+                .as_ref()
+                .is_some_and(|reason| reason.len() > 1024)
             || self.entries.iter().any(|entry| {
                 entry.path.is_empty()
                     || entry.path.len() > 32768
@@ -258,6 +268,10 @@ impl WorkspaceGitSnapshot {
                     || !status(entry.index_status)
                     || !status(entry.worktree_status)
             })
+            || self
+                .index_operation
+                .as_ref()
+                .is_some_and(|operation| operation.validate_pending_snapshot(self).is_err())
         {
             return Err("Ответ Git не соответствует выбранному воркспейсу".into());
         }
@@ -285,6 +299,49 @@ pub struct WorkspaceGitDiff {
     pub text: String,
     pub truncated: bool,
     pub binary: bool,
+    #[serde(default)]
+    pub index_ticket: Option<GitIndexTicket>,
+    #[serde(default)]
+    pub index_unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitIndexAction {
+    Stage,
+    Unstage,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitIndexPhase {
+    Applied,
+    Rejected,
+    Unknown,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GitIndexTicket {
+    pub id: uuid::Uuid,
+    pub action: GitIndexAction,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGitIndexResult {
+    pub ticket: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub path: String,
+    pub side: GitDiffSide,
+    pub action: GitIndexAction,
+    pub phase: GitIndexPhase,
+    pub message: Option<String>,
+    #[serde(default)]
+    pub acknowledged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -293,6 +350,61 @@ struct WorkspaceGitDiffTarget {
     workspace_revision: u64,
     path: String,
     side: GitDiffSide,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceGitIndexTarget {
+    workspace_id: uuid::Uuid,
+    workspace_revision: u64,
+    ticket: uuid::Uuid,
+    acknowledge: bool,
+}
+
+fn workspace_git_index_target(command: &Value) -> Result<Option<WorkspaceGitIndexTarget>, String> {
+    let command_name = command.get("command").and_then(Value::as_str);
+    let acknowledge = command_name == Some("workspace_git_index_acknowledge");
+    if !acknowledge && command_name != Some("workspace_git_index") {
+        return Ok(None);
+    }
+    let workspace_id = command
+        .get("workspace")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| "Не указан воркспейс изменения индекса Git".to_owned())?;
+    let workspace_revision = command
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Не указана ревизия воркспейса изменения индекса Git".to_owned())?;
+    let ticket = command
+        .get("ticket")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| "Не указан билет изменения индекса Git".to_owned())?;
+    if !acknowledge {
+        command
+            .get("inspect")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| "Не указан режим проверки изменения индекса Git".to_owned())?;
+    }
+    Ok(Some(WorkspaceGitIndexTarget {
+        workspace_id,
+        workspace_revision,
+        ticket,
+        acknowledge,
+    }))
+}
+
+fn index_side_matches(side: GitDiffSide, action: GitIndexAction) -> bool {
+    matches!(
+        (side, action),
+        (GitDiffSide::Index, GitIndexAction::Unstage)
+            | (
+                GitDiffSide::Worktree | GitDiffSide::Untracked,
+                GitIndexAction::Stage
+            )
+    )
 }
 
 fn validate_git_diff_path(path: &str) -> Result<(), String> {
@@ -366,10 +478,69 @@ impl WorkspaceGitDiff {
             || self.text.len() > 128 * 1024
             || self.text.lines().count() > 2000
             || self.binary && !self.text.is_empty()
+            || self
+                .index_unavailable_reason
+                .as_ref()
+                .is_some_and(|reason| reason.len() > 1024)
+            || self.index_ticket.is_some() && self.index_unavailable_reason.is_some()
+            || self.index_ticket.is_some_and(|ticket| {
+                ticket.id.is_nil() || !index_side_matches(self.side, ticket.action)
+            })
         {
             return Err("Ответ Git diff не соответствует выбранному файлу".into());
         }
         Ok(())
+    }
+}
+
+impl WorkspaceGitIndexResult {
+    fn validate(&self, target: Option<&WorkspaceGitIndexTarget>) -> Result<(), String> {
+        if target.is_none_or(|target| {
+            self.ticket != target.ticket
+                || self.workspace_id != target.workspace_id
+                || self.workspace_revision != target.workspace_revision
+        }) || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || validate_git_diff_path(&self.path).is_err()
+            || !index_side_matches(self.side, self.action)
+            || self
+                .message
+                .as_ref()
+                .is_some_and(|message| message.len() > 1024)
+            || target.is_some_and(|target| {
+                target.acknowledge
+                    && !self.acknowledged
+                    && !(matches!(
+                        self.phase,
+                        GitIndexPhase::Unavailable | GitIndexPhase::Rejected
+                    ) && self
+                        .message
+                        .as_ref()
+                        .is_some_and(|message| !message.is_empty()))
+            })
+        {
+            return Err("Ответ изменения индекса Git не соответствует выбранному билету".into());
+        }
+        Ok(())
+    }
+
+    fn validate_pending_snapshot(&self, snapshot: &WorkspaceGitSnapshot) -> Result<(), String> {
+        if self.workspace_id != snapshot.workspace_id
+            || self.project_id != snapshot.project_id
+            || self.cwd != snapshot.cwd
+            || self.workspace_revision > snapshot.workspace_revision
+            || self.phase != GitIndexPhase::Unknown
+            || self.acknowledged
+        {
+            return Err("Недопустимая незавершённая операция индекса Git".into());
+        }
+        self.validate(Some(&WorkspaceGitIndexTarget {
+            workspace_id: self.workspace_id,
+            workspace_revision: self.workspace_revision,
+            ticket: self.ticket,
+            acknowledge: false,
+        }))
     }
 }
 
@@ -606,6 +777,7 @@ pub struct ProductReply {
     pub panel_directory: Option<PanelDirectory>,
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
+    pub workspace_git_index: Option<WorkspaceGitIndexResult>,
 }
 
 pub struct ProductError {
@@ -648,6 +820,13 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         message,
         rejected_before_launch: false,
     })?;
+    let git_index_target =
+        workspace_git_index_target(&command).map_err(|message| ProductError {
+            ui_request: None,
+            providers_request: false,
+            message,
+            rejected_before_launch: false,
+        })?;
     let git_request = command_name == Some("workspace_git_snapshot");
     let git_target = git_request
         .then(|| {
@@ -664,6 +843,10 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
     let git_diff_request = command_name == Some("workspace_git_diff");
+    let git_index_request = matches!(
+        command_name,
+        Some("workspace_git_index" | "workspace_git_index_acknowledge")
+    );
     let context_saved = command_name == Some("save_context");
     let generation_selected = command_name == Some("select_generation");
     let history_view_request = command_name == Some("history_view");
@@ -773,6 +956,19 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
                 rejected_before_launch: false,
             })?;
     }
+    if git_index_request || response.workspace_git_index.is_some() {
+        response
+            .workspace_git_index
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул квитанцию изменения индекса Git".to_owned())
+            .and_then(|result| result.validate(git_index_target.as_ref()))
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
     let process_view = if let Some((session, generation)) = process_target {
         if response.views.len() != 1
             || session.is_none()
@@ -814,6 +1010,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         panel_directory: response.panel_directory,
         workspace_git_snapshot: response.workspace_git_snapshot,
         workspace_git_diff: response.workspace_git_diff,
+        workspace_git_index: response.workspace_git_index,
     })
 }
 
@@ -1353,6 +1550,309 @@ mod tests {
     }
 
     #[test]
+    fn git_index_receipt_is_bound_to_ticket_workspace_and_action() {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        for variant in 0..9 {
+            let workspace = uuid::Uuid::from_u128(501);
+            let ticket = uuid::Uuid::from_u128(502);
+            let request_id = uuid::Uuid::new_v4();
+            let path = std::env::temp_dir()
+                .join(format!("pigade-git-index-{}.sock", uuid::Uuid::new_v4()));
+            let listener = UnixListener::bind(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                let command: Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(command["command"]["command"], "workspace_git_index");
+                assert_eq!(command["command"]["workspace"], workspace.to_string());
+                assert_eq!(command["command"]["expected_revision"], 6);
+                assert_eq!(command["command"]["ticket"], ticket.to_string());
+                assert_eq!(command["command"]["inspect"], true);
+                assert!(command["command"].get("_ui_request").is_none());
+                let mut result = json!({
+                    "ticket": ticket,
+                    "workspace_id": workspace,
+                    "workspace_revision": 6,
+                    "project_id": uuid::Uuid::from_u128(503),
+                    "cwd": "/worktree",
+                    "path": "src/main.rs",
+                    "side": "worktree",
+                    "action": "stage",
+                    "phase": "applied",
+                    "message": null
+                });
+                match variant {
+                    1 => result["ticket"] = json!(uuid::Uuid::from_u128(504)),
+                    2 => result["workspace_id"] = json!(uuid::Uuid::from_u128(505)),
+                    3 => result["workspace_revision"] = json!(7),
+                    4 => result["action"] = json!("unstage"),
+                    5 => result["side"] = json!("conflict"),
+                    6 => result["path"] = json!("../outside"),
+                    7 => result["message"] = json!("x".repeat(1025)),
+                    8 => result["phase"] = json!("mystery"),
+                    _ => {}
+                }
+                let response = json!({
+                    "protocol": 2, "views": [], "error": null,
+                    "workspace_git_index": result
+                });
+                let bytes = serde_json::to_vec(&response).unwrap();
+                stream
+                    .write_all(&(bytes.len() as u32).to_le_bytes())
+                    .unwrap();
+                stream.write_all(&bytes).unwrap();
+            });
+            let result = product_request(
+                &path,
+                json!({"command":"workspace_git_index","workspace":workspace,
+                    "expected_revision":6,"ticket":ticket,"inspect":true,
+                    "_ui_request":request_id}),
+            );
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            if variant == 0 {
+                let reply = result.unwrap_or_else(|error| panic!("{}", error.message));
+                assert_eq!(reply.ui_request, Some(request_id));
+                let receipt = reply.workspace_git_index.unwrap();
+                assert_eq!(receipt.ticket, ticket);
+                assert_eq!(receipt.phase, GitIndexPhase::Applied);
+                assert_eq!(receipt.action, GitIndexAction::Stage);
+            } else {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("accepted malformed or mismatched Git index receipt"),
+                };
+                assert_eq!(error.ui_request, Some(request_id));
+            }
+        }
+    }
+
+    #[test]
+    fn git_index_request_and_response_require_a_receipt_and_valid_inspect_flag() {
+        let request_id = uuid::Uuid::new_v4();
+        let invalid = product_request(
+            Path::new("/no/such/pigade.sock"),
+            json!({"command":"workspace_git_index","workspace":uuid::Uuid::from_u128(501),
+                "expected_revision":6,"ticket":uuid::Uuid::from_u128(502),"inspect":"yes",
+                "_ui_request":request_id}),
+        );
+        let invalid = match invalid {
+            Err(error) => error,
+            Ok(_) => panic!("accepted malformed inspect flag"),
+        };
+        assert_eq!(invalid.ui_request, Some(request_id));
+
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        let path = std::env::temp_dir().join(format!(
+            "pigade-git-index-missing-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            let response = json!({"protocol":2,"views":[],"error":null});
+            let bytes = serde_json::to_vec(&response).unwrap();
+            stream
+                .write_all(&(bytes.len() as u32).to_le_bytes())
+                .unwrap();
+            stream.write_all(&bytes).unwrap();
+        });
+        let result = product_request(
+            &path,
+            json!({"command":"workspace_git_index","workspace":uuid::Uuid::from_u128(501),
+                "expected_revision":6,"ticket":uuid::Uuid::from_u128(502),"inspect":false,
+                "_ui_request":request_id}),
+        );
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("accepted missing Git index receipt"),
+        };
+        assert_eq!(error.ui_request, Some(request_id));
+    }
+
+    #[test]
+    fn diff_index_controls_are_optional_but_side_bound_and_mutually_exclusive() {
+        let workspace = uuid::Uuid::from_u128(601);
+        let request = WorkspaceGitDiffTarget {
+            workspace_id: workspace,
+            workspace_revision: 2,
+            path: "src/main.rs".into(),
+            side: GitDiffSide::Worktree,
+        };
+        let mut diff: WorkspaceGitDiff = serde_json::from_value(json!({
+            "workspace_id": workspace,
+            "workspace_revision": 2,
+            "project_id": uuid::Uuid::from_u128(602),
+            "cwd": "/worktree",
+            "path": "src/main.rs",
+            "side": "worktree",
+            "text": "",
+            "truncated": false,
+            "binary": false
+        }))
+        .unwrap();
+        assert!(diff.validate(Some(&request)).is_ok()); // Legacy host: no index controls.
+
+        diff.index_ticket = Some(GitIndexTicket {
+            id: uuid::Uuid::from_u128(603),
+            action: GitIndexAction::Stage,
+        });
+        assert!(diff.validate(Some(&request)).is_ok());
+        diff.index_unavailable_reason = Some("unsupported host".into());
+        assert!(diff.validate(Some(&request)).is_err());
+        diff.index_unavailable_reason = None;
+        diff.index_ticket.as_mut().unwrap().action = GitIndexAction::Unstage;
+        assert!(diff.validate(Some(&request)).is_err());
+        diff.index_ticket.as_mut().unwrap().action = GitIndexAction::Stage;
+        diff.index_unavailable_reason = Some("x".repeat(1025));
+        assert!(diff.validate(Some(&request)).is_err());
+    }
+
+    #[test]
+    fn pending_index_receipt_is_snapshot_bound_and_legacy_snapshot_is_supported() {
+        let workspace = uuid::Uuid::from_u128(701);
+        let project = uuid::Uuid::from_u128(702);
+        let base = json!({
+            "workspace_id": workspace,
+            "workspace_revision": 9,
+            "project_id": project,
+            "cwd": "/worktree",
+            "branch": "main",
+            "head": null,
+            "detached": false,
+            "entries": [],
+            "truncated": false
+        });
+        let legacy: WorkspaceGitSnapshot = serde_json::from_value(base.clone()).unwrap();
+        assert!(legacy.validate(Some((workspace, 9))).is_ok());
+
+        let operation = json!({
+            "ticket": uuid::Uuid::from_u128(703),
+            "workspace_id": workspace,
+            "workspace_revision": 8,
+            "project_id": project,
+            "cwd": "/worktree",
+            "path": "src/main.rs",
+            "side": "worktree",
+            "action": "stage",
+            "phase": "unknown",
+            "message": null
+        });
+        let mut pending = base.clone();
+        pending["index_operation"] = operation.clone();
+        let snapshot: WorkspaceGitSnapshot = serde_json::from_value(pending.clone()).unwrap();
+        assert!(snapshot.validate(Some((workspace, 9))).is_ok());
+
+        for (field, value) in [
+            ("workspace_id", json!(uuid::Uuid::from_u128(704))),
+            ("project_id", json!(uuid::Uuid::from_u128(705))),
+            ("cwd", json!("/renamed")),
+            ("workspace_revision", json!(10)),
+            ("phase", json!("applied")),
+            ("acknowledged", json!(true)),
+            ("action", json!("unstage")),
+        ] {
+            let mut malformed = pending.clone();
+            malformed["index_operation"][field] = value;
+            let snapshot: WorkspaceGitSnapshot = serde_json::from_value(malformed).unwrap();
+            assert!(
+                snapshot.validate(Some((workspace, 9))).is_err(),
+                "accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn acknowledge_reply_must_record_ack_or_a_terminal_blocker() {
+        let target = WorkspaceGitIndexTarget {
+            workspace_id: uuid::Uuid::from_u128(711),
+            workspace_revision: 4,
+            ticket: uuid::Uuid::from_u128(712),
+            acknowledge: true,
+        };
+        let base = json!({
+            "ticket": target.ticket,
+            "workspace_id": target.workspace_id,
+            "workspace_revision": target.workspace_revision,
+            "project_id": uuid::Uuid::from_u128(713),
+            "cwd": "/worktree",
+            "path": "src/main.rs",
+            "side": "worktree",
+            "action": "stage",
+            "phase": "unknown",
+            "message": null
+        });
+        let mut acknowledged = base.clone();
+        acknowledged["acknowledged"] = json!(true);
+        let result: WorkspaceGitIndexResult = serde_json::from_value(acknowledged).unwrap();
+        assert!(result.validate(Some(&target)).is_ok());
+
+        let rejected: WorkspaceGitIndexResult = serde_json::from_value({
+            let mut value = base.clone();
+            value["phase"] = json!("rejected");
+            value["message"] = json!("receipt could not be cleared");
+            value
+        })
+        .unwrap();
+        assert!(rejected.validate(Some(&target)).is_ok());
+
+        let empty_rejection: WorkspaceGitIndexResult = serde_json::from_value({
+            let mut value = base.clone();
+            value["phase"] = json!("rejected");
+            value["message"] = json!("");
+            value
+        })
+        .unwrap();
+        assert!(empty_rejection.validate(Some(&target)).is_err());
+
+        let unknown: WorkspaceGitIndexResult = serde_json::from_value(base).unwrap();
+        assert!(unknown.validate(Some(&target)).is_err());
+
+        let extra_field = json!({
+            "ticket": target.ticket,
+            "workspace_id": target.workspace_id,
+            "workspace_revision": target.workspace_revision,
+            "project_id": uuid::Uuid::from_u128(713),
+            "cwd": "/worktree",
+            "path": "src/main.rs",
+            "side": "worktree",
+            "action": "stage",
+            "phase": "unknown",
+            "message": null,
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<WorkspaceGitIndexResult>(extra_field.clone()).is_err());
+    }
+
+    #[test]
+    fn acknowledge_request_omits_inspect_while_index_lookup_requires_it() {
+        let workspace = uuid::Uuid::from_u128(721);
+        let ticket = uuid::Uuid::from_u128(722);
+        let acknowledge = json!({"command":"workspace_git_index_acknowledge",
+            "workspace":workspace,"expected_revision":4,"ticket":ticket});
+        assert!(
+            workspace_git_index_target(&acknowledge)
+                .unwrap()
+                .unwrap()
+                .acknowledge
+        );
+        let lookup = json!({"command":"workspace_git_index",
+            "workspace":workspace,"expected_revision":4,"ticket":ticket});
+        assert!(workspace_git_index_target(&lookup).is_err());
+    }
+
+    #[test]
     fn unsolicited_git_diff_response_is_rejected() {
         use std::os::unix::{fs::PermissionsExt, net::UnixListener};
         let path = std::env::temp_dir().join(format!(
@@ -1463,6 +1963,7 @@ mod tests {
             panel_directory: None,
             workspace_git_snapshot: None,
             workspace_git_diff: None,
+            workspace_git_index: None,
             generations: None,
             generation_selection: None,
             history_view: None,

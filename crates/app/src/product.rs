@@ -70,6 +70,9 @@ pub(super) enum ProductAction {
     GitRefreshDiff,
     GitCopyDiff,
     GitDiffPage(bool),
+    GitApplyIndex,
+    GitInspectIndex,
+    GitDismissIndexOutcome,
     SetCommandModifier(crate::controls::Modifier),
     AddProject,
     ToggleSidebar,
@@ -2557,9 +2560,20 @@ impl ProductUi {
         label: String,
         accessible_name: String,
         action: ProductAction,
-        style: ControlStyle,
+        mut style: ControlStyle,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == DialogKind::WorkspaceGit)
+        {
+            style.selected = self
+                .git_sheet
+                .as_ref()
+                .and_then(|sheet| sheet.action_focus.as_ref())
+                == Some(&action);
+        }
         let colors = self.colors();
         let primary = matches!(
             id.as_str(),

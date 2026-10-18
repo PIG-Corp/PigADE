@@ -2766,6 +2766,88 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     time.sleep(.3)
     helper_call(config, 'capture', '/artifacts/catalog-git-refreshed.ppm')
 
+    # Exercise each one-file index ticket only through the dialog's fixed UI
+    # keys. A single Ctrl+S is sent for each frozen diff, then host snapshots
+    # and read-only index listings gate the next action; the fixture never
+    # retries a pending mutation.
+    index_baseline = private_git(['ls-files', '--stage', '-z'])
+    cached_baseline = private_git(['diff', '--cached', '--raw', '-z'])
+    head_baseline = private_git(['rev-parse', 'HEAD']).strip()
+    tracked_bytes = (git_repo / 'tracked.txt').read_bytes()
+    staged_only_bytes = (git_repo / 'staged-only.txt').read_bytes()
+
+    def capture_git_diff(name):
+        time.sleep(.7)  # bounded normal paint settle; not a latency measurement
+        helper_call(config, 'capture', '/artifacts/' + name)
+
+    def git_snapshot_entries():
+        snapshot = request_git_snapshot()
+        return {entry['path']: entry for entry in snapshot['entries']}
+
+    def wait_git_entries(predicate, explanation):
+        snapshot_entries = wait_until(
+            lambda: (entries if predicate(entries := git_snapshot_entries()) else None),
+            time.monotonic() + 10)
+        require(snapshot_entries is not None, explanation)
+        time.sleep(.35)  # bounded normal UI/paint settle; not a latency measurement
+        require_git_fixture_invariants(explanation + ': process/layout invariants changed')
+        return snapshot_entries
+
+    # Initially the first group is the staged-only addition.
+    helper_call(config, 'catalog-git-diff-first')
+    capture_git_diff('catalog-git-index-staged-review.ppm')
+    helper_call(config, 'catalog-git-index-apply')
+    entries_after_unstage = wait_git_entries(
+        lambda entries: entries.get('staged-only.txt', {}).get('untracked') is True and
+        entries.get('tracked.txt', {}).get('worktree_status') == 'M',
+        'UI unstage receipt did not produce the expected untracked/still-modified snapshot')
+    require(entries_after_unstage['staged-only.txt'].get('index_status') == '?' and
+            entries_after_unstage['tracked.txt'].get('index_status') == '.',
+            'UI unstage changed a different path or left the addition staged')
+
+    # With no staged entries, tracked.txt is the first worktree row.
+    helper_call(config, 'catalog-git-diff-first')
+    capture_git_diff('catalog-git-worktree-review.ppm')
+    helper_call(config, 'catalog-git-index-apply')
+    entries_after_stage_tracked = wait_git_entries(
+        lambda entries: entries.get('tracked.txt', {}).get('index_status') == 'M' and
+        entries.get('tracked.txt', {}).get('worktree_status') == '.',
+        'UI stage receipt did not place the tracked file contents in the index')
+    require(entries_after_stage_tracked.get('staged-only.txt', {}).get('untracked') is True,
+            'staging tracked.txt also changed the staged-only path')
+
+    # The staged group now leads with tracked.txt; unstage restores the
+    # original HEAD index while leaving its working copy modified.
+    helper_call(config, 'catalog-git-diff-first')
+    capture_git_diff('catalog-git-index-tracked-review.ppm')
+    helper_call(config, 'catalog-git-index-apply')
+    entries_after_unstage_tracked = wait_git_entries(
+        lambda entries: entries.get('tracked.txt', {}).get('index_status') == '.' and
+        entries.get('tracked.txt', {}).get('worktree_status') == 'M',
+        'UI unstage of tracked.txt did not restore the original index state')
+    require(entries_after_unstage_tracked.get('staged-only.txt', {}).get('untracked') is True,
+            'unstaging tracked.txt also changed the untracked path')
+
+    # The untracked group is now the second row after the tracked worktree
+    # entry. Stage the new file and restore the original normalized index.
+    helper_call(config, 'catalog-git-diff-second')
+    capture_git_diff('catalog-git-untracked-review.ppm')
+    helper_call(config, 'catalog-git-index-apply')
+    entries_after_stage_untracked = wait_git_entries(
+        lambda entries: entries.get('staged-only.txt', {}).get('index_status') == 'A' and
+        entries.get('staged-only.txt', {}).get('worktree_status') == '.' and
+        entries.get('tracked.txt', {}).get('worktree_status') == 'M',
+        'UI stage of the untracked row did not restore the original staged addition')
+    require(entries_after_stage_untracked['tracked.txt'].get('index_status') == '.' and
+            private_git(['ls-files', '--stage', '-z']) == index_baseline and
+            private_git(['diff', '--cached', '--raw', '-z']) == cached_baseline and
+            private_git(['rev-parse', 'HEAD']).strip() == head_baseline and
+            (git_repo / 'tracked.txt').read_bytes() == tracked_bytes and
+            (git_repo / 'staged-only.txt').read_bytes() == staged_only_bytes,
+            'per-file stage/unstage sequence failed to restore the exact initial index without changing HEAD or worktree bytes')
+    require_git_fixture_invariants(
+        'per-file Git index actions changed process states, pane aliases, selection, or layout')
+
     report['stage'] = 'catalog-git-close'
     save()
     helper_call(config, 'catalog-git-close')
@@ -2938,6 +3020,7 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'other_four_process_states_and_pane_tree_preserved_after_hidden_stop': True,
         'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
         'workspace_git_refresh_reflects_private_file_removal': True,
+        'workspace_git_index_actions_used_fixed_ui_and_restored_exact_index': True,
         'workspace_git_ui_preserved_all_five_generation_states_aliases_selection_and_tree': True,
         'close_tab_cancel_preserved_selection_layout_process_frames_and_journals': True,
         'close_tab_confirm_removed_tab_and_reselected_adjacent_fallback': True,
@@ -2961,6 +3044,15 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                  'unmerged': entry['unmerged']}
                 for entry in sorted(git_after_refresh['entries'], key=lambda item: item['path'])],
             'refresh_invoked_by_fixed_keyboard_stage': 'catalog-git-refresh',
+            'index_transitions': [
+                {'path': 'staged-only.txt', 'side': 'index', 'action': 'unstage'},
+                {'path': 'tracked.txt', 'side': 'worktree', 'action': 'stage'},
+                {'path': 'tracked.txt', 'side': 'index', 'action': 'unstage'},
+                {'path': 'staged-only.txt', 'side': 'untracked', 'action': 'stage'},
+            ],
+            'normalized_index_listing_restored': True,
+            'cached_diff_restored': True,
+            'head_and_worktree_file_bytes_unchanged': True,
         },
         'delete_removed_template': True,
         'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
@@ -2971,7 +3063,9 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm',
                      'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm',
                      'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
-                     'catalog-git-refreshed.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
+                     'catalog-git-refreshed.ppm', 'catalog-git-index-staged-review.ppm',
+                     'catalog-git-worktree-review.ppm', 'catalog-git-index-tracked-review.ppm',
+                     'catalog-git-untracked-review.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
                      'catalog-close-tab-fallback.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
@@ -5434,6 +5528,8 @@ def outer_run(args) -> dict:
                   'catalog-stop-complete.ppm', 'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm',
                   'catalog-hidden-stop-complete.ppm', 'catalog-git-query.ppm',
                   'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm',
+                  'catalog-git-index-staged-review.ppm', 'catalog-git-worktree-review.ppm',
+                  'catalog-git-index-tracked-review.ppm', 'catalog-git-untracked-review.ppm',
                   'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm', 'catalog-close-tab-fallback.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
@@ -5469,7 +5565,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI and restore the normalized index, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',
