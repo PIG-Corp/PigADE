@@ -520,6 +520,7 @@ pub(super) struct ProductUi {
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) git_watch_view: Option<crate::git_watch::View>,
     pub(super) git_sheet: Option<crate::workspace_git::GitSheet>,
     pub(super) git_commit_plan: Option<protocol::WorkspaceGitCommitPlan>,
     pub(super) git_commit_plan_error: Option<String>,
@@ -2017,17 +2018,33 @@ impl ProductUi {
             ))
             .pr(px(8.));
         bar = bar
-            .child(self.action_control(
-                "workspace-git".into(),
-                "Git".into(),
-                ProductAction::OpenWorkspaceGit,
-                ControlStyle {
-                    role: Role::Button,
-                    selected: false,
-                    compact: true,
-                },
-                cx,
-            ))
+            .child(
+                self.action_control(
+                    "workspace-git".into(),
+                    self.git_watch_view
+                        .as_ref()
+                        .filter(|view| {
+                            self.catalog.as_ref().is_some_and(|catalog| {
+                                catalog.selection.workspace_id == Some(view.workspace)
+                                    && catalog.workspaces.iter().any(|workspace| {
+                                        workspace.id == view.workspace
+                                            && workspace.revision == view.revision
+                                            && workspace.project_id == view.project
+                                            && workspace.cwd == view.cwd
+                                            && workspace.status == WorkspaceStatus::Ready
+                                    })
+                            })
+                        })
+                        .map_or_else(|| "Git".into(), |view| view.label(self.compact)),
+                    ProductAction::OpenWorkspaceGit,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ),
+            )
             .child(self.action_control(
                 "open-agent-launcher".into(),
                 "Агент".into(),

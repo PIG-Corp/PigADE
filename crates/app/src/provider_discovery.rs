@@ -57,15 +57,33 @@ pub(crate) fn run_json_tracked<T: serde::de::DeserializeOwned>(
             .try_clone()
             .map_err(|error| format!("clone local host helper pipe: {error}"))?;
 
-        let mut child = ChildOnFailure(Some(
-            Command::new(binary)
-                .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(OwnedFd::from(writer)))
-                .stderr(Stdio::from(OwnedFd::from(stderr_writer)))
-                .spawn()
-                .map_err(|error| format!("start local host helper: {error}"))?,
-        ));
+        let mut command = Command::new(binary);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .stderr(Stdio::from(OwnedFd::from(stderr_writer)));
+        // Linux may retain a newly written executable through a concurrent
+        // fork until that child execs. ETXTBSY proves exec never happened;
+        // retry only that pre-start failure, within the original deadline.
+        let busy_deadline = deadline.min(Instant::now() + Duration::from_millis(100));
+        let process = loop {
+            match command.spawn() {
+                Ok(child) => break child,
+                Err(error)
+                    if cfg!(target_os = "linux")
+                        && error.raw_os_error() == Some(26)
+                        && Instant::now() < busy_deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(format!("start local host helper: {error}")),
+            }
+        };
+        // Command owns the parent's pipe writers; close them before reading
+        // so EOF continues to mean that the actual helper closed its output.
+        drop(command);
+        let mut child = ChildOnFailure(Some(process));
 
         started = true;
         let mut output = Vec::with_capacity(4096);
@@ -86,6 +104,7 @@ pub(crate) fn run_json_tracked<T: serde::de::DeserializeOwned>(
                     }
                     output.extend_from_slice(&chunk[..count]);
                 }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -229,6 +248,23 @@ mod tests {
             "unexpected helper error: {error}"
         );
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retries_busy_helper_only_before_exec_and_within_the_same_deadline() {
+        let binary = FakeBinary::new("printf '%s' '[]'");
+        let writer = fs::OpenOptions::new()
+            .write(true)
+            .open(&binary.path)
+            .unwrap();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            drop(writer);
+        });
+        let result = detect_with_binary(&binary.path, Duration::from_secs(1));
+        release.join().unwrap();
+        assert!(result.unwrap().is_empty());
     }
 
     #[test]

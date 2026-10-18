@@ -22,6 +22,11 @@ use pigade_storage::{Catalog, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "workspace_git_watch.rs"]
+mod watch;
+pub(crate) use watch::WatchReader;
+pub use watch::WorkspaceGitWatch;
+
 #[path = "workspace_git_commit.rs"]
 mod commit;
 #[path = "workspace_git_index.rs"]
@@ -1723,6 +1728,7 @@ pub(crate) fn response(
         template_runs: None,
         panel_directory: None,
         workspace_git_snapshot: snapshot,
+        workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
         workspace_git_commit_plan: None,

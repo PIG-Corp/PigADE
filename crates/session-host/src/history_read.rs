@@ -121,6 +121,7 @@ pub(crate) fn response(
         template_runs: None,
         panel_directory: None,
         workspace_git_snapshot: None,
+        workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
         workspace_git_commit_plan: None,

@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Linux Git watcher and automatic selected-workspace branch/change indicator with bounded event coverage, debounce and explicit stale/partial/unavailable states. Reviewed diffs and commit plans remain frozen; old hosts keep manual Git.
+
 - Prompt library now searches titles/full text, previews exact revisions, keeps stable selection across five-row pages/refresh/edit return, and creates independent unsaved copies. Insert/copy refuses stale revisions; search Delete is ordinary editing, Ctrl+Shift+Delete opens explicit removal.
 
 - Claude Code2.1.259: ручное продолжение точного UUID через отдельную проверку и durable launch; прежние контекст/история/раскладка сохраняются, модель и задание не повторяются. Native offline fixture и context-on/off PTY проверки; auto-resume и полная матрица ещё открыты.

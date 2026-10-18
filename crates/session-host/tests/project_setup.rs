@@ -1179,3 +1179,124 @@ fn lost_publication_proof_stays_unknown_across_restart_and_cannot_be_repeated() 
     );
     Ok(())
 }
+
+#[test]
+fn workspace_git_watch_events_are_scoped_read_only_and_reopen_with_a_new_epoch() -> Result<()> {
+    let mut host = HostFixture::new()?;
+    let parent = host.state().join("watch-parent");
+    fs::create_dir(&parent)?;
+    let created = exchange(
+        &host.socket(),
+        Command::CreateProject {
+            parent,
+            name: "WatchRepo".into(),
+        },
+    )?
+    .catalog
+    .context("missing project catalog")?;
+    let project = &created.projects[0];
+    let catalog = exchange(
+        &host.socket(),
+        Command::CreateWorkspace {
+            project: project.id,
+            task: "watch fixture".into(),
+            worktree: false,
+        },
+    )?
+    .catalog
+    .context("missing workspace catalog")?;
+    let workspace = catalog
+        .workspaces
+        .iter()
+        .find(|ws| ws.project_id == project.id)
+        .context("missing Ready workspace")?
+        .clone();
+    let command = || Command::WorkspaceGitWatch {
+        workspace: workspace.id,
+        expected_revision: workspace.revision,
+    };
+    let wait_watch = |host: &HostFixture,
+                      after: Option<(uuid::Uuid, u64)>|
+     -> Result<pigade_session_host::WorkspaceGitWatch> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let watch = exchange(&host.socket(), command())?
+                .workspace_git_watch
+                .context("watch response missing")?;
+            ensure!(
+                watch.workspace_id == workspace.id
+                    && watch.project_id == project.id
+                    && watch.workspace_revision == workspace.revision
+                    && watch.cwd == workspace.cwd,
+                "watch response belongs to another workspace"
+            );
+            if watch.complete
+                && watch.settled
+                && after.is_none_or(|(epoch, sequence)| {
+                    watch.epoch == epoch && watch.sequence > sequence
+                })
+            {
+                return Ok(watch);
+            }
+            ensure!(Instant::now() < deadline, "watch did not settle: {watch:?}");
+            thread::sleep(Duration::from_millis(40));
+        }
+    };
+    let before = wait_watch(&host, None)?;
+    let index = fs::read(workspace.cwd.join(".git/index")).ok();
+    let config = fs::read(workspace.cwd.join(".git/config"))?;
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::WorkspaceGitWatch {
+                workspace: workspace.id,
+                expected_revision: workspace.revision + 1,
+            }
+        )
+        .is_err(),
+        "stale watch revision accepted"
+    );
+    let path = workspace.cwd.join("native watch.txt");
+    fs::write(&path, b"watched exact bytes\n")?;
+    let added = wait_watch(&host, Some((before.epoch, before.sequence)))?;
+    let snapshot = exchange(
+        &host.socket(),
+        Command::WorkspaceGitSnapshot {
+            workspace: workspace.id,
+            expected_revision: workspace.revision,
+        },
+    )?
+    .workspace_git_snapshot
+    .context("missing status")?;
+    ensure!(
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == "native watch.txt" && entry.untracked)
+    );
+    ensure!(fs::read(&path)? == b"watched exact bytes\n");
+    fs::remove_file(&path)?;
+    let removed = wait_watch(&host, Some((added.epoch, added.sequence)))?;
+    ensure!(removed.epoch == before.epoch);
+    ensure!(
+        fs::read(workspace.cwd.join(".git/index")).ok() == index
+            && fs::read(workspace.cwd.join(".git/config"))? == config,
+        "watch mutated Git metadata"
+    );
+    ensure!(
+        exchange(&host.socket(), Command::List)?.views.is_empty(),
+        "watch launched a CLI"
+    );
+    ensure!(
+        exchange(&host.socket(), Command::Catalog)?.catalog == Some(catalog.clone()),
+        "watch changed catalog, selection or layout"
+    );
+    host.restart()?;
+    let reopened = wait_watch(&host, None)?;
+    ensure!(
+        reopened.epoch != before.epoch,
+        "host reopen reused an old watcher epoch"
+    );
+    ensure!(exchange(&host.socket(), Command::Catalog)?.catalog == Some(catalog));
+    Ok(())
+}

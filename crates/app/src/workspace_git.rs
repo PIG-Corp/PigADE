@@ -98,6 +98,7 @@ pub(crate) struct GitSheet {
     pub dialog: Uuid,
     pub target: Target,
     pub snapshot: Option<protocol::WorkspaceGitSnapshot>,
+    pub watch_stamp: Option<(Uuid, u64)>,
     pub loading: bool,
     pub error: Option<String>,
     pub selected: usize,
@@ -900,6 +901,7 @@ impl CanvasApp {
                     dialog: dialog.id,
                     target: target.clone(),
                     snapshot: None,
+                    watch_stamp: None,
                     loading: false,
                     error: None,
                     selected: 0,
@@ -1293,7 +1295,20 @@ impl CanvasApp {
         if self.git_worker.sender.try_send(pending.command()).is_ok() {
             if let Some(sheet) = &mut self.product.git_sheet {
                 match &pending.kind {
-                    Kind::Snapshot => sheet.loading = true,
+                    Kind::Snapshot => {
+                        sheet.loading = true;
+                        sheet.watch_stamp = self
+                            .product
+                            .git_watch_view
+                            .as_ref()
+                            .filter(|view| {
+                                view.workspace == sheet.target.workspace
+                                    && view.revision == sheet.target.revision
+                                    && view.project == sheet.target.project
+                                    && view.cwd == sheet.target.cwd
+                            })
+                            .and_then(crate::git_watch::View::stamp);
+                    }
                     Kind::Diff { path, side } => {
                         if let Some(diff) = &mut sheet.diff
                             && diff.path == *path
@@ -1755,6 +1770,7 @@ mod tests {
                 dialog,
                 target,
                 snapshot: None,
+                watch_stamp: None,
                 loading: true,
                 error: None,
                 selected: 0,

@@ -60,7 +60,7 @@ pub use template_run::{
 pub use workspace_git::{
     GitCommitEntry, GitCommitPhase, GitDiffSide, GitIndexAction, GitIndexPhase, GitIndexTicket,
     WorkspaceGitCommitPlan, WorkspaceGitCommitResult, WorkspaceGitDiff, WorkspaceGitEntry,
-    WorkspaceGitIndexResult, WorkspaceGitSnapshot,
+    WorkspaceGitIndexResult, WorkspaceGitSnapshot, WorkspaceGitWatch,
 };
 #[doc(hidden)]
 pub fn run_git_commit_helper(operation: &std::path::Path) -> Result<()> {
@@ -255,6 +255,10 @@ pub enum Command {
         task: String,
         worktree: bool,
     },
+    WorkspaceGitWatch {
+        workspace: Uuid,
+        expected_revision: u64,
+    },
     WorkspaceGitSnapshot {
         workspace: Uuid,
         expected_revision: u64,
@@ -414,6 +418,8 @@ pub struct Response {
     pub panel_directory: Option<PanelDirectory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_git_watch: Option<WorkspaceGitWatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -788,6 +794,7 @@ fn provider_response(
         template_runs: None,
         panel_directory: None,
         workspace_git_snapshot: None,
+        workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
         workspace_git_commit_plan: None,
@@ -822,6 +829,7 @@ fn maintenance_response(status: maintenance::Status, error: Option<String>) -> R
         template_runs: None,
         panel_directory: None,
         workspace_git_snapshot: None,
+        workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
         workspace_git_commit_plan: None,
@@ -1165,6 +1173,7 @@ impl Host {
                 template_runs: None,
                 panel_directory: None,
                 workspace_git_snapshot: None,
+                workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
@@ -1220,6 +1229,7 @@ impl Host {
                 template_runs: None,
                 panel_directory: None,
                 workspace_git_snapshot: None,
+                workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
@@ -1254,6 +1264,7 @@ impl Host {
                 template_runs: None,
                 panel_directory: None,
                 workspace_git_snapshot: None,
+                workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
@@ -1298,6 +1309,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: None,
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1333,6 +1345,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: Some(directory),
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1376,6 +1389,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: None,
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1410,6 +1424,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: None,
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1448,6 +1463,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: None,
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1544,7 +1560,8 @@ impl Host {
         }
         let catalog = match command {
             Command::DetectProviders => unreachable!("provider request routed to worker"),
-            Command::WorkspaceGitSnapshot { .. }
+            Command::WorkspaceGitWatch { .. }
+            | Command::WorkspaceGitSnapshot { .. }
             | Command::WorkspaceGitDiff { .. }
             | Command::WorkspaceGitIndex { .. }
             | Command::WorkspaceGitIndexAcknowledge { .. }
@@ -1632,6 +1649,7 @@ impl Host {
                     template_runs: None,
                     panel_directory: None,
                     workspace_git_snapshot: None,
+                    workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
@@ -1665,6 +1683,7 @@ impl Host {
             template_runs: None,
             panel_directory: None,
             workspace_git_snapshot: None,
+            workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
             workspace_git_commit_plan: None,
@@ -1703,6 +1722,7 @@ impl Host {
             template_runs: None,
             panel_directory: None,
             workspace_git_snapshot: None,
+            workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
             workspace_git_commit_plan: None,
@@ -1741,6 +1761,7 @@ impl Host {
             template_runs,
             panel_directory: None,
             workspace_git_snapshot: None,
+            workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
             workspace_git_commit_plan: None,
@@ -2939,6 +2960,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
     let workspace_git_reader = workspace_git::Reader::new(root.clone())?;
+    let workspace_git_watcher = workspace_git::WatchReader::new()?;
     let provider_detector = ProviderDetector::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
@@ -3195,6 +3217,26 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
             }
             continue;
         }
+        if let Command::WorkspaceGitWatch {
+            workspace,
+            expected_revision,
+        } = job.request.command
+        {
+            let target = host
+                .metadata
+                .catalog()
+                .and_then(|catalog| workspace_git::target(&catalog, workspace, expected_revision));
+            match target {
+                Ok(target) => workspace_git_watcher.submit(target, job.reply),
+                Err(error) => {
+                    let _ = job.reply.try_send(workspace_git::response(
+                        None,
+                        Some(format!("workspace Git watch unavailable: {error:#}")),
+                    ));
+                }
+            }
+            continue;
+        }
         if let Command::WorkspaceGitSnapshot {
             workspace,
             expected_revision,
@@ -3266,6 +3308,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 template_runs: None,
                 panel_directory: None,
                 workspace_git_snapshot: None,
+                workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,

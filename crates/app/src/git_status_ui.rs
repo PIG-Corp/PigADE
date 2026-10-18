@@ -202,6 +202,35 @@ fn git_entry_row(
 }
 
 impl ProductUi {
+    fn git_watch_notice(&self, sheet: &crate::workspace_git::GitSheet) -> Option<String> {
+        let view = self.git_watch_view.as_ref().filter(|view| {
+            view.workspace == sheet.target.workspace
+                && view.revision == sheet.target.revision
+                && view.project == sheet.target.project
+                && view.cwd == sheet.target.cwd
+        })?;
+        if view.stale || view.stamp() != sheet.watch_stamp {
+            Some("В репозитории обнаружены изменения или актуальность не подтверждена. Ниже сохранённый снимок; Ctrl+R обновит его. Проверяемое действие не повторяется автоматически.".into())
+        } else if view.unavailable || view.truncated {
+            Some("Автообновление Git недоступно или охватывает не весь репозиторий. Обновляйте снимок вручную (Ctrl+R).".into())
+        } else {
+            None
+        }
+    }
+
+    fn git_watch_banner(&self, sheet: &crate::workspace_git::GitSheet) -> Option<AnyElement> {
+        self.git_watch_notice(sheet).map(|notice| {
+            div()
+                .id("workspace-git-watch-notice")
+                .role(Role::Status)
+                .text_size(px(11.))
+                .text_color(self.colors().status_amber)
+                .whitespace_normal()
+                .child(notice)
+                .into_any_element()
+        })
+    }
+
     fn git_index_banner(
         &self,
         notice: &crate::workspace_git::IndexNotice,
@@ -484,6 +513,7 @@ impl ProductUi {
             .overflow_y_scroll()
             .track_scroll(&self.git_scroll);
 
+        body = body.children(self.git_watch_banner(sheet));
         if let Some(notice) = &sheet.last_index {
             body = body.child(self.git_index_banner(notice, cx));
         }
@@ -875,6 +905,8 @@ impl ProductUi {
             .border_color(colors.border)
             .rounded(px(6.))
             .p(px(8.));
+
+        body = body.children(self.git_watch_banner(sheet));
 
         if diff_sheet.loading {
             body = body.child(

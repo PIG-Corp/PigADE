@@ -214,6 +214,8 @@ struct Response {
     #[serde(default)]
     workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     #[serde(default)]
+    workspace_git_watch: Option<WorkspaceGitWatch>,
+    #[serde(default)]
     workspace_git_diff: Option<WorkspaceGitDiff>,
     #[serde(default)]
     workspace_git_index: Option<WorkspaceGitIndexResult>,
@@ -221,6 +223,42 @@ struct Response {
     workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
     #[serde(default)]
     workspace_git_commit: Option<WorkspaceGitCommitResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitWatch {
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub epoch: uuid::Uuid,
+    pub sequence: u64,
+    pub complete: bool,
+    pub rebuilding: bool,
+    pub settled: bool,
+    pub notice: Option<String>,
+}
+
+impl WorkspaceGitWatch {
+    fn validate(&self, target: Option<(uuid::Uuid, u64)>) -> Result<(), String> {
+        if self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || self.epoch.is_nil()
+            || target != Some((self.workspace_id, self.workspace_revision))
+            || self.workspace_revision >= i64::MAX as u64
+            || !self.cwd.is_absolute()
+            || self.cwd.as_os_str().len() > 4096
+            || self
+                .notice
+                .as_ref()
+                .is_some_and(|notice| notice.len() > 1024)
+            || (!self.complete && self.notice.is_none())
+            || (self.rebuilding && (self.complete || self.settled))
+        {
+            return Err("Некорректный ответ наблюдения Git".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -948,6 +986,7 @@ pub struct ProductReply {
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
     pub panel_directory: Option<PanelDirectory>,
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
+    pub workspace_git_watch: Option<WorkspaceGitWatch>,
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
     pub workspace_git_index: Option<WorkspaceGitIndexResult>,
     pub workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
@@ -1023,7 +1062,8 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         })
         .flatten();
     let git_request = command_name == Some("workspace_git_snapshot");
-    let git_target = git_request
+    let git_watch_request = command_name == Some("workspace_git_watch");
+    let git_target = (git_request || git_watch_request)
         .then(|| {
             Some((
                 command
@@ -1143,6 +1183,22 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             });
         }
     }
+    if git_watch_request || response.workspace_git_watch.is_some() {
+        response
+            .workspace_git_watch
+            .as_ref()
+            .ok_or_else(|| {
+                "Session host не поддерживает наблюдение Git; снимок можно обновить вручную"
+                    .to_owned()
+            })
+            .and_then(|watch| watch.validate(git_target))
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
     if git_request || response.workspace_git_snapshot.is_some() {
         response.workspace_git_snapshot.as_ref()
             .ok_or_else(|| "Эта версия session host не вернула Git-статус. Обновите приложение при следующем запуске.".to_owned())
@@ -1255,6 +1311,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         template_runs: response.template_runs,
         panel_directory: response.panel_directory,
         workspace_git_snapshot: response.workspace_git_snapshot,
+        workspace_git_watch: response.workspace_git_watch,
         workspace_git_diff: response.workspace_git_diff,
         workspace_git_index: response.workspace_git_index,
         workspace_git_commit_plan: response.workspace_git_commit_plan,
@@ -2252,6 +2309,7 @@ mod tests {
             template_runs: None,
             panel_directory: None,
             workspace_git_snapshot: None,
+            workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
             workspace_git_commit_plan: None,

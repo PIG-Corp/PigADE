@@ -4949,3 +4949,123 @@ Ship searchable revision-bound prompt library with full preview, stable paging a
 - Files: crates/app/src/prompt_flow.rs, crates/app/src/prompt_commands.rs, crates/app/src/prompt_ui.rs, crates/app/src/product.rs, crates/app/src/main.rs, crates/app/src/dirty_documents.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Integration 401 app tests passed; final 12 prompt tests, strict app Clippy, package fmt, 37 Python harness tests, version/diff checks and release build pass. Final private X11/real PTY context05 passes search, no matches, query Delete, independent copy, exact page selection/edit return, source insertion/removal and unchanged generation/PID/frame/journal. Final captures inspected; independent Luna review confirms full preview text. Initial native01 used stale debug and failed;02-04 passed intermediate release versions. Compile macro-import and color-type errors fixed before passing validation.
 - Risks / next: Commit coherent block. Compact/full-platform accessibility, broader MVP, reboot/24h/memory and provider matrix gates remain open. Preserve unrelated dirt and stash; no active desktop/user host changes.
+
+## 2026-10-18T10:48:35+00:00 — /root/git_watch_host_luna
+
+Add bounded Linux inotify workspace Git watcher module and parser/limit unit coverage
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); Cargo not run per root-owned lane
+- Risks / next: Root to run Cargo integration and add/verify real temporary Git watcher coverage; module expects parent workspace_git Response.workspace_git_watch field and mod declaration now present
+
+## 2026-10-18T10:48:36+00:00 — git_watch_app_luna
+
+Add bounded background selected-workspace Git watch service and safe toolbar view
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; crates/app/bootstrap.sh fmt --package pigade-app -- --check (currently reports formatting diffs in concurrently edited protocol.rs; git_watch.rs formatted)
+- Risks / next: Root must declare git_watch module, own Canvas integration, compile the app, and exercise cross-module behavior after integrating host DTO.
+
+## 2026-10-18T10:48:44+00:00 — /root/git_watch_host_luna
+
+Mark unreadable refs subtrees as incomplete watcher coverage
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); Cargo not run per root-owned lane
+- Risks / next: Root to run Cargo integration and real temporary-Git watcher coverage
+
+## 2026-10-18T10:52:40+00:00 — git_watch_app_luna
+
+Harden Git watch reply reduction, active-window gating, Russian status labels, and transition tests
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs WORKLOG.md; Cargo tests not run per leader coordination while app integration is being compiled
+- Risks / next: Leader should run targeted git_watch tests and app typecheck after protocol rebuilding field and module wiring settle.
+
+## 2026-10-18T10:53:04+00:00 — git_watch_app_luna
+
+Align watch reducer with rebuilding status and prevent inactive or same-stamp snapshot retries
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs WORKLOG.md; reducer tests added but not run while leader owns Cargo integration
+- Risks / next: Leader should run targeted app tests and resolve any compile or integration issues after protocol and module edits settle.
+
+## 2026-10-18T10:54:03+00:00 — git_watch_app_luna
+
+Fix Git watch test channel type and remove unused fixture binding
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs (pass); Cargo not run per root instruction
+- Risks / next: Leader to rerun app Clippy/tests after all integration fixes.
+
+## 2026-10-18T10:54:10+00:00 — /root/git_watch_host_luna
+
+Add temporary Git and inotify watcher integration coverage and bound rebuild scope
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); no Cargo run per root-owned lane
+- Risks / next: Root to run host Clippy/tests and report compile or behavior findings; actual temporary-Git tests are added but not executed in this lane
+
+## 2026-10-18T10:54:19+00:00 — /root/git_watch_host_luna
+
+Keep typed watcher status in the DTO without surfacing transient coverage states as transport errors
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); no Cargo run per root-owned lane
+- Risks / next: Root to run host Clippy/tests; watcher status notice remains in workspace_git_watch DTO
+
+## 2026-10-18T10:54:46+00:00 — /root/git_watch_host_luna
+
+Return all watcher partial states through the typed DTO without transport errors
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); Cargo not run per root-owned lane
+- Risks / next: Root to run host tests/Clippy; Response.error remains reserved for actor-level request failures, watcher reasons are in DTO notice
+
+## 2026-10-18T10:55:30+00:00 — git_watch_app_luna
+
+Correct the bounded result-channel type in Git watch reducer tests
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs (pass); all ResultMessage sender annotations now use SyncSender; Cargo not run per root instruction
+- Risks / next: Leader to rerun app Clippy/tests.
+
+## 2026-10-18T10:56:15+00:00 — git_watch_app_luna
+
+Separate tracked and untracked counts in Git watch summary
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs (pass); added reducer test with one tracked modification and one untracked file; Cargo not run per root instruction
+- Risks / next: Leader can run the app test suite and Clippy.
+
+## 2026-10-18T10:56:44+00:00 — /root/git_watch_host_luna
+
+Skip absent tracked worktree directories during rebuild and test deletion/recreation recovery
+
+- Files: crates/session-host/src/workspace_git_watch.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git_watch.rs (pass); git diff --check -- crates/session-host/src/workspace_git_watch.rs (pass); Cargo not run per root-owned lane
+- Risks / next: Root to run deleted tracked directory regression plus host unit suite; missing metadata and unsafe/symlink/permission paths remain incomplete
+
+## 2026-10-18T10:57:43+00:00 — git_watch_app_luna
+
+Restrict fallback Git snapshots to disabled watch scopes and retain counts in partial labels
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs (pass); Cargo not run per root instruction
+- Risks / next: Leader to rerun targeted Git watch tests.
+
+## 2026-10-18T10:57:53+00:00 — git_watch_app_luna
+
+Preserve partial and stale markers together in wide Git status labels
+
+- Files: crates/app/src/git_watch.rs
+- Verification: rustfmt --edition 2024 crates/app/src/git_watch.rs; git diff --check -- crates/app/src/git_watch.rs (pass); Cargo not run per root instruction
+- Risks / next: Leader to rerun targeted Git watch tests.
+
+## 2026-10-18T11:06:16+00:00 — root
+
+Ship event-driven selected-workspace Git indicator with frozen review invalidation and resilient local helper transport
+
+- Files: crates/session-host/src/workspace_git_watch.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/tests/project_setup.rs, crates/app/src/git_watch.rs, crates/app/src/git_status_ui.rs, crates/app/src/workspace_git.rs, crates/app/src/protocol.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/provider_discovery.rs, scripts/isolated-ime-x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 411 app tests;11 watcher tests incl actual Git/inotify;1 real-host IPC create/remove/reopen/no-mutation test;37 Python harness tests pass. Strict app/workspace Clippy, format/version/diff checks and release app/host binaries/examples builds pass. Final private X11 catalog run /tmp/pigade-git-watch-20261018-01 passes new watcher creation/removal and existing stage/unstage/native commit/tab-close flows with process/placement preservation. Root inspected indicator2tracked/2new then2tracked/1new without manualrefresh. Independent Luna source review found no blocker. Initial compile integration errors, unsettled initial snapshot fallback, label assertions and helper EINTR/ETXTBSY failures were fixed, not waived.
+- Risks / next: Commit coherent block; do not stage unrelated stress/research/patch dirt or stash. Large-monorepo performance, external global config/ignore updates, broad platform/a11y/recovery and complete MVP gates remain open. Manual Git remains available on old hosts; no user host/CLI/desktop changed.

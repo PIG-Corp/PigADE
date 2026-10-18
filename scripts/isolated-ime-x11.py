@@ -3568,6 +3568,44 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                 'workspace Git snapshot identity or branch metadata is invalid')
         return snapshot
 
+    # One existing private fixture also exercises metadata-only watching and
+    # the toolbar. External writes stay inside its exact tmpfs Git repository.
+    def request_git_watch():
+        response = host_request({'command': 'workspace_git_watch',
+                                 'workspace': workspace_id,
+                                 'expected_revision': git_workspace['revision']}, timeout=10)
+        watch = response.get('workspace_git_watch')
+        require(isinstance(watch, dict) and watch.get('workspace_id') == workspace_id and
+                watch.get('workspace_revision') == git_workspace['revision'] and
+                watch.get('project_id') == git_project['id'] and
+                watch.get('cwd') == str(git_repo), 'Git watch returned another scope')
+        return watch
+
+    def settled_git_watch(after=None):
+        watch = request_git_watch()
+        return watch if watch.get('complete') and watch.get('settled') and (
+            after is None or (watch.get('epoch') == after['epoch'] and
+                              watch.get('sequence', 0) > after['sequence'])) else None
+
+    report['stage'] = 'catalog-git-watch'
+    save()
+    watch_before = wait_until(lambda: settled_git_watch(), time.monotonic() + 12)
+    watch_file = git_repo / 'watch-temporary.txt'
+    require(not watch_file.exists(), 'private Git watch probe path already exists')
+    watch_file.write_text('private watcher fixture\n', encoding='utf-8')
+    watch_added = wait_until(lambda: settled_git_watch(watch_before), time.monotonic() + 12)
+    time.sleep(2)
+    helper_call(config, 'capture', '/artifacts/catalog-git-watch-added.ppm')
+    require('watch-temporary.txt' in {entry['path'] for entry in request_git_snapshot()['entries']},
+            'private Git status did not observe watched file creation')
+    watch_file.unlink()
+    wait_until(lambda: settled_git_watch(watch_added), time.monotonic() + 12)
+    time.sleep(2)
+    helper_call(config, 'capture', '/artifacts/catalog-git-watch-removed.ppm')
+    require('watch-temporary.txt' not in {entry['path'] for entry in request_git_snapshot()['entries']},
+            'private Git status did not observe watched file removal')
+    require_git_fixture_invariants('Git watcher changed sessions, aliases, selection or placement')
+
     report['stage'] = 'catalog-git-open'
     save()
     helper_call(config, 'catalog-git-open')
@@ -3978,6 +4016,7 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'agent_profile_pin_and_partition_reorder_persisted_exact_roster': True,
         'agent_profile_display_order_survived_library_close_and_reopen': True,
         'agent_profile_actions_preserved_profile_revisions_selection_layout_frames_and_journals': True,
+        'workspace_git_watch_sequence_covers_private_create_and_remove': True,
         'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
         'workspace_git_refresh_reflects_private_file_removal': True,
         'workspace_git_index_actions_used_fixed_ui_and_restored_exact_index': True,
@@ -4038,7 +4077,9 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm',
                      'catalog-agent-profiles-initial.ppm', 'catalog-agent-profiles-pinned.ppm',
                      'catalog-agent-profiles-final.ppm', 'catalog-agent-profiles-reopened.ppm',
-                     'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
+                     'catalog-git-watch-added.ppm', 'catalog-git-watch-removed.ppm',
+                     'catalog-git-watch-added.ppm', 'catalog-git-watch-removed.ppm',
+                  'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
                      'catalog-git-refreshed.ppm', 'catalog-git-index-staged-review.ppm',
                      'catalog-git-worktree-review.ppm', 'catalog-git-index-tracked-review.ppm',
                      'catalog-git-untracked-review.ppm', 'catalog-git-commit-review.ppm',

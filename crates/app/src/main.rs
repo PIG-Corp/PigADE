@@ -16,6 +16,7 @@ mod custom_cli;
 mod dirty_documents;
 mod edit_field;
 mod font;
+mod git_watch;
 mod handoff;
 mod handoff_commands;
 mod history_view;
@@ -1217,6 +1218,7 @@ struct TransferReload {
 }
 
 struct CanvasApp {
+    git_watch: git_watch::Watch,
     workspace_nav_writer: workspace_navigation::Writer,
     workspace_nav_reload: Option<(uuid::Uuid, uuid::Uuid)>,
     workspace_nav_select: Option<(uuid::Uuid, uuid::Uuid)>,
@@ -1338,6 +1340,7 @@ impl CanvasApp {
             product_rx,
             git_worker,
         } = connection;
+        let git_watch = git_watch::Watch::new(host_socket.clone(), wake.clone());
         let ui_trace = trace.clone();
         let focus = cx.focus_handle();
         let close_target = cx.entity().downgrade();
@@ -1396,6 +1399,10 @@ impl CanvasApp {
                 }
                 if weak
                     .update_in(cx, |this, window, cx| {
+                        if this.git_watch.service(this.product.catalog.as_ref(), window.is_window_active()) {
+                            this.product.git_watch_view = this.git_watch.view().cloned();
+                            cx.notify();
+                        }
                         this.service_workspace_git(cx);
                         while let Ok(reply) = this.product_rx.try_recv() {
                             let stop_pending=this.stop_control.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
@@ -1849,6 +1856,7 @@ impl CanvasApp {
         product.workspace_navigation.error = workspace_nav_writer.initial_error.clone();
         product.maintenance.managed = managed_host;
         Self {
+            git_watch,
             workspace_nav_reload: None,
             workspace_nav_select: None,
             workspace_last_confirmed: None,
