@@ -52,13 +52,6 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
             "Shell sessions do not accept startup context.",
         ));
     }
-    if provider == "opencode" && has_opencode_inline_config() {
-        return Ok(generic_info(
-            provider,
-            "unknown".to_owned(),
-            "OPENCODE_CONFIG_CONTENT is already set; PigADE leaves the existing OpenCode configuration untouched and disables context delivery.",
-        ));
-    }
 
     let output = match run_version(executable) {
         Ok(output) if output.status.success() => output,
@@ -84,6 +77,18 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
     let cli_version =
         first_version_token(&version_text).unwrap_or_else(|| version_text.trim().to_owned());
 
+    if provider == "opencode"
+        && let Some(key) = opencode_adapter_override()
+    {
+        return Ok(generic_info(
+            provider,
+            cli_version,
+            &format!(
+                "{key} is already set; PigADE leaves it untouched and disables advanced context/resume adapters."
+            ),
+        ));
+    }
+
     let supported = supported_transport(provider, &cli_version);
 
     if let Some((method, description)) = supported {
@@ -105,11 +110,19 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
             )),
         })
     } else {
-        Ok(generic_info(
+        let mut info = generic_info(
             provider,
             cli_version,
             "This provider/version has no certified PigADE context adapter; startup context is disabled.",
-        ))
+        );
+        if info.provider == "opencode" && info.cli_version == "1.19.3" {
+            // Exact-ID selection is independent from startup instructions.
+            // OpenCode validates/fetches the supplied session before its TUI;
+            // automatic discovery and context merging remain unsupported.
+            info.adapter_version = 2;
+            info.capabilities.native_resume = true;
+        }
+        Ok(info)
     }
 }
 
@@ -126,18 +139,25 @@ fn supported_transport(provider: &str, version: &str) -> Option<(&'static str, &
     }
 }
 
-fn has_opencode_inline_config() -> bool {
-    // Check presence only: never copy, parse, log, or merge the user's value.
-    #[cfg(unix)]
-    {
-        // SAFETY: the static key is NUL-terminated. Only pointer nullness is
-        // checked; the returned environment value is never dereferenced.
-        unsafe { !libc::getenv(c"OPENCODE_CONFIG_CONTENT".as_ptr()).is_null() }
+fn opencode_adapter_override() -> Option<&'static str> {
+    // Check presence only. Values can contain user instructions or routing
+    // selectors; never read, copy, log or merge them into a launch plan.
+    for (name, key) in [
+        ("OPENCODE_CONFIG_CONTENT", c"OPENCODE_CONFIG_CONTENT"),
+        ("OPENCODE_WORKSPACE_ID", c"OPENCODE_WORKSPACE_ID"),
+    ] {
+        #[cfg(unix)]
+        let present = unsafe { !libc::getenv(key.as_ptr()).is_null() };
+        #[cfg(not(unix))]
+        let present = {
+            let _ = key;
+            std::env::var_os(name).is_some()
+        };
+        if present {
+            return Some(name);
+        }
     }
-    #[cfg(not(unix))]
-    {
-        std::env::var_os("OPENCODE_CONFIG_CONTENT").is_some()
-    }
+    None
 }
 
 fn generic_info(provider: &str, cli_version: String, reason: &str) -> AdapterInfo {
@@ -322,15 +342,32 @@ pub(crate) fn context_arguments(
     Ok((args, env))
 }
 
-/// Build a resume invocation for the one Codex CLI version whose resume
-/// contract has been checked. The ID is always explicit; startup context is
-/// delivered as developer instructions and never as a new prompt.
+/// Build a version-pinned exact-ID resume invocation. It never uses a latest
+/// selector, forks the conversation, or sends a new task as positional text.
+/// Context transports remain independent capabilities.
 pub(crate) fn resume_arguments(
     info: &AdapterInfo,
     conversation_id: &str,
     cwd: &Path,
     context: Option<&str>,
 ) -> Result<(Vec<String>, BTreeMap<String, String>)> {
+    ensure!(cwd.is_absolute(), "resume cwd must be absolute");
+    let cwd_text = cwd.to_str().context("resume cwd must be valid UTF-8")?;
+    ensure!(!cwd_text.contains('\0'), "resume cwd must not contain NUL");
+    if info.provider == "opencode" && info.cli_version == "1.19.3" {
+        ensure!(
+            is_opencode_session_id(conversation_id),
+            "invalid OpenCode session ID"
+        );
+        ensure!(
+            context.is_none(),
+            "OpenCode resume does not support PigADE context injection"
+        );
+        return Ok((
+            vec!["--session".into(), conversation_id.into()],
+            BTreeMap::new(),
+        ));
+    }
     ensure!(
         info.provider == "codex" && info.cli_version == "0.162.1",
         "native resume is unsupported for {} {}",
@@ -341,9 +378,6 @@ pub(crate) fn resume_arguments(
         is_canonical_nonnil_uuid(conversation_id),
         "invalid conversation UUID"
     );
-    ensure!(cwd.is_absolute(), "resume cwd must be absolute");
-    let cwd_text = cwd.to_str().context("resume cwd must be valid UTF-8")?;
-    ensure!(!cwd_text.contains('\0'), "resume cwd must not contain NUL");
 
     let mut args = vec![
         "resume".to_owned(),
@@ -359,6 +393,15 @@ pub(crate) fn resume_arguments(
     }
     args.push(conversation_id.to_owned());
     Ok((args, env))
+}
+
+pub(crate) fn is_opencode_session_id(value: &str) -> bool {
+    value.starts_with("ses_")
+        && value.len() > 4
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn is_canonical_nonnil_uuid(value: &str) -> bool {
@@ -416,6 +459,30 @@ mod tests {
         assert!(!adapter.capabilities.context_receipt);
         assert!(!adapter.capabilities.native_resume);
         assert!(!adapter.capabilities.conversation_id);
+    }
+
+    #[test]
+    fn opencode_resume_uses_only_exact_id_and_rejects_context_or_unverified_versions() {
+        let adapter = info("opencode", "1.19.3");
+        let cwd = Path::new("/workspace");
+        let id = "ses_0123456789abcdefABCDEF";
+        let (args, env) = resume_arguments(&adapter, id, cwd, None).unwrap();
+        assert_eq!(args, vec!["--session", id]);
+        assert!(env.is_empty());
+        assert!(resume_arguments(&adapter, id, cwd, Some("must not send a new task")).is_err());
+        assert!(resume_arguments(&info("opencode", "1.19.2"), id, cwd, None).is_err());
+        for invalid in [
+            "ses_",
+            "latest",
+            "ses_bad id",
+            "ses_\ncontrol",
+            "--continue",
+        ] {
+            assert!(resume_arguments(&adapter, invalid, cwd, None).is_err());
+        }
+        assert!(
+            resume_arguments(&adapter, &format!("ses_{}", "a".repeat(253)), cwd, None).is_err()
+        );
     }
 
     #[test]
@@ -518,6 +585,34 @@ mod tests {
         let mut over_limit = Some(io::Cursor::new(vec![b'x'; VERSION_STREAM_LIMIT + 1]));
         let mut captured = Vec::with_capacity(VERSION_STREAM_LIMIT);
         assert!(drain_nonblocking(&mut over_limit, &mut captured).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_user_config_or_workspace_override_disables_advanced_adapter_without_reading_values()
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(key) = std::env::var_os("PIGADE_ADAPTER_ENV_PROBE") {
+            let root = tempfile::tempdir().unwrap();
+            let executable = root.path().join("opencode");
+            std::fs::write(&executable, b"#!/bin/sh\nprintf 'opencode 1.19.3\\n'\n").unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let info = inspect("opencode", &executable).unwrap();
+            assert_eq!(info.cli_version, "1.19.3");
+            assert!(!info.capabilities.native_resume && !info.capabilities.startup_context);
+            let reason = info.unsupported_reason.unwrap();
+            assert!(reason.contains(key.to_str().unwrap()));
+            assert!(!reason.contains("SYNTHETIC_PRIVATE_VALUE"));
+            return;
+        }
+        for key in ["OPENCODE_CONFIG_CONTENT", "OPENCODE_WORKSPACE_ID"] {
+            let status=Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","adapters::tests::opencode_user_config_or_workspace_override_disables_advanced_adapter_without_reading_values"])
+                .env_remove("OPENCODE_CONFIG_CONTENT").env_remove("OPENCODE_WORKSPACE_ID")
+                .env(key,"SYNTHETIC_PRIVATE_VALUE").env("PIGADE_ADAPTER_ENV_PROBE",key)
+                .stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
+            assert!(status.success(), "override guard failed for {key}");
+        }
     }
 
     #[test]

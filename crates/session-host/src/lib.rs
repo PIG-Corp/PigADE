@@ -9,10 +9,12 @@ pub mod history;
 pub mod history_read;
 pub mod history_view;
 pub mod input;
+mod opencode_resume;
 mod panel_directory;
 mod panel_launch;
 mod prepared;
 mod projects;
+mod resume_probe;
 mod template_run;
 mod workspace_git;
 pub use catalog::LayoutAction;
@@ -548,6 +550,7 @@ struct Host {
     metadata: MetadataStore,
     catalog_notice: Option<String>,
     recovery: RecoveryDiagnostics,
+    resume_verified: Option<resume_probe::Permit>,
     changes: changes::ChangeHub,
     _lock: File,
 }
@@ -1554,6 +1557,7 @@ impl Host {
             metadata,
             catalog_notice,
             recovery,
+            resume_verified: None,
             changes: changes::ChangeHub::new(),
             _lock: lock,
         })
@@ -2588,7 +2592,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     );
     let mut host = Host::open(root.clone())?;
     host.endpoint_root = runtime.clone();
-    let jobs = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
+    let (jobs, internal_jobs) = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
+    let resume_reader = resume_probe::Reader::new(internal_jobs)?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
     let workspace_git_reader = workspace_git::Reader::new()?;
@@ -2608,7 +2613,27 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     {
         eprintln!("Private replay-cache cleanup unavailable: {error}");
     }
-    for job in jobs {
+    for mut job in jobs {
+        let mut resume_error = None;
+        if let Some(completion) = job.resume_probe.take() {
+            match resume_probe::accept(&mut host, &job.request.command, completion) {
+                Ok(permit) => host.resume_verified = Some(permit),
+                Err(error) => {
+                    resume_error = Some(resume_probe::rejection(&host, &job.request.command, error))
+                }
+            }
+        } else {
+            match resume_probe::target(&mut host, &job.request.command) {
+                Ok(Some(target)) => {
+                    resume_reader.submit(job, target);
+                    continue;
+                }
+                Ok(None) => (),
+                Err(error) => {
+                    resume_error = Some(resume_probe::rejection(&host, &job.request.command, error))
+                }
+            }
+        }
         if let Command::DetectProviders = job.request.command {
             provider_detector.submit(job.reply);
             continue;
@@ -2651,7 +2676,13 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
             }
             continue;
         }
-        let response = match host.dispatch(job.request.command) {
+        let result = if let Some(error) = resume_error {
+            Err(error)
+        } else {
+            host.dispatch(job.request.command)
+        };
+        host.resume_verified = None;
+        let response = match result {
             Ok(response) => response,
             Err(error) => Response {
                 protocol: PROTOCOL,

@@ -135,6 +135,19 @@ class IsolatedImePlanTests(unittest.TestCase):
             self.assertEqual(len(retained), IME.LOG_LIMIT)
             self.assertEqual(retained, b'x' * IME.LOG_LIMIT)
 
+    def test_private_loopback_preflight_observes_flags_without_reconfiguring_network(self):
+        for flags, accepted in ((0x49, True), (0x8, False), (0x1, False)):
+            with self.subTest(flags=flags), mock.patch.object(IME.socket, 'socket'), \
+                    mock.patch.object(IME.fcntl, 'ioctl', return_value=IME.struct.pack(
+                        '16sH14x', b'lo', flags)) as ioctl:
+                if accepted:
+                    IME.verify_private_loopback()
+                else:
+                    with self.assertRaises(RuntimeError):
+                        IME.verify_private_loopback()
+                self.assertEqual(ioctl.call_count, 1)
+                self.assertEqual(ioctl.call_args.args[1], 0x8913)
+
     def test_process_identity_reads_real_proc_start_time(self):
         boot, start = IME.process_identity(os.getpid())
         self.assertEqual(boot, Path('/proc/sys/kernel/random/boot_id').read_text().strip())
@@ -213,6 +226,9 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertEqual(plan['fixture'], 'opencode')
         self.assertIn('/usr/bin/opencode 1.19.3', plan['input']['opencode'])
         self.assertIn('unsent prompt', plan['input']['opencode'])
+        self.assertIn('loopback session creation', plan['input']['opencode'])
+        self.assertIn('exact-ID resume', plan['input']['opencode'])
+        self.assertIn('public export/import of a synthetic text-only exchange', plan['input']['opencode'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         sequence = source.split('static void opencode_input_sequence', 1)[1].split('\n}', 1)[0]
@@ -220,6 +236,29 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('for (int column = 0; column < 16; ++column)', sequence)
         self.assertNotIn('XK_Return', sequence)
         self.assertNotIn('--text', source)
+        harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        self.assertIn("'/usr/bin/opencode', 'serve', '--hostname', '127.0.0.1'", harness)
+        self.assertIn("run_owned_opencode_command('export', session_id, project, env)", harness)
+        self.assertIn("run_owned_opencode_command(\n            'import', str(import_path), project, env)", harness)
+        self.assertIn("require(session_id.encode() in import_stdout", harness)
+        self.assertNotIn("require(assistant_message_id.encode() in import_stdout", harness)
+        self.assertIn("'POST', '/session', {'title': title}", harness)
+        self.assertIn("'command': 'prepare_resume', 'session': session", harness)
+        self.assertIn("['--session', conversation_id]", harness)
+        self.assertIn("['/usr/bin/opencode', '--session', missing_id]", harness)
+        self.assertIn("'failed_before_tui': True", harness)
+        self.assertIn("'synthetic': True", harness)
+        self.assertIn("'parentID': user_message_id", harness)
+        self.assertIn("'public_import_exact_two_messages': True", harness)
+        self.assertIn("'resumed_synthetic_response_visible_in_cells': True", harness)
+        self.assertIn("'GET /session/{id}/message'", harness)
+        self.assertIn("'opencode-resume-review.ppm'", harness)
+        self.assertIn("'opencode-resumed-session.ppm'", harness)
+        self.assertIn("'public_metadata_directory': '/home/pigade/.local/share/opencode'", harness)
+        self.assertIn("'private_loopback_enabled_for_fixture': config.get('fixture') == 'opencode'", harness)
+        self.assertNotIn("'/global/auth'", harness)
+        self.assertNotIn("'POST', '/message'", harness)
+        self.assertNotIn("'POST', '/session/", harness)
 
     def test_only_keyboard_fallback_accepts_no_fcitx_context(self):
         with mock.patch.object(IME.subprocess, 'run', return_value=SimpleNamespace(

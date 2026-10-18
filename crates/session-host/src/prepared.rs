@@ -76,7 +76,7 @@ pub(crate) struct BinaryIdentity {
     ctime_ns: i64,
 }
 
-fn binary_identity(path: &Path) -> Result<BinaryIdentity> {
+pub(crate) fn binary_identity(path: &Path) -> Result<BinaryIdentity> {
     let metadata = path.metadata().context("CLI executable is unavailable")?;
     ensure!(metadata.is_file(), "CLI executable is not a regular file");
     Ok(BinaryIdentity {
@@ -414,7 +414,7 @@ fn start_owned(
     Ok((catalog, plan.preview))
 }
 
-fn exited_head(host: &Host, session: Uuid) -> Result<Uuid> {
+pub(crate) fn exited_head(host: &Host, session: Uuid) -> Result<Uuid> {
     let records = host.metadata.generation_records(session, None, 1)?;
     let head = records
         .first()
@@ -463,6 +463,17 @@ fn validate_resume_source(host: &Host, plan: &StoredPlan, resume: &ResumeSource)
         plan.preview.capabilities.native_resume,
         "Нативное продолжение не подтверждено для этой версии CLI"
     );
+    if plan.preview.provider == "opencode" {
+        host.resume_verified
+            .as_ref()
+            .context("Требуется свежая проверка папки диалога OpenCode")?
+            .adapter(
+                plan.launch.session,
+                &resume.binding,
+                &plan.launch.executable,
+                &plan.launch.cwd,
+            )?;
+    }
     Ok(())
 }
 
@@ -492,7 +503,14 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
             "Исходная рабочая папка недоступна"
         );
         let identity = binary_identity(&plan.launch.executable)?;
-        let info = adapters::inspect(&plan.preview.provider, &plan.launch.executable)?;
+        let info = if plan.preview.provider == "opencode" {
+            host.resume_verified
+                .as_ref()
+                .context("Сначала требуется проверка папки диалога OpenCode")?
+                .adapter(session, &binding, &plan.launch.executable, &plan.launch.cwd)?
+        } else {
+            adapters::inspect(&plan.preview.provider, &plan.launch.executable)?
+        };
         ensure!(
             identity == binary_identity(&plan.launch.executable)?,
             "CLI изменился во время проверки"
@@ -531,7 +549,12 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
         plan.preview.can_launch = plan.preview.capabilities.native_resume;
         plan.preview.unavailable_reason = (!plan.preview.can_launch)
             .then(|| "Нативное продолжение ещё не подтверждено для этой версии CLI".into());
-        plan.preview.delivery_method = "native resume по точному ID; сохранённый контекст".into();
+        plan.preview.delivery_method = if plan.preview.deliver_context {
+            "native resume по точному ID; сохранённый контекст"
+        } else {
+            "native resume по точному ID; контекст PigADE не передаётся"
+        }
+        .into();
         plan.preview.conversation = Some(binding.clone());
         plan.preview.resume = Some(ResumeSource {
             binding,
@@ -540,7 +563,11 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
         plan.preview.warnings = vec![
             "Будет запущен новый процесс в той же панели. Предыдущее поколение останется доступно в истории.".into(),
             "Последнее задание не отправляется повторно. Продолжение подтверждается самим CLI; новая беседа при ошибке не создаётся.".into(),
-            "Используется сохранённая ревизия контекста; текущие правки проекта и воркспейса не подставляются.".into(),
+            if plan.preview.deliver_context {
+                "Используется сохранённая ревизия контекста; текущие правки проекта и воркспейса не подставляются."
+            } else {
+                "Контекст PigADE не передаётся. Историю и настройки выбранного диалога восстанавливает CLI."
+            }.into(),
         ];
         plan.launch.generation = plan.preview.generation;
         plan.launch.operation = plan.preview.plan_id;
@@ -624,7 +651,7 @@ pub(crate) fn bind_conversation(
             );
         }
         "opencode" => ensure!(
-            conversation_id.starts_with("ses_") && conversation_id.len() > 4,
+            adapters::is_opencode_session_id(conversation_id),
             "Нужен точный ID OpenCode вида ses_…"
         ),
         _ => anyhow::bail!("Привязка диалога недоступна для shell"),

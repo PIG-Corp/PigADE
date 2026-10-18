@@ -28,14 +28,15 @@ const JOB_LIMIT: usize = 16;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub struct Job {
+pub(crate) struct Job {
     pub request: Request,
     pub reply: SyncSender<Response>,
+    pub(crate) resume_probe: Option<crate::resume_probe::Completion>,
 }
 
 /// Caller must hold the host ownership lock and have validated its private state
 /// directory. The worker admission count also bounds simultaneous frame buffers.
-pub fn bind(socket: &Path, changes: ChangeHub) -> Result<Receiver<Job>> {
+pub(crate) fn bind(socket: &Path, changes: ChangeHub) -> Result<(Receiver<Job>, SyncSender<Job>)> {
     if let Ok(metadata) = fs::symlink_metadata(socket) {
         // A stale socket is safe to unlink only under the caller's ownership lock.
         // SAFETY: geteuid has no preconditions.
@@ -48,6 +49,7 @@ pub fn bind(socket: &Path, changes: ChangeHub) -> Result<Receiver<Job>> {
     let listener = UnixListener::bind(socket).context("bind private host endpoint")?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let (sender, receiver) = mpsc::sync_channel(JOB_LIMIT);
+    let internal_sender = sender.clone();
     let active = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name("pigade-ipc-accept".into())
@@ -85,7 +87,7 @@ pub fn bind(socket: &Path, changes: ChangeHub) -> Result<Receiver<Job>> {
                     });
             }
         })?;
-    Ok(receiver)
+    Ok((receiver, internal_sender))
 }
 
 struct ConnectionSlot(Arc<AtomicUsize>);
@@ -95,7 +97,7 @@ impl Drop for ConnectionSlot {
     }
 }
 
-fn error_response(
+pub(crate) fn error_response(
     error: impl Into<String>,
     rejected_before_admission: Option<CommandRejection>,
 ) -> Response {
@@ -213,7 +215,11 @@ fn process_connection(
         return Ok(());
     }
     let (reply, receiver) = mpsc::sync_channel(1);
-    match jobs.try_send(Job { request, reply }) {
+    match jobs.try_send(Job {
+        request,
+        reply,
+        resume_probe: None,
+    }) {
         Ok(()) => (),
         Err(mpsc::TrySendError::Full(_)) => {
             send(
@@ -293,6 +299,33 @@ mod tests {
     }
 
     #[test]
+    fn wire_fields_cannot_supply_internal_resume_verification() -> Result<()> {
+        let (mut client, server) = UnixStream::pair()?;
+        client.set_read_timeout(Some(IO_TIMEOUT))?;
+        let (jobs, receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        send(
+            &mut client,
+            &serde_json::json!({"protocol":PROTOCOL,
+            "command":{"command":"prepare_resume","session":uuid::Uuid::new_v4(),"resume_probe":{"verified":true}},
+            "resume_probe":{"verified":true,"directory":"/untrusted"}}),
+        )?;
+        let job = receiver.recv_timeout(IO_TIMEOUT)?;
+        assert!(job.resume_probe.is_none());
+        assert!(matches!(job.request.command, Command::PrepareResume { .. }));
+        job.reply
+            .send(error_response("spy rejected before execution", None))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            receive::<Response>(&mut client)?.error.as_deref(),
+            Some("spy rejected before execution")
+        );
+        worker.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
     fn incompatible_protocol_is_rejected_before_dispatch() -> Result<()> {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -324,6 +357,7 @@ mod tests {
                 command: Command::List,
             },
             reply,
+            resume_probe: None,
         })
         .ok()
         .unwrap();

@@ -3089,3 +3089,75 @@ Integrate native read-only workspace Git snapshots with independent bounded UI r
 - Files: crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation_ui.rs, crates/app/src/protocol.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/projects.rs, crates/session-host/tests/project_setup.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
 - Verification: Fresh app203, host129 library and harness30 tests pass; agent real-host IPC test gates Git while List/Poll complete without catalog/index mutations. Strict workspace/app Clippy, formatting, version/diff checks and release builds pass. Private native git-release-20261018-02 passes open/three groups/native Refresh/removal/close with all five generation/PID states, aliases, selection and tree preserved; query/snapshot/refreshed captures inspected. Native01 failed before Git at fixture artifact-path assumption; corrected verified tmpfs HOME/exact demo guard and repo-relative common-dir resolution. Final app rebuild changes only group-count copy after captured02.
 - Risks / next: Request snapshots do not implement watchers or live dirty status; filesystem canonicalization has no hard syscall deadline, Git phases each share3s deadline. Non-UTF8 names display lossily with no file actions. Full Wayland/platform/accessibility/provider/performance/MVP gates remain open; preserve unrelated research/stress/quarantined patches and user host/CLI.
+
+## 2026-10-18T00:07:42+00:00 — layout_templates_luna
+
+Added a fake OpenCode 1.19.3 real-host exact-ID resume integration covering context-off initial launch, manual ses_ binding, frozen cwd/context, unsupported-version and stale-binding rejection before spawn, immutable old frame/layout, duplicate rejection, and exact --session argv.
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: Focused command passed: cargo test -p pigade-session-host --test context_launch opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery -- --nocapture (1 passed). rustfmt --edition 2024 --check and git diff --check passed.
+- Risks / next: Strict host Clippy waits for root to finish adapter/prepared source edits. Native provider certification remains pending.
+
+## 2026-10-18T00:11:55+00:00 — recipe_native_luna
+
+Extended the existing isolated OpenCode fixture to create and verify one synthetic public session over private loopback, bind and manually resume it through durable host plans with exact --session argv, and check missing-session failure before TUI
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 (30 tests passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/isolated-ime-x11.py --fixture opencode --compile-helper /tmp/pigade-x11-ime-input-opencode-luna; git diff --check. No native fixture or Cargo run.
+- Risks / next: Root owns app/host integration and release/native fixture run; inspect retained API/server outcome and screenshots.
+
+## 2026-10-18T00:15:53+00:00 — layout_templates_luna
+
+Extended the OpenCode test executable with an authenticated loopback metadata endpoint and controls for mismatched stored directory and workspace routing; integration now asserts PrepareResume and StartPrepared reject unsafe metadata without creating a generation.
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: rustfmt --edition 2024 --check crates/session-host/tests/context_launch.rs and git diff --check passed; focused Cargo test is pending helper readiness/root go-ahead.
+- Risks / next: Run the focused real-host test after opencode_resume helper is complete and root clears testing.
+
+## 2026-10-18T00:18:35+00:00 — catalog_flow_luna
+
+Add bounded OpenCode exact-session metadata preflight for resume
+
+- Files: crates/session-host/src/opencode_resume.rs
+- Verification: cargo test -p pigade-session-host --lib opencode_resume::tests -- --nocapture (6 passed)
+- Risks / next: Root to run supported OpenCode native resume fixture; helper is Linux-only and requires v1.19.3-compatible --pure server behavior.
+
+## 2026-10-18T00:19:10+00:00 — layout_templates_luna
+
+Verified the exact-ID OpenCode integration against the new authenticated metadata probe; added directory and workspace-route refusals passed through PrepareResume and StartPrepared.
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: cargo test -p pigade-session-host --test context_launch opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery -- --nocapture passed (1/1). cargo clippy --workspace --all-targets -- -D warnings stopped on manual_inspect in crates/session-host/src/opencode_resume.rs:526, outside this lane.
+- Risks / next: Root to resolve the probe helper Clippy finding; no probe fixture issue observed.
+
+## 2026-10-18T00:23:03+00:00 — recipe_native_luna
+
+Added bounded OpenCode v1.19.3 public export/import of one synthetic user-assistant text exchange and assertions that exact imported response survives resume and appears in host cells
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Verified official v1.19.3 Session schema and CLI export/import implementation; python3 -m unittest scripts.test_isolated_ime_x11 (30 tests passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; git diff --check. No Cargo or native run.
+- Risks / next: Root owns current host/app build and isolated native run; report any mismatch in actual public import shape or resumed cells.
+
+## 2026-10-18T00:25:18+00:00 — root
+
+Reverified requested pointer-follow focus and Dwindle pane dragging against the current native release
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs
+- Verification: crates/app/bootstrap.sh test --locked pointer_layout -- --test-threads=1: 6 passed. Existing isolated X11 pointer fixture /tmp/pigade-pointer-final-20261018-01: PASS; real four-shell hover/input routing, stationary-pointer keyboard focus, off-center floating drag, insertion, Escape and exact undo; session/generation/PIDs unchanged. Held and dropped captures inspected. git diff --check passed.
+- Risks / next: Existing product implementation is in commits 4638814 and 7fd52c3; no product code changed during this recheck. Native Wayland and full MVP gates remain open. Unrelated OpenCode resume work in progress was preserved.
+
+## 2026-10-18T00:25:52+00:00 — recipe_native_luna
+
+Corrected bounded OpenCode import CLI output assertion to check the source-confirmed imported session ID rather than a synthetic message ID
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: Verified official v1.19.3 import.ts writes Imported session: exportData.info.id; python3 -m unittest scripts.test_isolated_ime_x11 (30 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; git diff --check. No native/Cargo run.
+- Risks / next: Root owns the native fixture run; import stdout assertion now matches v1.19.3 source.
+
+## 2026-10-18T00:31:49+00:00 — root
+
+Integrate OpenCode1.19.3 manual exact-ID resume with asynchronous public-metadata cwd validation and durable launch safeguards
+
+- Files: crates/session-host/src/adapters.rs, crates/session-host/src/prepared.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/resume_probe.rs, crates/session-host/src/opencode_resume.rs, crates/session-host/tests/context_launch.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
+- Verification: 140 host library tests and4 context real-PTY integration tests passed; strict locked workspace Clippy and release host build passed;31 harness tests, py_compile, fmt/diff/version checks passed. Private native /tmp/pigade-opencode-resume-release-20261018-06 passes actual1.19.3 exact argv/cwd, preserved ID/two synthetic messages, response displayed in host cells, one new generation, old frame/tree unchanged and missing-ID exit1/no new conversation. Captures inspected. Root repaired noisy-output deadline starvation, directory/symlink identity revalidation, import stdout/empty-env/TUI-receipt fixture assumptions; preflight01-03 attempted an unnecessary interface write, removed in favor of read-only existing-loopback observation. No app code changed.
+- Risks / next: Manual support only; OpenCode startup context/native workspaces/overridden configuration, Claude resume, two-version matrix, account mismatch/reboot and full MVP gates remain open. Synthetic offline model is absent from private model catalog; no provider-task result claimed. Preserve unrelated stress/research/GPUI patches and stash0.

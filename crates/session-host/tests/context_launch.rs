@@ -85,6 +85,53 @@ impl TestHost {
             ),
         )?;
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o755))?;
+        let opencode = bin.path().join("opencode");
+        fs::write(bin.path().join("opencode.version"), "1.19.3\n")?;
+        fs::write(
+            &opencode,
+            concat!(
+                "#!/usr/bin/python3\n",
+                "import base64,json,os,sys,time\n",
+                "version_path=os.path.join(os.path.dirname(__file__),'opencode.version')\n",
+                "fixture_dir=os.path.dirname(__file__)\n",
+                "if sys.argv[1:] == ['--version']:\n",
+                " print('opencode '+open(version_path,encoding='utf-8').read().strip()); raise SystemExit(0)\n",
+                "if sys.argv[1:2] == ['serve']:\n",
+                " from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\n",
+                " from urllib.parse import unquote,urlsplit\n",
+                " class Handler(BaseHTTPRequestHandler):\n",
+                "  def log_message(self,*args): pass\n",
+                "  def do_GET(self):\n",
+                "   expected='Basic '+base64.b64encode((os.environ.get('OPENCODE_SERVER_USERNAME','')+':'+os.environ.get('OPENCODE_SERVER_PASSWORD','')).encode()).decode()\n",
+                "   if self.headers.get('Authorization') != expected:\n",
+                "    self.send_error(401); return\n",
+                "   path=urlsplit(self.path).path\n",
+                "   if not path.startswith('/session/'):\n",
+                "    self.send_error(404); return\n",
+                "   session_id=unquote(path[len('/session/'):])\n",
+                "   hold=os.path.join(fixture_dir,'opencode.probe-hold')\n",
+                "   if os.path.exists(hold):\n",
+                "    open(os.path.join(fixture_dir,'opencode.probe-entered'),'w').close()\n",
+                "    deadline=time.monotonic()+3\n",
+                "    while os.path.exists(hold) and time.monotonic()<deadline: time.sleep(0.005)\n",
+                "    if os.path.exists(hold): self.send_error(503); return\n",
+                "   directory=os.getcwd()\n",
+                "   if os.path.exists(os.path.join(fixture_dir,'opencode.probe-wrong-directory')):\n",
+                "    directory=os.path.dirname(directory)\n",
+                "   workspace_id='workspace-fixture' if os.path.exists(os.path.join(fixture_dir,'opencode.probe-workspace')) else None\n",
+                "   body=json.dumps({'id':session_id,'directory':directory,'workspaceID':workspace_id}).encode()\n",
+                "   self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)\n",
+                " server=ThreadingHTTPServer(('127.0.0.1',0),Handler)\n",
+                " print('opencode server listening on http://127.0.0.1:'+str(server.server_address[1]),flush=True)\n",
+                " server.serve_forever()\n",
+                " raise SystemExit(0)\n",
+                "print('FIXTURE_OPENCODE_ARGS='+json.dumps(sys.argv[1:],ensure_ascii=False))\n",
+                "print('FIXTURE_OPENCODE_CWD='+os.getcwd())\n",
+                "print('FIXTURE_OPENCODE_CONFIG_CONTENT_PRESENT='+str('OPENCODE_CONFIG_CONTENT' in os.environ))\n",
+                "raise SystemExit(0)\n",
+            ),
+        )?;
+        fs::set_permissions(&opencode, fs::Permissions::from_mode(0o755))?;
         let mut host = Self {
             directory,
             bin,
@@ -111,6 +158,8 @@ impl TestHost {
             .arg("serve")
             .arg(self.root())
             .env("PATH", path)
+            .env_remove("OPENCODE_CONFIG_CONTENT")
+            .env_remove("OPENCODE_WORKSPACE_ID")
             .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1176,5 +1225,452 @@ fn panel_generation_selection_uses_ordinal_head_and_persists_history_pin() -> Re
         "host restart changed generation count"
     );
     ensure!(all_views.iter().all(|view| view.pid.is_none()));
+    Ok(())
+}
+
+#[test]
+fn opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let root = host.root().canonicalize()?;
+    let launch_cwd = root.join("original-workspace-cwd");
+    fs::create_dir(&launch_cwd)?;
+    let project = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let tab = Uuid::new_v4();
+    success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                projects: vec![CatalogWrite {
+                    value: Project {
+                        id: project,
+                        canonical_path: root.clone(),
+                        git_common_dir: root.clone(),
+                        name: "OpenCode resume fixture".into(),
+                        roots: vec![],
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                workspaces: vec![CatalogWrite {
+                    value: Workspace {
+                        id: workspace,
+                        project_id: project,
+                        task: "This task must not be repeated".into(),
+                        cwd: launch_cwd.clone(),
+                        mode: WorkspaceMode::SharedCheckout,
+                        status: WorkspaceStatus::Ready,
+                        error: None,
+                        context_revision: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                tabs: vec![CatalogWrite {
+                    value: Tab {
+                        id: tab,
+                        workspace_id: workspace,
+                        name: "OpenCode".into(),
+                        layout_json: serde_json::to_string(&TabLayout::default())?,
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            },
+        },
+    )?;
+    let frozen_context = "FROZEN_CONTEXT_MUST_NOT_BE_DELIVERED";
+    success(
+        &host.socket(),
+        Command::SaveContext {
+            document: context(project, 0, "", "", ""),
+            expected_revision: 0,
+        },
+    )?;
+    success(
+        &host.socket(),
+        Command::SaveContext {
+            document: context(workspace, 0, frozen_context, "", ""),
+            expected_revision: 0,
+        },
+    )?;
+
+    let initial = success(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: PrepareRequest {
+                tab,
+                provider: "opencode".into(),
+                side: Direction::Right,
+                target: None,
+                role_override: String::new(),
+                agent_instructions: String::new(),
+                include_memory: false,
+                memory_selection: None,
+                deliver_context: false,
+            },
+        },
+    )?
+    .launch_preview
+    .context("initial OpenCode preview missing")?;
+    ensure!(initial.cli_version == "1.19.3");
+    ensure!(!initial.deliver_context);
+    ensure!(initial.context.text.contains(frozen_context));
+    host.active = Some((initial.session, initial.generation));
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: initial.plan_id,
+        },
+    )?;
+    let initial_views = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == initial.session
+                && view.generation == initial.generation
+                && view.state == "exited"
+                && view.frame.text().contains("FIXTURE_OPENCODE_ARGS=")
+        })
+    })?;
+    ensure!(initial_views.len() == 1);
+    let initial_view = &initial_views[0];
+    let initial_text = initial_view.frame.text();
+    ensure!(initial_text.contains("FIXTURE_OPENCODE_CWD="));
+    let initial_frame: String = initial_view
+        .frame
+        .cells
+        .iter()
+        .map(|cell| cell.text.as_str())
+        .collect();
+    let initial_args_json = initial_frame
+        .split_once("FIXTURE_OPENCODE_ARGS=")
+        .map(|(_, value)| value)
+        .context("OpenCode fixture omitted initial argv")?;
+    let initial_args = serde_json::Deserializer::from_str(initial_args_json)
+        .into_iter::<Vec<String>>()
+        .next()
+        .context("initial OpenCode args JSON missing")??;
+    ensure!(
+        initial_args.is_empty(),
+        "initial context-off launch had arguments"
+    );
+    ensure!(
+        initial_text.contains(&format!("FIXTURE_OPENCODE_CWD={}", launch_cwd.display())),
+        "initial OpenCode launch used a different cwd"
+    );
+
+    let conversation_id = "ses_pigade_exact_resume_0193";
+    let binding = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: initial.session,
+            generation: initial.generation,
+            conversation_id: conversation_id.into(),
+            expected_revision: 0,
+        },
+    )?
+    .launch_preview
+    .context("OpenCode binding preview missing")?
+    .conversation
+    .context("OpenCode exact-ID binding missing")?;
+    ensure!(binding.conversation_id == conversation_id);
+
+    success(
+        &host.socket(),
+        Command::SaveContext {
+            document: context(workspace, 1, "EDITED_CONTEXT_MUST_NOT_BE_DELIVERED", "", ""),
+            expected_revision: 1,
+        },
+    )?;
+
+    fs::write(host.bin.path().join("opencode.version"), "1.19.2\n")?;
+    let unsupported = exchange(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?;
+    ensure!(
+        unsupported.error.is_some(),
+        "unsupported OpenCode version produced a resume plan"
+    );
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "unsupported-version preflight created a generation"
+    );
+    fs::write(host.bin.path().join("opencode.version"), "1.19.3\n")?;
+
+    fs::write(
+        host.bin.path().join("opencode.probe-wrong-directory"),
+        "1\n",
+    )?;
+    let wrong_directory = exchange(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?;
+    ensure!(
+        wrong_directory.error.is_some(),
+        "resume accepted an OpenCode session stored under another directory"
+    );
+    fs::remove_file(host.bin.path().join("opencode.probe-wrong-directory"))?;
+    fs::write(host.bin.path().join("opencode.probe-workspace"), "1\n")?;
+    let workspace_routed = exchange(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?;
+    ensure!(
+        workspace_routed.error.is_some(),
+        "resume accepted a workspace-routed OpenCode session"
+    );
+    fs::remove_file(host.bin.path().join("opencode.probe-workspace"))?;
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "metadata preflight refusal created a generation"
+    );
+
+    let hold = host.bin.path().join("opencode.probe-hold");
+    let entered = host.bin.path().join("opencode.probe-entered");
+    fs::write(
+        &hold,
+        "hold metadata until independent host commands finish",
+    )?;
+    let socket = host.socket();
+    let session = initial.session;
+    let pending = thread::spawn(move || success(&socket, Command::PrepareResume { session }));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !entered.exists() {
+        ensure!(
+            Instant::now() < deadline,
+            "metadata request did not reach the gate"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    // These must complete before the held metadata operation is released.
+    ensure!(success(&host.socket(), Command::List)?.views.len() == 1);
+    let poll = success(
+        &host.socket(),
+        Command::PollPanels {
+            panels: vec![pigade_session_host::poll::PanelTarget {
+                session: initial.session,
+                generation: None,
+            }],
+            known: vec![],
+        },
+    )?;
+    ensure!(poll.views.len() == 1 && poll.views[0].generation == initial.generation);
+    fs::remove_file(hold)?;
+    let stale = pending
+        .join()
+        .map_err(|_| anyhow::anyhow!("resume preparation thread failed"))??
+        .launch_preview
+        .context("OpenCode resume preparation omitted preview")?;
+    ensure!(stale.session == initial.session);
+    ensure!(stale.generation != initial.generation);
+    ensure!(!stale.deliver_context);
+    ensure!(stale.context.content_hash == initial.context.content_hash);
+    ensure!(stale.context.text.contains(frozen_context));
+    ensure!(
+        !stale
+            .context
+            .text
+            .contains("EDITED_CONTEXT_MUST_NOT_BE_DELIVERED")
+    );
+    ensure!(stale.cwd.as_ref() == Some(&launch_cwd));
+    ensure!(
+        stale
+            .resume
+            .as_ref()
+            .is_some_and(|source| source.binding == binding)
+    );
+    let before = success(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing before OpenCode resume")?;
+
+    let changed_binding = "ses_pigade_rebound_exact_0193";
+    let rebound = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: initial.session,
+            generation: initial.generation,
+            conversation_id: changed_binding.into(),
+            expected_revision: binding.revision,
+        },
+    )?
+    .launch_preview
+    .context("replacement conversation binding preview missing")?
+    .conversation
+    .context("replacement OpenCode binding missing")?;
+    ensure!(
+        rebound.revision == binding.revision + 1,
+        "explicit replacement binding was not recorded"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: stale.plan_id,
+            },
+        )?
+        .error
+        .is_some(),
+        "resume with a stale conversation binding was admitted"
+    );
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "stale-binding rejection created a new generation"
+    );
+
+    let restored_binding = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: initial.session,
+            generation: initial.generation,
+            conversation_id: conversation_id.into(),
+            expected_revision: rebound.revision,
+        },
+    )?
+    .launch_preview
+    .context("restored conversation binding preview missing")?
+    .conversation
+    .context("restored OpenCode binding missing")?;
+
+    let prepared = success(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?
+    .launch_preview
+    .context("fresh OpenCode resume preparation omitted preview")?;
+    ensure!(prepared.session == initial.session);
+    ensure!(prepared.generation != initial.generation);
+    ensure!(!prepared.deliver_context);
+    ensure!(prepared.context.content_hash == initial.context.content_hash);
+    ensure!(prepared.cwd.as_ref() == Some(&launch_cwd));
+    ensure!(
+        prepared
+            .resume
+            .as_ref()
+            .is_some_and(|source| source.binding == restored_binding),
+        "fresh resume did not capture the restored explicit binding"
+    );
+
+    fs::write(
+        host.bin.path().join("opencode.probe-wrong-directory"),
+        "1\n",
+    )?;
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: prepared.plan_id,
+            },
+        )?
+        .error
+        .is_some(),
+        "StartPrepared did not recheck OpenCode session directory metadata"
+    );
+    fs::remove_file(host.bin.path().join("opencode.probe-wrong-directory"))?;
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "StartPrepared metadata refusal created a generation"
+    );
+    let prepared = success(
+        &host.socket(),
+        Command::PrepareResume {
+            session: initial.session,
+        },
+    )?
+    .launch_preview
+    .context("verified OpenCode resume preparation omitted preview")?;
+
+    host.active = Some((prepared.session, prepared.generation));
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: prepared.plan_id,
+        },
+    )?;
+    let resumed_views = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == prepared.session
+                && view.generation == prepared.generation
+                && view.state == "exited"
+                && view.frame.text().contains("FIXTURE_OPENCODE_ARGS=")
+        })
+    })?;
+    ensure!(
+        resumed_views.len() == 2,
+        "resume created other than one generation"
+    );
+    let old_view = resumed_views
+        .iter()
+        .find(|view| view.generation == initial.generation)
+        .context("original OpenCode generation disappeared")?;
+    ensure!(old_view.frame.text() == initial_text);
+    let resumed_view = resumed_views
+        .iter()
+        .find(|view| view.generation == prepared.generation)
+        .context("resumed OpenCode generation missing")?;
+    let resumed_frame: String = resumed_view
+        .frame
+        .cells
+        .iter()
+        .map(|cell| cell.text.as_str())
+        .collect();
+    let args_json = resumed_frame
+        .split_once("FIXTURE_OPENCODE_ARGS=")
+        .map(|(_, value)| value)
+        .context("OpenCode fixture omitted resume argv")?;
+    let args = serde_json::Deserializer::from_str(args_json)
+        .into_iter::<Vec<String>>()
+        .next()
+        .context("OpenCode resume args JSON missing")??;
+    ensure!(
+        args == vec!["--session".to_owned(), conversation_id.to_owned()],
+        "OpenCode resume must use only the exact session ID"
+    );
+    let resumed_text = resumed_view.frame.text();
+    ensure!(
+        resumed_text.contains(&format!("FIXTURE_OPENCODE_CWD={}", launch_cwd.display())),
+        "OpenCode resumed in a different working directory"
+    );
+    ensure!(
+        resumed_text.contains("FIXTURE_OPENCODE_CONFIG_CONTENT_PRESENT=False"),
+        "resume unexpectedly received OpenCode config context environment"
+    );
+    ensure!(
+        !resumed_text.contains(frozen_context)
+            && !resumed_text.contains("EDITED_CONTEXT_MUST_NOT_BE_DELIVERED")
+            && !resumed_text.contains("This task must not be repeated")
+            && !resumed_text.contains("continue")
+            && !resumed_text.contains("fork"),
+        "resume unexpectedly delivered a prompt, task, or context"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: prepared.plan_id,
+            },
+        )?
+        .error
+        .is_some(),
+        "OpenCode resume plan was admitted more than once"
+    );
+    let after = success(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing after OpenCode resume")?;
+    ensure!(after.layout.revision == before.layout.revision);
+    ensure!(after.layout.json == before.layout.json);
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 2,
+        "duplicate OpenCode resume created an extra generation"
+    );
     Ok(())
 }

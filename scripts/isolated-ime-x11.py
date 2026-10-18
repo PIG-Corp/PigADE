@@ -8,6 +8,7 @@ display or accepts arbitrary text for synthetic input.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -28,6 +29,7 @@ import tempfile
 import threading
 import time
 import uuid
+import http.client
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_APP = ROOT / 'crates/app/target/debug/pigade-app'
@@ -2307,32 +2309,57 @@ def prepare_opencode_fixture(report, save):
     project = Path('/artifacts/opencode-workspace')
     project.mkdir(mode=0o700)
     before = fixture_generations()
-    session, generation = str(uuid.uuid4()), str(uuid.uuid4())
-    launched = host_request({'command': 'launch', 'spec': {
-        'session': session, 'generation': generation, 'operation': str(uuid.uuid4()),
-        'executable': '/usr/bin/opencode', 'args': [], 'cwd': str(project),
-        'geometry': {'rows': 24, 'cols': 80}}})
-    require(any(view.get('session') == session and view.get('generation') == generation
-                for view in launched.get('views', [])),
-            'OpenCode launch response omitted its exact session/generation')
+    catalog_ids = seed_opencode_catalog(str(project))
+    preview = host_request({'command': 'prepare_launch', 'request': {
+        'tab': catalog_ids['tab'], 'provider': 'opencode', 'side': 'Right',
+        'target': None, 'role_override': '', 'agent_instructions': '',
+        'include_memory': False, 'memory_selection': None, 'deliver_context': False}}).get(
+            'launch_preview')
+    require(isinstance(preview, dict) and preview.get('provider') == 'opencode' and
+            preview.get('cli_version') == '1.19.3' and preview.get('can_launch') is True and
+            preview.get('deliver_context') is False,
+            'OpenCode 1.19.3 prepared launch preview is unavailable')
+    session, generation = preview['session'], preview['generation']
+    host_request({'command': 'start_prepared', 'plan_id': preview['plan_id']})
     wait_until(lambda: (models if (models := fixture_session_models(session)).get(
         generation, {}).get('state') == 'running' else None), time.monotonic() + 12)
     require(fixture_generations() == sorted(before + [(session, generation)]),
             'OpenCode launch created an unexpected private PTY generation')
-    seed_context_catalog(session, cwd=str(project))
     catalog = host_request({'command': 'catalog'})['catalog']
-    tab = catalog['tabs'][0]
+    tab = next(item for item in catalog['tabs'] if item['id'] == catalog_ids['tab'])
     layout = json.loads(tab['layout_json'])
     require(layout.get('focused') == session,
             'OpenCode PTY was not the focused pane before app startup')
     report['opencode'] = {
         'session': session, 'generation': generation, 'tab': tab['id'],
+        'plan_id': preview['plan_id'], 'project': catalog_ids['project'],
+        'workspace': catalog_ids['workspace'], 'cwd': str(project),
         'executable': '/usr/bin/opencode', 'version': '1.19.3', 'launch_arguments': [],
         'task_sent': False, 'focused_pane_before_app_start': True,
         'network': 'private user/network namespaces; only loopback routes',
         'home': 'fresh /home/pigade with no provider auth/history files',
     }
     save()
+
+
+def seed_opencode_catalog(cwd):
+    catalog = host_request({'command': 'catalog'})['catalog']
+    project, workspace, tab = (str(uuid.uuid4()) for _ in range(3))
+    selection = dict(catalog['selection'], project_id=project, workspace_id=workspace, tab_id=tab)
+    host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [{'expected_revision': None, 'value': {
+            'id': project, 'canonical_path': cwd, 'git_common_dir': cwd,
+            'name': 'OpenCode resume fixture', 'roots': [], 'revision': 0}}],
+        'workspaces': [{'expected_revision': None, 'value': {
+            'id': workspace, 'project_id': project, 'task': 'OpenCode exact-session resume fixture',
+            'cwd': cwd, 'mode': 'shared_checkout', 'status': 'ready',
+            'error': None, 'context_revision': None, 'revision': 0}}],
+        'tabs': [{'expected_revision': None, 'value': {
+            'id': tab, 'workspace_id': workspace, 'name': 'OpenCode',
+            'layout_json': 'null', 'active_pane': None, 'revision': 0}}],
+        'selection': {'expected_revision': selection['revision'], 'value': selection},
+        'layout': None}})
+    return {'project': project, 'workspace': workspace, 'tab': tab}
 
 
 def run_opencode_fixture(config, report, control, app, env, artifacts, save):
@@ -2399,8 +2426,475 @@ def run_opencode_fixture(config, report, control, app, env, artifacts, save):
         'queue_full_footer': 'retained screenshot for visual inspection; no UI text export available',
         'bootstrap_pty_received_no_input': True,
     })
+    run_opencode_resume_fixture(config, report, app, env, artifacts, save)
     report.update({'status': OPENCODE_PASS, 'stage': 'complete'})
     save()
+
+
+def opencode_api(port, method, path, payload=None, timeout=2):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
+    body = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
+    headers = {'Accept': 'application/json'}
+    if body is not None:
+        headers['Content-Type'] = 'application/json'
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        data = response.read(1024 * 1024 + 1)
+        require(len(data) <= 1024 * 1024, 'OpenCode public API response exceeds bound')
+        require(200 <= response.status < 300,
+                f'OpenCode public API {method} {path} returned HTTP {response.status}')
+        require(data, 'OpenCode public API returned an empty response')
+        value = json.loads(data)
+        require(isinstance(value, (dict, list)), 'OpenCode public API JSON has invalid shape')
+        return value
+    finally:
+        connection.close()
+
+
+def opencode_sessions(port):
+    value = opencode_api(port, 'GET', '/session')
+    require(isinstance(value, list) and len(value) <= 64,
+            'OpenCode public session list exceeds fixture bound')
+    entries = {}
+    for item in value:
+        require(isinstance(item, dict), 'OpenCode public session entry has invalid shape')
+        session_id = item.get('id')
+        require(isinstance(session_id, str) and re.fullmatch(r'ses_[A-Za-z0-9_-]{1,252}', session_id),
+                'OpenCode public session list contains an invalid ID')
+        require(session_id not in entries, 'OpenCode public session list contains duplicate IDs')
+        entries[session_id] = item
+    return entries
+
+
+def opencode_messages(port, session_id):
+    require(re.fullmatch(r'ses_[A-Za-z0-9_-]{1,252}', session_id) is not None,
+            'OpenCode public message query has an invalid session ID')
+    value = opencode_api(port, 'GET', f'/session/{session_id}/message')
+    require(isinstance(value, list) and len(value) <= 32,
+            'OpenCode public message list exceeds fixture bound')
+    return value
+
+
+def run_owned_opencode_command(action, target, cwd, env, *, stdout_limit=64 * 1024, timeout=6):
+    require(action in ('export', 'import'), 'OpenCode fixture command is outside export/import allowlist')
+    if action == 'export':
+        require(isinstance(target, str) and
+                re.fullmatch(r'ses_[A-Za-z0-9_-]{1,252}', target) is not None,
+                'OpenCode export target is not the exact fixture session')
+    else:
+        input_path = Path(target).resolve(strict=True)
+        require(input_path.is_file() and input_path.is_relative_to(Path(cwd).resolve(strict=True)) and
+                input_path.stat().st_size <= 64 * 1024,
+                'OpenCode import source is outside the bounded private workspace file')
+        target = str(input_path)
+    argv = ['/usr/bin/opencode', action, target]
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               close_fds=True, start_new_session=True)
+    identity = None
+    output = {'stdout': bytearray(), 'stderr': bytearray()}
+    streams = {process.stdout.fileno(): ('stdout', process.stdout, stdout_limit),
+               process.stderr.fileno(): ('stderr', process.stderr, 8192)}
+    try:
+        try:
+            identity = process_identity(process.pid)
+        except FileNotFoundError:
+            if process.poll() is None:
+                raise
+        for fd in streams:
+            os.set_blocking(fd, False)
+        deadline = time.monotonic() + timeout
+        while streams or process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if process.poll() is None and identity is not None:
+                    stop_owned_group(process, identity)
+                raise RuntimeError('bounded OpenCode export/import CLI command timed out')
+            ready, _, _ = select.select(list(streams), [], [], min(0.1, remaining))
+            for fd in ready:
+                key, stream, limit = streams[fd]
+                remaining_cap = limit + 1 - len(output[key])
+                try:
+                    chunk = os.read(fd, min(4096, max(1, remaining_cap)))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    stream.close()
+                    del streams[fd]
+                    continue
+                output[key].extend(chunk)
+                if len(output[key]) > limit:
+                    if process.poll() is None and identity is not None:
+                        stop_owned_group(process, identity)
+                    raise RuntimeError(f'OpenCode {key} exceeded the fixture output bound')
+        status = process.wait(timeout=1)
+        require(status == 0, 'fixed OpenCode export/import command failed')
+        return bytes(output['stdout']), bytes(output['stderr'])
+    finally:
+        for _, stream, _ in streams.values():
+            stream.close()
+        if process.poll() is None and identity is not None:
+            stop_owned_group(process, identity)
+
+
+def import_synthetic_opencode_exchange(port, session_id, title, project, env):
+    require(opencode_messages(port, session_id) == [],
+            'new public OpenCode session unexpectedly contains messages')
+    exported, export_stderr = run_owned_opencode_command('export', session_id, project, env)
+    export_data = json.loads(exported)
+    require(isinstance(export_data, dict) and isinstance(export_data.get('info'), dict) and
+            export_data['info'].get('id') == session_id and
+            export_data['info'].get('title') == title and export_data.get('messages') == [],
+            'OpenCode public export is not the expected exact empty-session document')
+    exported_info = dict(export_data['info'])
+    tag = uuid.uuid4().hex[:16]
+    user_message_id = 'msg_fixture_1_user_' + tag
+    assistant_message_id = 'msg_fixture_2_assistant_' + tag
+    user_part_id = 'prt_fixture_user_' + tag
+    assistant_part_id = 'prt_fixture_assistant_' + tag
+    user_marker = 'PIGADE_SYNTHETIC_USER_FIXTURE_' + tag
+    assistant_marker = 'PIGADE_SYNTHETIC_ASSISTANT_RESPONSE_' + tag
+    timestamp = int(time.time() * 1000)
+    export_data['messages'] = [
+        {'info': {'id': user_message_id, 'sessionID': session_id, 'role': 'user',
+                  'time': {'created': timestamp}, 'agent': 'build',
+                  'model': {'providerID': 'openai', 'modelID': 'gpt-4o'}},
+         'parts': [{'id': user_part_id, 'sessionID': session_id,
+                    'messageID': user_message_id, 'type': 'text', 'text': user_marker,
+                    'synthetic': True}]},
+        {'info': {'id': assistant_message_id, 'sessionID': session_id, 'role': 'assistant',
+                  'time': {'created': timestamp + 1, 'completed': timestamp + 2},
+                  'parentID': user_message_id, 'modelID': 'gpt-4o', 'providerID': 'openai',
+                  'mode': 'build', 'agent': 'build', 'path': {'cwd': project, 'root': project},
+                  'cost': 0, 'tokens': {'input': 0, 'output': 0, 'reasoning': 0,
+                                        'cache': {'read': 0, 'write': 0}}, 'finish': 'stop'},
+         'parts': [{'id': assistant_part_id, 'sessionID': session_id,
+                    'messageID': assistant_message_id, 'type': 'text', 'text': assistant_marker,
+                    'synthetic': True}]},
+    ]
+    import_bytes = json.dumps(export_data, separators=(',', ':')).encode()
+    require(len(exported) <= 64 * 1024 and len(import_bytes) <= 64 * 1024 and
+            dict(export_data['info']) == exported_info,
+            'synthetic OpenCode export/import document exceeded bounds or changed outer info')
+    import_path = Path(project) / ('.pigade-opencode-import-' + tag + '.json')
+    import_fd = os.open(import_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    try:
+        with os.fdopen(import_fd, 'wb') as output:
+            output.write(import_bytes)
+            output.flush()
+            os.fsync(output.fileno())
+        import_stdout, import_stderr = run_owned_opencode_command(
+            'import', str(import_path), project, env)
+    finally:
+        import_path.unlink(missing_ok=True)
+    require(session_id.encode() in import_stdout and
+            len(export_stderr) <= 8192 and len(import_stderr) <= 8192,
+            'OpenCode import command omitted the exact synthetic session identity')
+    expected_messages = export_data['messages']
+    imported = opencode_messages(port, session_id)
+    require(len(imported) == 2, 'public OpenCode import did not return exactly two messages')
+    expected_by_id = {message['info']['id']: message for message in expected_messages}
+    actual_by_id = {message.get('info', {}).get('id'): message for message in imported
+                    if isinstance(message, dict) and isinstance(message.get('info'), dict)}
+    require(actual_by_id == expected_by_id and set(actual_by_id) == set(expected_by_id),
+            'public OpenCode message list differs from the exact two synthetic imported messages')
+    return {'user_marker': user_marker, 'assistant_marker': assistant_marker,
+            'messages': expected_messages, 'export_bytes': len(exported),
+            'import_bytes': len(import_bytes), 'import_file_removed': not import_path.exists()}
+
+
+def stop_owned_group(process, expected_identity):
+    if process.poll() is not None:
+        return
+    require(process_identity(process.pid) == expected_identity and os.getpgid(process.pid) == process.pid,
+            'owned OpenCode fixture process identity changed before cleanup')
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        require(process_identity(process.pid) == expected_identity and os.getpgid(process.pid) == process.pid,
+                'owned OpenCode fixture process identity changed before bounded kill')
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=2)
+
+
+def verify_private_loopback():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
+        request = struct.pack('16sH14x', b'lo', 0)
+        response = fcntl.ioctl(control.fileno(), 0x8913, request)  # SIOCGIFFLAGS
+        flags = struct.unpack('16sH14x', response)[1]
+    # bwrap brings up lo before dropping setup privileges. Observe it without
+    # trying to reconfigure an interface or granting the fixture capabilities.
+    require(flags & 1 and flags & 8, 'private OpenCode loopback is not up/loopback')
+
+
+def private_browser_processes():
+    browser_tokens = ('firefox', 'chromium', 'chrome', 'browser', 'xdg-open')
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            name = (entry / 'comm').read_text().strip().lower()
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if any(token in name for token in browser_tokens):
+            found.append((int(entry.name), name))
+    require(len(found) <= 8, 'private browser process observation exceeds bound')
+    return sorted(found)
+
+
+def run_missing_opencode_session(project, env, port):
+    missing_id = 'ses_missingfixture20261018'
+    before = opencode_sessions(port)
+    require(missing_id not in before, 'negative OpenCode session ID unexpectedly exists')
+    master, slave = os.openpty()
+    process = None
+    identity = None
+    captured = bytearray()
+    try:
+        process = subprocess.Popen(['/usr/bin/opencode', '--session', missing_id], cwd=project,
+                                   env=env, stdin=slave, stdout=slave, stderr=slave,
+                                   close_fds=True, start_new_session=True)
+        os.close(slave); slave = -1
+        identity = process_identity(process.pid)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and process.poll() is None and len(captured) < 8192:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master, min(2048, 8192 - len(captured)))
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                captured.extend(chunk)
+        require(process.poll() is not None,
+                'OpenCode missing-session CLI did not fail before its bounded deadline')
+        status = process.wait(timeout=1)
+        text = bytes(captured).decode('utf-8', errors='replace')
+        require(status != 0 and '█' not in text and len(captured) <= 8192,
+                'OpenCode missing-session CLI entered TUI or unexpectedly succeeded')
+        after = opencode_sessions(port)
+        require(set(after) == set(before),
+                'failed OpenCode missing-session invocation created a public session')
+        return {'missing_session_id': missing_id, 'exit_status': status,
+                'failed_before_tui': True, 'public_session_list_unchanged': True,
+                'bounded_output_bytes': len(captured), 'tui_block_glyph_absent': True}
+    finally:
+        if process is not None and process.poll() is None:
+            if identity is None:
+                identity = process_identity(process.pid)
+            stop_owned_group(process, identity)
+        os.close(master)
+        if slave >= 0:
+            os.close(slave)
+
+
+def run_opencode_resume_fixture(config, report, app, env, artifacts, save):
+    report['stage'] = 'opencode-public-session-create-and-bind'
+    save()
+    session, generation, project = (report['opencode'][key]
+                                    for key in ('session', 'generation', 'cwd'))
+    baseline_generations = fixture_generations()
+    baseline_catalog = host_request({'command': 'catalog'})['catalog']
+    baseline_layout = baseline_catalog['layout']
+    baseline_identities = sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                                 for view in host_request({'command': 'list'}).get('views', []))
+    require(len(baseline_identities) <= 32 and
+            all(type(pid) is int and pid > 0 for _, _, pid in baseline_identities),
+            'OpenCode resume baseline omitted a process identity')
+    baseline_plans = prepared_launches_read_only()
+    port_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    port_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    port_socket.bind(('127.0.0.1', 0))
+    port = port_socket.getsockname()[1]
+    port_socket.close()
+    server_env = {'PATH': '/usr/bin', 'HOME': '/home/pigade',
+                  'XDG_RUNTIME_DIR': '/run/pigade-test', 'TMPDIR': '/tmp', 'LC_ALL': 'C.utf8'}
+    server = start_process(['/usr/bin/opencode', 'serve', '--hostname', '127.0.0.1',
+                            '--port', str(port), '--no-mdns'], env=server_env,
+                           name='opencode-public-session-server', cwd=project)
+    server_identity = process_identity(server.pid)
+    try:
+        browser_baseline = private_browser_processes()
+        require(not browser_baseline, 'private OpenCode fixture unexpectedly has a browser process')
+        def api_ready():
+            if server.poll() is not None:
+                raise RuntimeError('private loopback OpenCode server exited during startup')
+            try:
+                return opencode_api(port, 'GET', '/global/health', timeout=0.5)
+            except (OSError, RuntimeError, json.JSONDecodeError):
+                return None
+        health = wait_until(api_ready, time.monotonic() + 8, interval=0.1)
+        require(isinstance(health, dict), 'OpenCode public health response is invalid')
+        baseline_sessions = opencode_sessions(port)
+        title = 'PigADE exact-session fixture ' + uuid.uuid4().hex[:12]
+        created = opencode_api(port, 'POST', '/session', {'title': title})
+        conversation_id = created.get('id') if isinstance(created, dict) else None
+        require(isinstance(conversation_id, str) and
+                re.fullmatch(r'ses_[A-Za-z0-9_-]{1,252}', conversation_id) and
+                conversation_id not in baseline_sessions,
+                'OpenCode public API did not create one exact new synthetic session')
+        public_sessions = opencode_sessions(port)
+        require(set(public_sessions) == set(baseline_sessions) | {conversation_id} and
+                public_sessions[conversation_id].get('title') == title,
+                'OpenCode public session list differs from the single synthetic addition')
+        synthetic_exchange = import_synthetic_opencode_exchange(
+            port, conversation_id, title, project, server_env)
+        require(fixture_generations() == baseline_generations,
+                'creating a public OpenCode session changed terminal generations')
+        require(host_request({'command': 'bind_conversation', 'session': session,
+                              'generation': generation, 'conversation_id': conversation_id,
+                              'expected_revision': 0}).get('launch_preview', {}).get(
+                                  'conversation', {}).get('conversation_id') == conversation_id,
+                'host did not bind the exact public OpenCode session to its initial generation')
+        before_stop = fixture_session_models(session).get(generation)
+        require(before_stop and before_stop.get('state') == 'running',
+                'bound OpenCode generation stopped before explicit host stop')
+        stop = host_request({'command': 'stop', 'session': session, 'generation': generation})
+        require(stop.get('error') is None, 'host rejected stop for the exact OpenCode generation')
+        stopped_models = wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+            generation, {}).get('state') == 'exited' else None), time.monotonic() + 8)
+        time.sleep(0.15)
+        stopped_models = fixture_session_models(session)
+        old_frame = stopped_models[generation].get('frame')
+        require(old_frame is not None and fixture_generations() == baseline_generations,
+                'stopping OpenCode changed source generation history unexpectedly')
+        baseline_catalog = host_request({'command': 'catalog'})['catalog']
+        require(baseline_catalog['layout'] == baseline_layout,
+                'stopping OpenCode changed its catalog layout')
+        plans_before_resume = prepared_launches_read_only()
+        prepared = host_request({'command': 'prepare_resume', 'session': session}).get('launch_preview')
+        require(isinstance(prepared, dict) and prepared.get('session') == session and
+                prepared.get('generation') != generation and prepared.get('can_launch') is True and
+                prepared.get('provider') == 'opencode' and prepared.get('cli_version') == '1.19.3' and
+                prepared.get('deliver_context') is False and
+                (prepared.get('resume') or {}).get('binding', {}).get('conversation_id') == conversation_id,
+                'OpenCode exact-ID resume preview differs from its frozen source binding')
+        require(fixture_generations() == baseline_generations,
+                'PrepareResume created a process before explicit start')
+        prepared_after = prepared_launches_read_only()
+        added_plan_ids = set(prepared_after) - set(plans_before_resume)
+        require(len(added_plan_ids) == 1, 'PrepareResume did not save exactly one frozen plan')
+        resume_plan_id = next(iter(added_plan_ids))
+        plan = prepared_after[resume_plan_id]
+        require(plan['phase'] == 'prepared' and
+                plan['payload'].get('launch', {}).get('args') == ['--session', conversation_id] and
+                plan['payload'].get('launch', {}).get('env', {}) == {},
+                'OpenCode resume plan contains arguments beyond exact --session ID')
+        require(set(plans_before_resume) == set(baseline_plans),
+                'OpenCode initial launch plan set changed before PrepareResume')
+        old_generation_plan = baseline_plans.get(report['opencode']['plan_id'])
+        require(old_generation_plan is not None and
+                old_generation_plan['payload'].get('launch', {}).get('args') == [] and
+                old_generation_plan['payload'].get('launch', {}).get('cwd') == project,
+                'OpenCode initial launch plan has unexpected source arguments or cwd')
+        require(host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+                'PrepareResume changed catalog placement or layout history')
+        time.sleep(0.2)
+        helper_call(config, 'capture', '/artifacts/opencode-resume-review.ppm')
+        require(0 < (artifacts / 'opencode-resume-review.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'OpenCode resume review capture exceeds bound')
+        started = host_request({'command': 'start_prepared', 'plan_id': resume_plan_id})
+        require(started.get('error') is None, 'StartPrepared rejected the reviewed OpenCode exact-ID plan')
+        new_generation = prepared['generation']
+        assistant_marker = synthetic_exchange['assistant_marker']
+        # `running` acknowledges exec, not completion of the native TUI's
+        # asynchronous session/history fetch. Wait for its actual cell receipt.
+        resumed_view = wait_until(lambda: (view if (view := fixture_session_models(session)).get(
+            new_generation, {}).get('state') == 'running' and assistant_marker in view_text(
+                view[new_generation]) else None), time.monotonic() + 12)
+        view = resumed_view[new_generation]
+        require(fixture_generations() == sorted(baseline_generations + [(session, new_generation)]),
+                'OpenCode resume created an extra generation or changed another process')
+        final_models = fixture_session_models(session)
+        require(set(final_models) == {generation, new_generation} and
+                final_models[generation].get('frame') == old_frame,
+                'OpenCode resume changed the source frame or created another generation')
+        identities_after = sorted((item.get('session'), item.get('generation'), item.get('pid'))
+                                  for item in host_request({'command': 'list'}).get('views', []))
+        require(len(identities_after) == len(baseline_identities) + 1 and
+                set(baseline_identities).issubset(set(identities_after)) and
+                identities_after.count((session, new_generation, view.get('pid'))) == 1,
+                'OpenCode resume did not add exactly one unique process identity')
+        require(host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+                'OpenCode resume changed current layout placement')
+        generation_history = fixture_generation_list(session)
+        require(generation_history.get('head') == new_generation and
+                {item.get('generation') for item in generation_history.get('entries', [])} ==
+                {generation, new_generation}, 'OpenCode resume did not retain exact source history')
+        pid = view.get('pid')
+        cmdline = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        if cmdline and cmdline[-1] == b'':
+            cmdline.pop()
+        decoded_cmdline = [item.decode('utf-8', errors='strict') for item in cmdline]
+        require(decoded_cmdline == ['/usr/bin/opencode', '--session', conversation_id],
+                'resumed OpenCode process argv is not exactly --session plus the bound ID')
+        public_after_resume = opencode_sessions(port)
+        require(set(public_after_resume) == set(public_sessions) and
+                public_after_resume[conversation_id].get('title') == title,
+                'OpenCode resume changed public session identity or created another session')
+        messages_after_resume = opencode_messages(port, conversation_id)
+        require(len(messages_after_resume) == 2,
+                'OpenCode resume changed the number of synthetic messages')
+        expected_by_id = {message['info']['id']: message
+                          for message in synthetic_exchange['messages']}
+        actual_by_id = {message.get('info', {}).get('id'): message for message in messages_after_resume
+                        if isinstance(message, dict) and isinstance(message.get('info'), dict)}
+        require(actual_by_id == expected_by_id and set(actual_by_id) == set(expected_by_id),
+                'OpenCode resume changed or duplicated the exact imported synthetic messages')
+        require(assistant_marker in view_text(view),
+                'resumed OpenCode TUI cells do not show the synthetic imported assistant response')
+        title_visible = title in view_text(view)
+        require(title_visible or conversation_id in decoded_cmdline,
+                'resumed TUI has no exact public session ID/title evidence')
+        time.sleep(0.3)
+        helper_call(config, 'capture', '/artifacts/opencode-resumed-session.ppm')
+        require(0 < (artifacts / 'opencode-resumed-session.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'OpenCode resumed session capture exceeds bound')
+        negative = run_missing_opencode_session(project, server_env, port)
+        require(private_browser_processes() == browser_baseline,
+                'OpenCode exact-session or missing-ID flow spawned a browser')
+        require(app.poll() is None and server.poll() is None,
+                'PigADE or private OpenCode server exited during exact-ID resume fixture')
+        final_catalog = host_request({'command': 'catalog'})['catalog']
+        require(final_catalog['layout'] == baseline_layout,
+                'negative OpenCode lookup changed saved placement or undo history')
+        report['opencode'].update({
+            'public_server': '127.0.0.1 loopback only', 'public_api_operations': [
+                'GET /global/health', 'GET /session', 'POST /session', 'GET /session',
+                'GET /session/{id}/message'],
+            'public_metadata_directory': '/home/pigade/.local/share/opencode',
+            'synthetic_conversation_id': conversation_id, 'synthetic_session_title': title,
+            'synthetic_user_message_marker': synthetic_exchange['user_marker'],
+            'synthetic_assistant_response_marker': assistant_marker,
+            'public_export_initially_empty': True, 'public_import_exact_two_messages': True,
+            'synthetic_fixture_not_provider_output': True,
+            'export_bytes': synthetic_exchange['export_bytes'],
+            'import_bytes': synthetic_exchange['import_bytes'],
+            'import_file_removed': synthetic_exchange['import_file_removed'],
+            'public_messages_unchanged_after_resume': True,
+            'source_plan_id': report['opencode']['plan_id'], 'resume_plan_id': resume_plan_id,
+            'bound_source_generation': generation, 'resumed_generation': new_generation,
+            'resume_arguments_exact': ['--session', conversation_id],
+            'resume_context_or_prompt_arguments': False, 'resume_prepare_created_no_process': True,
+            'initial_and_resumed_generations_retained': True, 'source_frame_unchanged': True,
+            'public_session_list_unchanged_after_resume': True,
+            'resumed_title_visible_in_cells': title_visible,
+            'resumed_synthetic_response_visible_in_cells': True,
+            'resumed_exact_id_visible_in_process_argv': conversation_id in decoded_cmdline,
+            'missing_session_negative': negative,
+            'captures': ['opencode-logo-before.ppm', 'opencode-input-after.ppm',
+                         'opencode-resume-review.ppm', 'opencode-resumed-session.ppm'],
+            'task_sent': False, 'provider_auth_or_private_db_access': False,
+            'private_browser_processes': browser_baseline,
+            'no_browser_or_host_desktop_access': True,
+        })
+        save()
+    finally:
+        stop_owned_group(server, server_identity)
 
 
 def wait_for_private_xim(config: dict, timeout: float = 8.0) -> dict:
@@ -2553,14 +3047,15 @@ def _drain_log(stream, path, process_name):
                               'truncated_at_bytes': LOG_LIMIT, 'stream_sha256': digest.hexdigest()})
 
 
-def start_process(argv, *, env=None, pass_fds=(), name=None, stdout=subprocess.PIPE):
+def start_process(argv, *, env=None, pass_fds=(), name=None, stdout=subprocess.PIPE, cwd=None):
     Path('/artifacts/logs').mkdir(mode=0o700, exist_ok=True)
     process_name = name or Path(argv[0]).name
     safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', process_name)[:48]
     log_path = Path('/artifacts/logs') / f'{safe_name}-{uuid.uuid4().hex[:8]}.log'
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout,
                                stderr=subprocess.STDOUT if stdout == subprocess.PIPE else subprocess.DEVNULL,
-                               close_fds=True, start_new_session=True, env=env, pass_fds=pass_fds)
+                               close_fds=True, start_new_session=True, env=env, pass_fds=pass_fds,
+                               cwd=cwd)
     if stdout == subprocess.PIPE:
         thread = threading.Thread(target=_drain_log, args=(process.stdout, log_path, safe_name),
                                   daemon=True)
@@ -2917,6 +3412,8 @@ def inside_run() -> int:
         for path in ('/run/user', '/tmp/.X11-unix', '/dev/input', '/dev/uinput', '/dev/dri',
                      '/dev/nvidia0', '/dev/nvidiactl'):
             require(not Path(path).exists(), f'host runtime/device path exposed: {path}')
+        if config.get('fixture') == 'opencode':
+            verify_private_loopback()
         route_rows = Path('/proc/net/route').read_text().splitlines()[1:]
         ipv6_route_rows = Path('/proc/net/ipv6_route').read_text().splitlines()
         require(all(row.split()[0] == 'lo' for row in route_rows), 'network namespace has a non-loopback IPv4 route')
@@ -2932,7 +3429,8 @@ def inside_run() -> int:
                                'project_parent_default': '/home/pigade',
                                'private_home_projects_directory_absent': True,
                                'network_interfaces': sorted(netdev_names),
-                               'non_loopback_routes': 0}
+                               'non_loopback_routes': 0,
+                               'private_loopback_enabled_for_fixture': config.get('fixture') == 'opencode'}
         report['stage'] = 'xvfb-start'
         save()
         private_x_socket_dir = Path('/tmp/.X11-unix')
@@ -3293,7 +3791,9 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
-                 ['opencode-logo-before.ppm', 'opencode-input-after.ppm'] if args.fixture == 'opencode' else
+                 ['opencode-logo-before.ppm', 'opencode-input-after.ppm',
+                  'opencode-resume-review.ppm', 'opencode-resumed-session.ppm']
+                 if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
         'limits': ['one fixed local X11 keyboard/IME/context/memory-review/generation-history/resume/text-history/OpenCode/panel-controls/pointer-layout fixture only',
@@ -3322,7 +3822,7 @@ def plan(args) -> dict:
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, and open/refresh private workspace Git',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
-                  'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',
+                  'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, and missing-ID pre-TUI negative check',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',

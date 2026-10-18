@@ -43,7 +43,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/launch.rs, catalog.rs | Schema7 launch-order ordinals allocated with intent/lock, indexed exclusive-cursor pages, durable pre-v7 backups and per-pane generation pins in WindowState |
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
 | crates/session-host/src/prepared.rs | Review/start/session-context and explicit PrepareResume routes; frozen binding/context/cwd, unchanged exited-head checks and one durable attempt; resumed generations preserve layout |
-| crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1 resume argv; other resume versions remain unsupported |
+| crates/session-host/src/resume_probe.rs, opencode_resume.rs | Bounded asynchronous exact-ID OpenCode metadata preflight through authenticated pure loopback server; frozen binding/head/executable/directory identity, no provider transcript parsing or IPC-supplied permit |
+| crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1/OpenCode1.19.3 resume argv; unknown versions remain generic |
 | crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |
 | crates/session-host/tests/project_setup.rs | Real IPC create/reopen, existing-target preservation and bounded provider-version fixture |
 | crates/app/src/chrome.rs, assets/icons | Shared neutral/lavender chrome palette and embedded original16-icon SVG family; terminal ANSI palette is separate |
