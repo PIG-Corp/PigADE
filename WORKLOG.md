@@ -4621,3 +4621,11 @@ Finalize Ctrl+Enter regression and visible refusal feedback
 - Files: WORKLOG.md
 - Verification: Final release build exits0 (1m39s); final app363 tests and strictClippy pass, version0.0.1-dev aligned and diff clean. Private X11 setup01 passed actual CtrlReturn single shell on prior release; changed source only adds refusal/notice display, does not change launch dispatch. Original user Wayland symptom remains unconfirmed.
 - Risks / next: Commit coherent block; running user window remains untouched. Continue exact-screen shortcut investigation when clarification arrives and preserve broad BridgeMind product goal.
+
+## 2026-10-18T08:26:32+00:00 — /root
+
+Correct final Ctrl+Enter build duration in prior history entry
+
+- Files: WORKLOG.md
+- Verification: Authoritative /tmp/pigade-ctrl-enter-build.log reports Finished release in35.69s, not1m39s stated in the preceding entry. Build exit0 and other recorded results are unchanged.
+- Risks / next: Original live Wayland shortcut cause remains unconfirmed; pending exact-screen clarification. Broad product goal remains active.
