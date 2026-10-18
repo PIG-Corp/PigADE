@@ -17,6 +17,7 @@ use crate::agent_profile::{
     AgentProfile, AgentProfileDelete, MAX_AGENT_PROFILE_SETTINGS_BYTES, MAX_AGENT_PROFILES,
     validate_agent_profile_settings,
 };
+use crate::prompt::{MAX_PROMPTS, Prompt, PromptDelete, delete_prompt, read_prompts, write_prompt};
 
 const MAX_PROJECTS: usize = 256;
 const MAX_WORKSPACES: usize = 4096;
@@ -272,6 +273,9 @@ pub struct Catalog {
     /// `None` means the connected host predates agent profile support.
     #[serde(default)]
     pub agent_profiles: Option<Vec<AgentProfile>>,
+    /// `None` means the connected host predates prompt library support.
+    #[serde(default)]
+    pub prompts: Option<Vec<Prompt>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -293,6 +297,10 @@ pub struct CatalogBatch {
     pub agent_profiles: Vec<CatalogWrite<AgentProfile>>,
     #[serde(default)]
     pub remove_agent_profiles: Vec<AgentProfileDelete>,
+    #[serde(default)]
+    pub prompts: Vec<CatalogWrite<Prompt>>,
+    #[serde(default)]
+    pub remove_prompts: Vec<PromptDelete>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionConflict {
@@ -474,6 +482,10 @@ fn apply_catalog_batch(
         batch.remove_agent_profiles.len() <= MAX_AGENT_PROFILES,
         "too many agent profile deletions"
     );
+    ensure!(
+        batch.prompts.len() <= MAX_PROMPTS && batch.remove_prompts.len() <= MAX_PROMPTS,
+        "too many prompt writes or deletions"
+    );
     unique_ids(batch.layout_templates.iter().map(|write| write.value.id))?;
     unique_ids(batch.remove_layout_templates.iter().map(|delete| delete.id))?;
     ensure!(
@@ -491,6 +503,15 @@ fn apply_catalog_batch(
             .iter()
             .any(|delete| delete.id == write.value.id)),
         "agent profile cannot be written and deleted in one batch"
+    );
+    unique_ids(batch.prompts.iter().map(|write| write.value.id))?;
+    unique_ids(batch.remove_prompts.iter().map(|delete| delete.id))?;
+    ensure!(
+        batch.prompts.iter().all(|write| !batch
+            .remove_prompts
+            .iter()
+            .any(|delete| delete.id == write.value.id)),
+        "prompt cannot be written and deleted in one batch"
     );
     unique_ids(batch.projects.iter().map(|write| write.value.id))?;
     unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
@@ -515,6 +536,12 @@ fn apply_catalog_batch(
     }
     for delete in batch.remove_agent_profiles {
         delete_agent_profile(tx, delete)?;
+    }
+    for write in batch.prompts {
+        write_prompt(tx, write.value, write.expected_revision)?;
+    }
+    for delete in batch.remove_prompts {
+        delete_prompt(tx, delete)?;
     }
     if let Some(write) = batch.selection {
         write_selection(tx, write)?;
@@ -1065,6 +1092,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
       COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))+COALESCE(length(CAST(launches_json AS BLOB)),0)) FROM layout_templates),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(settings_json AS BLOB))) FROM agent_profiles),0)+
+      COALESCE((SELECT SUM(length(CAST(title AS BLOB))+length(CAST(content AS BLOB))) FROM prompt_records WHERE deleted=0),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))) FROM pane_labels),0)",[],|row|row.get(0))?;
     ensure!(
         bytes <= MAX_MANIFEST_BYTES,
@@ -1234,6 +1262,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         template_launch_schema: Some(1),
         pane_labels: Some(read_pane_labels(connection, pane_label_count)?),
         agent_profiles: Some(read_agent_profiles(connection, agent_profile_count)?),
+        prompts: Some(read_prompts(connection)?),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1396,7 +1425,9 @@ mod tests {
         }
         {
             let connection = Connection::open(&path)?;
-            connection.execute_batch("DROP TABLE agent_profiles; PRAGMA user_version=10;")?;
+            connection.execute_batch(
+                "DROP TABLE prompt_records; DROP TABLE agent_profiles; PRAGMA user_version=10;",
+            )?;
         }
         let store = MetadataStore::open(&path)?;
         let catalog = store.catalog()?;
@@ -1409,12 +1440,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            11
+            12
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-10 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v11."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1424,6 +1455,65 @@ mod tests {
         assert_eq!(
             backup.query_row::<usize, _, _>(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_profiles'",
+                [],
+                |row| row.get(0),
+            )?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schema_v11_migration_adds_prompt_library_and_preserves_catalog_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let profile_id = Uuid::new_v4();
+        {
+            let mut store = MetadataStore::open(&path)?;
+            store.apply_catalog(CatalogBatch {
+                agent_profiles: vec![CatalogWrite {
+                    value: profile(profile_id, 0, "codex"),
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            })?;
+        }
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch("DROP TABLE prompt_records; PRAGMA user_version=11;")?;
+        }
+        let store = MetadataStore::open(&path)?;
+        let catalog = store.catalog()?;
+        assert_eq!(catalog.prompts, Some(Vec::new()));
+        assert_eq!(catalog.agent_profiles.unwrap()[0].id, profile_id);
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            12
+        );
+        let backup_path = store
+            .migration_backup_path()
+            .context("schema-11 backup absent")?;
+        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            11
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_profiles'",
+                [],
+                |row| row.get(0),
+            )?,
+            1
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='prompt_records'",
                 [],
                 |row| row.get(0),
             )?,
@@ -2354,7 +2444,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            11
+            12
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -2449,7 +2539,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                11
+                12
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

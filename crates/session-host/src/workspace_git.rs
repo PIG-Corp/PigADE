@@ -992,6 +992,7 @@ mod tests {
             template_launch_schema: Some(1),
             pane_labels: Some(Vec::new()),
             agent_profiles: None,
+            prompts: None,
         };
         assert!(target(&catalog, workspace_id, 3).is_err());
         assert_eq!(target(&catalog, workspace_id, 4)?.workspace_revision, 4);

@@ -114,6 +114,7 @@ mod tests {
             template_launch_schema: Some(1),
             pane_labels: Some(vec![]),
             agent_profiles: None,
+            prompts: None,
         }
     }
 

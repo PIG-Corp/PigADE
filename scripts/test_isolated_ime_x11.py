@@ -42,6 +42,38 @@ class IsolatedImePlanTests(unittest.TestCase):
                                                  '--diagnostic-publication-trace'])
         self.assertEqual(IME.app_command('arbitrary'), IME.app_command())
 
+    def test_context_prompt_flow_is_fixed_plan_only_and_never_targets_terminal_input(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'context']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'context')
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        self.assertIn('Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft',
+                      plan['input']['context'])
+        self.assertIn('no terminal input', plan['input']['context'])
+
+        source = Path(__file__).with_name('x11-ime-input.c').read_text()
+        harness = SCRIPT.read_text()
+        stages = ('context-close', 'prompts-open', 'prompt-new', 'prompt-create-fields',
+                  'prompt-save', 'prompt-select-first', 'prompt-edit', 'prompt-rename',
+                  'prompt-save-edit', 'prompt-close', 'prompt-insert-open', 'prompt-use-first',
+                  'prompt-delete', 'prompt-delete-cancel', 'prompt-confirm-delete')
+        for stage in stages:
+            self.assertIn(f'"{stage}"', source)
+            self.assertIn(f"helper_call(config, '{stage}'", harness)
+        self.assertIn("'revision') == 1", harness)
+        self.assertIn("'revision') == 2", harness)
+        self.assertIn("'instructions'] == appended", harness)
+        self.assertIn("fixture_journal_hashes([generation]) == baseline_journal", harness)
+        context_flow = harness.split('def run_context_fixture(', 1)[1].split(
+            '\ndef run_latency_fixture(', 1)[0]
+        self.assertNotIn('control.sendall', context_flow)
+        self.assertIn("'context-prompt-inserted.ppm'", harness)
+        self.assertIn("'context-prompt-delete-review.ppm'", harness)
+
     def test_private_host_rejection_reports_bounded_escaped_protocol_error(self):
         reader, writer = socket.socketpair()
         try:

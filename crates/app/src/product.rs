@@ -20,6 +20,8 @@ mod git_status_ui;
 mod navigation_ui;
 #[path = "profile_ui.rs"]
 mod profile_ui;
+#[path = "prompt_ui.rs"]
+mod prompt_ui;
 #[path = "session_control_ui.rs"]
 mod session_control_ui;
 #[path = "template_ui.rs"]
@@ -30,6 +32,14 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenPrompts,
+    ReloadPrompts,
+    NewPrompt,
+    EditPrompt(Uuid),
+    DeletePrompt(Uuid),
+    UsePrompt(Uuid),
+    CopyPrompt(Uuid),
+    SaveDraftAsPrompt,
     OpenAgentProfiles,
     ReloadAgentProfiles,
     NewAgentProfile,
@@ -137,6 +147,9 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    Prompts,
+    Prompt,
+    DeletePrompt,
     AgentProfiles,
     AgentProfile,
     DeleteAgentProfile,
@@ -177,6 +190,9 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Prompts => "Библиотека промптов",
+            Self::Prompt => "Сохранённый промпт",
+            Self::DeletePrompt => "Удалить промпт?",
             Self::AgentProfiles => "Профили агентов",
             Self::AgentProfile => "Настройки профиля",
             Self::DeleteAgentProfile => "Удалить профиль?",
@@ -217,6 +233,8 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Prompts | Self::DeletePrompt => &[],
+            Self::Prompt => &["Название", "Текст промпта"],
             Self::AgentProfiles | Self::DeleteAgentProfile => &[],
             Self::AgentProfile => &["Название профиля", "Роль", "Инструкции"],
             Self::WorkspaceGit => &[],
@@ -257,6 +275,9 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::Prompts => "Готово",
+            Self::Prompt => "Сохранить промпт",
+            Self::DeletePrompt => "Удалить промпт",
             Self::AgentProfiles => "Готово",
             Self::AgentProfile => "Сохранить профиль",
             Self::DeleteAgentProfile => "Удалить профиль",
@@ -328,6 +349,9 @@ pub(super) struct ProductUi {
     pub(super) management_target: Option<crate::catalog_flow::ManagedEntity>,
     pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
     pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
+    pub(super) prompt_editor: Option<crate::prompt_flow::PromptEditor>,
+    pub(super) prompt_delete: Option<pigade_storage::Prompt>,
+    pub(super) prompt_origin: Option<Dialog>,
     pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
     pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
     pub(super) recipe_editor: Option<crate::template_flow::RecipeEditor>,
@@ -495,6 +519,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Управление панелями", ProductAction::OpenPaneMenu),
         ("Переименовать панель", ProductAction::RenamePane),
         ("Контекст воркспейса · E", ProductAction::EditContext),
+        ("Библиотека промптов · prompts", ProductAction::OpenPrompts),
         (
             "Контекст проекта · Shift+E",
             ProductAction::EditProjectContext,
@@ -776,6 +801,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::ProjectContext => true,
         DialogKind::LaunchReview => index == 1,
         DialogKind::AgentProfile => index > 0,
+        DialogKind::Prompt => index == 1,
         DialogKind::RecipeSlot => true,
         DialogKind::History => index == 1,
         _ => false,
@@ -930,6 +956,7 @@ impl ProductUi {
                 ("Обновить".into(), ProductAction::RefreshWorkspaceGit),
                 ("Закрыть".into(), ProductAction::CloseDialog),
             ],
+            Some(DialogKind::Prompts) => self.prompt_menu_entries(),
             Some(DialogKind::AgentProfiles) => self.profile_menu_entries(),
             Some(DialogKind::Sessions) => self.session_menu_entries(),
             Some(DialogKind::StopSession) => self.stop_menu_entries(),
@@ -2647,6 +2674,36 @@ impl ProductUi {
 
         fields = self.template_dialog_fields(dialog, fields, cx);
         fields = self.profile_dialog_fields(dialog, fields, cx);
+        fields = self.prompt_dialog_fields(dialog, fields, cx);
+        if crate::prompt_flow::accepts_prompt(dialog) {
+            fields = fields.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.action_control(
+                        "open-prompts-in-draft".into(),
+                        "Промпты · Ctrl+Shift+P".into(),
+                        ProductAction::OpenPrompts,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    ))
+                    .child(self.action_control(
+                        "save-draft-prompt".into(),
+                        "Сохранить текст · Ctrl+Shift+B".into(),
+                        ProductAction::SaveDraftAsPrompt,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    )),
+            );
+        }
 
         if dialog.kind == DialogKind::CreateProject {
             fields = fields.child(self.action_control(

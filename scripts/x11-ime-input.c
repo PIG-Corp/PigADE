@@ -74,7 +74,15 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "commit") && strcmp(a.stage, "capture") &&
         strcmp(a.stage, "keyboard") && strcmp(a.stage, "latency") &&
         strcmp(a.stage, "context-open") && strcmp(a.stage, "context-edit") &&
-        strcmp(a.stage, "context-save") && strcmp(a.stage, "memory-open") &&
+        strcmp(a.stage, "context-save") && strcmp(a.stage, "context-close") &&
+        strcmp(a.stage, "prompts-open") && strcmp(a.stage, "prompt-new") &&
+        strcmp(a.stage, "prompt-create-fields") && strcmp(a.stage, "prompt-save") &&
+        strcmp(a.stage, "prompt-select-first") && strcmp(a.stage, "prompt-edit") &&
+        strcmp(a.stage, "prompt-rename") && strcmp(a.stage, "prompt-save-edit") &&
+        strcmp(a.stage, "prompt-close") && strcmp(a.stage, "prompt-insert-open") &&
+        strcmp(a.stage, "prompt-use-first") && strcmp(a.stage, "prompt-delete") &&
+        strcmp(a.stage, "prompt-delete-cancel") && strcmp(a.stage, "prompt-confirm-delete") &&
+        strcmp(a.stage, "memory-open") &&
         strcmp(a.stage, "memory-select") && strcmp(a.stage, "generations-open") &&
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
         strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm") &&
@@ -840,6 +848,63 @@ int main(int argc, char **argv) {
             context_edit_sequence(dpy);
         } else if (!strcmp(a.stage, "context-save")) {
             modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "context-close") ||
+                   !strcmp(a.stage, "prompt-close") ||
+                   !strcmp(a.stage, "prompt-delete-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "prompts-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_p, XK_r, XK_o, XK_m, XK_p, XK_t, XK_s };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "prompt-new")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "prompt-create-fields")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_p);
+            const KeySym title_first[] = { XK_r, XK_o, XK_m, XK_p, XK_t };
+            for (size_t i = 0; i < sizeof(title_first) / sizeof(title_first[0]); ++i)
+                key(dpy, title_first[i]);
+            modified_key(dpy, XK_Shift_L, XK_f);
+            const KeySym title_last[] = { XK_i, XK_x, XK_t, XK_u, XK_r, XK_e };
+            for (size_t i = 0; i < sizeof(title_last) / sizeof(title_last[0]); ++i)
+                key(dpy, title_last[i]);
+            key(dpy, XK_Tab);
+            const KeySym body[] = { XK_r, XK_e, XK_v, XK_i, XK_e, XK_w, XK_space,
+                XK_f, XK_i, XK_x, XK_t, XK_u, XK_r, XK_e, XK_space,
+                XK_t, XK_e, XK_x, XK_t };
+            for (size_t i = 0; i < sizeof(body) / sizeof(body[0]); ++i) key(dpy, body[i]);
+        } else if (!strcmp(a.stage, "prompt-save") || !strcmp(a.stage, "prompt-save-edit")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "prompt-select-first")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "prompt-edit")) {
+            modified_key(dpy, XK_Control_L, XK_e);
+        } else if (!strcmp(a.stage, "prompt-rename")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_p);
+            const KeySym first[] = { XK_r, XK_o, XK_m, XK_p, XK_t };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym last[] = { XK_e, XK_n, XK_a, XK_m, XK_e, XK_d };
+            for (size_t i = 0; i < sizeof(last) / sizeof(last[0]); ++i) key(dpy, last[i]);
+        } else if (!strcmp(a.stage, "prompt-insert-open")) {
+            KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+            KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+            if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+                !XTestFakeKeyEvent(dpy, shift, True, CurrentTime))
+                fail("prompt insertion shortcut press failed");
+            key(dpy, XK_p);
+            if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+                !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+                fail("prompt insertion shortcut release failed");
+        } else if (!strcmp(a.stage, "prompt-use-first")) {
+            key(dpy, XK_Down);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "prompt-delete")) {
+            key(dpy, XK_Delete);
+        } else if (!strcmp(a.stage, "prompt-confirm-delete")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "memory-open")) {
             memory_open_sequence(dpy);
         } else if (!strcmp(a.stage, "memory-select")) {
@@ -1208,6 +1273,8 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "profile-delete") ? "1" :
                             !strcmp(a.stage, "profile-cancel-delete") ? "1" :
                             !strcmp(a.stage, "profile-confirm-delete") ? "1" :
+                            !strcmp(a.stage, "prompt-create-fields") ? "34" :
+                            !strcmp(a.stage, "prompt-rename") ? "15" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

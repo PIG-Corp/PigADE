@@ -4,6 +4,7 @@ use crate::navigation::{PaletteEntry, search_matches, search_score};
 
 fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
     match action {
+        ProductAction::OpenPrompts => &["prompts", "шаблоны текста", "промпты"],
         ProductAction::RenamePane => &["rename", "alias", "имя"],
         ProductAction::OpenStop => &["stop", "terminate", "остановить"],
         ProductAction::OpenWorkspaceGit => &["git", "status", "branch", "изменения"],

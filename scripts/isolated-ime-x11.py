@@ -2216,10 +2216,147 @@ def run_context_fixture(config, report, env, save):
                        time.monotonic() + 8)
     require(saved['instructions'] == expected and saved['revision'] == 1,
             'saved workspace context differs from fixed edit sequence')
+
+    session, generation = report['fixture']['session'], report['fixture']['generation']
+    baseline_generations = fixture_generations()
+    baseline_models = fixture_session_models(session)
+    baseline_view = baseline_models.get(generation)
+    require(baseline_view is not None and baseline_view.get('pid') is not None and
+            (session, generation) in baseline_generations,
+            'context prompt fixture lost its original running generation')
+    baseline_pin = fixture_panel_pin(session)
+    baseline_journal = fixture_journal_hashes([generation])
+    captures = ['context-editor.ppm']
+
+    def capture(name):
+        path = Path('/artifacts') / name
+        helper_call(config, 'capture', f'/artifacts/{name}')
+        require(0 < path.stat().st_size <= MAX_CAPTURE_BYTES,
+                f'{name} capture is empty or exceeds bound')
+        captures.append(name)
+
+    def require_live_unchanged():
+        current = fixture_session_models(session).get(generation)
+        require(fixture_generations() == baseline_generations and current is not None and
+                current.get('pid') == baseline_view.get('pid') and
+                current.get('frame') == baseline_view.get('frame') and
+                fixture_panel_pin(session) == baseline_pin and
+                fixture_journal_hashes([generation]) == baseline_journal,
+                'prompt operation changed the selected generation, live frame, PID, or PTY journal')
+
+    def current_prompts():
+        catalog = host_request({'command': 'catalog'}).get('catalog')
+        require(isinstance(catalog, dict), 'host omitted prompt fixture catalog')
+        prompts = catalog.get('prompts')
+        require(isinstance(prompts, list) and len(prompts) <= 128,
+                'host omitted supported prompt library or exceeded its bound')
+        return prompts
+
+    # Close the saved context sheet, then exercise the library only through its
+    # palette command and normal dialog keys. Every string and key is fixed here.
+    helper_call(config, 'context-close')
+    helper_call(config, 'prompts-open')
+    time.sleep(.4)
+    capture('context-prompts-empty.ppm')
+    helper_call(config, 'prompt-new')
+    time.sleep(.2)
+    helper_call(config, 'capture', '/artifacts/context-prompt-editor.ppm')
+    require(0 < Path('/artifacts/context-prompt-editor.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'prompt editor capture is empty or exceeds bound')
+    captures.append('context-prompt-editor.ppm')
+    helper_call(config, 'prompt-create-fields')
+    time.sleep(.2)
+    capture('context-prompt-editor-filled.ppm')
+    require(current_prompts() == [], 'unsaved prompt appeared in catalog before explicit save')
+    helper_call(config, 'prompt-save')
+    created_prompts = wait_until(
+        lambda: (items if len(items := current_prompts()) == 1 and
+                 items[0].get('title') == 'PromptFixture' and
+                 items[0].get('content') == 'review fixture text' and
+                 items[0].get('revision') == 1 else None),
+        time.monotonic() + 8)
+    prompt = created_prompts[0]
+    require_live_unchanged()
+    time.sleep(.2)
+    capture('context-prompts-created.ppm')
+
+    helper_call(config, 'prompt-select-first')
+    helper_call(config, 'prompt-edit')
+    time.sleep(.2)
+    capture('context-prompt-edit.ppm')
+    helper_call(config, 'prompt-rename')
+    time.sleep(.2)
+    helper_call(config, 'prompt-save-edit')
+    renamed_prompts = wait_until(
+        lambda: (items if len(items := current_prompts()) == 1 and
+                 items[0].get('id') == prompt.get('id') and
+                 items[0].get('title') == 'PromptRenamed' and
+                 items[0].get('content') == 'review fixture text' and
+                 items[0].get('revision') == 2 else None),
+        time.monotonic() + 8)
+    prompt = renamed_prompts[0]
+    require_live_unchanged()
+    time.sleep(.2)
+    capture('context-prompts-renamed.ppm')
+    helper_call(config, 'prompt-close')
+
+    # Reopen the exact saved workspace draft. Ctrl+Shift+P freezes its current
+    # selection, and Enter inserts the first library row back into that draft.
+    helper_call(config, 'context-open')
+    time.sleep(.3)
+    helper_call(config, 'prompt-insert-open')
+    time.sleep(.3)
+    capture('context-prompts-insertion-library.ppm')
+    helper_call(config, 'prompt-use-first')
+    time.sleep(.3)
+    capture('context-prompt-inserted.ppm')
+    require(get_context()['revision'] == saved['revision'],
+            'prompt insertion persisted workspace context before explicit save')
+    helper_call(config, 'context-save')
+    appended = expected + 'review fixture text'
+    inserted = wait_until(
+        lambda: (document if (document := get_context())['revision'] == saved['revision'] + 1 and
+                 document['instructions'] == appended else None),
+        time.monotonic() + 8)
+    require(inserted['instructions'] == appended and inserted['role'] == saved['role'] and
+            inserted['memory'] == saved['memory'],
+            'prompt insertion failed to append exact text or preserve role and memory')
+    require_live_unchanged()
+
+    helper_call(config, 'context-close')
+    helper_call(config, 'prompts-open')
+    helper_call(config, 'prompt-select-first')
+    helper_call(config, 'prompt-delete')
+    time.sleep(.2)
+    capture('context-prompt-delete-review.ppm')
+    helper_call(config, 'prompt-delete-cancel')
+    after_cancel = current_prompts()
+    require(len(after_cancel) == 1 and after_cancel[0].get('id') == prompt.get('id') and
+            after_cancel[0].get('revision') == 2 and get_context() == inserted,
+            'Escape from prompt deletion changed the saved prompt or inserted workspace context')
+    helper_call(config, 'prompt-select-first')
+    helper_call(config, 'prompt-delete')
+    helper_call(config, 'prompt-confirm-delete')
+    wait_until(lambda: current_prompts() == [], time.monotonic() + 8)
+    deleted_prompts = current_prompts()
+    require(deleted_prompts == [] and get_context() == inserted,
+            'confirming prompt deletion changed the saved workspace context')
+    require_live_unchanged()
+    time.sleep(.2)
+    capture('context-prompts-deleted.ppm')
     report['contextEditor'] = {
         'workspace': workspace, 'initialRevision': initial['revision'],
         'unsavedRevisionRemainedZero': True, 'savedRevision': saved['revision'],
         'savedInstructions': expected, 'editSequence': 'Pinyin commit 你好; type ab; Left; Shift+Left; replace x; undo; redo; Ctrl+Enter',
+        'prompt_id': prompt['id'], 'prompt_create_revision': 1,
+        'prompt_renamed_revision': 2, 'prompt_title_after_edit': 'PromptRenamed',
+        'prompt_content': 'review fixture text', 'prompt_inserted_exactly_once_at_frozen_cursor': True,
+        'inserted_context_revision': inserted['revision'],
+        'inserted_context_instructions': appended,
+        'role_and_memory_preserved': True, 'prompt_delete_cancel_preserved_record': True,
+        'prompt_delete_confirm_removed_record_only': True,
+        'generation_pid_frame_and_journal_unchanged': True,
+        'captures': captures,
         'privateInputMethod': active_im,
         'capture': 'context-editor.ppm', 'scope': 'private Xvfb window; isolated host metadata only',
     }
@@ -3986,7 +4123,12 @@ def outer_run(args) -> dict:
             'app_sha256': sha256(app), 'host_sha256': sha256(host),
             'helper': helper_evidence, 'fonts': fonts, 'x11_sdk': x11,
             'platform_sdk': platform, 'captures': [str(args.output / name) for name in
-                (['context-editor.ppm'] if args.fixture == 'context' else
+                (['context-editor.ppm', 'context-prompts-empty.ppm',
+                  'context-prompt-editor.ppm', 'context-prompt-editor-filled.ppm',
+                  'context-prompts-created.ppm', 'context-prompt-edit.ppm',
+                  'context-prompts-renamed.ppm', 'context-prompts-insertion-library.ppm',
+                  'context-prompt-inserted.ppm', 'context-prompt-delete-review.ppm',
+                  'context-prompts-deleted.ppm'] if args.fixture == 'context' else
                  ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else
                  ['generations-picker.ppm', 'generation-pinned-old.ppm',
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
@@ -4037,7 +4179,7 @@ def plan(args) -> dict:
         'software_renderer_sdk': str(args.platform_sdk / 'manifest.json'),
         'input': {'compose': 'fixed XTEST n,i,h,a,o sequence', 'commit': 'fixed XTEST Space',
                   'keyboard': 'fixed US/RU groups, Ctrl-C/D/Z/R/L/A, Alt-x, Left/Home/Enter',
-                  'context': 'fixed private shortcut, Pinyin commit, selection/replace/undo/redo and Ctrl+Enter',
+                  'context': 'fixed private shortcut and Pinyin editing; create/rename/delete-cancel/delete a prompt through the palette, then Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft; no terminal input',
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',

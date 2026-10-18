@@ -3209,3 +3209,35 @@ Integrate revisioned agent launch profiles, repair local palette readiness, and 
 - Files: crates/storage/src/agent_profile.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/storage/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/src/lib.rs, crates/session-host/src/catalog.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/workspace_git.rs, crates/session-host/tests/context_launch.rs, crates/session-host/tests/recovery.rs, crates/session-host/tests/template_run.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Workspace326 tests, current context5, app206, harness31 and pointer6 passed; strict locked workspace/app Clippy and release builds passed. Native profiles07 passes create/save/prepare/explicit launch/rename/delete cancel/confirm with unchanged live frame/generation/PID/tree/source. Native pointer02 passes four real shells, hover input routing, relative grab, sibling insertion, Escape/undo, unchanged processes; captures inspected. Native06 froze startup frame too early;07 requires actual TUI version/logo and retains strict equality plus diagnostic booleans. Earlier palette first Enter issue now regression-tested. Workspace fmt, first-party app fmt, py_compile/diff/version pass; app fmt --all also reports existing pinned-upstream patch formatting, left intact.
 - Risks / next: Manual runtime/chat/model/permission functions and full SPEC gates remain open. Private X11 evidence is not native Wayland certification. Preserve unrelated stress/research/GPUI dirt and stash0; never active-desktop automation.
+
+## 2026-10-18T00:59:20+00:00 — /root/prompts_ui_luna
+
+Add prompt library, editor note, and delete confirmation rendering
+
+- Files: crates/app/src/prompt_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/prompt_ui.rs; git diff --check -- crates/app/src/prompt_ui.rs (passed); app build not run because prompt UI integration is owned by parent lane
+- Risks / next: Parent integrates module with product.rs/main.rs and runs app verification.
+
+## 2026-10-18T01:01:24+00:00 — prompts_storage_luna
+
+Add bounded prompt library storage with CAS writes, tombstone deletes, global catalog admission and schema migration coverage
+
+- Files: crates/storage/src/prompt.rs, crates/storage/src/catalog.rs, crates/storage/src/lib.rs
+- Verification: cargo test -p pigade-storage -- --test-threads=1 (78 passed); cargo clippy -p pigade-storage --all-targets -- -D warnings; rustfmt --edition 2024 --check on owned Rust files; git diff --check
+- Risks / next: Schema 12 is wired by root; app and host integration remains root-owned.
+
+## 2026-10-18T01:03:42+00:00 — /root/prompts_ui_luna
+
+Extend isolated context fixture with bounded prompt library CRUD and frozen-draft insertion flow
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py (passed); python3 scripts/isolated-ime-x11.py --compile-helper /tmp/pigade-prompt-ime-helper-v3 (passed); python3 scripts/isolated-ime-x11.py --fixture context (plan-only passed); scoped git diff --check (passed); no native fixture run per assigned scope
+- Risks / next: Root owns built-app native context fixture run and integration verification.
+
+## 2026-10-18T01:04:56+00:00 — root
+
+Ship BridgeMind prompt library with revisioned storage, frozen instruction-draft insertion and explicit copy; integrate schema12 and native workflow
+
+- Files: crates/app/src/prompt_commands.rs, crates/app/src/prompt_flow.rs, crates/app/src/prompt_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/storage/src/prompt.rs, crates/storage/src/catalog.rs, crates/storage/src/lib.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Locked workspace332/app208/harness32 tests passed; strict workspace/app Clippy, first-party fmt, diff/version checks and locked release app/host builds passed. Native /tmp/pigade-prompts-release-20261018-01 passes Pinyin editor plus prompt create/edit/exact draft insertion/context save/delete cancel/confirm, preserving original generation/PID/frame/pin and journal hash; captures inspected. Read-only Luna review found no concrete prompt-specific correctness bug. Root made explicit primary labels/target-draft note and preserved post-submit edits/late-refresh scope.
+- Risks / next: Full BridgeMind runtime/chat/approval work and SPEC platform/reboot/soak gates remain open. Private X11 workflow does not certify native Wayland, accessibility or native clipboard side effects; save-as shortcut is code-covered but not separately traversed natively. Previous goal turn was progress; leave goal active. Preserve unrelated dirt/stash0.

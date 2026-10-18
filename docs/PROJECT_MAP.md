@@ -9,7 +9,9 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
 | crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
-| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema11, launch locks, catalog CAS, optional template launch settings, durable template runs and CAS pane aliases |
+| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema12, launch locks, catalog CAS, optional template launch settings, durable template runs and CAS pane aliases |
+| crates/storage/src/prompt.rs | Schema12 bounded revisioned prompts; CAS writes, UUID-preserving tombstones and idempotent exact-revision deletes, migration backup |
+| crates/app/src/prompt_flow.rs, prompt_commands.rs, prompt_ui.rs | Reusable prompt editor/library; exact draft selection/undo restoration, no terminal input, explicit clipboard copy |
 | crates/storage/src/agent_profile.rs, catalog.rs | Bounded128-entry named launch-profile library; settings-only records, revision CAS writes/deletes, schema11 durable migration backup |
 | crates/app/src/profile_flow.rs, profile_commands.rs, profile_ui.rs | Native reusable profile editor/library, exact dialog/request prepare receipts, retained post-save edits, explicit review and unchanged live sessions |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |

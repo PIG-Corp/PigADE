@@ -246,6 +246,7 @@ mod tests {
             template_launch_schema: None,
             pane_labels: None,
             agent_profiles: None,
+            prompts: None,
         };
         let target = Target::selected(&catalog).unwrap();
         let dialog = Uuid::new_v4();
