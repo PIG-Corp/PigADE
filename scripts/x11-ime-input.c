@@ -238,6 +238,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-picker-confirm") &&
         strcmp(a.stage, "pointer-tab-drop-cancel") && strcmp(a.stage, "pointer-tab-drop") &&
         strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
+        strcmp(a.stage, "pointer-workspace-drop-cancel") && strcmp(a.stage, "pointer-workspace-drop") &&
+        strcmp(a.stage, "pointer-select-first-workspace") &&
         strcmp(a.stage, "pointer-file-drop") &&
         strcmp(a.stage, "pointer-file-drop-invalid-uri") &&
         strcmp(a.stage, "pointer-file-drop-truncated") &&
@@ -281,6 +283,12 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-tab-drop-populated-preview.ppm")))
         fail("populated tab-drop preview capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-workspace-drop-cancel") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-workspace-drop-cancel.ppm")))
+        fail("workspace drop cancel requires its fixed capture");
+    if (!strcmp(a.stage, "pointer-workspace-drop") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-workspace-drop-preview.ppm")))
+        fail("workspace drop requires its fixed capture");
     if (!strcmp(a.stage, "pointer-file-drop") &&
         (!a.output || (strcmp(a.output, "/artifacts/pointer-file-drop-review-cancel.ppm") &&
                       strcmp(a.output, "/artifacts/pointer-file-drop-review-confirm.ppm"))))
@@ -783,6 +791,21 @@ static void pointer_tab_drag_begin(Display *dpy, Window app) {
         fail("tab drop button press failed");
     /* Fixed center of the second visible tab in the private four-shell fixture. */
     pointer_position(dpy, app, 405, 57);
+    XSync(dpy, False);
+}
+
+static void pointer_workspace_drag_begin(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("workspace drop requires the fixed private 1280x800 app");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+        fail("workspace drop modifier press failed");
+    pointer_position(dpy, app, 350, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+        fail("workspace drop button press failed");
+    /* Second workspace follows the selected workspace's four panel rows. */
+    pointer_position(dpy, app, 100, 300);
     XSync(dpy, False);
 }
 
@@ -2141,6 +2164,22 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_r);
         } else if (!strcmp(a.stage, "pointer-picker-confirm")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "pointer-select-first-workspace")) {
+            setup_click(dpy, app_window, 90, 135);
+        } else if (!strcmp(a.stage, "pointer-workspace-drop-cancel") ||
+                   !strcmp(a.stage, "pointer-workspace-drop")) {
+            int cancel = !strcmp(a.stage, "pointer-workspace-drop-cancel");
+            pointer_workspace_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 300000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            const char *expected = cancel ? "CANCEL\n" : "RELEASE\n";
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, expected))
+                fail("workspace drop accepts only its fixed release response");
+            pointer_drag_release(dpy, cancel);
         } else if (!strcmp(a.stage, "pointer-tab-drop-cancel") ||
                    !strcmp(a.stage, "pointer-tab-drop") ||
                    !strcmp(a.stage, "pointer-tab-drop-populated-preview")) {

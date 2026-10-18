@@ -683,6 +683,7 @@ mod tests {
             tab_close_schema: None,
             engine_options_schema: None,
             pane_tab_drop_schema: None,
+            pane_workspace_drop_schema: None,
             history_grid_schema: None,
             custom_cli_schema: None,
         });

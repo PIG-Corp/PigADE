@@ -55,6 +55,7 @@ mod tiling;
 mod transfer_flow;
 mod viewport;
 mod wake_signal;
+mod workspace_drop;
 mod workspace_git;
 mod workspace_nav_store;
 mod workspace_navigation;
@@ -1036,6 +1037,8 @@ struct PaneDropPreview {
 
 #[derive(Clone)]
 struct TabDropPreview {
+    workspace_drop: Option<pigade_storage::WorkspaceDropGuard>,
+    workspace: Option<uuid::Uuid>,
     from_tab: uuid::Uuid,
     to_tab: uuid::Uuid,
     layout_revision: u64,
@@ -1080,6 +1083,8 @@ fn tab_drop_preview(
     let (command, layout) =
         pointer_layout::tab_transfer_preview(&state, from_tab, pane, to_tab, split)?;
     Some(TabDropPreview {
+        workspace_drop: None,
+        workspace: None,
         from_tab,
         to_tab,
         layout_revision: catalog.layout.revision,
@@ -1175,6 +1180,7 @@ mod focus_placement_tests {
             tab_close_schema: None,
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
+            pane_workspace_drop_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
         };
@@ -1276,6 +1282,7 @@ struct CanvasApp {
     resize_gesture: Option<ResizeGesture>,
     pane_drag: Option<PaneDrag>,
     tab_drop_bounds: std::collections::BTreeMap<uuid::Uuid, Bounds<Pixels>>,
+    workspace_drop_bounds: std::collections::BTreeMap<uuid::Uuid, Bounds<Pixels>>,
     deferred_tab_drop: Option<Arc<TabDropPreview>>,
     focus_queue: pointer_layout::FocusQueue,
     hover_focus: pointer_layout::HoverFocus,
@@ -1921,6 +1928,7 @@ impl CanvasApp {
             resize_gesture: None,
             pane_drag: None,
             tab_drop_bounds: Default::default(),
+            workspace_drop_bounds: Default::default(),
             deferred_tab_drop: None,
             focus_queue: Default::default(),
             hover_focus: Default::default(),
@@ -3257,6 +3265,9 @@ impl CanvasApp {
     fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
         if self.pane_drag.take().is_some() {
             self.product.tab_drop_target = None;
+            self.product.workspace_drop_target = None;
+            self.product.workspace_drop_invalid = None;
+            self.product.workspace_drop_notice = None;
             self.layout_preview = None;
             self.sync_panel_visibility();
             self.filter_product_views();
@@ -3303,17 +3314,57 @@ impl CanvasApp {
                 self.geometry(bounds, cell, scale, cx);
             }
         }
+        let hovered_workspace = self
+            .workspace_drop_bounds
+            .iter()
+            .find(|(_, bounds)| bounds.contains(&position))
+            .map(|(workspace, _)| *workspace);
         let tab_drop = self.pane_drag.as_ref().and_then(|drag| {
             if !drag.moved || !drag.travelled {
                 return None;
+            }
+            let catalog = self.product.catalog.as_ref()?;
+            if let Some(workspace) = hovered_workspace {
+                if let Some(previous) = &drag.tab_drop
+                    && previous.workspace == Some(workspace)
+                    && previous.layout_revision == catalog.layout.revision
+                    && previous.workspace_drop.as_ref().is_some_and(|guard| {
+                        workspace_drop::guard_matches(
+                            catalog,
+                            previous.from_tab,
+                            previous.to_tab,
+                            guard,
+                        )
+                    })
+                {
+                    return Some(previous.clone());
+                }
+                let preview = workspace_drop::preview(
+                    catalog,
+                    &self.product.workspace_navigation.config,
+                    drag.tab,
+                    drag.pane,
+                    workspace,
+                    drag.split,
+                )?;
+                return Some(Arc::new(TabDropPreview {
+                    from_tab: preview.from_tab,
+                    to_tab: preview.to_tab,
+                    workspace_drop: Some(preview.guard),
+                    workspace: Some(preview.workspace),
+                    layout_revision: preview.layout_revision,
+                    name: preview.name,
+                    command: preview.command,
+                    layout: preview.layout,
+                }));
             }
             let destination = self
                 .tab_drop_bounds
                 .iter()
                 .find(|(tab, bounds)| **tab != drag.tab && bounds.contains(&position))
                 .map(|(tab, _)| *tab)?;
-            let catalog = self.product.catalog.as_ref()?;
             if let Some(previous) = &drag.tab_drop
+                && previous.workspace.is_none()
                 && previous.to_tab == destination
                 && previous.layout_revision == catalog.layout.revision
             {
@@ -3321,7 +3372,23 @@ impl CanvasApp {
             }
             tab_drop_preview(catalog, drag.tab, drag.pane, destination, drag.split).map(Arc::new)
         });
-        self.product.tab_drop_target = tab_drop.as_ref().map(|preview| preview.to_tab);
+        self.product.tab_drop_target = tab_drop
+            .as_ref()
+            .filter(|preview| preview.workspace.is_none())
+            .map(|preview| preview.to_tab);
+        self.product.workspace_drop_target =
+            tab_drop.as_ref().and_then(|preview| preview.workspace);
+        self.product.workspace_drop_invalid = hovered_workspace.filter(|_| tab_drop.is_none());
+        self.product.workspace_drop_notice = self.product.workspace_drop_invalid.map(|id| {
+            let catalog = self.product.catalog.as_ref();
+            if catalog.is_some_and(|catalog| catalog.pane_workspace_drop_schema != Some(1)) {
+                "Этот host не поддерживает перенос мышью между воркспейсами".into()
+            } else if catalog.is_some_and(|catalog| catalog.selection.workspace_id == Some(id)) {
+                "Этот воркспейс уже открыт; выберите другую вкладку".into()
+            } else {
+                "Воркспейс недоступен или в нём нет вкладки для переноса".into()
+            }
+        });
         let drag = self.pane_drag.as_mut().expect("active pane drag");
         drag.tab_drop = tab_drop;
         let previous = drag.drop.take();
@@ -3524,6 +3591,9 @@ impl CanvasApp {
         self.deferred_placement = None;
         self.deferred_tab_drop = None;
         self.product.tab_drop_target = None;
+        self.product.workspace_drop_target = None;
+        self.product.workspace_drop_invalid = None;
+        self.product.workspace_drop_notice = None;
         self.layout_preview = None;
         self.resize_pending = None;
         self.resize_gesture = None;
@@ -3660,7 +3730,21 @@ impl CanvasApp {
         let Some(catalog) = &self.product.catalog else {
             return;
         };
-        if catalog.pane_tab_drop_schema != Some(1)
+        let workspace_valid = preview.workspace_drop.as_ref().is_none_or(|guard| {
+            let frozen = workspace_drop::Preview {
+                from_tab: preview.from_tab,
+                to_tab: preview.to_tab,
+                workspace: guard.destination_workspace,
+                layout_revision: preview.layout_revision,
+                name: preview.name.clone(),
+                command: preview.command.clone(),
+                layout: preview.layout.clone(),
+                guard: guard.clone(),
+            };
+            workspace_drop::matches(catalog, &frozen)
+        });
+        if !workspace_valid
+            || catalog.pane_tab_drop_schema != Some(1)
             || catalog.selection.tab_id != Some(preview.from_tab)
         {
             self.product.notice = Some(
@@ -3688,7 +3772,8 @@ impl CanvasApp {
                 "action": {"action":"transfer_and_activate", "pane":pane,
                     "from_tab":preview.from_tab, "to_tab":to_tab, "target":target,
                     "side":side, "split":split,
-                    "expected_selection_revision":catalog.selection.revision}
+                    "expected_selection_revision":catalog.selection.revision,
+                    "workspace_drop":preview.workspace_drop}
             }),
             cx,
         );
@@ -6125,6 +6210,9 @@ impl CanvasApp {
         {
             self.layout_preview = None;
             self.product.tab_drop_target = None;
+            self.product.workspace_drop_target = None;
+            self.product.workspace_drop_invalid = None;
+            self.product.workspace_drop_notice = None;
             self.sync_panel_visibility();
             self.filter_product_views();
             if let Some(preview) = drag.tab_drop.filter(|_| drag.travelled) {
@@ -8817,6 +8905,7 @@ impl Render for CanvasApp {
         self.service_workspace_navigation(cx);
         self.sync_prompt_library();
         self.tab_drop_bounds.clear();
+        self.workspace_drop_bounds.clear();
         self.product.refresh_activity_badges();
         let width = f32::from(window.viewport_size().width);
         self.product.compact = width < 900.;
@@ -8838,7 +8927,17 @@ impl Render for CanvasApp {
             .pane_drag
             .as_ref()
             .and_then(|drag| drag.tab_drop.as_ref())
-            .map(|preview| self.product.tab_drop_card(&preview.name, &preview.layout))
+            .map(|preview| {
+                if preview.workspace_drop.is_some() {
+                    self.product.layout_drop_card(
+                        &preview.name,
+                        &preview.layout,
+                        "CLI, исходная папка и сохранённый контекст остаются прежними",
+                    )
+                } else {
+                    self.product.tab_drop_card(&preview.name, &preview.layout)
+                }
+            })
             .or_else(|| {
                 let preview = self.pane_drag.as_ref()?.drop.as_ref()?;
                 let pigade_layout::Command::Move { side, .. } = preview.command else {
@@ -8943,8 +9042,13 @@ impl Render for CanvasApp {
             Some(drag) if drag.drop.is_some() => {
                 "Отпустите для перемещения панели · Escape — отменить".to_owned()
             }
-            Some(_) => "Здесь нельзя разместить панель · Отпустите для отмены · Escape — отменить"
-                .to_owned(),
+            Some(_) => self.product.workspace_drop_notice.as_ref().map_or_else(
+                || {
+                    "Здесь нельзя разместить панель · Отпустите для отмены · Escape — отменить"
+                        .to_owned()
+                },
+                |notice| format!("{notice} · Отпустите для отмены · Escape — отменить"),
+            ),
             None => status,
         };
         let status = match self.layout_mode {

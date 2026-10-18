@@ -43,6 +43,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
 | crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |
 | crates/app/src/transfer_flow.rs | Frozen source validation and bounded searchable Ready project/workspace/tab destination pages; shared exact empty/populated transfer construction, preserving no-follow selection |
+| crates/app/src/workspace_drop.rs | Pure cross-workspace sidebar drop preview: remembered/first exact tab, Ready/capability validation, immutable workspace/tab revision guards and command/tree equivalence before commit |
 | crates/app/src/pointer_layout.rs | Pure immediate modifier grab / 10px header threshold, nearest gutter target, relative grab retention, exact Move-tree preview and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots, temporarily polls the focus-mode remainder, and provides clipped cross-tab drop previews with atomic TransferAndActivate |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |

@@ -472,6 +472,9 @@ pub(super) struct ProductUi {
     pub(super) activity_workspace_counts: HashMap<Uuid, usize>,
     pub(super) create_project_parent_baseline: Option<String>,
     pub(super) tab_drop_target: Option<Uuid>,
+    pub(super) workspace_drop_target: Option<Uuid>,
+    pub(super) workspace_drop_invalid: Option<Uuid>,
+    pub(super) workspace_drop_notice: Option<String>,
     pub(super) transfer_source: Option<crate::transfer_flow::Source>,
     pub(super) transfer_index: usize,
     pub(super) transfer_offset: usize,
@@ -1685,8 +1688,46 @@ impl ProductUi {
                     } else {
                         title.clone()
                     };
+                    let workspace_id = workspace.id;
+                    let drop_target = self.workspace_drop_target == Some(workspace_id);
+                    let invalid_drop = self.workspace_drop_invalid == Some(workspace_id);
+                    let app = cx.entity();
+                    let drop_bounds = canvas(
+                        move |bounds, window, cx| {
+                            let clipped = bounds.intersect(&window.content_mask().bounds);
+                            app.update(cx, |this, _| {
+                                if clipped.is_empty() {
+                                    this.workspace_drop_bounds.remove(&workspace_id);
+                                } else {
+                                    this.workspace_drop_bounds.insert(workspace_id, clipped);
+                                }
+                            });
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full();
                     let mut workspace_row = div()
                         .id(format!("workspace-row-{}", workspace.id))
+                        .relative()
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(colors.sidebar)
+                        .when(drop_target || invalid_drop, |row| {
+                            row.border_color(if invalid_drop {
+                                colors.status_amber
+                            } else {
+                                colors.accent
+                            })
+                            .bg(if invalid_drop {
+                                colors.base
+                            } else {
+                                colors.selected
+                            })
+                        })
+                        .child(drop_bounds)
                         .flex()
                         .items_center()
                         .min_w_0()

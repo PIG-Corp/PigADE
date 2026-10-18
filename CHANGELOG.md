@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Sidebar workspace drop moves an existing pane into the remembered/first destination tab with an exact layout preview, atomic transfer and activation, stale workspace/tab guards and one-step placement undo. CLI process, cwd and frozen context are preserved.
+
 - Linux Git watcher and automatic selected-workspace branch/change indicator with bounded event coverage, debounce and explicit stale/partial/unavailable states. Reviewed diffs and commit plans remain frozen; old hosts keep manual Git.
 
 - Prompt library now searches titles/full text, previews exact revisions, keeps stable selection across five-row pages/refresh/edit return, and creates independent unsaved copies. Insert/copy refuses stale revisions; search Delete is ordinary editing, Ctrl+Shift+Delete opens explicit removal.

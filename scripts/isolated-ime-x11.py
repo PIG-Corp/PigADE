@@ -2775,6 +2775,115 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         return (catalog, view_state, fixture_journal_hashes(
             [generation for _, generation in current_generations]))
 
+    # Build a real second worktree, then move the existing pane through the
+    # sidebar. Only this private fixture's Git repository is changed to seed it.
+    ws_catalog = host_request({'command': 'catalog'})['catalog']
+    ws_source = next(ws for ws in ws_catalog['workspaces']
+                     if ws['id'] == ws_catalog['selection']['workspace_id'])
+    ws_project = next(project for project in ws_catalog['projects']
+                      if project['id'] == ws_source['project_id'])
+    require(Path(ws_source['cwd']).resolve(strict=True) == Path('/home/pigade/demo') and
+            mount_filesystem_type('/home') == 'tmpfs', 'worktree seed escaped private fixture')
+    git_seed = subprocess.run(['/usr/bin/git', '-C', ws_source['cwd'],
+        '-c', 'user.name=PigADE fixture', '-c', 'user.email=fixture@localhost',
+        '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+        'commit', '--allow-empty', '--no-gpg-sign', '-m', 'private workspace drop base'],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+        env={**env, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'})
+    require(git_seed.returncode == 0 and len(git_seed.stdout) + len(git_seed.stderr) <= 8192,
+            'could not seed private worktree base')
+    created_ws = host_request({'command': 'create_workspace', 'project': ws_project['id'],
+                               'task': 'Drop target', 'worktree': True}, timeout=12)['catalog']
+    ws_destination = next(ws for ws in created_ws['workspaces'] if ws['task'] == 'Drop target')
+    ws_to_tab = next(tab['id'] for tab in created_ws['tabs']
+                     if tab['workspace_id'] == ws_destination['id'])
+    require(ws_destination['status'] == 'ready' and ws_destination['mode'] == 'worktree' and
+            ws_destination['cwd'] != ws_source['cwd'] and Path(ws_destination['cwd']).is_dir(),
+            'workspace drop destination is not a distinct real worktree')
+    step('workspace-switcher-open')
+    step('workspace-switcher-refresh')
+    time.sleep(.6)
+    step('custom-review-cancel')
+    step('pointer-select-first-workspace')
+    step('pointer-select-first-tab')
+    wait_until(lambda: (catalog if catalog['selection'].get('tab_id') == tab_id and
+                        catalog['selection'].get('workspace_id') == ws_source['id'] else None)
+               if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+               time.monotonic() + 6)
+    step('pointer-hover-left')
+    time.sleep(.4)
+    ws_before = host_request({'command': 'catalog'})['catalog']
+    ws_before_source = tab_layout(ws_before, tab_id)
+    ws_before_destination = tab_layout(ws_before, ws_to_tab)
+    ws_generations = fixture_generations()
+    ws_processes = process_snapshot()
+    ws_cwds = cwd_snapshot(ws_processes)
+    ws_geometries = frame_geometries(panes)
+    ws_moved = left_pane
+    require(ws_moved in pane_ids(ws_before_source.get('root')) and
+            ws_before_destination.get('root') is None, 'workspace drop fixture is not exact')
+    ws_generation = next(generation for session, generation in ws_generations if session == ws_moved)
+    ws_pid = next(pid for session, generation, pid in ws_processes
+                  if session == ws_moved and generation == ws_generation)
+    require(len(ws_cwds) == len(ws_processes) and
+            ws_cwds[(ws_moved, ws_generation, ws_pid)] == ws_source['cwd'] and
+            ws_cwds[(ws_moved, ws_generation, ws_pid)] != ws_destination['cwd'],
+            'workspace drop omitted actual process cwd or started in the destination')
+    def session_context():
+        return host_request({'command': 'get_session_context', 'session': ws_moved,
+                             'generation': ws_generation}).get('launch_preview')
+    ws_context = session_context()
+    require(isinstance(ws_context, dict) and ws_context.get('cwd') == ws_source['cwd'],
+            'source pane has no exact frozen launch cwd')
+
+    def unchanged_workspace_hold():
+        current = host_request({'command': 'catalog'})['catalog']
+        require(current['layout'] == ws_before['layout'] and
+                current['selection'] == ws_before['selection'] and
+                tab_layout(current, tab_id) == ws_before_source and
+                tab_layout(current, ws_to_tab) == ws_before_destination and
+                frame_geometries(panes) == ws_geometries and
+                live_unchanged(ws_generations, ws_processes) and
+                cwd_snapshot(ws_processes) == ws_cwds and session_context() == ws_context,
+                'held workspace preview changed layout/selection/PTY/process/cwd/context')
+
+    held_stage('pointer-workspace-drop-cancel', 'HELD', 'CANCEL',
+               '/artifacts/pointer-workspace-drop-cancel.ppm', unchanged_workspace_hold)
+    time.sleep(.3)
+    unchanged_workspace_hold()
+    held_stage('pointer-workspace-drop', 'HELD', 'RELEASE',
+               '/artifacts/pointer-workspace-drop-preview.ppm', unchanged_workspace_hold)
+    ws_committed = wait_until(lambda: (catalog if catalog['selection'].get('workspace_id') == ws_destination['id']
+        and catalog['selection'].get('tab_id') == ws_to_tab
+        and set(pane_ids(tab_layout(catalog, ws_to_tab).get('root'))) == {ws_moved}
+        else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    ws_history_before = json.loads(ws_before['layout']['json'])
+    ws_history_after = json.loads(ws_committed['layout']['json'])
+    require(set(pane_ids(tab_layout(ws_committed, tab_id).get('root'))) ==
+            set(pane_ids(ws_before_source.get('root'))) - {ws_moved} and
+            ws_committed['layout']['revision'] == ws_before['layout']['revision'] + 1 and
+            len(ws_history_after['undo']) == len(ws_history_before['undo']) + 1 and
+            ws_history_after['undo'][-1]['before']['tabs'][tab_id] == ws_before_source and
+            ws_history_after['undo'][-1]['before']['tabs'][ws_to_tab] == ws_before_destination and
+            live_unchanged(ws_generations, ws_processes) and cwd_snapshot(ws_processes) == ws_cwds and
+            session_context() == ws_context, 'workspace drop changed identity/cwd/context or was not one exact placement')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/pointer-workspace-drop-committed.ppm')
+    step('pointer-undo')
+    ws_undone = wait_until(lambda: (catalog if tab_layout(catalog, tab_id) == ws_before_source
+        and tab_layout(catalog, ws_to_tab) == ws_before_destination else None)
+        if (catalog := host_request({'command': 'catalog'})['catalog']) else None, time.monotonic() + 8)
+    require(ws_undone['selection']['workspace_id'] == ws_destination['id'] and
+            live_unchanged(ws_generations, ws_processes) and cwd_snapshot(ws_processes) == ws_cwds and
+            session_context() == ws_context, 'workspace drop undo changed selection/process/cwd/context')
+    step('pointer-select-first-workspace')
+    step('pointer-select-first-tab')
+    wait_until(lambda: host_request({'command': 'catalog'})['catalog']['selection']['tab_id'] == tab_id,
+               time.monotonic() + 6)
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/pointer-workspace-drop-undo.ppm')
+
     def pointer_chrome_pixel(name):
         raw = (Path('/artifacts') / name).read_bytes()
         match = re.match(rb'P6\n([0-9]+) ([0-9]+)\n255\n', raw)
@@ -2985,6 +3094,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'drop_inserted_source_to_right_of_expected_target_as_horizontal_sibling': True,
         'prefix_undo_restored_exact_pre_drag_layout': True,
         'gap_drop_inserted_source_left_of_nearest_right_pane_and_undo_restored_exact_tree': True,
+        'workspace_sidebar_drop_preserved_real_worktree_cwd_and_context_and_one_step_undo': True,
         'tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes': True,
         'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination': True,
         'tab_transfer_history_contains_exact_before_and_after_for_both_tabs': True,
@@ -3004,6 +3114,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
                      'pointer-dropped.ppm', 'pointer-undo.ppm',
                      'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
+                     'pointer-workspace-drop-cancel.ppm', 'pointer-workspace-drop-preview.ppm',
+                     'pointer-workspace-drop-committed.ppm', 'pointer-workspace-drop-undo.ppm',
                      'pointer-tab-drop-cancel.ppm', 'pointer-tab-drop-preview.ppm',
                      'pointer-tab-drop-committed.ppm', 'pointer-tab-drop-undo.ppm',
                      'pointer-tab-drop-populated-before.ppm',
@@ -7581,6 +7693,8 @@ def outer_run(args) -> dict:
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
                   'pointer-undo.ppm', 'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
+                  'pointer-workspace-drop-cancel.ppm', 'pointer-workspace-drop-preview.ppm',
+                  'pointer-workspace-drop-committed.ppm', 'pointer-workspace-drop-undo.ppm',
                   'pointer-tab-drop-cancel.ppm',
                   'pointer-tab-drop-preview.ppm', 'pointer-tab-drop-committed.ppm',
                   'pointer-tab-drop-undo.ppm', 'pointer-tab-drop-populated-before.ppm',

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, ensure};
 use pigade_layout::{Command, LayoutHistory, LayoutModel, LayoutState, TabLayout};
 use pigade_storage::{
     Catalog, CatalogBatch, CatalogWrite, LayoutDocument, MetadataStore, RevisionConflict,
+    WorkspaceDropGuard,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -25,6 +26,8 @@ pub enum LayoutAction {
         side: pigade_layout::Direction,
         split: Uuid,
         expected_selection_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_drop: Option<WorkspaceDropGuard>,
     },
     Undo,
     Redo,
@@ -357,6 +360,7 @@ pub(crate) fn layout_edit(
             side,
             split,
             expected_selection_revision,
+            workspace_drop,
         } => {
             let selection = &current.selection;
             ensure!(
@@ -385,24 +389,49 @@ pub(crate) fn layout_edit(
                 model.state().pane_tab(pane) == Some(from_tab),
                 "pane is no longer in the requested source tab"
             );
-            ensure!(
-                source.workspace_id == destination.workspace_id,
-                "pane drops must stay within one workspace"
-            );
-            let workspace = current
+            validate_transfer_workspaces(&current, from_tab, to_tab)?;
+            let source_workspace = current
                 .workspaces
                 .iter()
                 .find(|workspace| workspace.id == source.workspace_id)
                 .context("pane drop workspace is missing")?;
             ensure!(
-                workspace.status == pigade_storage::WorkspaceStatus::Ready,
-                "pane drop workspace is unavailable"
-            );
-            ensure!(
-                selection.workspace_id == Some(workspace.id)
-                    && selection.project_id == Some(workspace.project_id),
+                selection.workspace_id == Some(source_workspace.id)
+                    && selection.project_id == Some(source_workspace.project_id),
                 "selected source tab workspace is inconsistent"
             );
+            let destination_workspace = current
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == destination.workspace_id)
+                .context("pane drop destination workspace is missing")?;
+            match workspace_drop {
+                None => ensure!(
+                    source_workspace.id == destination_workspace.id,
+                    "pane drops must stay within one workspace"
+                ),
+                Some(guard) => {
+                    ensure!(
+                        source_workspace.id != destination_workspace.id,
+                        "workspace drop guard requires different workspaces"
+                    );
+                    ensure!(
+                        guard.source_workspace == source_workspace.id
+                            && guard.source_revision == source_workspace.revision
+                            && guard.destination_workspace == destination_workspace.id
+                            && guard.destination_revision == destination_workspace.revision
+                            && guard.destination_tab_revision == destination.revision,
+                        "pane drop workspace revisions changed"
+                    );
+                    ensure!(
+                        current
+                            .projects
+                            .iter()
+                            .any(|project| project.id == destination_workspace.project_id),
+                        "pane drop destination project is missing"
+                    );
+                }
+            }
             let destination_layout = &model.state().tabs[&to_tab];
             ensure!(
                 match (&destination_layout.root, target) {
@@ -420,8 +449,8 @@ pub(crate) fn layout_edit(
                 split,
             })?;
             let mut next_selection = selection.clone();
-            next_selection.project_id = Some(workspace.project_id);
-            next_selection.workspace_id = Some(workspace.id);
+            next_selection.project_id = Some(destination_workspace.project_id);
+            next_selection.workspace_id = Some(destination_workspace.id);
             next_selection.tab_id = Some(to_tab);
             transfer_selection = Some(CatalogWrite {
                 value: next_selection,
@@ -1003,6 +1032,7 @@ mod tests {
                     side: Direction::Right,
                     split: id(32),
                     expected_selection_revision: before.selection.revision,
+                    workspace_drop: None,
                 },
             )?;
             assert_eq!(committed.selection.tab_id, Some(id(6)));
@@ -1030,6 +1060,172 @@ mod tests {
     }
 
     #[test]
+    fn guarded_cross_workspace_drop_is_atomic_reopenable_and_undoable() -> Result<()> {
+        for populated in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let database = directory.path().join("state.sqlite");
+            let mut store = MetadataStore::open(&database)?;
+            seed(&mut store)?;
+            let project = Project {
+                id: id(70),
+                canonical_path: "/pigade-test/other".into(),
+                git_common_dir: "/pigade-test/other/.git".into(),
+                name: "Other".into(),
+                roots: Vec::new(),
+                revision: 0,
+            };
+            let workspace = Workspace {
+                id: id(73),
+                project_id: id(70),
+                task: "Other task".into(),
+                cwd: "/pigade-test/other-worktree".into(),
+                mode: WorkspaceMode::Worktree,
+                status: WorkspaceStatus::Ready,
+                error: None,
+                context_revision: None,
+                revision: 0,
+            };
+            let mut before = apply_metadata(
+                &mut store,
+                CatalogBatch {
+                    projects: vec![new(project)],
+                    workspaces: vec![new(workspace)],
+                    tabs: vec![new(tab(6, 73))],
+                    ..CatalogBatch::default()
+                },
+            )?;
+            let mut selection = before.selection.clone();
+            selection.project_id = Some(id(1));
+            selection.workspace_id = Some(id(2));
+            selection.tab_id = Some(id(4));
+            before = store.apply_catalog(CatalogBatch {
+                selection: Some(CatalogWrite {
+                    value: selection,
+                    expected_revision: Some(before.selection.revision),
+                }),
+                ..CatalogBatch::default()
+            })?;
+            before = layout_edit(
+                &mut store,
+                before.layout.revision,
+                LayoutAction::Apply {
+                    command: Command::Insert {
+                        tab: id(4),
+                        pane: id(20),
+                        target: None,
+                        side: Direction::Right,
+                        split: id(30),
+                    },
+                },
+            )?;
+            if populated {
+                before = layout_edit(
+                    &mut store,
+                    before.layout.revision,
+                    LayoutAction::Apply {
+                        command: Command::Insert {
+                            tab: id(6),
+                            pane: id(21),
+                            target: None,
+                            side: Direction::Right,
+                            split: id(31),
+                        },
+                    },
+                )?;
+            }
+            let guard = WorkspaceDropGuard {
+                source_workspace: id(2),
+                source_revision: before
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id(2))
+                    .unwrap()
+                    .revision,
+                destination_workspace: id(73),
+                destination_revision: before
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id(73))
+                    .unwrap()
+                    .revision,
+                destination_tab_revision: find_tab(&before, 6).revision,
+            };
+            for stale in [
+                WorkspaceDropGuard {
+                    source_revision: guard.source_revision.saturating_add(1),
+                    ..guard.clone()
+                },
+                WorkspaceDropGuard {
+                    destination_revision: guard.destination_revision.saturating_add(1),
+                    ..guard.clone()
+                },
+                WorkspaceDropGuard {
+                    destination_tab_revision: guard.destination_tab_revision.saturating_add(1),
+                    ..guard.clone()
+                },
+                WorkspaceDropGuard {
+                    destination_workspace: id(999),
+                    ..guard.clone()
+                },
+            ] {
+                assert!(
+                    layout_edit(
+                        &mut store,
+                        before.layout.revision,
+                        LayoutAction::TransferAndActivate {
+                            pane: id(20),
+                            from_tab: id(4),
+                            to_tab: id(6),
+                            target: populated.then_some(id(21)),
+                            side: Direction::Right,
+                            split: id(71),
+                            expected_selection_revision: before.selection.revision,
+                            workspace_drop: Some(stale),
+                        }
+                    )
+                    .is_err()
+                );
+                let unchanged = store.catalog()?;
+                assert_eq!(unchanged.layout.revision, before.layout.revision);
+                assert_eq!(unchanged.selection, before.selection);
+            }
+            let committed = layout_edit(
+                &mut store,
+                before.layout.revision,
+                LayoutAction::TransferAndActivate {
+                    pane: id(20),
+                    from_tab: id(4),
+                    to_tab: id(6),
+                    target: populated.then_some(id(21)),
+                    side: Direction::Right,
+                    split: id(72),
+                    expected_selection_revision: before.selection.revision,
+                    workspace_drop: Some(guard),
+                },
+            )?;
+            assert_eq!(
+                (
+                    committed.selection.project_id,
+                    committed.selection.workspace_id,
+                    committed.selection.tab_id
+                ),
+                (Some(id(70)), Some(id(73)), Some(id(6)))
+            );
+            drop(store);
+            let mut store = reopen_after_test_drop(&database)?;
+            let reopened = store.catalog()?;
+            assert_eq!(
+                load_layout(&reopened)?.state().pane_tab(id(20)),
+                Some(id(6))
+            );
+            let undone = layout_edit(&mut store, reopened.layout.revision, LayoutAction::Undo)?;
+            assert_eq!(load_layout(&undone)?.state().pane_tab(id(20)), Some(id(4)));
+            assert_eq!(undone.selection.tab_id, Some(id(6)));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn stale_selection_wrong_source_cross_workspace_and_moved_target_fail_closed() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
@@ -1046,6 +1242,7 @@ mod tests {
                     side: Direction::Right,
                     split: id(33),
                     expected_selection_revision: selection_revision,
+                    workspace_drop: None,
                 },
             )
         };
@@ -1078,6 +1275,7 @@ mod tests {
                     side: Direction::Right,
                     split: id(34),
                     expected_selection_revision: before.selection.revision,
+                    workspace_drop: None,
                 },
             )
             .is_err()
@@ -1111,6 +1309,7 @@ mod tests {
                     side: Direction::Right,
                     split: id(35),
                     expected_selection_revision: archived.selection.revision,
+                    workspace_drop: None,
                 },
             )
             .is_err()

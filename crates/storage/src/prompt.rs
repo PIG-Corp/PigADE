@@ -422,6 +422,7 @@ mod tests {
             tab_close_schema: None,
             engine_options_schema: None,
             pane_tab_drop_schema: Some(1),
+            pane_workspace_drop_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
         })?;

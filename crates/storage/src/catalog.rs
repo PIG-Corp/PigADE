@@ -343,6 +343,15 @@ pub struct LayoutDocument {
     pub json: String,
     pub revision: u64,
 }
+/// Revision guard required for atomic pane drops between workspaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDropGuard {
+    pub source_workspace: Uuid,
+    pub source_revision: u64,
+    pub destination_workspace: Uuid,
+    pub destination_revision: u64,
+    pub destination_tab_revision: u64,
+}
 impl Default for LayoutDocument {
     fn default() -> Self {
         Self {
@@ -382,6 +391,9 @@ pub struct Catalog {
     /// `None` means the connected host predates atomic pane-to-tab drops.
     #[serde(default)]
     pub pane_tab_drop_schema: Option<u16>,
+    /// `None` means the connected host predates cross-workspace pane drops.
+    #[serde(default)]
+    pub pane_workspace_drop_schema: Option<u16>,
     /// Host-owned, immutable colored scrollback pages. No database migration.
     #[serde(default)]
     pub history_grid_schema: Option<u16>,
@@ -1440,6 +1452,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         tab_close_schema: Some(1),
         engine_options_schema: Some(1),
         pane_tab_drop_schema: Some(1),
+        pane_workspace_drop_schema: Some(1),
         history_grid_schema: Some(1),
         custom_cli_schema: Some(1),
     };

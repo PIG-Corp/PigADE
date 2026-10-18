@@ -5069,3 +5069,51 @@ Ship event-driven selected-workspace Git indicator with frozen review invalidati
 - Files: crates/session-host/src/workspace_git_watch.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/tests/project_setup.rs, crates/app/src/git_watch.rs, crates/app/src/git_status_ui.rs, crates/app/src/workspace_git.rs, crates/app/src/protocol.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/provider_discovery.rs, scripts/isolated-ime-x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 411 app tests;11 watcher tests incl actual Git/inotify;1 real-host IPC create/remove/reopen/no-mutation test;37 Python harness tests pass. Strict app/workspace Clippy, format/version/diff checks and release app/host binaries/examples builds pass. Final private X11 catalog run /tmp/pigade-git-watch-20261018-01 passes new watcher creation/removal and existing stage/unstage/native commit/tab-close flows with process/placement preservation. Root inspected indicator2tracked/2new then2tracked/1new without manualrefresh. Independent Luna source review found no blocker. Initial compile integration errors, unsettled initial snapshot fallback, label assertions and helper EINTR/ETXTBSY failures were fixed, not waived.
 - Risks / next: Commit coherent block; do not stage unrelated stress/research/patch dirt or stash. Large-monorepo performance, external global config/ignore updates, broad platform/a11y/recovery and complete MVP gates remain open. Manual Git remains available on old hosts; no user host/CLI/desktop changed.
+
+## 2026-10-18T11:09:44+00:00 — /root/workspace_drop_host_luna
+
+Added revision-guarded atomic cross-workspace pane drops and host coverage
+
+- Files: crates/storage/src/catalog.rs, crates/session-host/src/catalog.rs
+- Verification: git diff --check passed; rustfmt --edition 2024 applied to session-host catalog; Cargo verification intentionally left to root lane
+- Risks / next: Root to run backend tests/build and resolve any API constructor mismatches across other crates.
+
+## 2026-10-18T11:10:50+00:00 — /root/workspace_drop_model_luna
+
+Add pure cross-workspace pane drop preview and frozen guard model
+
+- Files: crates/app/src/workspace_drop.rs
+- Verification: rustfmt --edition 2024 crates/app/src/workspace_drop.rs (pass); git diff --check -- crates/app/src/workspace_drop.rs (pass); Cargo not run per root-owned app Cargo lane
+- Risks / next: Root to wire module/UI, run app Cargo checks and exercise new model tests; global layout revision remains a caller-owned deferred-commit check.
+
+## 2026-10-18T11:13:26+00:00 — /root/workspace_drop_model_luna
+
+Group preview transfer IDs to satisfy strict Clippy argument count
+
+- Files: crates/app/src/workspace_drop.rs
+- Verification: rustfmt --edition 2024 crates/app/src/workspace_drop.rs (pass); git diff --check -- crates/app/src/workspace_drop.rs (pass); Cargo not run per root-owned app Cargo lane
+- Risks / next: Root to rerun app Clippy/tests; helper now accepts transfer IDs as one tuple.
+
+## 2026-10-18T11:18:31+00:00 — /root/workspace_drop_host_luna
+
+Corrected cross-project drop fixture to create destination workspace with immutable project ownership
+
+- Files: crates/session-host/src/catalog.rs
+- Verification: git diff --check passed; Cargo test not run because root owns Cargo lane
+- Risks / next: Root to rerun failing guarded cross-workspace test and remaining backend checks.
+
+## 2026-10-18T11:18:36+00:00 — /root/workspace_drop_model_luna
+
+Correct workspace drop tests to match frozen fallback and destination preview semantics
+
+- Files: crates/app/src/workspace_drop.rs
+- Verification: crates/app/bootstrap.sh fmt --package pigade-app (pass); git diff --check -- crates/app/src/workspace_drop.rs (pass); Cargo tests not run per root-owned app lane
+- Risks / next: Root to rerun the three workspace_drop tests; failures were incorrect expected destination pane list, fallback-to-first expectation, and stale test mutating a non-target tab.
+
+## 2026-10-18T11:22:31+00:00 — root
+
+Ship guarded sidebar workspace pane drops with exact preview, atomic activation and one placement Undo
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/workspace_drop.rs, crates/app/src/activity_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_git.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 416 app tests,19 catalog tests,89 storage tests,37 Python harness tests pass; strict workspace/app Clippy, format/version/diff checks, fixed C helper compilation and release app/host binaries/examples builds pass. Final private native pointer fixture /tmp/pigade-workspace-drop-20261018-02 passes real Git worktree cancel/drop/Undo, exact unchanged generations/PIDs/all process cwd/frozen context, preview PTY sizes and existing Dwindle/tab/keyboard/IME/file-drop/clipboard flows. Root inspected final preview and run01 committed/restored captures; binaries identical in both passes. Independent Luna source review found no blocker. Initial four test expectation/fixture-owner errors were corrected before passing, not waived.
+- Risks / next: Commit coherent feature. Old hosts remain running without this capability; full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open. Preserve unrelated stress/research/unused GPUI patch dirt and stash0. Broader product goal remains active.
