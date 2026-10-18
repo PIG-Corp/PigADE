@@ -2,15 +2,16 @@
   "schema": 1,
   "upstream_commit": "322cd509dcccaee1f6bc44725d270598ae8171ad",
   "upstream_archive_sha256": "27e6a724515cb6e6fa8a456098d075bfa2a50b4f6145491105555e56de2d256d",
-  "profile": "pigade-x11-ime-focus-v2",
+  "profile": "pigade-x11-ime-focus-v3",
   "previous_files_sha256": {
-    "crates/gpui_linux/src/linux/x11/xim_handler.rs": "da9779b554c1360dcca4956f27031235e5239666e97313fa7b0283c652495115",
-    "crates/gpui_linux/src/linux/x11/client.rs": "58231306aa6d15d897d24991e09ed8df20c7910945259e67c08e1a73110e553d"
+    "crates/gpui_linux/src/linux/x11/xim_handler.rs": "7b91a6d4109622aea22ace00f452afbd7da704ac195e00cb68ee264059368f2a",
+    "crates/gpui_linux/src/linux/x11/client.rs": "1086c3f44d6567360c74703d2101c7e3c24c89371c6fade921332f11e0b95b70",
+    "crates/gpui/src/window.rs": "224c1f15e78b3baa128479dbabfa1512e67d2794d3ef4cf6ca9eaf64cbd2bd74"
   },
   "patches": [
     {
       "path": "focus.patch",
-      "sha256": "bf3ca5516dc1c1cf11afa45e858873af7f3f3e2ad9cc241f5ea421f1f3ea0c9f"
+      "sha256": "548fb15f4a3b9d153e6dbbcb7ad6f9ab70a1f2eb0ff819a75134fc626fff6635"
     }
   ],
   "files": [
@@ -22,7 +23,12 @@
     {
       "path": "crates/gpui_linux/src/linux/x11/client.rs",
       "before_sha256": "9dc83361d502a8d0ed1729276f0d5f4eff97b584eb73acf233968016aa7b1057",
-      "after_sha256": "1086c3f44d6567360c74703d2101c7e3c24c89371c6fade921332f11e0b95b70"
+      "after_sha256": "265a829a2f273970df9390cbd40e704ad03199288b529450385d7e5e29d63935"
+    },
+    {
+      "path": "crates/gpui/src/window.rs",
+      "before_sha256": "224c1f15e78b3baa128479dbabfa1512e67d2794d3ef4cf6ca9eaf64cbd2bd74",
+      "after_sha256": "22c8d7d3bcd63b4d00e945d943a575c07cb1f03c0828421e82651389efae6e45"
     }
   ]
 }

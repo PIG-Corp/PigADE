@@ -113,6 +113,7 @@ pub(super) enum ProductAction {
     RefreshTransfer,
     TransferTo(Uuid),
     TransferPage(usize),
+    ConfirmTerminalInsert,
     OpenSessions,
     RefreshSessions,
     AttachSession(Uuid),
@@ -201,6 +202,7 @@ pub(super) enum DialogKind {
     Sessions,
     StopSession,
     History,
+    TerminalInsert,
 }
 
 impl DialogKind {
@@ -246,12 +248,13 @@ impl DialogKind {
             Self::Sessions => "Неразмещённые сессии",
             Self::StopSession => "Остановить CLI?",
             Self::History => "История сессии",
+            Self::TerminalInsert => "Проверить вставку",
         }
     }
 
     fn fields(self) -> &'static [&'static str] {
         match self {
-            Self::Appearance => &[],
+            Self::Appearance | Self::TerminalInsert => &[],
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
@@ -344,6 +347,7 @@ impl DialogKind {
             Self::Sessions => "Закрыть",
             Self::StopSession => "Остановить CLI",
             Self::History => "Закрыть",
+            Self::TerminalInsert => "Вставить",
         }
     }
 }
@@ -426,6 +430,8 @@ pub(super) struct ProductUi {
     pub(super) workspace_isolated: bool,
     pub(super) workspace_project: Option<Uuid>,
     pub(super) history_sheet: Option<crate::history_view::HistorySheet>,
+    pub(super) insert_review: Option<crate::terminal_insert::Review>,
+    pub(super) insert_scroll: gpui::ScrollHandle,
 }
 
 pub(super) struct SessionSummary {
@@ -2679,6 +2685,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::History {
             return self.history_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::TerminalInsert {
+            return self.terminal_insert_overlay(cx);
         }
 
         let can_bind = dialog.kind != DialogKind::Conversation
@@ -5473,6 +5482,167 @@ impl ProductUi {
                     .child(body_content)
                     .child(div().id("history-keyboard-hint").role(Role::Status).text_size(px(11.)).text_color(colors.muted).child("Tab: поиск / текст · Ctrl+F: поиск · F3: дальше · Shift+F3: сначала · PageUp/Down: страницы · Ctrl+R: обновить · Ctrl+Shift+C: вся страница"))
                     .child(div().flex().justify_end().child(close)),
+            )
+            .into_any_element()
+    }
+
+    fn terminal_insert_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
+        let colors = self.colors();
+        let Some(review) = &self.insert_review else {
+            return div()
+                .id("terminal-insert-review-missing")
+                .role(Role::Status)
+                .child("Нет подготовленного текста для вставки")
+                .into_any_element();
+        };
+        let short_id = |value: &str| value.chars().take(10).collect::<String>();
+        let target = format!(
+            "{} · сессия {} · поколение {}",
+            review.label,
+            short_id(&review.target.session),
+            short_id(&review.target.generation),
+        );
+        let safety_note: Option<String> = match &review.origin {
+            crate::terminal_insert::Origin::Clipboard
+                if review.text.contains('\n') || review.text.contains('\r') =>
+            {
+                Some(
+                    "Переводы строк могут выполнить команды в shell. Проверьте получателя и текст."
+                        .into(),
+                )
+            }
+            crate::terminal_insert::Origin::Files { count } => Some(format!(
+                "Вставляются пути ({count}) в формате POSIX shell. Содержимое файлов не загружается. Enter не добавляется."
+            )),
+            _ => None,
+        };
+        let close = self.action_control(
+            "terminal-insert-cancel".into(),
+            "Отмена".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let confirm = self.action_control(
+            "terminal-insert-confirm".into(),
+            "Вставить".into(),
+            ProductAction::ConfirmTerminalInsert,
+            ControlStyle {
+                role: Role::Button,
+                selected: true,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("terminal-insert-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(24.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx)
+            }))
+            .child(
+                div()
+                    .id("terminal-insert-review")
+                    .role(Role::Dialog)
+                    .aria_label("Проверить вставку")
+                    .w_full()
+                    .max_w(px(640.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(18.))
+                    .text_color(colors.text)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("terminal-insert-title")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Проверить вставку"),
+                    )
+                    .child(
+                        div()
+                            .id("terminal-insert-target")
+                            .role(Role::Status)
+                            .text_size(px(12.))
+                            .text_color(colors.muted)
+                            .child(target),
+                    )
+                    .when_some(safety_note, |card, note| {
+                        card.child(
+                            div()
+                                .id("terminal-insert-safety-note")
+                                .role(Role::Alert)
+                                .text_size(px(12.))
+                                .text_color(colors.accent)
+                                .whitespace_normal()
+                                .child(note),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("terminal-insert-text")
+                            .accessibility_id("terminal-insert-text")
+                            .role(Role::Document)
+                            .aria_label("Текст, подготовленный для вставки")
+                            .w_full()
+                            .min_h(px(120.))
+                            .max_h(px(360.))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.insert_scroll)
+                            .font_family(crate::font::PRIMARY_FAMILY)
+                            .whitespace_normal()
+                            .bg(colors.base)
+                            .border_1()
+                            .border_color(colors.border)
+                            .rounded(px(6.))
+                            .p(px(12.))
+                            .text_size(px(12.))
+                            .text_color(colors.text)
+                            .child(review.text.clone()),
+                    )
+                    .children(self.notice.clone().map(|notice| {
+                        div()
+                            .id("terminal-insert-notice")
+                            .role(Role::Status)
+                            .text_size(px(12.))
+                            .text_color(colors.accent)
+                            .child(notice)
+                    }))
+                    .child(
+                        div()
+                            .id("terminal-insert-keyboard-hint")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child("Ctrl+Enter — вставить · Ctrl+C — копировать · PgUp/PgDn — текст · Escape — отмена"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(close)
+                            .child(confirm),
+                    ),
             )
             .into_any_element()
     }

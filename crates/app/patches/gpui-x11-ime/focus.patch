@@ -1,5 +1,5 @@
---- i/crates/gpui_linux/src/linux/x11/xim_handler.rs
-+++ w/crates/gpui_linux/src/linux/x11/xim_handler.rs
+--- a/crates/gpui_linux/src/linux/x11/xim_handler.rs
++++ b/crates/gpui_linux/src/linux/x11/xim_handler.rs
 @@ -2,6 +2,339 @@
  
  use x11rb::protocol::{Event, xproto};
@@ -585,8 +585,8 @@
          // XIMReverse: 1, XIMPrimary: 8, XIMTertiary: 32: selected text
          // XIMUnderline: 2, XIMSecondary: 16: underlined text
          // XIMHighlight: 4: normal text
---- i/crates/gpui_linux/src/linux/x11/client.rs
-+++ w/crates/gpui_linux/src/linux/x11/client.rs
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -36,7 +36,7 @@
      wrapper::ConnectionExt as _,
      xcb_ffi::XCBConnection,
@@ -596,7 +596,15 @@
  use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
  use xkbcommon::xkb::{self as xkbc, STATE_LAYOUT_EFFECTIVE};
  
-@@ -297,7 +297,7 @@
+@@ -156,6 +156,7 @@
+     other_window: xproto::Window,
+     drag_type: u32,
+     retrieved: bool,
++    drop_success: bool,
+     position: Point<Pixels>,
+ }
+ 
+@@ -297,7 +298,7 @@
              .build_ic_attributes()
              .push(
                  xim::AttributeName::InputStyle,
@@ -605,7 +613,7 @@
              )
              .push(xim::AttributeName::ClientWindow, xim_handler.window)
              .push(xim::AttributeName::FocusWindow, xim_handler.window)
-@@ -820,40 +820,14 @@
+@@ -820,40 +821,14 @@
              return;
          }
  
@@ -649,7 +657,87 @@
          let mut state = self.0.borrow_mut();
          state.restore_xim(ximc, xim_handler);
      }
-@@ -1081,7 +1055,13 @@
+@@ -927,6 +902,7 @@
+ 
+                 if event.type_ == state.atoms.XdndEnter {
+                     state.xdnd_state.other_window = atom;
++                    state.xdnd_state.drop_success = false;
+                     if (arg1 & 0x1) == 0x1 {
+                         state.xdnd_state.drag_type = xdnd_get_supported_atom(
+                             &state.xcb_connection,
+@@ -986,6 +962,7 @@
+                         &state.atoms,
+                         event.window,
+                         state.xdnd_state.other_window,
++                        state.xdnd_state.drop_success,
+                     );
+                     let position = state.xdnd_state.position;
+                     drop(state);
+@@ -1005,33 +982,43 @@
+                         state.atoms.XDND_DATA,
+                         AtomEnum::ANY,
+                         0,
+-                        1024,
++                        16 * 1024,
+                     ),
+                 )
+                 .log_err();
+                 let Some(reply) = reply else {
+                     return Some(());
+                 };
+-                if let Ok(file_list) = str::from_utf8(&reply.value) {
+-                    let paths: SmallVec<[_; 2]> = file_list
+-                        .lines()
+-                        .filter_map(|path| Url::parse(path).log_err())
+-                        .filter_map(|url| match url.to_file_path() {
+-                            Ok(url) => Some(url),
+-                            Err(()) => {
+-                                log::error!("Failed turn {url:?} into a file path");
+-                                None
+-                            }
++                let paths = if reply.bytes_after != 0 {
++                    log::error!("Rejecting truncated XdndSelection data");
++                    SmallVec::new()
++                } else {
++                    str::from_utf8(&reply.value)
++                        .ok()
++                        .and_then(|file_list| {
++                            file_list
++                                .lines()
++                                .filter(|path| !path.is_empty() && !path.starts_with('#'))
++                                .map(|path| {
++                                    Url::parse(path).ok().and_then(|url| url.to_file_path().ok())
++                                })
++                                .collect::<Option<SmallVec<[_; 2]>>>()
+                         })
+-                        .collect();
+-                    let input = PlatformInput::FileDrop(FileDropEvent::Entered {
+-                        position: state.xdnd_state.position,
+-                        paths: gpui::ExternalPaths(paths),
+-                    });
+-                    drop(state);
+-                    window.handle_input(input);
+-                    self.0.borrow_mut().xdnd_state.retrieved = true;
+-                }
++                        .unwrap_or_else(|| {
++                            log::error!("Rejecting invalid XdndSelection URI list");
++                            SmallVec::new()
++                        })
++                };
++                let drop_success = !paths.is_empty();
++                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
++                    position: state.xdnd_state.position,
++                    paths: gpui::ExternalPaths(paths),
++                });
++                drop(state);
++                window.handle_input(input);
++                let mut state = self.0.borrow_mut();
++                state.xdnd_state.retrieved = true;
++                state.xdnd_state.drop_success = drop_success;
+             }
+             Event::ConfigureNotify(event) => {
+                 let bounds = Bounds {
+@@ -1081,7 +1068,13 @@
                  state.pre_edit_text.take();
                  state.restore_cursor_after_hide();
                  drop(state);
@@ -664,7 +752,7 @@
                  window.handle_ime_delete();
              }
              Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
-@@ -1525,6 +1505,20 @@
+@@ -1525,6 +1518,20 @@
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
                  let mut state = self.0.borrow_mut();
@@ -685,7 +773,7 @@
                  state.pre_key_char_down = Some(keystroke_from_xkb(
                      &state.xkb,
                      state.modifiers,
-@@ -1581,7 +1575,7 @@
+@@ -1581,7 +1588,7 @@
                  .build_ic_attributes()
                  .push(
                      xim::AttributeName::InputStyle,
@@ -694,3 +782,47 @@
                  )
                  .push(xim::AttributeName::ClientWindow, xim_handler.window)
                  .push(xim::AttributeName::FocusWindow, xim_handler.window)
+@@ -1733,7 +1740,7 @@
+                 xproto::PropMode::REPLACE,
+                 x_window,
+                 state.atoms.XdndAware,
+-                state.atoms.XA_ATOM,
++                xproto::AtomEnum::ATOM,
+                 &[5],
+             ),
+         )
+@@ -2411,12 +2418,19 @@
+     atoms: &XcbAtoms,
+     source: xproto::Window,
+     target: xproto::Window,
++    success: bool,
+ ) {
+     let message = ClientMessageEvent {
+         format: 32,
+         window: target,
+         type_: atoms.XdndFinished,
+-        data: ClientMessageData::from([source, 1, atoms.XdndActionCopy, 0, 0]),
++        data: ClientMessageData::from([
++            source,
++            if success { 1 } else { 0 },
++            if success { atoms.XdndActionCopy } else { 0 },
++            0,
++            0,
++        ]),
+         sequence: 0,
+         response_type: xproto::CLIENT_MESSAGE_EVENT,
+     };
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5641,6 +5641,11 @@
+         self.last_input_modality = match &event {
+             PlatformInput::KeyDown(_) => InputModality::Keyboard,
+             PlatformInput::MouseMove(_) | PlatformInput::MouseDown(_) => InputModality::Mouse,
++            PlatformInput::FileDrop(
++                FileDropEvent::Entered { .. }
++                | FileDropEvent::Pending { .. }
++                | FileDropEvent::Submit { .. },
++            ) => InputModality::Mouse,
+             PlatformInput::Touch(_) => InputModality::Touch,
+             _ => self.last_input_modality,
+         };

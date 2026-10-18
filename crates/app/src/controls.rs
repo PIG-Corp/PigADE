@@ -92,6 +92,8 @@ pub enum Action {
     LaunchShell,
     ResizeLeft,
     ResizeRight,
+    CopySelection,
+    PasteClipboard,
 }
 
 /// Classifies a key using a configured modifier and exact modifier state.
@@ -100,6 +102,15 @@ pub enum Action {
 pub fn classify(modifier: Modifier, key: &str, state: Modifiers) -> Option<Action> {
     let key = normalize_key(key);
     let shifted = state.shift;
+    // Clipboard controls are fixed conventional shortcuts, independent of the
+    // user's configurable modifier for panel-management keys.
+    if state.control && shifted && !state.alt && !state.platform {
+        match key {
+            "c" | "C" => return Some(Action::CopySelection),
+            "v" | "V" => return Some(Action::PasteClipboard),
+            _ => (),
+        }
+    }
     if !modifier.matches(state) {
         return None;
     }
@@ -381,6 +392,47 @@ mod tests {
         }
         assert_eq!(
             classify(Modifier::Control, "q", mods(true, false, true, false)),
+            None
+        );
+    }
+
+    #[test]
+    fn clipboard_shortcuts_are_fixed_and_exact_across_modifier_profiles() {
+        let ctrl_shift = mods(true, false, true, false);
+        for modifier in Modifier::ALL {
+            assert_eq!(
+                classify(modifier, "c", ctrl_shift),
+                Some(Action::CopySelection)
+            );
+            assert_eq!(
+                classify(modifier, "C", ctrl_shift),
+                Some(Action::CopySelection)
+            );
+            assert_eq!(
+                classify(modifier, "v", ctrl_shift),
+                Some(Action::PasteClipboard)
+            );
+            assert_eq!(
+                classify(modifier, "V", ctrl_shift),
+                Some(Action::PasteClipboard)
+            );
+        }
+        for state in [
+            mods(true, true, true, false),
+            mods(true, false, true, true),
+            mods(false, false, true, false),
+            mods(true, false, false, false),
+        ] {
+            assert_eq!(classify(Modifier::Control, "c", state), None);
+            assert_eq!(classify(Modifier::Control, "v", state), None);
+        }
+        // The ordinary CLI controls remain terminal input.
+        assert_eq!(
+            classify(Modifier::Control, "c", mods(true, false, false, false)),
+            None
+        );
+        assert_eq!(
+            classify(Modifier::Control, "v", mods(true, false, false, false)),
             None
         );
     }

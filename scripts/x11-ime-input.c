@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,8 @@
 #define MAX_W 1280
 #define MAX_H 800
 #define MAX_PIXELS (MAX_W * MAX_H)
+static const unsigned char FIXED_CLIPBOARD_TEXT[] =
+    "PIGADE_MULTILINE_A\nPIGADE_MULTILINE_B";
 
 typedef struct {
     const char *stage, *display, *boot, *output;
@@ -153,6 +156,15 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-picker-confirm") &&
         strcmp(a.stage, "pointer-tab-drop-cancel") && strcmp(a.stage, "pointer-tab-drop") &&
         strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
+        strcmp(a.stage, "pointer-file-drop") &&
+        strcmp(a.stage, "pointer-file-drop-invalid-uri") &&
+        strcmp(a.stage, "pointer-file-drop-truncated") &&
+        strcmp(a.stage, "pointer-file-drop-cancel") &&
+        strcmp(a.stage, "pointer-file-drop-confirm") &&
+        strcmp(a.stage, "pointer-clipboard-paste") &&
+        strcmp(a.stage, "pointer-clipboard-enter") &&
+        strcmp(a.stage, "pointer-clipboard-cancel") &&
+        strcmp(a.stage, "pointer-clipboard-confirm") &&
         strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
         strcmp(a.stage, "pointer-ime-input") && strcmp(a.stage, "pointer-ime-cancel") &&
         strcmp(a.stage, "pointer-dialog-hover") && strcmp(a.stage, "pointer-inactive-hold"))
@@ -181,6 +193,16 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-tab-drop-populated-preview.ppm")))
         fail("populated tab-drop preview capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-file-drop") &&
+        (!a.output || (strcmp(a.output, "/artifacts/pointer-file-drop-review-cancel.ppm") &&
+                      strcmp(a.output, "/artifacts/pointer-file-drop-review-confirm.ppm"))))
+        fail("file-drop review capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-file-drop-invalid-uri") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-file-drop-invalid-uri.ppm")))
+        fail("invalid URI-list capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-file-drop-truncated") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-file-drop-truncated.ppm")))
+        fail("truncated URI-list capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-ime-input") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-ime-preedit.ppm")))
         fail("pointer IME preedit capture path must be the fixed artifact");
@@ -679,6 +701,332 @@ static void pointer_inactive_hold(const Args *a, Display *dpy, xcb_connection_t 
     XSync(dpy, False);
 }
 
+/* Send exactly one native XDND URI-list to the verified fixture app window.
+ * This source and its selection owner exist only on the private Xvfb. */
+enum FixedUriPayload { URI_PAYLOAD_VALID, URI_PAYLOAD_NONFILE, URI_PAYLOAD_TRUNCATED };
+
+static const unsigned char *fixed_uri_payload(enum FixedUriPayload kind, size_t *length) {
+    static const unsigned char valid[] =
+        "file:///home/pigade/demo/a%20space.txt\r\n"
+        "file:///home/pigade/demo/it%27s%24%28no%29.txt\r\n";
+    static const unsigned char nonfile[] =
+        "file:///home/pigade/demo/a%20space.txt\r\n"
+        "https://example.invalid/file.txt\r\n";
+    static unsigned char truncated[66 * 1024];
+    static size_t truncated_length;
+    if (kind == URI_PAYLOAD_VALID) {
+        *length = sizeof(valid) - 1;
+        return valid;
+    }
+    if (kind == URI_PAYLOAD_NONFILE) {
+        *length = sizeof(nonfile) - 1;
+        return nonfile;
+    }
+    if (!truncated_length) {
+        static const char prefix[] = "file:///home/pigade/demo/a%20space.txt\r\n#";
+        memcpy(truncated, prefix, sizeof(prefix) - 1);
+        memset(truncated + sizeof(prefix) - 1, 'x', sizeof(truncated) - sizeof(prefix) - 1);
+        truncated[sizeof(truncated) - 2] = '\r';
+        truncated[sizeof(truncated) - 1] = '\n';
+        truncated_length = sizeof(truncated);
+    }
+    *length = truncated_length;
+    return truncated;
+}
+
+static int serve_xdnd_request(Display *dpy, xcb_connection_t *c, Window source,
+                              pid_t app_pid, Atom selection, Atom uri_list,
+                              enum FixedUriPayload payload, XSelectionRequestEvent *request) {
+    if (request->owner != source || request->selection != selection ||
+        xres_pid(c, (uint32_t)request->requestor) != app_pid ||
+        (request->target != uri_list && request->target != XA_ATOM))
+        fail("unexpected XDND selection request");
+    Atom output_property = request->property == None ? request->target : request->property;
+    if (request->target == XA_ATOM) {
+        Atom offered[] = { uri_list, XA_ATOM };
+        XChangeProperty(dpy, request->requestor, output_property, XA_ATOM, 32,
+                        PropModeReplace, (unsigned char *)offered, 2);
+    } else {
+        size_t length = 0;
+        const unsigned char *uris = fixed_uri_payload(payload, &length);
+        XChangeProperty(dpy, request->requestor, output_property, uri_list, 8,
+                        PropModeReplace, uris, (int)length);
+    }
+    XEvent reply; memset(&reply, 0, sizeof(reply));
+    reply.xselection.type = SelectionNotify;
+    reply.xselection.display = dpy;
+    reply.xselection.requestor = request->requestor;
+    reply.xselection.selection = request->selection;
+    reply.xselection.target = request->target;
+    reply.xselection.property = output_property;
+    reply.xselection.time = request->time;
+    if (!XSendEvent(dpy, request->requestor, False, 0, &reply))
+        fail("XDND SelectionNotify send failed");
+    XFlush(dpy);
+    return request->target == uri_list;
+}
+
+static void pointer_file_drop(Display *dpy, xcb_connection_t *c, Window target, pid_t app_pid,
+                              enum FixedUriPayload payload) {
+    Atom aware = XInternAtom(dpy, "XdndAware", False);
+    Atom enter = XInternAtom(dpy, "XdndEnter", False);
+    Atom position = XInternAtom(dpy, "XdndPosition", False);
+    Atom drop = XInternAtom(dpy, "XdndDrop", False);
+    Atom status = XInternAtom(dpy, "XdndStatus", False);
+    Atom finished = XInternAtom(dpy, "XdndFinished", False);
+    Atom leave = XInternAtom(dpy, "XdndLeave", False);
+    Atom selection = XInternAtom(dpy, "XdndSelection", False);
+    Atom uri_list = XInternAtom(dpy, "text/uri-list", False);
+    Atom actual_type = None; int actual_format = 0; unsigned long nitems = 0, after = 0;
+    unsigned char *value = NULL;
+    int rc = XGetWindowProperty(dpy, target, aware, 0, 1, False, XA_ATOM,
+                                &actual_type, &actual_format, &nitems, &after, &value);
+    int version_ok = rc == Success && actual_type == XA_ATOM && actual_format == 32 &&
+                     nitems == 1 && value && (*(unsigned long *)value) >= 3;
+    if (value) XFree(value);
+    if (!version_ok) fail("verified app window does not advertise XDND version 3 or newer");
+    Window source = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
+    if (!source) fail("cannot create private XDND source window");
+    XSelectInput(dpy, source, StructureNotifyMask | PropertyChangeMask);
+    if (!XSetSelectionOwner(dpy, selection, source, CurrentTime))
+        fail("cannot own private XDND selection");
+    XSync(dpy, False);
+    if (XGetSelectionOwner(dpy, selection) != source)
+        fail("private XDND selection ownership was not established");
+    XWindowAttributes attr; int root_x = 0, root_y = 0; Window child = None;
+    if (!XGetWindowAttributes(dpy, target, &attr) || attr.width != 1280 || attr.height != 800 ||
+        !XTranslateCoordinates(dpy, target, DefaultRootWindow(dpy), 350, 250,
+                               &root_x, &root_y, &child))
+        fail("file drop requires the fixed private 1280x800 app target");
+    XEvent event; memset(&event, 0, sizeof(event));
+    event.xclient.type = ClientMessage; event.xclient.display = dpy;
+    event.xclient.window = target; event.xclient.message_type = enter; event.xclient.format = 32;
+    event.xclient.data.l[0] = (long)source;
+    event.xclient.data.l[1] = 5L << 24;
+    event.xclient.data.l[2] = (long)uri_list;
+    if (!XSendEvent(dpy, target, False, NoEventMask, &event)) fail("XDND Enter send failed");
+    XFlush(dpy);
+    memset(&event, 0, sizeof(event));
+    event.xclient.type = ClientMessage; event.xclient.display = dpy;
+    event.xclient.window = target; event.xclient.message_type = position; event.xclient.format = 32;
+    event.xclient.data.l[0] = (long)source;
+    event.xclient.data.l[2] = ((root_x & 0xffff) << 16) | (root_y & 0xffff);
+    event.xclient.data.l[3] = CurrentTime;
+    event.xclient.data.l[4] = (long)XInternAtom(dpy, "XdndActionCopy", False);
+    if (!XSendEvent(dpy, target, False, NoEventMask, &event)) fail("XDND Position send failed");
+    XFlush(dpy);
+    int status_received = 0, accepted = 0, uri_transferred = 0;
+    struct timespec deadline; clock_gettime(CLOCK_MONOTONIC, &deadline); deadline.tv_sec += 2;
+    while (!status_received || !uri_transferred) {
+        while (XPending(dpy)) {
+            XNextEvent(dpy, &event);
+            if (event.type == SelectionRequest) {
+                uri_transferred |= serve_xdnd_request(dpy, c, source, app_pid,
+                    selection, uri_list, payload, &event.xselectionrequest);
+            } else if (event.type == ClientMessage && event.xclient.message_type == status) {
+                if ((Window)event.xclient.data.l[0] != target)
+                    fail("XDND Status came from an unexpected target");
+                status_received = 1;
+                accepted = (event.xclient.data.l[1] & 1L) != 0 &&
+                    event.xclient.data.l[4] == (long)XInternAtom(dpy, "XdndActionCopy", False);
+            }
+        }
+        if (status_received && uri_transferred) break;
+        struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+        long ms = (deadline.tv_sec - now.tv_sec) * 1000L +
+                  (deadline.tv_nsec - now.tv_nsec + 999999L) / 1000000L;
+        if (ms <= 0) fail("XDND Status deadline expired");
+        struct pollfd pfd = { .fd = ConnectionNumber(dpy), .events = POLLIN };
+        if (poll(&pfd, 1, (int)ms) < 0 && errno != EINTR) fail("XDND Status wait failed");
+    }
+    /* GPUI converts the URI list while Position is active. Let that target-side
+     * event task settle before sending Drop; this is fixture pacing, not a
+     * performance measurement. */
+    struct timespec entered = { .tv_sec = 0, .tv_nsec = 250000000 };
+    nanosleep(&entered, NULL);
+    if (payload != URI_PAYLOAD_VALID && !accepted) {
+        memset(&event, 0, sizeof(event));
+        event.xclient.type = ClientMessage; event.xclient.display = dpy;
+        event.xclient.window = target; event.xclient.message_type = leave; event.xclient.format = 32;
+        event.xclient.data.l[0] = (long)source;
+        if (!XSendEvent(dpy, target, False, NoEventMask, &event)) fail("XDND Leave send failed");
+        XFlush(dpy);
+        struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+        nanosleep(&settle, NULL);
+        XSetSelectionOwner(dpy, selection, None, CurrentTime);
+        XDestroyWindow(dpy, source);
+        XSync(dpy, False);
+        return;
+    }
+    if (!accepted) fail("verified app rejected valid fixed URI-list drop");
+    memset(&event, 0, sizeof(event));
+    event.xclient.type = ClientMessage; event.xclient.display = dpy;
+    event.xclient.window = target; event.xclient.message_type = drop; event.xclient.format = 32;
+    event.xclient.data.l[0] = (long)source; event.xclient.data.l[2] = CurrentTime;
+    if (!XSendEvent(dpy, target, False, NoEventMask, &event)) fail("XDND Drop send failed");
+    XFlush(dpy);
+    int complete = 0; clock_gettime(CLOCK_MONOTONIC, &deadline); deadline.tv_sec += 2;
+    while (!complete) {
+        while (XPending(dpy)) {
+            XNextEvent(dpy, &event);
+            if (event.type == SelectionRequest) {
+                uri_transferred |= serve_xdnd_request(dpy, c, source, app_pid,
+                    selection, uri_list, payload, &event.xselectionrequest);
+            } else if (event.type == ClientMessage && event.xclient.message_type == finished) {
+                if ((Window)event.xclient.data.l[0] != target)
+                    fail("XDND Finished came from an unexpected target");
+                int succeeded = (event.xclient.data.l[1] & 1L) != 0;
+                if ((payload == URI_PAYLOAD_VALID) != succeeded)
+                    fail("XDND Finished did not match fixed URI-list validity");
+                complete = 1;
+            }
+        }
+        if (complete) break;
+        struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+        long ms = (deadline.tv_sec - now.tv_sec) * 1000L +
+                  (deadline.tv_nsec - now.tv_nsec + 999999L) / 1000000L;
+        if (ms <= 0) fail("XDND Finished deadline expired");
+        struct pollfd pfd = { .fd = ConnectionNumber(dpy), .events = POLLIN };
+        if (poll(&pfd, 1, (int)ms) < 0 && errno != EINTR) fail("XDND Finished wait failed");
+    }
+    struct timespec review_paint = { .tv_sec = 0, .tv_nsec = 250000000 };
+    nanosleep(&review_paint, NULL);
+    XSetSelectionOwner(dpy, selection, None, CurrentTime);
+    XDestroyWindow(dpy, source);
+    XSync(dpy, False);
+}
+
+static int self_test_uri_payloads(void) {
+    size_t invalid_length = 0, truncated_length = 0;
+    const unsigned char *invalid = fixed_uri_payload(URI_PAYLOAD_NONFILE, &invalid_length);
+    const unsigned char *truncated = fixed_uri_payload(URI_PAYLOAD_TRUNCATED, &truncated_length);
+    if (!strstr((const char *)invalid, "https://example.invalid/file.txt") ||
+        invalid_length <= strlen("file:///home/pigade/demo/a%20space.txt\r\n") ||
+        truncated_length <= 65536 || truncated[truncated_length - 2] != '\r' ||
+        truncated[truncated_length - 1] != '\n') return 1;
+    printf("{\"invalid_uri_bytes\":%zu,\"truncated_uri_bytes\":%zu}\n",
+           invalid_length, truncated_length);
+    return 0;
+}
+
+/* Own one fixed multiline clipboard only during the private pointer fixture. */
+static void pointer_clipboard_paste(Display *dpy, xcb_connection_t *c, pid_t app_pid,
+                                   pid_t fcitx_pid) {
+    Atom clipboard = XInternAtom(dpy, "CLIPBOARD", False);
+    Atom targets = XInternAtom(dpy, "TARGETS", False);
+    Atom utf8 = XInternAtom(dpy, "UTF8_STRING", False);
+    Atom plain = XInternAtom(dpy, "text/plain", False);
+    Atom plain_utf8 = XInternAtom(dpy, "text/plain;charset=utf-8", False);
+    Window source = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
+    if (!source) fail("cannot create private clipboard owner window");
+    XSelectInput(dpy, source, StructureNotifyMask | PropertyChangeMask);
+    XSetSelectionOwner(dpy, clipboard, source, CurrentTime);
+    XSync(dpy, False);
+    if (XGetSelectionOwner(dpy, clipboard) != source)
+        fail("private clipboard ownership was not established");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    if (!control || !shift || !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime))
+        fail("fixed clipboard paste shortcut press failed");
+    key(dpy, XK_v);
+    if (!XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+        fail("fixed clipboard paste shortcut release failed");
+    XFlush(dpy);
+    int transferred = 0;
+    struct timespec deadline; clock_gettime(CLOCK_MONOTONIC, &deadline); deadline.tv_sec += 2;
+    while (!transferred) {
+        XEvent event;
+        while (XPending(dpy)) {
+            XNextEvent(dpy, &event);
+            if (event.type != SelectionRequest) continue;
+            XSelectionRequestEvent *request = &event.xselectionrequest;
+            int owner_match = request->owner == source;
+            int selection_match = request->selection == clipboard;
+            pid_t requestor_pid = xres_pid(c, (uint32_t)request->requestor);
+            int target_match = request->target == targets || request->target == utf8 ||
+                               request->target == plain || request->target == plain_utf8;
+            char target_name[65] = "<unknown>";
+            char *atom_name = XGetAtomName(dpy, request->target);
+            if (atom_name) {
+                snprintf(target_name, sizeof(target_name), "%.*s", 64, atom_name);
+                XFree(atom_name);
+            }
+            if (!owner_match || !selection_match) {
+                fprintf(stderr,
+                    "clipboard_request_diagnostic owner_match=%d selection_match=%d "
+                    "requestor_pid=%ld expected_pid=%ld target=%s target_allowed=%d\n",
+                    owner_match, selection_match, (long)requestor_pid, (long)app_pid,
+                    target_name, target_match);
+                fflush(stderr);
+                fail("unexpected private clipboard selection request");
+            }
+            if (fcitx_pid > 0 && fcitx_pid != app_pid && requestor_pid == fcitx_pid) {
+                /* The already-verified private Fcitx client probes clipboard
+                 * owners. Refuse its request with no data, then keep serving
+                 * the exact app PID request below. */
+                XEvent refusal; memset(&refusal, 0, sizeof(refusal));
+                refusal.xselection.type = SelectionNotify;
+                refusal.xselection.display = dpy;
+                refusal.xselection.requestor = request->requestor;
+                refusal.xselection.selection = request->selection;
+                refusal.xselection.target = request->target;
+                refusal.xselection.property = None;
+                refusal.xselection.time = request->time;
+                if (!XSendEvent(dpy, request->requestor, False, 0, &refusal))
+                    fail("private Fcitx clipboard refusal failed");
+                XFlush(dpy);
+                continue;
+            }
+            if (requestor_pid != app_pid || !target_match) {
+                fprintf(stderr,
+                    "clipboard_request_diagnostic owner_match=%d selection_match=%d "
+                    "requestor_pid=%ld expected_pid=%ld target=%s target_allowed=%d\n",
+                    owner_match, selection_match, (long)requestor_pid, (long)app_pid,
+                    target_name, target_match);
+                fflush(stderr);
+                fail("unexpected private clipboard selection request");
+            }
+            Atom output_property = request->property == None ? request->target : request->property;
+            if (request->target == targets) {
+                Atom offered[] = { targets, utf8, plain, plain_utf8 };
+                XChangeProperty(dpy, request->requestor, output_property, XA_ATOM, 32,
+                                PropModeReplace, (unsigned char *)offered, 4);
+            } else {
+                XChangeProperty(dpy, request->requestor, output_property, request->target, 8,
+                                PropModeReplace, FIXED_CLIPBOARD_TEXT,
+                                (int)(sizeof(FIXED_CLIPBOARD_TEXT) - 1));
+                transferred = 1;
+            }
+            XEvent reply; memset(&reply, 0, sizeof(reply));
+            reply.xselection.type = SelectionNotify;
+            reply.xselection.display = dpy;
+            reply.xselection.requestor = request->requestor;
+            reply.xselection.selection = request->selection;
+            reply.xselection.target = request->target;
+            reply.xselection.property = output_property;
+            reply.xselection.time = request->time;
+            if (!XSendEvent(dpy, request->requestor, False, 0, &reply))
+                fail("clipboard SelectionNotify send failed");
+            XFlush(dpy);
+        }
+        if (transferred) break;
+        struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+        long ms = (deadline.tv_sec - now.tv_sec) * 1000L +
+                  (deadline.tv_nsec - now.tv_nsec + 999999L) / 1000000L;
+        if (ms <= 0) fail("clipboard transfer deadline expired");
+        struct pollfd pfd = { .fd = ConnectionNumber(dpy), .events = POLLIN };
+        if (poll(&pfd, 1, (int)ms) < 0 && errno != EINTR)
+            fail("clipboard selection wait failed");
+    }
+    struct timespec settle = { .tv_sec = 0, .tv_nsec = 100000000 };
+    nanosleep(&settle, NULL);
+    XSetSelectionOwner(dpy, clipboard, None, CurrentTime);
+    XDestroyWindow(dpy, source);
+    XSync(dpy, False);
+}
+
 static void setup_create_sequence(Display *dpy) {
     const KeySym name[] = { XK_d, XK_e, XK_m, XK_o };
     for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
@@ -865,6 +1213,18 @@ static void wait_workspace_bar(Display *dpy, Window app) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--self-test-clipboard-payload")) {
+        static const unsigned char expected[] =
+            "PIGADE_MULTILINE_A\nPIGADE_MULTILINE_B";
+        if (sizeof(expected) != sizeof(FIXED_CLIPBOARD_TEXT) ||
+            memcmp(expected, FIXED_CLIPBOARD_TEXT, sizeof(expected)) != 0) return 3;
+        for (size_t i = 0; i < sizeof(FIXED_CLIPBOARD_TEXT) - 1; ++i)
+            printf("%02x", FIXED_CLIPBOARD_TEXT[i]);
+        putchar('\n');
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--self-test-uri-payloads"))
+        return self_test_uri_payloads();
     if (argc == 2 && !strcmp(argv[1], "--self-test-proc")) {
         printf("%llu\n", self_process_start());
         return 0;
@@ -1282,6 +1642,27 @@ int main(int argc, char **argv) {
             pointer_drag_release(dpy, 0);
         } else if (!strcmp(a.stage, "pointer-hover-source")) {
             pointer_hover(dpy, app_window, 350, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-file-drop")) {
+            pointer_file_drop(dpy, c, app_window, a.app, URI_PAYLOAD_VALID);
+            capture(dpy, a.output);
+        } else if (!strcmp(a.stage, "pointer-file-drop-invalid-uri")) {
+            pointer_file_drop(dpy, c, app_window, a.app, URI_PAYLOAD_NONFILE);
+            capture(dpy, a.output);
+        } else if (!strcmp(a.stage, "pointer-file-drop-truncated")) {
+            pointer_file_drop(dpy, c, app_window, a.app, URI_PAYLOAD_TRUNCATED);
+            capture(dpy, a.output);
+        } else if (!strcmp(a.stage, "pointer-file-drop-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "pointer-file-drop-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "pointer-clipboard-paste")) {
+            pointer_clipboard_paste(dpy, c, a.app, a.fcitx);
+        } else if (!strcmp(a.stage, "pointer-clipboard-enter")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "pointer-clipboard-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "pointer-clipboard-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "pointer-subthreshold-hold")) {
             KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
             if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
@@ -1487,8 +1868,14 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "prompt-create-fields") ? "34" :
                             !strcmp(a.stage, "prompt-rename") ? "15" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
-        printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
-               a.stage, (long)a.app, count);
+        if (!strcmp(a.stage, "pointer-clipboard-paste")) {
+            printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s,"
+                   "\"selection_transfer\":true,\"payload_bytes\":%zu}\n",
+                   a.stage, (long)a.app, count, sizeof(FIXED_CLIPBOARD_TEXT) - 1);
+        } else {
+            printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
+                   a.stage, (long)a.app, count);
+        }
     }
     XSync(dpy, False); xcb_disconnect(c); XCloseDisplay(dpy); return 0;
 }

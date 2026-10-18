@@ -32,6 +32,8 @@ mod startup;
 mod tab_close;
 mod template_commands;
 mod template_flow;
+mod terminal_insert;
+mod terminal_insert_commands;
 mod text_edit;
 mod tiling;
 mod transfer_flow;
@@ -1233,6 +1235,9 @@ struct CanvasApp {
     selection: Option<selection::CellSelection>,
     selection_dragging: bool,
     clipboard_pending: bool,
+    external_file_drag: bool,
+    file_drop_target: Option<CommandTarget>,
+    insert_return_target: Option<CommandTarget>,
     input_epoch: u64,
     cursor_epoch: Instant,
     cursor_phase_visible: bool,
@@ -1282,6 +1287,7 @@ impl CanvasApp {
         let input_subscriptions = vec![
             cx.on_blur(&focus, window, |this, window, cx| {
                 this.cancel_pane_drag(cx);
+                this.clear_external_files(cx);
                 this.finish_resize(false, cx);
                 this.canvas_drag = None;
                 this.selection_dragging = false;
@@ -1297,6 +1303,7 @@ impl CanvasApp {
                 cx.notify();
                 if !window.is_window_active() {
                     this.cancel_pane_drag(cx);
+                    this.clear_external_files(cx);
                     this.finish_resize(false, cx);
                     this.selection_dragging = false;
                     this.input_epoch = this.input_epoch.wrapping_add(1);
@@ -1783,6 +1790,9 @@ impl CanvasApp {
             selection: None,
             selection_dragging: false,
             clipboard_pending: false,
+            external_file_drag: false,
+            file_drop_target: None,
+            insert_return_target: None,
             input_epoch: 0,
             cursor_epoch: Instant::now(),
             cursor_phase_visible: true,
@@ -2670,6 +2680,15 @@ impl CanvasApp {
 
     fn sync_editor_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let scope = self.product.dialog.as_ref().map(|dialog| dialog.id);
+        if !self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::TerminalInsert)
+        {
+            self.product.insert_review = None;
+            self.insert_return_target = None;
+        }
         if scope != self.editor_dialog {
             let transfer_dialog = self
                 .product
@@ -3434,7 +3453,11 @@ impl CanvasApp {
         // user action and build its metadata batch only after that ACK.
         if !matches!(
             action,
-            A::CloseDialog | A::FocusPane(_) | A::ToggleSidebar | A::ToggleArchived
+            A::CloseDialog
+                | A::ConfirmTerminalInsert
+                | A::FocusPane(_)
+                | A::ToggleSidebar
+                | A::ToggleArchived
         ) {
             if !self.product.busy && self.focus_queue.pending().is_some() {
                 self.flush_focus(cx);
@@ -3519,6 +3542,7 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::ConfirmTerminalInsert => self.confirm_terminal_insert(window, cx),
             A::OpenAppearance
             | A::SetTheme(_)
             | A::ToggleReducedMotion
@@ -4113,6 +4137,15 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::TerminalInsert)
+                {
+                    self.cancel_terminal_insert(window, cx);
+                    return;
+                }
                 self.template_flow.pause();
                 self.product.run_automatic = false;
                 self.deferred_product_action = None;
@@ -4617,7 +4650,10 @@ impl CanvasApp {
                     }
                     DialogKind::History => self.history_search(None, cx),
                     DialogKind::Launcher | DialogKind::Controls => self.product.dialog = None,
-                    DialogKind::SessionContext | DialogKind::Transfer | DialogKind::Sessions => (),
+                    DialogKind::SessionContext
+                    | DialogKind::Transfer
+                    | DialogKind::Sessions
+                    | DialogKind::TerminalInsert => (),
                 }
             }
             A::Launch(provider) => {
@@ -4806,11 +4842,15 @@ impl CanvasApp {
             controls::Direction::Up => pigade_layout::Direction::Up,
             controls::Direction::Down => pigade_layout::Direction::Down,
         };
-        self.finish_pointer(cx);
-        self.selection_dragging = false;
-        self.text_input.cancel();
-        window.notify_text_input_changed(&self.focus);
+        if !matches!(action, A::CopySelection | A::PasteClipboard) {
+            self.finish_pointer(cx);
+            self.selection_dragging = false;
+            self.text_input.cancel();
+            window.notify_text_input_changed(&self.focus);
+        }
         match action {
+            A::CopySelection => self.copy_selection(cx),
+            A::PasteClipboard => self.request_paste(cx),
             A::Close => {
                 self.product_action(product::ProductAction::Layout("hide".into()), window, cx)
             }
@@ -5494,6 +5534,11 @@ impl CanvasApp {
         }
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.external_file_drag {
+            self.clear_external_files(cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.editor_drag.take().is_some() {
             cx.stop_propagation();
             return;
@@ -5564,6 +5609,9 @@ impl CanvasApp {
         // Only real pointer movement changes hover focus. Repaint/layout changes
         // beneath a stationary cursor must not undo a keyboard focus command.
         let moved = self.hover_position.replace(event.position) != Some(event.position);
+        if self.external_file_drag {
+            return;
+        }
         if let Some((id, index, anchor)) = self.editor_drag {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.editor_drag = None;
@@ -5663,7 +5711,16 @@ impl CanvasApp {
             self.reset_cursor_blink(cx);
             self.persist_focus(cx);
         }
-        self.pointer_event(PointerAction::Motion, event.position, event.modifiers, cx);
+        // Native file-drop Pending can arrive before its paths, as a move with
+        // Left held. Never invent a terminal drag whose press we did not send.
+        if event.pressed_button.is_none()
+            || self
+                .pointer
+                .as_ref()
+                .is_some_and(|route| route.encoder.has_pressed())
+        {
+            self.pointer_event(PointerAction::Motion, event.position, event.modifiers, cx);
+        }
     }
     fn pointer_wheel(
         &mut self,
@@ -5757,9 +5814,25 @@ impl CanvasApp {
     }
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.product.dialog.is_some()
+            || self.external_file_drag
             || self.pane_drag.is_some()
             || self.resize_gesture.is_some()
         {
+            return;
+        }
+        if text.len() > 16 * 1024 {
+            self.input_notice = Some("Вставка более 16 KiB не принята".into());
+            cx.notify();
+            return;
+        }
+        if terminal_insert::needs_review(text) {
+            self.prepare_terminal_insert(
+                self.selected,
+                text.to_owned(),
+                terminal_insert::Origin::Clipboard,
+                window,
+                cx,
+            );
             return;
         }
         self.reset_cursor_blink(cx);
@@ -5807,11 +5880,7 @@ impl CanvasApp {
                     return;
                 }
                 match result {
-                    Ok(Some(item)) => {
-                        if let Some(text) = item.text() {
-                            this.paste_text(&text, window, cx);
-                        }
-                    }
+                    Ok(Some(item)) => this.paste(item, window, cx),
                     Ok(None) => (),
                     Err(_) => {
                         this.input_notice =
@@ -5873,9 +5942,59 @@ impl CanvasApp {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let k = &event.keystroke;
+        if self.external_file_drag {
+            if k.key == "escape" {
+                cx.stop_active_drag(window);
+                self.clear_external_files(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if k.key == "escape" && self.deferred_product_action.take().is_some() {
             self.product.notice = Some("Ожидающее действие отменено".into());
             cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::TerminalInsert)
+        {
+            if !event.is_held {
+                if k.key == "c" && (k.modifiers.control || k.modifiers.platform) && !k.modifiers.alt
+                {
+                    if let Some(review) = &self.product.insert_review {
+                        cx.write_to_clipboard(ClipboardItem::new_string(review.text.clone()));
+                    }
+                } else if matches!(
+                    k.key.as_str(),
+                    "up" | "down" | "pageup" | "pagedown" | "home" | "end"
+                ) {
+                    let handle = &self.product.insert_scroll;
+                    let mut offset = handle.offset();
+                    let end = -handle.max_offset().y;
+                    offset.y = match k.key.as_str() {
+                        "home" => px(0.),
+                        "end" => end,
+                        "up" => (offset.y + px(24.)).min(px(0.)),
+                        "down" => (offset.y - px(24.)).max(end),
+                        "pageup" => (offset.y + px(280.)).min(px(0.)),
+                        _ => (offset.y - px(280.)).max(end),
+                    };
+                    handle.set_offset(offset);
+                    cx.notify();
+                } else if k.key == "escape" {
+                    self.product_action(product::ProductAction::CloseDialog, window, cx);
+                } else if k.key == "enter"
+                    && (k.modifiers.control || k.modifiers.platform)
+                    && !k.modifiers.alt
+                    && !k.modifiers.shift
+                {
+                    self.product_action(product::ProductAction::ConfirmTerminalInsert, window, cx);
+                }
+            }
             cx.stop_propagation();
             return;
         }
@@ -7184,6 +7303,7 @@ impl EntityInputHandler for CanvasApp {
             }) && self.product.active_editor().is_some();
         }
         (!self.prefix
+            && !self.external_file_drag
             && self.layout_mode.is_none()
             && self.pane_drag.is_none()
             && self.resize_gesture.is_none())
@@ -7302,7 +7422,7 @@ impl EntityInputHandler for CanvasApp {
             self.editor_changed(window, cx);
             return;
         }
-        if self.pane_drag.is_some() || self.resize_gesture.is_some() {
+        if self.external_file_drag || self.pane_drag.is_some() || self.resize_gesture.is_some() {
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
             return;
@@ -7332,6 +7452,9 @@ impl EntityInputHandler for CanvasApp {
             dialog.kind == product::DialogKind::History && dialog.active_field == 1
         }) {
             cx.notify();
+            return;
+        }
+        if self.paste_clipboard_files(&item, window, cx) {
             return;
         }
         if let Some(text) = item.text() {
@@ -7378,7 +7501,7 @@ impl EntityInputHandler for CanvasApp {
             self.editor_changed(window, cx);
             return;
         }
-        if self.pane_drag.is_some() || self.resize_gesture.is_some() {
+        if self.external_file_drag || self.pane_drag.is_some() || self.resize_gesture.is_some() {
             self.text_input.cancel();
             window.notify_text_input_changed(&self.focus);
             return;
@@ -7484,6 +7607,7 @@ impl Render for CanvasApp {
         let preedit = self.text_input.preedit.clone();
         let preedit_selection = self.text_input.selection_bytes();
         let selected = self.selected;
+        let file_drop_target = self.file_drop_target.clone();
         let cursor_visible = self.cursor_phase_visible;
         let selection = self.selection.clone();
         let drop_preview = self
@@ -7560,6 +7684,15 @@ impl Render for CanvasApp {
             format!("{status} · Положение canvas не сохранено")
         } else if !self.canvas_bars.is_empty() && self.layout_mode.is_none() {
             format!("{status} · Shift+колесо — canvas · Alt — горизонтально")
+        } else {
+            status
+        };
+        let status = if self.external_file_drag {
+            if self.file_drop_target.is_some() {
+                "Отпустите файлы над панелью, чтобы проверить пути перед вставкой".to_owned()
+            } else {
+                "Перетащите файлы на доступную работающую панель".to_owned()
+            }
         } else {
             status
         };
@@ -7701,7 +7834,7 @@ impl Render for CanvasApp {
                                                                     .get(index)
                                                                     .map(String::as_str)
                                                                     .unwrap_or("Терминал"),
-                                                                selected: index == selected,
+                                                                selected: file_drop_target.as_ref().map_or(index == selected, |target| views.get(index).is_some_and(|view| view.session == target.session && view.generation == target.generation)),
                                                                 attached,
                                                                 focused: index == selected
                                                                     && attached
@@ -7900,6 +8033,9 @@ impl Render for CanvasApp {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::pointer_up))
             .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::pointer_up))
             .on_mouse_up_out(MouseButton::Right, cx.listener(Self::pointer_up))
+            .on_drag_move::<ExternalPaths>(cx.listener(Self::external_files_over))
+            .on_file_drop_exit(cx.listener(|this, _: &FileDropEvent, _, cx| this.clear_external_files(cx)))
+            .on_drop::<ExternalPaths>(cx.listener(Self::drop_external_files))
             .on_mouse_move(cx.listener(Self::pointer_move))
             .on_scroll_wheel(cx.listener(Self::pointer_wheel))
     }

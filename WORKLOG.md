@@ -3586,3 +3586,132 @@ Finish copy-only release rebuild after visual review
 - Files: crates/app/src/transfer_flow.rs
 - Verification: Final six transfer helper tests, strict app Clippy, locked release rebuild, first-party fmt/version/diff checks passed. Full private native02 preceded only the pane-count wording change; no behavioral delta followed it.
 - Risks / next: Commit integrated tiling block; full MVP/platform gates remain open.
+
+## 2026-10-18T02:36:28+00:00 — pointer_review_luna
+
+Added a pure generation-bound terminal paste review model and bounded POSIX-shell quoting for absolute UTF-8 file paths.
+
+- Files: crates/app/src/terminal_insert.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/terminal_insert.rs and scoped git diff --check passed. App Cargo tests were not run by task boundary.
+- Risks / next: Root owns module declaration and integration into clipboard/multiline paste and BridgeMind file-drop review; verify module tests through the designated app Cargo lane.
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Add an explicit terminal insertion review card for clipboard and file-path payloads
+
+- Files: crates/app/src/product.rs
+- Verification: `rustfmt --edition 2024 --check crates/app/src/product.rs` and `git diff --check` passed. App Cargo/native checks were not run per task boundary.
+- Behavior: review shows destination label plus shortened session/generation, full untruncated read-only text in a bounded scroll area, the multiline shell warning or file-path-only notice, current notice, and explicit Cancel/Insert actions with Ctrl+Enter/Escape guidance. The card does not label insertion as model or CLI context acceptance.
+- Risks / next: Root owns modal lifecycle, Ctrl+Enter confirmation, and delivery validation.
+
+## 2026-10-18T02:38:36+00:00 — /root/appearance_colors_luna
+
+Extend the private pointer fixture with fixed native XDND file-drop review, cancellation, and explicit confirmation checks.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed (33 tests); isolated C helper compiled with -Wall -Wextra -Werror; git diff --check passed. No app/native run performed.
+- Risks / next: Root owns application/native review and acceptance run.
+
+## 2026-10-18T02:42:41+00:00 — /root/appearance_colors_luna
+
+Extend the isolated pointer fixture with private fixed multiline clipboard paste review, cancellation, and bracketed-paste-gated confirmation.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed (34 tests), including compiling the X11 helper with -Wall -Wextra -Werror and running its exact UTF-8 payload self-test; git diff --check passed. No app/native acceptance run.
+- Risks / next: Root owns app integration and acceptance verification.
+
+## 2026-10-18T02:47:13+00:00 — /root/appearance_colors_luna
+
+Correct the private XDND fixture to serve URI selection requests during Position and gate Drop on both accepted Status and actual data transfer.
+
+- Files: scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; all 34 scripts/test_isolated_ime_x11.py tests passed, including strict helper compile/self-test; git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns native fixture rerun.
+
+## 2026-10-18T02:52:40+00:00 — pointer_review_luna
+
+Upgraded the pinned GPUI X11 patch to v3, correcting the XdndAware property type to the predefined ATOM and preserving the v2 XIM handler postimage.
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py: passed (12 embedded tests and archive/preimage/postimage checks); python3 -m unittest scripts.test_apply_gpui_patches: 15 passed; git diff --check on owned files: passed.
+- Risks / next: The pinned profile is prepared but must be applied by the integration owner; app build and isolated native drag-and-drop fixture were intentionally not run.
+
+## 2026-10-18T02:53:55+00:00 — pointer_review_luna
+
+Extended pinned GPUI patch v3 to bound X11 URI-list reads at 64 KiB, reject truncated or malformed external-path lists atomically, and ignore empty/comment lines; kept v2 as the migration predecessor and used direct AtomEnum::ATOM for the XdndAware type.
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py: passed (12 embedded tests plus archive/preimage/postimage and static regression checks); python3 -m unittest scripts.test_apply_gpui_patches: 15 passed; git diff --check on owned files: passed.
+- Risks / next: Profile v3 is ready for integration-owner application; no bootstrap, Cargo, or native fixture was run.
+
+## 2026-10-18T02:58:49+00:00 — /root/appearance_colors_luna
+
+Extended the private pointer fixture with atomic rejection checks for a valid-file-plus-HTTPS URI list and a valid-file-plus-over-64-KiB comment list.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed, strict C compile and URI payload size self-test included); git diff --check passed. No native or Cargo run.
+- Risks / next: Root owns release build and private native fixture execution; verify malformed drops produce no preview and compare the fixed header sample against baseline.
+
+## 2026-10-18T03:00:54+00:00 — pointer_review_luna
+
+Completed GPUI X11 patch v3 transfer-result handling: only complete, nonempty decoded URI lists yield XdndFinished success and XdndActionCopy; invalid, truncated, or empty lists report failure with no action.
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, WORKLOG.md
+- Verification: python3 scripts/test_gpui_xim_focus.py: passed (12 embedded tests plus pinned archive/postimage and XDND static checks); python3 -m unittest scripts.test_apply_gpui_patches: 15 passed; git diff --check on owned files: passed.
+- Risks / next: Integration owner can now apply the exact v3 patch; no bootstrap, Cargo, or native fixture was run in this lane.
+
+## 2026-10-18T03:05:58+00:00 — /root/appearance_colors_luna
+
+Gated every pointer file/clipboard review key with a visible modal pixel check and captured overlay dismissal after Escape.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed, including strict C helper compile); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns the private native fixture rerun and investigation of repeated file-drop review behavior.
+
+## 2026-10-18T03:08:40+00:00 — pointer_review_luna
+
+Treat active GPUI X11 file-drop events as mouse modality before translated dispatch so a repeated drop after Escape reaches hover and root drop handling.
+
+- Files: crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py
+- Verification: python3 scripts/test_gpui_xim_focus.py (12 embedded state tests passed; exact source hashes and modality guard passed); python3 -m unittest scripts.test_apply_gpui_patches (15 passed); git diff --check on owned files passed. No Cargo or native run.
+- Risks / next: Root should migrate the verified cache from v2 and run the private isolated repeated-file-drop fixture; this slice does not claim native behavior.
+
+## 2026-10-18T03:14:03+00:00 — /root/appearance_colors_luna
+
+Added bounded fail-closed clipboard SelectionRequest diagnostics for owner/selection matches, requestor and expected PIDs, and target atom name.
+
+- Files: scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed, strict C helper compile included); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns rerunning the private fixture to identify whether the request is an unexpected target, selection/owner, or XRes PID.
+
+## 2026-10-18T03:15:27+00:00 — /root/appearance_colors_luna
+
+Allowed only the preflight-verified private Fcitx PID to receive a no-data SelectionNotify refusal, then continued waiting for the exact app PID clipboard transfer.
+
+- Files: scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed, strict C helper compile included); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns private native rerun; clipboard data remains served only to the exact app PID.
+
+## 2026-10-18T03:17:56+00:00 — pointer_review_luna
+
+Classify exact Ctrl+Shift+C/V as fixed copy/paste actions independently of the panel modifier preference, with passthrough regression cases.
+
+- Files: crates/app/src/controls.rs
+- Verification: rustfmt --edition 2024 crates/app/src/controls.rs; git diff --check -- crates/app/src/controls.rs passed. App Cargo tests intentionally not run per scope.
+- Risks / next: Root must wire the new actions to selection copy and guarded clipboard paste, then run the app test lane.
+
+## 2026-10-18T03:20:46+00:00 — /root/appearance_colors_luna
+
+Unified the successful clipboard transfer metadata with the shared helper JSON footer so clipboard paste emits exactly one JSON record.
+
+- Files: scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 passed, strict C helper compile included); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns final native09 run; Python retains strict json.loads and checks selection_transfer plus exact payload_bytes.
+
+## 2026-10-18T03:22:35+00:00 — /root
+
+Ship generation-bound terminal file and multiline paste review; repair native XDND repeat-drop and conventional clipboard shortcuts
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/controls.rs, crates/app/src/terminal_insert.rs, crates/app/src/terminal_insert_commands.rs, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0010-gpui-x11-ime-focus-lifecycle.md
+- Verification: 242 app tests, strict app Clippy, locked release build,34 harness tests including strict C compile,12 GPUI state tests with exact hashes/static guards,15 applier tests, fmt/version/diff checks passed. Private native09 passes full pointer/transfer/IME plus actual first/repeat file review and insertion, CShiftV multiline Enter/cancel/confirm, malformed/truncated URI rejection; fresh captures inspected. Retained01-08 are failures, not acceptance. Temporary event probes removed; exact derived caches migrated only through hash-verifying applier.
+- Risks / next: Commit coherent block. Native Wayland, synchronous Linux clipboard latency, typed OS file clipboard, non-POSIX/image attachment and full MVP gates remain explicit. Preserve unrelated dirt and stash0; do not mark broad goal complete.

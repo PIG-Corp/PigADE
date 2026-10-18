@@ -98,6 +98,39 @@ path override. `bootstrap.sh test-xim` executes the patched crate's actual
 mock-transport tests; it uses its upstream workspace because Cargo cannot test a
 nonmember dependency's dev-dependencies from the app workspace.
 
+## Update18.10.2026 — native file-drop transport
+
+Profile `pigade-x11-ime-focus-v3` preserves v2 XIM behavior and fixes the
+`XdndAware` property type. The pinned atom manager interns the literal name
+`XA_ATOM`, which is a custom atom, while the [XDND specification](https://www.freedesktop.org/wiki/Specifications/XDND/)
+requires the predefined `ATOM`. Two isolated file-drop attempts failed before
+data transfer on this mismatch; the native fixture retains its standard type
+requirement. The patch now uses XCB's `AtomEnum::ATOM` directly.
+
+Selection reads are bounded to64KiB, sufficient for percent-encoded application
+path lists. Nonzero `bytes_after`, invalid UTF-8 and any malformed or non-file
+URI reject the entire list. Empty and comment lines are ignored. Invalid data
+produces an empty external-path event so the UI can clear the drag and report
+failure; no partial valid prefix reaches terminal insertion review. The exact
+v2 postimages are the only recognized migration predecessor. Existing hash and
+source checks do not replace native file-drop acceptance.
+
+`XdndFinished` reports success only after a complete nonempty path list was
+decoded; invalid, truncated, empty or missing payloads return failure with no
+action. Success acknowledges the native transfer only. Terminal insertion
+still requires the application's explicit review confirmation and ordinary
+generation-bound input admission.
+
+Native03 opened the first review but lost a second drop after Escape. Native04
+added a visible-modal gate before any confirmation and reproduced the loss
+without sending Ctrl+Enter. The pinned GPUI window classifies input modality
+before translating file events; `FileDrop` left keyboard modality unchanged,
+so `HitboxId::is_hovered` suppressed the drop listener. The third patched file,
+`gpui/src/window.rs`, classifies only native Entered/Pending/Submit as mouse
+input. Exited/Ended and ordinary paints do not change modality, preserving
+keyboard focus under a stationary cursor. The pristine window file hash joins
+the exact v2 predecessor set; unknown cache edits still fail closed.
+
 Final18.10 evidence: source-bound12 capability/lifecycle tests and the actual
 patched xim-rs2 mock-transport tests pass. Native release pointer07, Pinyin04,
 keyboard03 and controls01 pass. Inline preedit and final drop/undo captures were

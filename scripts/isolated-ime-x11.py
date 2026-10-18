@@ -1929,6 +1929,212 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                       prepare_stage='pointer-picker-transfer',
                       search_capture='/artifacts/pointer-transfer-picker-search.ppm')
 
+    # Native external XDND path: each fixed URI-list is reviewed by the app
+    # before terminal input. Escape cancels the first preview; Ctrl+Enter on a
+    # second review inserts only quoted, unsent shell text into the hit pane.
+    def pointer_state_snapshot():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        views = host_request({'command': 'list'}).get('views', [])
+        require(len(views) <= 32, 'file-drop view snapshot exceeds bound')
+        view_state = {}
+        for view in views:
+            key = (view.get('session'), view.get('generation'))
+            require(all(isinstance(part, str) for part in key) and
+                    type(view.get('sequence')) is int and isinstance(view.get('frame'), dict),
+                    'file-drop view omitted identity, sequence, or frame')
+            view_state[key] = (view.get('pid'), view.get('state'), view['sequence'],
+                               view['frame'], view_text(view))
+        current_generations = fixture_generations()
+        return (catalog, view_state, fixture_journal_hashes(
+            [generation for _, generation in current_generations]))
+
+    def pointer_chrome_pixel(name):
+        raw = (Path('/artifacts') / name).read_bytes()
+        match = re.match(rb'P6\n([0-9]+) ([0-9]+)\n255\n', raw)
+        require(match is not None and len(raw) <= MAX_CAPTURE_BYTES,
+                'pointer review chrome capture is not a bounded PPM image')
+        width, height = int(match.group(1)), int(match.group(2))
+        pixels = raw[match.end():]
+        x, y = 640, 57  # blank center of the fixed 1280x800 tab/header strip
+        require(width == 1280 and height == 800 and len(pixels) == width * height * 3,
+                'pointer review chrome capture has invalid geometry or pixels')
+        offset = (y * width + x) * 3
+        return tuple(pixels[offset:offset + 3])
+
+    def fixed_file_drop(capture_name):
+        report['stage'] = 'pointer-file-drop'
+        save()
+        helper_call(config, 'pointer-file-drop', capture_name, timeout=5)
+        require(0 < Path(capture_name).stat().st_size <= MAX_CAPTURE_BYTES,
+                'native file-drop review capture is missing or oversized')
+
+    step('pointer-hover-source')
+    time.sleep(0.2)
+    drop_target = catalog_layout()[1].get('focused')
+    require(drop_target in original_ids, 'fixed file drop did not resolve its actual hit pane')
+    helper_call(config, 'capture', '/artifacts/pointer-review-baseline.ppm')
+    require(0 < Path('/artifacts/pointer-review-baseline.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'plain-window pointer review baseline capture is missing or oversized')
+    pointer_review_baseline = pointer_chrome_pixel('pointer-review-baseline.ppm')
+    drop_before = pointer_state_snapshot()
+    drop_processes = process_snapshot()
+    drop_cwds = cwd_snapshot(drop_processes)
+    fixed_file_drop('/artifacts/pointer-file-drop-review-cancel.ppm')
+    require(pointer_chrome_pixel('pointer-file-drop-review-cancel.ppm') != pointer_review_baseline,
+            'first file drop did not visibly open its review overlay')
+    require(pointer_state_snapshot() == drop_before and
+            process_snapshot() == drop_processes and cwd_snapshot(drop_processes) == drop_cwds,
+            'first file-drop preview changed catalog/layout, selection, frames, journals, sequences, or processes')
+    report['stage'] = 'pointer-file-drop-cancel'
+    save()
+    helper_call(config, 'pointer-file-drop-cancel')
+    wait_until(lambda: pointer_state_snapshot() == drop_before, time.monotonic() + 5)
+    require(process_snapshot() == drop_processes and cwd_snapshot(drop_processes) == drop_cwds,
+            'Escape file-drop cancellation changed processes')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/pointer-file-drop-review-cancelled.ppm')
+    require(pointer_chrome_pixel('pointer-file-drop-review-cancelled.ppm') == pointer_review_baseline,
+            'Escape did not visibly close the file-drop review overlay')
+
+    fixed_file_drop('/artifacts/pointer-file-drop-review-confirm.ppm')
+    require(pointer_chrome_pixel('pointer-file-drop-review-confirm.ppm') != pointer_review_baseline,
+            'second file drop did not visibly open its review overlay')
+    require(pointer_state_snapshot() == drop_before and
+            process_snapshot() == drop_processes and cwd_snapshot(drop_processes) == drop_cwds,
+            'second file-drop review changed state before explicit confirmation')
+    report['stage'] = 'pointer-file-drop-confirm'
+    save()
+    helper_call(config, 'pointer-file-drop-confirm')
+    first_quoted = "'/home/pigade/demo/a space.txt'"
+    second_quoted = "'/home/pigade/demo/it'\\''s$(no).txt'"
+    expected_insert = first_quoted + ' ' + second_quoted + ' '
+    def confirmed_file_text():
+        views = host_request({'command': 'list'}).get('views', [])
+        target_view = next((view for view in views if view.get('session') == drop_target), None)
+        others = [view for view in views if view.get('session') != drop_target]
+        if not target_view or expected_insert not in view_text(target_view):
+            return None
+        if any(first_quoted in view_text(view) or second_quoted in view_text(view) for view in others):
+            raise RuntimeError('confirmed file-drop text reached an unrelated pane')
+        return target_view
+    confirmed_view = wait_until(confirmed_file_text, time.monotonic() + 6)
+    after_confirm = pointer_state_snapshot()
+    baseline_target_key = next(key for key in drop_before[1] if key[0] == drop_target)
+    baseline_target_state = drop_before[1][baseline_target_key]
+    unrelated_view_keys = set(drop_before[1]) - {baseline_target_key}
+    require(after_confirm[0]['layout'] == drop_before[0]['layout'] and
+            {item['id']: (item['layout_json'], item['active_pane']) for item in after_confirm[0]['tabs']} ==
+            {item['id']: (item['layout_json'], item['active_pane']) for item in drop_before[0]['tabs']} and
+            process_snapshot() == drop_processes and cwd_snapshot(drop_processes) == drop_cwds and
+            confirmed_view.get('pid') == baseline_target_state[0] and
+            after_confirm[1].get(baseline_target_key, (None, None, -1, None))[2] >= baseline_target_state[2] and
+            all(after_confirm[1].get(key) == drop_before[1][key] for key in unrelated_view_keys),
+            'confirmed file drop changed placement, process identity, cwd, or started a command')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/pointer-file-drop-inserted.ppm')
+
+    # Clipboard paste is a separate multiline preview. Enter is deliberately
+    # inert; only Escape cancels, and explicit confirmation is allowed when
+    # the exact target terminal has acknowledged bracketed-paste mode.
+    clipboard_before = pointer_state_snapshot()
+    clipboard_processes = process_snapshot()
+    clipboard_cwds = cwd_snapshot(clipboard_processes)
+    report['stage'] = 'pointer-clipboard-paste'
+    save()
+    clipboard_reply = helper_call(config, 'pointer-clipboard-paste', timeout=5)
+    require(clipboard_reply.get('selection_transfer') is True and
+            clipboard_reply.get('payload_bytes') == len(b'PIGADE_MULTILINE_A\nPIGADE_MULTILINE_B'),
+            'private clipboard source did not transfer the exact fixed multiline payload')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/pointer-clipboard-review-enter.ppm')
+    require(0 < Path('/artifacts/pointer-clipboard-review-enter.ppm').stat().st_size <= MAX_CAPTURE_BYTES and
+            pointer_chrome_pixel('pointer-clipboard-review-enter.ppm') != pointer_review_baseline and
+            pointer_state_snapshot() == clipboard_before and
+            process_snapshot() == clipboard_processes and cwd_snapshot(clipboard_processes) == clipboard_cwds,
+            'multiline clipboard review changed terminal/catalog state before confirmation')
+    report['stage'] = 'pointer-clipboard-enter'
+    save()
+    helper_call(config, 'pointer-clipboard-enter')
+    require(pointer_chrome_pixel('pointer-clipboard-review-enter.ppm') != pointer_review_baseline and
+            pointer_state_snapshot() == clipboard_before and
+            process_snapshot() == clipboard_processes and cwd_snapshot(clipboard_processes) == clipboard_cwds,
+            'plain Enter accepted a multiline clipboard review or changed terminal state')
+    report['stage'] = 'pointer-clipboard-cancel'
+    save()
+    helper_call(config, 'pointer-clipboard-cancel')
+    require(pointer_state_snapshot() == clipboard_before and
+            process_snapshot() == clipboard_processes and cwd_snapshot(clipboard_processes) == clipboard_cwds,
+            'Escape did not cancel multiline clipboard review without input')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/pointer-clipboard-review-cancelled.ppm')
+    require(pointer_chrome_pixel('pointer-clipboard-review-cancelled.ppm') == pointer_review_baseline,
+            'Escape did not visibly close the clipboard review overlay')
+    report['stage'] = 'pointer-clipboard-paste'
+    save()
+    clipboard_reply = helper_call(config, 'pointer-clipboard-paste', timeout=5)
+    require(clipboard_reply.get('selection_transfer') is True and
+            pointer_state_snapshot() == clipboard_before,
+            'second multiline clipboard review changed host or terminal state')
+    helper_call(config, 'capture', '/artifacts/pointer-clipboard-review-confirm.ppm')
+    require(0 < Path('/artifacts/pointer-clipboard-review-confirm.ppm').stat().st_size <= MAX_CAPTURE_BYTES and
+            pointer_chrome_pixel('pointer-clipboard-review-confirm.ppm') != pointer_review_baseline,
+            'second multiline review capture is missing or oversized')
+    target_key = next(key for key in clipboard_before[1] if key[0] == drop_target)
+    target_modes = clipboard_before[1][target_key][3].get('modes')
+    require(type(target_modes) is int and target_modes & 16,
+            'target pane did not acknowledge bracketed-paste mode; multiline confirm not sent')
+    report['stage'] = 'pointer-clipboard-confirm'
+    save()
+    helper_call(config, 'pointer-clipboard-confirm')
+    clipboard_markers = ('PIGADE_MULTILINE_A', 'PIGADE_MULTILINE_B')
+    def confirmed_clipboard_text():
+        views = host_request({'command': 'list'}).get('views', [])
+        target_view = next((view for view in views if view.get('session') == drop_target), None)
+        target_text = view_text(target_view) if target_view else ''
+        if not target_view or not all(marker in target_text for marker in clipboard_markers) or \
+                target_text.index(clipboard_markers[0]) > target_text.index(clipboard_markers[1]):
+            return None
+        if any(any(marker in view_text(view) for marker in clipboard_markers)
+               for view in views if view.get('session') != drop_target):
+            raise RuntimeError('confirmed clipboard payload reached another pane')
+        return target_view
+    clipboard_view = wait_until(confirmed_clipboard_text, time.monotonic() + 6)
+    after_clipboard = pointer_state_snapshot()
+    require(after_clipboard[0]['layout'] == clipboard_before[0]['layout'] and
+            {item['id']: (item['layout_json'], item['active_pane']) for item in after_clipboard[0]['tabs']} ==
+            {item['id']: (item['layout_json'], item['active_pane']) for item in clipboard_before[0]['tabs']} and
+            clipboard_view.get('pid') == clipboard_before[1][target_key][0] and
+            process_snapshot() == clipboard_processes and cwd_snapshot(clipboard_processes) == clipboard_cwds and
+            all(after_clipboard[1].get(key) == clipboard_before[1][key]
+                for key in set(clipboard_before[1]) - {target_key}) and
+            'command not found' not in view_text(clipboard_view).lower() and
+            'not found' not in view_text(clipboard_view).lower(),
+            'confirmed clipboard paste changed layout, another pane, process identity, or cwd')
+    helper_call(config, 'capture', '/artifacts/pointer-clipboard-inserted.ppm')
+
+    # Malformed native URI lists must be rejected as a whole before the app
+    # opens its review surface, using the same plain-window baseline.
+    def assert_invalid_file_drop(stage, capture_name):
+        before = pointer_state_snapshot()
+        processes = process_snapshot()
+        cwds = cwd_snapshot(processes)
+        report['stage'] = stage
+        save()
+        reply = helper_call(config, stage, capture_name, timeout=5)
+        require(reply.get('stage') == stage and
+                0 < Path(capture_name).stat().st_size <= MAX_CAPTURE_BYTES,
+                f'{stage} did not produce its fixed private capture')
+        require(pointer_state_snapshot() == before and process_snapshot() == processes and
+                cwd_snapshot(processes) == cwds,
+                f'{stage} changed catalog/layout, selection, frames, journals, sequences, or processes')
+        require(pointer_chrome_pixel(Path(capture_name).name) == pointer_review_baseline,
+                f'{stage} opened a review overlay instead of rejecting the whole URI list')
+
+    assert_invalid_file_drop('pointer-file-drop-invalid-uri',
+                             '/artifacts/pointer-file-drop-invalid-uri.ppm')
+    assert_invalid_file_drop('pointer-file-drop-truncated',
+                             '/artifacts/pointer-file-drop-truncated.ppm')
+
     report['pointer'] = {
         'four_pane_ids_preserved': sorted(original_ids),
         'process_generations_and_pids_unchanged': True,
@@ -1951,6 +2157,9 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'populated_destination_received_source_as_right_sibling_and_undo_restored_it': True,
         'ctrl_shift_2_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees': True,
         'searchable_transfer_picker_transferred_to_occupied_tab_without_following_selection_and_undo_restored_exact_trees': True,
+        'xdnd_file_drop_review_cancel_and_confirm_inserted_only_fixed_shell_quoted_text': True,
+        'xdnd_nonfile_and_over_64k_uri_lists_rejected_atomically_without_review_or_input': True,
+        'multiline_clipboard_review_ignored_enter_cancelled_without_input_and_confirmed_only_with_bracketed_mode': True,
         'one_fixture_shell_was_explicitly_added_before_populated_transfer': destination_pair,
         'captures': ['pointer-hover.ppm', 'pointer-subthreshold-before.ppm',
                      'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
@@ -1962,7 +2171,13 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                      'pointer-tab-drop-populated-before.ppm',
                      'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
                      'pointer-tab-drop-populated-undo.ppm', 'pointer-transfer-hotkey.ppm',
-                     'pointer-transfer-picker-search.ppm', 'pointer-transfer-picker.ppm']}
+                     'pointer-transfer-picker-search.ppm', 'pointer-transfer-picker.ppm',
+                     'pointer-file-drop-review-cancel.ppm', 'pointer-file-drop-review-confirm.ppm',
+                     'pointer-file-drop-inserted.ppm', 'pointer-review-baseline.ppm',
+                     'pointer-file-drop-review-cancelled.ppm',
+                     'pointer-file-drop-invalid-uri.ppm', 'pointer-file-drop-truncated.ppm',
+                     'pointer-clipboard-review-enter.ppm', 'pointer-clipboard-review-cancelled.ppm',
+                     'pointer-clipboard-review-confirm.ppm', 'pointer-clipboard-inserted.ppm']}
     report.update({'status': POINTER_PASS, 'stage': 'complete'})
     save()
 
@@ -5103,7 +5318,13 @@ def outer_run(args) -> dict:
                   'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
                   'pointer-tab-drop-populated-undo.ppm', 'pointer-transfer-hotkey.ppm',
                   'pointer-transfer-picker-search.ppm',
-                  'pointer-transfer-picker.ppm'] if args.fixture == 'pointer' else
+                  'pointer-transfer-picker.ppm', 'pointer-file-drop-review-cancel.ppm',
+                  'pointer-file-drop-review-confirm.ppm', 'pointer-file-drop-review-cancelled.ppm',
+                  'pointer-file-drop-inserted.ppm', 'pointer-review-baseline.ppm',
+                  'pointer-file-drop-invalid-uri.ppm', 'pointer-file-drop-truncated.ppm',
+                  'pointer-clipboard-review-enter.ppm', 'pointer-clipboard-review-cancelled.ppm',
+                  'pointer-clipboard-review-confirm.ppm',
+                  'pointer-clipboard-inserted.ppm'] if args.fixture == 'pointer' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
@@ -5147,7 +5368,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

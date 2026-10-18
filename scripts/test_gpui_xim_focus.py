@@ -17,7 +17,7 @@ PROFILE = ROOT / "crates/app/patches/gpui-x11-ime"
 MANIFEST = PROFILE / "manifest.json"
 MAX_ARCHIVE_FILE = 1024 * 1024
 MAX_PATCH = 256 * 1024
-MAX_SOURCE_FILES = 2
+MAX_SOURCE_FILES = 3
 STATE_BEGIN = "// BEGIN PIGADE XIM FOCUS STATE"
 STATE_END = "// END PIGADE XIM FOCUS STATE"
 TEST_BEGIN = "// BEGIN PIGADE XIM FOCUS TESTS"
@@ -74,7 +74,15 @@ def extract_sources(archive: Path, manifest: dict, destination: Path) -> None:
 def apply_profile(archive: Path, temp: Path) -> tuple[dict, Path]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     fail(manifest.get("schema") == 1, "unsupported manifest schema")
-    fail(manifest.get("profile") == "pigade-x11-ime-focus-v2", "unexpected patch profile")
+    fail(manifest.get("profile") == "pigade-x11-ime-focus-v3", "unexpected patch profile")
+    fail(manifest.get("previous_files_sha256") == {
+        "crates/gpui_linux/src/linux/x11/xim_handler.rs":
+            "7b91a6d4109622aea22ace00f452afbd7da704ac195e00cb68ee264059368f2a",
+        "crates/gpui_linux/src/linux/x11/client.rs":
+            "1086c3f44d6567360c74703d2101c7e3c24c89371c6fade921332f11e0b95b70",
+        "crates/gpui/src/window.rs":
+            "224c1f15e78b3baa128479dbabfa1512e67d2794d3ef4cf6ca9eaf64cbd2bd74",
+    }, "profile migration must recognize the exact v2 postimages")
     fail(len(manifest.get("files", [])) == MAX_SOURCE_FILES, "unexpected source file set")
     fail(len(manifest.get("patches", [])) == 1, "expected one focus patch")
     source = temp / "upstream"
@@ -137,6 +145,68 @@ def apply_profile(archive: Path, temp: Path) -> tuple[dict, Path]:
          "both live XIC style updates must keep the complete preedit/status style pair")
     fail("xim::InputStyle::PREEDIT_CALLBACKS," not in client_text,
          "client XIC updates must not select preedit callbacks without a status style")
+    xdnd_setter = client_text.find("state.xcb_connection.change_property32(")
+    fail(xdnd_setter >= 0, "XdndAware property setter is missing")
+    xdnd_block = client_text[xdnd_setter:xdnd_setter + 600]
+    fail("state.atoms.XdndAware" in xdnd_block and
+         "xproto::AtomEnum::ATOM" in xdnd_block and
+         "state.atoms.XA_ATOM" not in xdnd_block,
+         "XdndAware property type must use the predefined X11 ATOM")
+    selection_start = client_text.find("Event::SelectionNotify(event)")
+    selection_end = client_text.find("Event::ConfigureNotify(event)", selection_start)
+    fail(selection_start >= 0 and selection_end > selection_start,
+         "X11 selection-notify handler is missing")
+    selection_block = client_text[selection_start:selection_end]
+    fail("16 * 1024" in selection_block and "reply.bytes_after != 0" in selection_block,
+         "X11 URI-list reads must be bounded to 64 KiB and reject truncation")
+    fail(".filter(|path| !path.is_empty() && !path.starts_with('#'))" in selection_block and
+         ".collect::<Option<SmallVec<[_; 2]>>>()" in selection_block and
+         "Url::parse(path).ok().and_then(|url| url.to_file_path().ok())" in selection_block and
+         ".filter_map(" not in selection_block and
+         "let drop_success = !paths.is_empty();" in selection_block and
+         "state.xdnd_state.drop_success = drop_success;" in selection_block,
+         "external URI lists must be all-or-nothing and mark only nonempty decoded paths successful")
+    xdnd_start = client_text.find("pub struct Xdnd {")
+    xdnd_end = client_text.find("\n}", xdnd_start)
+    fail(xdnd_start >= 0 and xdnd_end > xdnd_start and
+         "drop_success: bool" in client_text[xdnd_start:xdnd_end],
+         "XDND drop validity must be tracked for the active transfer")
+    enter_start = client_text.find("event.type_ == state.atoms.XdndEnter")
+    enter_end = client_text.find("event.type_ == state.atoms.XdndLeave", enter_start)
+    fail(enter_start >= 0 and enter_end > enter_start and
+         "state.xdnd_state.drop_success = false;" in client_text[enter_start:enter_end],
+         "a new XDND transfer must not inherit an earlier result")
+    drop_start = client_text.find("event.type_ == state.atoms.XdndDrop")
+    drop_end = client_text.find("Event::SelectionNotify(event)", drop_start)
+    fail(drop_start >= 0 and drop_end > drop_start and
+         "state.xdnd_state.drop_success" in client_text[drop_start:drop_end],
+         "XdndDrop must report the validity of its received URI list")
+    finished_start = client_text.find("fn xdnd_send_finished(")
+    finished_end = client_text.find("fn xdnd_send_status(", finished_start)
+    fail(finished_start >= 0 and finished_end > finished_start,
+         "XdndFinished sender is missing")
+    finished_block = client_text[finished_start:finished_end]
+    fail("success: bool" in finished_block and
+         "if success { 1 } else { 0 }" in finished_block and
+         "if success { atoms.XdndActionCopy } else { 0 }" in finished_block,
+         "invalid URI lists must produce failed XdndFinished with no action")
+    window_entry = next(row for row in manifest["files"]
+                        if row["path"].endswith("/window.rs"))
+    window_text = source.joinpath(*PurePosixPath(window_entry["path"]).parts).read_text(
+        encoding="utf-8")
+    modality_start = window_text.find("// Track input modality for focus-visible styling and hover suppression.")
+    modality_end = window_text.find("if self.last_input_modality != old_modality", modality_start)
+    fail(modality_start >= 0 and modality_end > modality_start,
+         "window input-modality classifier is missing")
+    modality_block = window_text[modality_start:modality_end]
+    fail("PlatformInput::FileDrop(" in modality_block and
+         "FileDropEvent::Entered { .. }" in modality_block and
+         "FileDropEvent::Pending { .. }" in modality_block and
+         "FileDropEvent::Submit { .. }" in modality_block and
+         modality_block.count("InputModality::Mouse") == 2 and
+         "FileDropEvent::Exited" not in modality_block and
+         "FileDropEvent::Ended" not in modality_block,
+         "active external file-drop events must enter mouse modality without changing exit/end modality")
     return manifest, source
 
 

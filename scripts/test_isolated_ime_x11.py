@@ -509,6 +509,126 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('--coordinates', source)
         self.assertNotIn('--text', source)
 
+    def test_pointer_file_drop_uses_fixed_private_xdnd_and_waits_for_review_confirmation(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'pointer']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertIn('native XDND fixed URI list opens review', plan['input']['pointer'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+        source = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for token in ('XdndAware', 'XdndSelection', 'XdndEnter', 'XdndPosition', 'XdndDrop',
+                      'XdndStatus', 'XdndFinished', 'text/uri-list',
+                      'file:///home/pigade/demo/a%20space.txt',
+                      'file:///home/pigade/demo/it%27s%24%28no%29.txt',
+                      'https://example.invalid/file.txt', 'URI_PAYLOAD_TRUNCATED',
+                      'pointer-file-drop-invalid-uri', 'pointer-file-drop-truncated'):
+            self.assertIn(token, source)
+        drop = source.split('static void pointer_file_drop', 1)[1].split('\n}', 1)[0]
+        self.assertIn('XGetSelectionOwner(dpy, selection) != source', drop)
+        self.assertIn('XGetWindowProperty(dpy, target, aware, 0, 1, False, XA_ATOM', drop)
+        self.assertIn('actual_type == XA_ATOM && actual_format == 32', drop)
+        self.assertIn('XDND Status deadline expired', drop)
+        self.assertIn('XDND Finished deadline expired', drop)
+        self.assertIn('serve_xdnd_request(dpy, c, source, app_pid', drop)
+        self.assertIn('while (!status_received || !uri_transferred)', drop)
+        self.assertLess(drop.index('uri_transferred |= serve_xdnd_request'),
+                        drop.index('message_type = drop'))
+        self.assertIn('nanosleep(&entered, NULL)', drop)
+        self.assertIn('nanosleep(&review_paint, NULL)', drop)
+        self.assertIn('Finished did not match fixed URI-list validity', drop)
+        self.assertIn('payload != URI_PAYLOAD_VALID && !accepted', drop)
+        selection_service = source.split('static int serve_xdnd_request', 1)[1].split(
+            'static void pointer_file_drop', 1)[0]
+        self.assertIn('request->owner != source', selection_service)
+        self.assertIn('xres_pid(c, (uint32_t)request->requestor) != app_pid', selection_service)
+        harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        file_flow = harness.split('    # Native external XDND path:', 1)[1].split(
+            "    report['pointer'] = {", 1)[0]
+        self.assertLess(file_flow.index("helper_call(config, 'pointer-file-drop-cancel')"),
+                        file_flow.index("helper_call(config, 'pointer-file-drop-confirm')"))
+        self.assertIn("process_snapshot() == drop_processes", file_flow)
+        self.assertIn("cwd_snapshot(drop_processes) == drop_cwds", file_flow)
+        self.assertIn("expected_insert = first_quoted + ' ' + second_quoted + ' '", file_flow)
+        self.assertIn('pointer-file-drop-review-cancel.ppm', harness)
+        self.assertIn('pointer-file-drop-review-confirm.ppm', harness)
+        self.assertIn('pointer-file-drop-inserted.ppm', harness)
+        self.assertIn('pointer-review-baseline.ppm', harness)
+        self.assertIn('pointer-file-drop-review-cancelled.ppm', harness)
+        self.assertIn('pointer-file-drop-invalid-uri.ppm', harness)
+        self.assertIn('pointer-file-drop-truncated.ppm', harness)
+        self.assertIn("pointer_chrome_pixel('pointer-file-drop-review-cancel.ppm') != pointer_review_baseline",
+                      file_flow)
+        self.assertIn("pointer_chrome_pixel('pointer-file-drop-review-confirm.ppm') != pointer_review_baseline",
+                      file_flow)
+        self.assertIn("pointer_chrome_pixel('pointer-file-drop-review-cancelled.ppm') == pointer_review_baseline",
+                      file_flow)
+        self.assertIn('pointer_chrome_pixel(Path(capture_name).name) == pointer_review_baseline', file_flow)
+        self.assertIn('xdnd_nonfile_and_over_64k_uri_lists_rejected_atomically_without_review_or_input',
+                      harness)
+
+    def test_private_clipboard_multiline_payload_is_exact_and_review_gated(self):
+        source_path = Path(__file__).with_name('x11-ime-input.c')
+        source = source_path.read_text()
+        for token in ('CLIPBOARD', 'TARGETS', 'UTF8_STRING', 'text/plain',
+                      'PIGADE_MULTILINE_A\\nPIGADE_MULTILINE_B',
+                      'pointer-clipboard-paste', 'clipboard transfer deadline expired',
+                      'requestor_pid != app_pid', 'owner_match=%d selection_match=%d',
+                      'requestor_pid=%ld expected_pid=%ld target=%s target_allowed=%d',
+                      'snprintf(target_name, sizeof(target_name), "%.*s", 64, atom_name)',
+                      'xres_pid(c, (uint32_t)request->requestor)',
+                      'fcitx_pid > 0 && fcitx_pid != app_pid && requestor_pid == fcitx_pid',
+                      'refusal.xselection.property = None',
+                      'pointer_clipboard_paste(dpy, c, a.app, a.fcitx)'):
+            self.assertIn(token, source)
+        clipboard_source = source.split('static void pointer_clipboard_paste', 1)[1].split(
+            'static void setup_create_sequence', 1)[0]
+        fcitx_refusal = clipboard_source.split('if (fcitx_pid > 0 && fcitx_pid != app_pid &&', 1)[1].split(
+            'if (requestor_pid != app_pid || !target_match)', 1)[0]
+        self.assertIn('XSendEvent(dpy, request->requestor, False, 0, &refusal)', fcitx_refusal)
+        self.assertIn('continue;', fcitx_refusal)
+        self.assertNotIn('XChangeProperty', fcitx_refusal)
+        self.assertNotIn('printf("{\\"stage\\":\\"pointer-clipboard-paste', clipboard_source)
+        self.assertEqual(source.count('selection_transfer'), 1)
+        self.assertIn('if (!strcmp(a.stage, "pointer-clipboard-paste")) {', source)
+        self.assertIn('"\\\"selection_transfer\\\":true,\\\"payload_bytes\\\":%zu}', source)
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary) / 'x11-ime-input'
+            IME.compile_helper(source_path, helper)
+            result = subprocess.run([str(helper), '--self-test-clipboard-payload'],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, timeout=3, check=False)
+            uri_result = subprocess.run([str(helper), '--self-test-uri-payloads'],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, timeout=3, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), b'PIGADE_MULTILINE_A\nPIGADE_MULTILINE_B'.hex())
+        self.assertEqual(uri_result.returncode, 0, uri_result.stderr)
+        uri_lengths = json.loads(uri_result.stdout)
+        self.assertGreater(uri_lengths['truncated_uri_bytes'], 65536)
+        self.assertGreater(uri_lengths['invalid_uri_bytes'], 0)
+        harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        flow = harness.split('    # Clipboard paste is a separate multiline preview.', 1)[1].split(
+            "    report['pointer'] = {", 1)[0]
+        self.assertLess(flow.index("helper_call(config, 'pointer-clipboard-enter')"),
+                        flow.index("helper_call(config, 'pointer-clipboard-cancel')"))
+        self.assertLess(flow.index("helper_call(config, 'pointer-clipboard-cancel')"),
+                        flow.index("helper_call(config, 'pointer-clipboard-confirm')"))
+        self.assertLess(flow.index('target_modes & 16'),
+                        flow.index("helper_call(config, 'pointer-clipboard-confirm')"))
+        self.assertIn("pointer_chrome_pixel('pointer-clipboard-review-enter.ppm') != pointer_review_baseline",
+                      flow)
+        self.assertIn("pointer_chrome_pixel('pointer-clipboard-review-cancelled.ppm') == pointer_review_baseline",
+                      flow)
+        self.assertIn("pointer_chrome_pixel('pointer-clipboard-review-confirm.ppm') != pointer_review_baseline",
+                      flow)
+        self.assertIn("clipboard_before[1][target_key][3].get('modes')", flow)
+        self.assertIn("pointer_state_snapshot() == clipboard_before", flow)
+        self.assertIn('pointer-clipboard-review-enter.ppm', flow)
+        self.assertIn('pointer-clipboard-review-confirm.ppm', flow)
+
     def test_catalog_mode_is_fixed_plan_only_and_has_bounded_library_sequences(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
