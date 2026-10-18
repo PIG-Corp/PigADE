@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Claude Code2.1.259: ручное продолжение точного UUID через отдельную проверку и durable launch; прежние контекст/история/раскладка сохраняются, модель и задание не повторяются. Native offline fixture и context-on/off PTY проверки; auto-resume и полная матрица ещё открыты.
+
 - Searchable workspace switcher from the breadcrumb, palette or Prefix,A, with recent destinations and restoration of the last confirmed tab. Project folding and recent UUID-only preferences merge in bounded per-host files; navigation leaves CLI generations and layouts intact. Startup now waits through a cooperative host shutdown and the socket-unlinked/lock-held gap.
 
 - Optional host service sheet shows the active versus installed build and active sessions. Explicit idle-only replacement authenticates and freezes the peer/socket/helper, seals command admission, refuses active or unresolved work, and reconnects through existing writer locks without starting CLI. Unknown outcomes remain frozen for read-only reconciliation; legacy and explicit-socket hosts stay read-only.

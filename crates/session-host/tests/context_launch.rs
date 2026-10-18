@@ -89,6 +89,28 @@ impl TestHost {
             ),
         )?;
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o755))?;
+        let claude = bin.path().join("claude");
+        fs::write(
+            &claude,
+            concat!(
+                "#!/usr/bin/python3\n",
+                "import json,os,sys,zlib,time\n",
+                "if sys.argv[1:] == ['--version']:\n",
+                " print('2.1.259 (Claude Code)'); raise SystemExit(0)\n",
+                "args=sys.argv[1:]\n",
+                "print('FIXTURE_CLAUDE_START',flush=True)\n",
+                "context=args[args.index('--append-system-prompt')+1] if '--append-system-prompt' in args else None\n",
+                "if context is not None:\n",
+                " print('FIXTURE_CONTEXT_CRC32='+str(zlib.crc32(context.encode('utf-8'))))\n",
+                "if '--resume' in args:\n",
+                " reported=[('<append-system-prompt>' if i>0 and args[i-1]=='--append-system-prompt' else arg) for i,arg in enumerate(args)]\n",
+                " print('FIXTURE_RESUME_ARGS='+json.dumps(reported,ensure_ascii=False),flush=True)\n",
+                " print('FIXTURE_RESUME_CWD='+os.getcwd(),flush=True)\n",
+                " deadline=time.monotonic()+8\n",
+                " while os.path.exists('hold-resume') and time.monotonic()<deadline: time.sleep(0.01)\n",
+            ),
+        )?;
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755))?;
         let opencode = bin.path().join("opencode");
         fs::write(bin.path().join("opencode.version"), "1.19.3\n")?;
         fs::write(
@@ -875,6 +897,20 @@ fn custom_cli_prepare_never_probes_and_starts_exact_reviewed_argv() -> Result<()
 #[test]
 fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_binding() -> Result<()>
 {
+    frozen_context_resume("codex", true)
+}
+
+#[test]
+fn claude_resume_reuses_frozen_context_preserves_history_and_rejects_stale_binding() -> Result<()> {
+    frozen_context_resume("claude", true)
+}
+
+#[test]
+fn claude_resume_without_context_omits_task_and_original_engine_options() -> Result<()> {
+    frozen_context_resume("claude", false)
+}
+
+fn frozen_context_resume(provider: &str, deliver_context: bool) -> Result<()> {
     let mut host = TestHost::new()?;
     let root = host.root().canonicalize()?;
     let project = Uuid::new_v4();
@@ -944,17 +980,24 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
-                engine: Default::default(),
+                engine: if provider == "claude" {
+                    pigade_storage::EngineOptions {
+                        model: Some("claude-fixture-model".into()),
+                        reasoning_effort: Some("high".into()),
+                    }
+                } else {
+                    Default::default()
+                },
                 custom_command: None,
                 tab,
-                provider: "codex".into(),
+                provider: provider.into(),
                 side: Direction::Right,
                 target: None,
                 role_override: "".into(),
                 agent_instructions: "FROZEN_AGENT_INSTRUCTIONS".into(),
                 include_memory: false,
                 memory_selection: None,
-                deliver_context: true,
+                deliver_context,
             },
         },
     )?
@@ -976,7 +1019,7 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
     ensure!(initial_views.len() == 1);
     let old_frame = initial_views[0].frame.text();
     let old_context_hash = initial.context.content_hash.clone();
-    ensure!(old_frame.contains("FIXTURE_CONTEXT_CRC32="));
+    ensure!(old_frame.contains("FIXTURE_CONTEXT_CRC32=") == deliver_context);
 
     let conversation_id = "01234567-89ab-cdef-0123-456789abcdef";
     let binding = success(
@@ -1013,6 +1056,7 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
             generation: Some(initial.generation),
         },
     )?;
+    host.restart()?;
     let before = success(&host.socket(), Command::Catalog)?
         .catalog
         .context("catalog missing before resume")?;
@@ -1032,6 +1076,11 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
     ensure!(resume_source.previous_head == initial.generation);
     ensure!(prepared.session == initial.session && prepared.generation != initial.generation);
     ensure!(prepared.context.content_hash == old_context_hash);
+    ensure!(
+        prepared.engine.is_empty(),
+        "resume reapplied the initial model/effort"
+    );
+    ensure!(prepared.deliver_context == deliver_context);
     ensure!(prepared.context.text.contains(old_project_text));
     ensure!(prepared.context.text.contains(old_workspace_text));
     ensure!(prepared.context.text.contains("FROZEN_AGENT_INSTRUCTIONS"));
@@ -1130,19 +1179,32 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
         .into_iter::<Vec<String>>()
         .next()
         .context("resume args JSON missing")??;
+    let expected_args = match provider {
+        "codex" => vec![
+            "resume".to_owned(),
+            "--no-daemon".to_owned(),
+            "--cd".to_owned(),
+            root.to_str()
+                .context("fixture cwd is not UTF-8")?
+                .to_owned(),
+            "-c".to_owned(),
+            "<developer_instructions>".to_owned(),
+            conversation_id.to_owned(),
+        ],
+        "claude" => {
+            let mut args = vec!["--resume".to_owned(), conversation_id.to_owned()];
+            if deliver_context {
+                args.extend([
+                    "--append-system-prompt".to_owned(),
+                    "<append-system-prompt>".to_owned(),
+                ]);
+            }
+            args
+        }
+        _ => unreachable!(),
+    };
     ensure!(
-        resume_args
-            == vec![
-                "resume".to_owned(),
-                "--no-daemon".to_owned(),
-                "--cd".to_owned(),
-                root.to_str()
-                    .context("fixture cwd is not UTF-8")?
-                    .to_owned(),
-                "-c".to_owned(),
-                "<developer_instructions>".to_owned(),
-                conversation_id.to_owned(),
-            ],
+        resume_args == expected_args,
         "resume did not receive the reviewed exact argv"
     );
     let resumed_text = resumed_view.frame.text();
@@ -1150,13 +1212,20 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
         resumed_text.contains(&format!("FIXTURE_RESUME_CWD={}", root.display())),
         "resume CLI ran in a different working directory"
     );
-    ensure!(
-        resumed_text.contains(&format!(
-            "FIXTURE_CONTEXT_CRC32={}",
-            crc32fast::hash(prepared.context.text.as_bytes())
-        )),
-        "resumed CLI received different frozen context bytes"
-    );
+    if deliver_context {
+        ensure!(
+            resumed_text.contains(&format!(
+                "FIXTURE_CONTEXT_CRC32={}",
+                crc32fast::hash(prepared.context.text.as_bytes())
+            )),
+            "resumed CLI received different frozen context bytes"
+        );
+    } else {
+        ensure!(
+            !resumed_text.contains("FIXTURE_CONTEXT_CRC32="),
+            "resume delivered unrequested context"
+        );
+    }
     ensure!(!resumed_text.contains("initial task must not be repeated"));
     let after = success(&host.socket(), Command::Catalog)?
         .catalog
@@ -1216,7 +1285,7 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
     )?
     .launch_preview
     .context("resume review for binary guard missing")?;
-    let executable = host.bin.path().join("codex");
+    let executable = host.bin.path().join(provider);
     let mut changed_binary = fs::read(&executable)?;
     changed_binary.push(b'\n');
     fs::write(&executable, changed_binary)?;

@@ -4885,3 +4885,27 @@ Ship searchable workspace switching, remembered confirmed tabs and local project
 - Files: crates/app/src/workspace_navigation.rs, crates/app/src/workspace_navigation_commands.rs, crates/app/src/workspace_nav_store.rs, crates/app/src/workspace_switcher_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/close_ui.rs, crates/app/src/provider_discovery.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0022-workspace-navigation-preferences.md
 - Verification: Root393 app tests pass, strict app Clippy/packagefmt and release build pass. Store tests verify private bounded atomic merge/reopen/source preservation; model verifies valid remembered/current/foreign/deleted tab fallback and stable search IDs. Existing37 Python harness tests and strict C helper compile pass. Native setup03 passes real PTY workspace return to Remembered tab, filtered/refreshed query target, empty-query-match refusal, durable fold/unfold and unchanged existing generations/PIDs/layout/prepared plans; root inspected recent/refreshed/folded captures. Native01/02 fixture assumptions fixed: new tab must use null and workspace creation already adds Development. Root also fixed DirBuilderExt import/test WindowState fixture, indexed row lookup, unchanged-selection recency, newer-dialog preservation and composition guard. Earlier legacy helper-timeout test failed an opaque assertion once; added actual-error diagnostic, isolated and full parallel reruns pass with cause unproven.
 - Risks / next: Commit navigation feature. Broad goal/release gates remain active. Concurrent preferences merge but require explicit refresh to observe another window, and full platform/a11y/IME/soak certification remains separate. Preserve unrelated resource/soak/GPUI patch dirt and stash0.
+
+## 2026-10-18T09:59:41+00:00 — /root/product_gap_luna
+
+Add exact-version Claude Code 2.1.259 manual UUID resume argv with optional frozen startup context; bump Claude adapter version and cover fail-closed cases
+
+- Files: crates/session-host/src/adapters.rs, WORKLOG.md
+- Verification: cargo fmt -p pigade-session-host -- --check (pass); cargo test -p pigade-session-host adapters::tests --lib (16 passed, 0 failed); git diff --check -- crates/session-host/src/adapters.rs (pass)
+- Risks / next: Native Claude resume remains unverified; root owns native validation and may disable the capability if that gate fails.
+
+## 2026-10-18T10:04:38+00:00 — /root/product_gap_luna
+
+Bound only the two catalog persistence tests’ intentional post-drop reopen operations against transient fork-inherited flock EAGAIN
+
+- Files: crates/session-host/src/catalog.rs, WORKLOG.md
+- Verification: cargo fmt -p pigade-session-host -- --check (pass); cargo test -p pigade-session-host --lib catalog::tests::transfer_and_activate_is_atomic_reopenable_and_one_undo_step (1 passed); cargo test -p pigade-session-host --lib catalog::tests::persisted_fifty_undo_redo_survive_reopen_and_new_catalog_tab (1 passed); git diff --check -- crates/session-host/src/catalog.rs (pass)
+- Risks / next: Root to run workspace integration/full validation; no production locking behavior changed.
+
+## 2026-10-18T10:09:57+00:00 — root
+
+Enable manual exact-UUID Claude resume through durable prepare/start and verify native host-cell continuity
+
+- Files: crates/session-host/src/adapters.rs, crates/session-host/src/catalog.rs, crates/session-host/tests/context_launch.rs, README.md, SPEC.md, CHANGELOG.md, docs/compatibility/CLI.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 424 workspace tests pass; strict workspace Clippy, formatting/version checks and release binaries/examples build pass. Eight context_launch tests include Claude context on/off, host reopen, original engine omission, immutable old frame/layout and stale/duplicate refusal. Actual isolated Claude2.1.259 missing UUID exits1/no transcript; final actual release-host fixture 5e50qmfc passes exact native UUID, kill/reopen, process-free prepare, prior assistant in authoritative cells, unchanged messages and duplicate rejection. First full suite exposed known parallel post-drop flock race; bounded test-only fix then complete suite passed. Native fixture setup failures retained in CLI matrix. Re-read old soak manifests as completed2h and failed11.24h, verified old PIDs absent; no new soak.
+- Risks / next: Commit coherent block. Full model/account/two-version/GUI/reboot/24h/memory certification remains open. No app source changed or active user host restarted. Preserve unrelated worktree dirt/stash.

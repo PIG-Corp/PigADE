@@ -101,20 +101,24 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
     let supported = supported_transport(provider, &cli_version);
 
     if let Some((method, description)) = supported {
+        let native_resume = matches!(
+            (provider, cli_version.as_str()),
+            ("claude", "2.1.259") | ("codex", "0.162.1")
+        );
         Ok(AdapterInfo {
             provider: provider.to_owned(),
             cli_version,
             adapter_version: match provider {
-                "claude" => 2,
+                "claude" => 3,
                 "codex" => 3,
                 _ => 1,
             },
             capabilities: Capabilities {
                 startup_context: true,
                 context_receipt: false,
-                // Exact-ID TUI resume and missing-ID failure were executed
-                // for 0.162.1. Automatic ID discovery remains unsupported.
-                native_resume: provider == "codex",
+                // Exact-ID resume is manual. Automatic ID discovery and
+                // model/application receipts remain unsupported.
+                native_resume,
                 conversation_id: false,
                 model_selection: true,
                 reasoning_effort: provider == "claude" || provider == "codex",
@@ -470,6 +474,25 @@ pub(crate) fn resume_arguments(
     ensure!(cwd.is_absolute(), "resume cwd must be absolute");
     let cwd_text = cwd.to_str().context("resume cwd must be valid UTF-8")?;
     ensure!(!cwd_text.contains('\0'), "resume cwd must not contain NUL");
+    if info.provider == "claude" && info.cli_version == "2.1.259" {
+        ensure!(
+            info.capabilities.native_resume,
+            "Claude native resume is not enabled for this adapter"
+        );
+        ensure!(
+            is_canonical_nonnil_uuid(conversation_id),
+            "invalid conversation UUID"
+        );
+        let mut args = vec!["--resume".to_owned(), conversation_id.to_owned()];
+        let env = if let Some(context) = context {
+            let (context_args, context_env) = context_arguments(info, context)?;
+            args.extend(context_args);
+            context_env
+        } else {
+            BTreeMap::new()
+        };
+        return Ok((args, env));
+    }
     if info.provider == "opencode" && info.cli_version == "1.19.3" {
         ensure!(
             is_opencode_session_id(conversation_id),
@@ -489,6 +512,10 @@ pub(crate) fn resume_arguments(
         "native resume is unsupported for {} {}",
         info.provider,
         info.cli_version
+    );
+    ensure!(
+        info.capabilities.native_resume,
+        "Codex native resume is not enabled for this adapter"
     );
     ensure!(
         is_canonical_nonnil_uuid(conversation_id),
@@ -551,7 +578,7 @@ mod tests {
             provider: provider.to_owned(),
             cli_version: version.to_owned(),
             adapter_version: match provider {
-                "claude" if version == "2.1.259" => 2,
+                "claude" if version == "2.1.259" => 3,
                 "codex" if version == "0.162.1" => 3,
                 "opencode" if version == "1.19.3" => 3,
                 _ => 1,
@@ -559,7 +586,10 @@ mod tests {
             capabilities: Capabilities {
                 startup_context: true,
                 context_receipt: false,
-                native_resume: false,
+                native_resume: matches!(
+                    (provider, version),
+                    ("claude", "2.1.259") | ("codex", "0.162.1")
+                ),
                 conversation_id: false,
                 model_selection: matches!(
                     (provider, version),
@@ -689,7 +719,7 @@ mod tests {
             r####"developer_instructions="line1\n\"quoted\"""####
         );
         assert!(!adapter.capabilities.context_receipt);
-        assert!(!adapter.capabilities.native_resume);
+        assert!(adapter.capabilities.native_resume);
         assert!(!adapter.capabilities.conversation_id);
     }
 
@@ -718,6 +748,53 @@ mod tests {
     }
 
     #[test]
+    fn claude_resume_uses_exact_uuid_and_optional_frozen_context_only() {
+        let adapter = info("claude", "2.1.259");
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        let (args, env) = resume_arguments(&adapter, id, Path::new("/workspace"), None).unwrap();
+        assert_eq!(args, ["--resume", id]);
+        assert!(env.is_empty());
+
+        let (args, env) = resume_arguments(
+            &adapter,
+            id,
+            Path::new("/workspace"),
+            Some("frozen context"),
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            ["--resume", id, "--append-system-prompt", "frozen context"]
+        );
+        assert!(env.is_empty());
+        assert!(
+            !args
+                .iter()
+                .any(|arg| { matches!(arg.as_str(), "--continue" | "--fork-session" | "--last") })
+        );
+        assert!(!args.iter().any(|arg| arg == "new task"));
+    }
+
+    #[test]
+    fn claude_resume_rejects_invalid_uuid_unknown_version_and_disabled_capability() {
+        let adapter = info("claude", "2.1.259");
+        let cwd = Path::new("/workspace");
+        let id = "01234567-89ab-cdef-0123-456789abcdef";
+        for invalid in [
+            "latest",
+            "--continue",
+            "00000000-0000-0000-0000-000000000000",
+            "01234567-89ab-cdef-0123-456789abcdeZ",
+        ] {
+            assert!(resume_arguments(&adapter, invalid, cwd, None).is_err());
+        }
+        assert!(resume_arguments(&info("claude", "2.1.260"), id, cwd, None).is_err());
+        let mut disabled = adapter;
+        disabled.capabilities.native_resume = false;
+        assert!(resume_arguments(&disabled, id, cwd, None).is_err());
+    }
+
+    #[test]
     fn codex_resume_selects_exact_id_directory_and_context_without_prompt() {
         let adapter = info("codex", "0.162.1");
         let cwd = std::env::current_dir().unwrap();
@@ -743,7 +820,6 @@ mod tests {
     fn codex_resume_validates_saved_metadata_and_path_representation_only() {
         let cwd = std::env::current_dir().unwrap();
         let id = "01234567-89ab-cdef-0123-456789abcdef";
-        assert!(resume_arguments(&info("claude", "2.1.259"), id, &cwd, None).is_err());
         assert!(resume_arguments(&info("codex", "0.162.2"), id, &cwd, None).is_err());
         for invalid in [
             "abc",
@@ -854,6 +930,9 @@ mod tests {
         assert!(supported_transport("opencode", "1.18.22").is_none());
         assert!(supported_transport("claude", "2.1.260").is_none());
         assert!(supported_transport("shell", "5.3.3").is_none());
+        assert_eq!(info("claude", "2.1.259").adapter_version, 3);
+        assert!(info("claude", "2.1.259").capabilities.native_resume);
+        assert!(!info("claude", "2.1.260").capabilities.native_resume);
     }
 
     #[cfg(unix)]

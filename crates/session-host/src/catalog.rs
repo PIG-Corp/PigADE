@@ -639,6 +639,36 @@ mod tests {
     use super::*;
     use pigade_layout::Direction;
     use pigade_storage::{CanvasOffset, Project, Tab, Workspace, WorkspaceMode, WorkspaceStatus};
+    use std::{
+        io::ErrorKind,
+        path::Path,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    /// Reopen after this test dropped its sole writer. A concurrent test may
+    /// briefly fork while the writer is open; the child inherits the flock
+    /// open-file description until exec closes its CLOEXEC descriptor.
+    /// Retry only that transient WouldBlock window, never other open errors.
+    fn reopen_after_test_drop(path: &Path) -> Result<MetadataStore> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match MetadataStore::open(path) {
+                Ok(store) => return Ok(store),
+                Err(error) => {
+                    let would_block = error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|error| error.kind() == ErrorKind::WouldBlock)
+                    });
+                    if !would_block || Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+    }
 
     fn id(number: u128) -> Uuid {
         Uuid::from_u128(number)
@@ -981,7 +1011,7 @@ mod tests {
                 Some(id(6))
             );
             drop(store);
-            let mut store = MetadataStore::open(&database)?;
+            let mut store = reopen_after_test_drop(&database)?;
             let reopened = store.catalog()?;
             assert_eq!(
                 load_layout(&reopened)?.state().pane_tab(id(20)),
@@ -1563,7 +1593,7 @@ mod tests {
             },
         )?;
         drop(store);
-        let mut store = MetadataStore::open(&path)?;
+        let mut store = reopen_after_test_drop(&path)?;
         assert_eq!(store.catalog()?, committed);
         for _ in 0..50 {
             edit(&mut store, LayoutAction::Undo)?;
@@ -1577,7 +1607,7 @@ mod tests {
         );
         assert_eq!(model.state().tabs[&id(6)], TabLayout::default());
         drop(store);
-        let mut store = MetadataStore::open(&path)?;
+        let mut store = reopen_after_test_drop(&path)?;
         for _ in 0..50 {
             edit(&mut store, LayoutAction::Redo)?;
         }
