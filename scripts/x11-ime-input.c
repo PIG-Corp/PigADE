@@ -110,6 +110,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "prompt-close") && strcmp(a.stage, "prompt-insert-open") &&
         strcmp(a.stage, "prompt-use-first") && strcmp(a.stage, "prompt-delete") &&
         strcmp(a.stage, "prompt-delete-cancel") && strcmp(a.stage, "prompt-confirm-delete") &&
+        strcmp(a.stage, "prompt-filter-content") && strcmp(a.stage, "prompt-filter-missing") &&
+        strcmp(a.stage, "prompt-filter-page") && strcmp(a.stage, "prompt-filter-clear") &&
+        strcmp(a.stage, "prompt-search-delete") && strcmp(a.stage, "prompt-duplicate") &&
+        strcmp(a.stage, "prompt-page-next") && strcmp(a.stage, "prompt-page-rename") &&
+        strcmp(a.stage, "prompt-refresh") && strcmp(a.stage, "prompt-copy") &&
+        strcmp(a.stage, "prompt-row-down-four") && strcmp(a.stage, "prompt-row-up-four") &&
         strcmp(a.stage, "memory-open") &&
         strcmp(a.stage, "memory-select") && strcmp(a.stage, "generations-open") &&
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
@@ -1433,7 +1439,7 @@ int main(int argc, char **argv) {
             for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "prompt-new")) {
-            key(dpy, XK_Return);
+            modified_key(dpy, XK_Control_L, XK_n);
         } else if (!strcmp(a.stage, "prompt-create-fields")) {
             modified_key(dpy, XK_Control_L, XK_a);
             modified_key(dpy, XK_Shift_L, XK_p);
@@ -1476,8 +1482,33 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a.stage, "prompt-use-first")) {
             key(dpy, XK_Down);
             key(dpy, XK_Return);
-        } else if (!strcmp(a.stage, "prompt-delete")) {
+        } else if (!strcmp(a.stage, "prompt-filter-content") ||
+                   !strcmp(a.stage, "prompt-filter-missing") ||
+                   !strcmp(a.stage, "prompt-filter-page") ||
+                   !strcmp(a.stage, "prompt-filter-clear")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            if (!strcmp(a.stage, "prompt-filter-clear")) key(dpy, XK_BackSpace);
+            else custom_ascii(dpy, !strcmp(a.stage, "prompt-filter-content") ? "fixture text" :
+                                  !strcmp(a.stage, "prompt-filter-page") ? "page fixture" : "nosuchprompt");
+        } else if (!strcmp(a.stage, "prompt-search-delete")) {
+            key(dpy, XK_Home);
             key(dpy, XK_Delete);
+        } else if (!strcmp(a.stage, "prompt-duplicate")) {
+            modified_key(dpy, XK_Control_L, XK_d);
+        } else if (!strcmp(a.stage, "prompt-row-down-four") || !strcmp(a.stage, "prompt-row-up-four")) {
+            for (size_t i = 0; i < 4; ++i) key(dpy, !strcmp(a.stage, "prompt-row-down-four") ? XK_Down : XK_Up);
+        } else if (!strcmp(a.stage, "prompt-page-next")) {
+            key(dpy, XK_Next);
+        } else if (!strcmp(a.stage, "prompt-page-rename")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            custom_ascii(dpy, "PageSelected");
+        } else if (!strcmp(a.stage, "prompt-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "prompt-copy") || !strcmp(a.stage, "prompt-delete")) {
+            KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+            if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime)) fail("prompt delete modifier press failed");
+            modified_key(dpy, XK_Shift_L, !strcmp(a.stage, "prompt-copy") ? XK_c : XK_Delete);
+            if (!XTestFakeKeyEvent(dpy, control, False, CurrentTime)) fail("prompt copy/delete modifier release failed");
         } else if (!strcmp(a.stage, "prompt-confirm-delete")) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "memory-open")) {
@@ -2291,6 +2322,19 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "profile-delete") ? "1" :
                             !strcmp(a.stage, "profile-cancel-delete") ? "1" :
                             !strcmp(a.stage, "profile-confirm-delete") ? "1" :
+                            !strcmp(a.stage, "prompt-new") ? "2" :
+                            !strcmp(a.stage, "prompt-delete") ? "3" :
+                            !strcmp(a.stage, "prompt-copy") ? "3" :
+                            !strcmp(a.stage, "prompt-filter-content") ? "14" :
+                            !strcmp(a.stage, "prompt-filter-missing") ? "14" :
+                            !strcmp(a.stage, "prompt-filter-page") ? "14" :
+                            !strcmp(a.stage, "prompt-filter-clear") ? "3" :
+                            !strcmp(a.stage, "prompt-search-delete") ? "2" :
+                            !strcmp(a.stage, "prompt-duplicate") ? "2" :
+                            !strcmp(a.stage, "prompt-page-rename") ? "16" :
+                            !strcmp(a.stage, "prompt-refresh") ? "2" :
+                            !strcmp(a.stage, "prompt-row-down-four") ? "4" :
+                            !strcmp(a.stage, "prompt-row-up-four") ? "4" :
                             !strcmp(a.stage, "prompt-create-fields") ? "34" :
                             !strcmp(a.stage, "prompt-rename") ? "15" :
                             !strcmp(a.stage, "context-edit") ? "7" :

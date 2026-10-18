@@ -73,10 +73,13 @@ pub(super) enum ProductAction {
     OpenPrompts,
     ReloadPrompts,
     NewPrompt,
-    EditPrompt(Uuid),
-    DeletePrompt(Uuid),
-    UsePrompt(Uuid),
-    CopyPrompt(Uuid),
+    SelectPrompt(crate::prompt_flow::PromptRef),
+    PromptPage(bool),
+    EditPrompt(crate::prompt_flow::PromptRef),
+    DuplicatePrompt(crate::prompt_flow::PromptRef),
+    DeletePrompt(crate::prompt_flow::PromptRef),
+    UsePrompt(crate::prompt_flow::PromptRef),
+    CopyPrompt(crate::prompt_flow::PromptRef),
     SaveDraftAsPrompt,
     OpenAgentProfiles,
     ReloadAgentProfiles,
@@ -330,7 +333,8 @@ impl DialogKind {
             Self::HostMaintenance | Self::Activity => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
-            Self::Prompts | Self::DeletePrompt => &[],
+            Self::Prompts => &["Найти по названию или тексту…"],
+            Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
             Self::AgentProfiles | Self::DeleteAgentProfile | Self::ProfilePreparing => &[],
             Self::AgentProfile => &[
@@ -496,6 +500,9 @@ pub(super) struct ProductUi {
     pub(super) prompt_editor: Option<crate::prompt_flow::PromptEditor>,
     pub(super) prompt_delete: Option<pigade_storage::Prompt>,
     pub(super) prompt_origin: Option<Dialog>,
+    pub(super) prompt_library: crate::prompt_flow::Library,
+    pub(super) prompt_library_dialog: Option<Dialog>,
+    pub(super) prompt_preview_scroll: gpui::ScrollHandle,
     pub(super) profile_preparing_label: Option<String>,
     pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
     pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
@@ -3813,7 +3820,9 @@ impl ProductUi {
                     .role(Role::Dialog)
                     .aria_label(dialog.kind.title())
                     .w_full()
-                    .max_w(px(if dialog.kind == DialogKind::AgentProfiles {
+                    .max_w(px(if dialog.kind == DialogKind::Prompts {
+                        800.
+                    } else if dialog.kind == DialogKind::AgentProfiles {
                         640.
                     } else if matches!(
                         dialog.kind,
@@ -3833,6 +3842,9 @@ impl ProductUi {
                     .mx(px(16.))
                     .flex()
                     .flex_col()
+                    .when(dialog.kind == DialogKind::Prompts, |sheet| {
+                        sheet.max_h(gpui::relative(1.))
+                    })
                     .rounded(px(12.))
                     .border_1()
                     .border_color(colors.border)
@@ -3850,11 +3862,22 @@ impl ProductUi {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(dialog.kind.title()),
                     )
-                    .child(fields)
+                    .child(if dialog.kind == DialogKind::Prompts {
+                        div()
+                            .id("prompt-library-body")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .child(fields)
+                            .into_any_element()
+                    } else {
+                        fields.into_any_element()
+                    })
                     .child(
                         div()
                             .flex()
                             .justify_end()
+                            .flex_shrink_0()
                             .gap_2()
                             .mt(px(18.))
                             .child(close)

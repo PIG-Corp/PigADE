@@ -4909,3 +4909,43 @@ Enable manual exact-UUID Claude resume through durable prepare/start and verify 
 - Files: crates/session-host/src/adapters.rs, crates/session-host/src/catalog.rs, crates/session-host/tests/context_launch.rs, README.md, SPEC.md, CHANGELOG.md, docs/compatibility/CLI.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 424 workspace tests pass; strict workspace Clippy, formatting/version checks and release binaries/examples build pass. Eight context_launch tests include Claude context on/off, host reopen, original engine omission, immutable old frame/layout and stale/duplicate refusal. Actual isolated Claude2.1.259 missing UUID exits1/no transcript; final actual release-host fixture 5e50qmfc passes exact native UUID, kill/reopen, process-free prepare, prior assistant in authoritative cells, unchanged messages and duplicate rejection. First full suite exposed known parallel post-drop flock race; bounded test-only fix then complete suite passed. Native fixture setup failures retained in CLI matrix. Re-read old soak manifests as completed2h and failed11.24h, verified old PIDs absent; no new soak.
 - Risks / next: Commit coherent block. Full model/account/two-version/GUI/reboot/24h/memory certification remains open. No app source changed or active user host restarted. Preserve unrelated worktree dirt/stash.
+
+## 2026-10-18T10:14:15+00:00 — /root/product_gap_luna
+
+Add cached searchable and five-row paged prompt-library model with stable revision-bound selection and invalid-source reporting
+
+- Files: crates/app/src/prompt_flow.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/prompt_flow.rs (pass); git diff --check -- crates/app/src/prompt_flow.rs (pass); Cargo/app tests not run per root-owned build lane
+- Risks / next: Root/prompt UI lane to integrate library.error and run app tests in the single authorized Cargo lane.
+
+## 2026-10-18T10:14:59+00:00 — /root/prompt_library_ui_luna
+
+Render searchable prompt library with exact-revision preview, explicit actions, and bounded paging
+
+- Files: crates/app/src/prompt_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/prompt_ui.rs (passed); git diff --check -- crates/app/src/prompt_ui.rs (passed); Cargo/app integration build not run per assigned UI-only lane
+- Risks / next: Root to integrate keyboard routing and prompt actions, then run app build and UI verification
+
+## 2026-10-18T10:15:08+00:00 — /root/product_gap_luna
+
+Reject zero-revision saved prompts and bound normalized prompt snippets to 121 visible characters
+
+- Files: crates/app/src/prompt_flow.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/prompt_flow.rs (pass); git diff --check -- crates/app/src/prompt_flow.rs (pass); Cargo/app tests not run per root-owned build lane
+- Risks / next: Root owns app compilation and integration verification.
+
+## 2026-10-18T10:17:35+00:00 — /root/prompt_library_ui_luna
+
+Clarify prompt insertion versus copy actions and add mouse retry for unavailable library
+
+- Files: crates/app/src/prompt_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/prompt_ui.rs (passed); git diff --check -- crates/app/src/prompt_ui.rs (passed); Cargo not run per assigned UI-only lane
+- Risks / next: Root to compile after action and keyboard integration; compact modal remains vertically scrollable through existing overlay
+
+## 2026-10-18T10:43:11+00:00 — root
+
+Ship searchable revision-bound prompt library with full preview, stable paging and independent duplication
+
+- Files: crates/app/src/prompt_flow.rs, crates/app/src/prompt_commands.rs, crates/app/src/prompt_ui.rs, crates/app/src/product.rs, crates/app/src/main.rs, crates/app/src/dirty_documents.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Integration 401 app tests passed; final 12 prompt tests, strict app Clippy, package fmt, 37 Python harness tests, version/diff checks and release build pass. Final private X11/real PTY context05 passes search, no matches, query Delete, independent copy, exact page selection/edit return, source insertion/removal and unchanged generation/PID/frame/journal. Final captures inspected; independent Luna review confirms full preview text. Initial native01 used stale debug and failed;02-04 passed intermediate release versions. Compile macro-import and color-type errors fixed before passing validation.
+- Risks / next: Commit coherent block. Compact/full-platform accessibility, broader MVP, reboot/24h/memory and provider matrix gates remain open. Preserve unrelated dirt and stash; no active desktop/user host changes.

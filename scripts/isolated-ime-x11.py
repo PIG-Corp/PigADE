@@ -5479,6 +5479,76 @@ def run_context_fixture(config, report, env, save, app, host):
     require_live_unchanged()
     time.sleep(.2)
     capture('context-prompts-renamed.ppm')
+
+    # Search the body (the title has no 'fixture text'), read an exact revision,
+    # and return to the same query after editing/copying. No library action sends
+    # terminal input or rewrites the suspended workspace draft.
+    helper_call(config, 'prompt-filter-content')
+    time.sleep(.2)
+    capture('context-prompts-content-search.ppm')
+    helper_call(config, 'prompt-search-delete')
+    time.sleep(.15)
+    capture('context-prompts-search-delete.ppm')
+    require(current_prompts() == renamed_prompts, 'Delete in prompt search mutated the library')
+    helper_call(config, 'prompt-filter-missing')
+    helper_call(config, 'prompt-use-first')
+    require(current_prompts() == renamed_prompts and get_context() == saved,
+            'empty prompt search inserted, created, or deleted content')
+    capture('context-prompts-no-match.ppm')
+    helper_call(config, 'prompt-filter-content')
+    helper_call(config, 'prompt-duplicate')
+    time.sleep(.2)
+    capture('context-prompt-copy-draft.ppm')
+    require(current_prompts() == renamed_prompts, 'duplicating a prompt saved before confirmation')
+    helper_call(config, 'prompt-save')
+    copied_prompts = wait_until(lambda: (items if len(items := current_prompts()) == 2 else None),
+                               time.monotonic() + 8)
+    copied = next(item for item in copied_prompts if item['id'] != prompt['id'])
+    require(copied['revision'] == 1 and copied['content'] == prompt['content'] and
+            copied['title'].endswith(' · копия') and prompt in copied_prompts,
+            'copy did not get independent identity/revision with exact source content')
+    time.sleep(.2)
+    capture('context-prompts-copy-saved.ppm')
+    require_live_unchanged()
+
+    # Seed seven bounded records through the normal catalog API; the native keys
+    # must choose the sixth filtered UUID, not a previous unfiltered row index.
+    seeds = [{'id': str(uuid.uuid4()), 'title': f'Page {index}',
+              'content': f'page fixture content {index}', 'revision': 0} for index in range(7)]
+    host_request({'command': 'catalog_apply', 'batch': {'projects': [], 'workspaces': [], 'tabs': [], 'prompts': [
+        {'value': item, 'expected_revision': None} for item in seeds]}})
+    helper_call(config, 'prompt-refresh')
+    time.sleep(.2)
+    helper_call(config, 'prompt-filter-page')
+    time.sleep(.2)
+    matching = [item for item in current_prompts() if 'page fixture' in item['content']]
+    require(len(matching) == 7, 'prompt paging setup is incomplete')
+    chosen = matching[5]
+    helper_call(config, 'prompt-row-down-four')
+    time.sleep(.2)
+    capture('context-prompts-fifth-row-visible.ppm')
+    helper_call(config, 'prompt-row-up-four')
+    helper_call(config, 'prompt-page-next')
+    time.sleep(.2)
+    capture('context-prompts-second-page.ppm')
+    helper_call(config, 'prompt-edit')
+    time.sleep(.15)
+    helper_call(config, 'prompt-page-rename')
+    helper_call(config, 'prompt-save-edit')
+    renamed_page = wait_until(lambda: next((item for item in current_prompts() if
+        item['id'] == chosen['id'] and item['title'] == 'PageSelected' and item['revision'] == 2), None),
+        time.monotonic() + 8)
+    require(renamed_page['content'] == chosen['content'], 'paged edit changed prompt body')
+    time.sleep(.2)
+    capture('context-prompts-page-return.ppm')
+    require_live_unchanged()
+    cleanup_ids = {item['id'] for item in seeds} | {copied['id']}
+    cleanup = [{'id': item['id'], 'expected_revision': item['revision']} for item in current_prompts()
+               if item['id'] in cleanup_ids]
+    host_request({'command': 'catalog_apply', 'batch': {'projects': [], 'workspaces': [], 'tabs': [], 'remove_prompts': cleanup}})
+    helper_call(config, 'prompt-refresh')
+    helper_call(config, 'prompt-filter-clear')
+    wait_until(lambda: current_prompts() == renamed_prompts, time.monotonic() + 8)
     helper_call(config, 'prompt-close')
 
     # Reopen the exact saved workspace draft. Ctrl+Shift+P freezes its current
@@ -5488,6 +5558,10 @@ def run_context_fixture(config, report, env, save, app, host):
     helper_call(config, 'prompt-insert-open')
     time.sleep(.3)
     capture('context-prompts-insertion-library.ppm')
+    helper_call(config, 'prompt-copy')
+    time.sleep(.2)
+    capture('context-prompts-copy-before-insert.ppm')
+    require(get_context() == saved, 'explicit prompt copy changed the suspended workspace context')
     helper_call(config, 'prompt-use-first')
     time.sleep(.3)
     capture('context-prompt-inserted.ppm')
@@ -5579,6 +5653,11 @@ def run_context_fixture(config, report, env, save, app, host):
         'inserted_context_instructions': appended,
         'role_and_memory_preserved': True, 'prompt_delete_cancel_preserved_record': True,
         'prompt_delete_confirm_removed_record_only': True,
+        'prompt_full_content_search_and_no_match_enter_safe': True,
+        'prompt_search_delete_did_not_remove_record': True,
+        'prompt_copy_saved_independent_id_and_exact_content': True,
+        'prompt_second_page_selected_exact_sixth_filtered_id': chosen['id'],
+        'prompt_page_edit_changed_only_exact_selected_record': True,
         'generation_pid_frame_and_journal_unchanged': True,
         'native_close_escape_preserved_exact_dirty_context_draft': True,
         'native_close_ctrl_enter_discarded_only_unsaved_draft_and_exited_app': True,
@@ -7416,7 +7495,11 @@ def outer_run(args) -> dict:
                   'context-prompts-empty.ppm',
                   'context-prompt-editor.ppm', 'context-prompt-editor-filled.ppm',
                   'context-prompts-created.ppm', 'context-prompt-edit.ppm',
-                  'context-prompts-renamed.ppm', 'context-prompts-insertion-library.ppm',
+                  'context-prompts-renamed.ppm', 'context-prompts-content-search.ppm',
+                  'context-prompts-search-delete.ppm', 'context-prompts-no-match.ppm',
+                  'context-prompt-copy-draft.ppm', 'context-prompts-copy-saved.ppm',
+                  'context-prompts-fifth-row-visible.ppm', 'context-prompts-second-page.ppm', 'context-prompts-page-return.ppm',
+                  'context-prompts-insertion-library.ppm', 'context-prompts-copy-before-insert.ppm',
                   'context-prompt-inserted.ppm', 'context-prompt-delete-review.ppm',
                   'context-prompts-deleted.ppm'] if args.fixture == 'context' else
                  ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else

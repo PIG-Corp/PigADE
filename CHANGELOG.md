@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Prompt library now searches titles/full text, previews exact revisions, keeps stable selection across five-row pages/refresh/edit return, and creates independent unsaved copies. Insert/copy refuses stale revisions; search Delete is ordinary editing, Ctrl+Shift+Delete opens explicit removal.
+
 - Claude Code2.1.259: ручное продолжение точного UUID через отдельную проверку и durable launch; прежние контекст/история/раскладка сохраняются, модель и задание не повторяются. Native offline fixture и context-on/off PTY проверки; auto-resume и полная матрица ещё открыты.
 
 - Searchable workspace switcher from the breadcrumb, palette or Prefix,A, with recent destinations and restoration of the last confirmed tab. Project folding and recent UUID-only preferences merge in bounded per-host files; navigation leaves CLI generations and layouts intact. Startup now waits through a cooperative host shutdown and the socket-unlinked/lock-held gap.

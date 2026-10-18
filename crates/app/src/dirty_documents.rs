@@ -317,11 +317,12 @@ pub(crate) fn collect(
             &mut notices,
         );
     }
-    if product
-        .dialog
-        .as_ref()
-        .is_some_and(|dialog| dialog.kind == DialogKind::Prompts)
-        && let Some(origin) = product.prompt_origin.as_ref()
+    if product.dialog.as_ref().is_some_and(|dialog| {
+        matches!(
+            dialog.kind,
+            DialogKind::Prompts | DialogKind::Prompt | DialogKind::DeletePrompt
+        )
+    }) && let Some(origin) = product.prompt_origin.as_ref()
     {
         add_dialog(
             product,
@@ -468,6 +469,21 @@ mod tests {
         let notices = collect(&product, &GitFlow::default(), None, None);
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].label, "Черновик контекста воркспейса");
+    }
+
+    #[test]
+    fn prompt_library_children_keep_the_suspended_instruction_draft_in_close_review() {
+        let mut product = ProductUi::default();
+        let mut origin = Dialog::new(DialogKind::Context);
+        origin.fields[0] = "authored instructions behind library".into();
+        product.prompt_origin = Some(origin);
+        product.prompt_editor = Some(crate::prompt_flow::PromptEditor::new());
+        for kind in [DialogKind::Prompt, DialogKind::DeletePrompt] {
+            product.dialog = Some(Dialog::new(kind));
+            let notices = collect(&product, &GitFlow::default(), None, None);
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].label, "Черновик контекста воркспейса");
+        }
     }
 
     #[test]

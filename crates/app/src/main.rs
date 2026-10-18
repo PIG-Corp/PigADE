@@ -2006,6 +2006,18 @@ impl CanvasApp {
                         self.product
                             .dialog
                             .as_ref()
+                            .filter(|dialog| {
+                                matches!(
+                                    dialog.kind,
+                                    product::DialogKind::Prompt | product::DialogKind::DeletePrompt
+                                )
+                            })
+                            .and_then(|_| self.product.prompt_library_dialog.clone())
+                    })
+                    .or_else(|| {
+                        self.product
+                            .dialog
+                            .as_ref()
                             .filter(|dialog| dialog.kind == product::DialogKind::AgentProfile)
                             .and_then(|_| {
                                 self.product
@@ -3029,6 +3041,7 @@ impl CanvasApp {
                 .unwrap_or(0);
             self.product.recipe_profile_scroll.scroll_to_item(index);
         }
+        self.sync_prompt_library();
         let query = self.product.dialog.as_ref().and_then(|dialog| {
             (dialog.kind == product::DialogKind::History)
                 .then(|| dialog.fields.first().map(|field| field.text().to_owned()))
@@ -3758,6 +3771,14 @@ impl CanvasApp {
                 | A::ToggleContextDelivery
                 | A::OpenPrompts
                 | A::SaveDraftAsPrompt
+                | A::NewPrompt
+                | A::SelectPrompt(_)
+                | A::PromptPage(_)
+                | A::UsePrompt(_)
+                | A::CopyPrompt(_)
+                | A::EditPrompt(_)
+                | A::DuplicatePrompt(_)
+                | A::DeletePrompt(_)
                 | A::SaveLaunchAsProfile
                 | A::SetProfileProvider(_)
                 | A::ToggleProfileContext
@@ -3846,6 +3867,9 @@ impl CanvasApp {
             A::OpenPrompts
             | A::ReloadPrompts
             | A::NewPrompt
+            | A::SelectPrompt(_)
+            | A::PromptPage(_)
+            | A::DuplicatePrompt(_)
             | A::EditPrompt(_)
             | A::DeletePrompt(_)
             | A::UsePrompt(_)
@@ -6639,6 +6663,9 @@ impl CanvasApp {
             cx.stop_propagation();
             return;
         }
+        if self.prompt_library_key(event, window, cx) {
+            return;
+        }
         if self
             .product
             .dialog
@@ -7139,7 +7166,6 @@ impl CanvasApp {
                     | product::DialogKind::WorkspaceGit
                     | product::DialogKind::StopSession
                     | product::DialogKind::Sessions
-                    | product::DialogKind::Prompts
                     | product::DialogKind::AgentProfiles
                     | product::DialogKind::Layouts
                     | product::DialogKind::Recipe
@@ -8781,6 +8807,7 @@ impl EntityInputHandler for CanvasApp {
 impl Render for CanvasApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.service_workspace_navigation(cx);
+        self.sync_prompt_library();
         self.tab_drop_bounds.clear();
         self.product.refresh_activity_badges();
         let width = f32::from(window.viewport_size().width);
