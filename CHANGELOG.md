@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Confirmed tab closing atomically rebases placement history and selects an adjacent tab while retaining live sessions and journals. Conflicts/unknown outcomes require explicit inspection; active configured launches block tab deletion.
+
 - Revisioned prompt library with CAS editing, idempotent deletion, frozen draft insertion and explicit clipboard copy. No terminal input or automatic task submission; schema12 migration keeps a durable backup.
 
 - Именованные профили запуска агентов: библиотека, редактор, сохранение настроек из review, проверка ревизии при подготовке и неизменяемый источник профиля в снимке запуска. Схема11 мигрирует библиотеку с durable backup; CRUD не меняет живые CLI.

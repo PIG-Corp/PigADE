@@ -782,6 +782,35 @@ impl LayoutModel {
         Ok(())
     }
 
+    /// Catalog-removed tabs are metadata, not undoable placement operations.
+    /// Remove the tab from every snapshot and discard history steps made empty by
+    /// that removal, while preserving the remaining placement history chain.
+    pub fn remove_tab_metadata(&mut self, tab: TabId) -> Result<()> {
+        let mut history = self.export_history();
+        ensure!(
+            history.current.tabs.contains_key(&tab),
+            "tab does not occur in current placement"
+        );
+
+        fn remove(state: &mut LayoutState, tab: TabId) {
+            state.tabs.remove(&tab);
+        }
+
+        remove(&mut history.current, tab);
+        for step in history.undo.iter_mut().chain(&mut history.redo) {
+            remove(&mut step.before, tab);
+            remove(&mut step.after, tab);
+        }
+        history
+            .undo
+            .retain(|step| !same_placement(&step.before, &step.after));
+        history
+            .redo
+            .retain(|step| !same_placement(&step.before, &step.after));
+        *self = Self::from_history(history)?;
+        Ok(())
+    }
+
     pub fn export_history(&self) -> LayoutHistory {
         LayoutHistory {
             schema: 1,
@@ -859,6 +888,101 @@ fn same_placement(first: &LayoutState, second: &LayoutState) -> bool {
                 .get(id)
                 .is_some_and(|other| tab.root == other.root && tab.focus_mode == other.focus_mode)
         })
+}
+
+#[cfg(test)]
+mod metadata_history_tests {
+    use super::*;
+
+    fn id(value: u128) -> Uuid {
+        Uuid::from_u128(value)
+    }
+
+    fn two_tab_transfer() -> LayoutModel {
+        let mut model = LayoutModel::default();
+        model.add_tab_metadata(id(1)).unwrap();
+        model.add_tab_metadata(id(2)).unwrap();
+        model
+            .apply(Command::Insert {
+                tab: id(1),
+                pane: id(10),
+                target: None,
+                side: Direction::Right,
+                split: id(100),
+            })
+            .unwrap();
+        model
+            .apply(Command::Insert {
+                tab: id(2),
+                pane: id(20),
+                target: None,
+                side: Direction::Right,
+                split: id(200),
+            })
+            .unwrap();
+        model
+            .apply(Command::Transfer {
+                pane: id(10),
+                to_tab: id(2),
+                target: Some(id(20)),
+                side: Direction::Right,
+                split: id(201),
+            })
+            .unwrap();
+        model
+    }
+
+    #[test]
+    fn removing_tab_rebases_cross_tab_move_undo_and_redo() {
+        let mut model = two_tab_transfer();
+        model.remove_tab_metadata(id(2)).unwrap();
+        assert!(!model.state().tabs.contains_key(&id(2)));
+        assert!(model.state().tabs[&id(1)].root.is_none());
+
+        assert!(model.undo());
+        assert!(!model.state().tabs.contains_key(&id(2)));
+        assert_eq!(model.state().pane_tab(id(10)), Some(id(1)));
+        assert_eq!(model.state().pane_tab(id(20)), None);
+        assert!(model.redo());
+        assert!(!model.state().tabs.contains_key(&id(2)));
+        assert!(model.state().tabs[&id(1)].root.is_none());
+        assert_eq!(model.state().pane_tab(id(20)), None);
+    }
+
+    #[test]
+    fn removing_tab_rebases_existing_redo_history() {
+        let mut model = two_tab_transfer();
+        assert!(model.undo());
+        assert_eq!(model.state().pane_tab(id(10)), Some(id(1)));
+        model.remove_tab_metadata(id(2)).unwrap();
+        assert_eq!(model.redo_len(), 1);
+
+        assert!(model.redo());
+        assert!(!model.state().tabs.contains_key(&id(2)));
+        assert!(model.state().tabs[&id(1)].root.is_none());
+        assert!(model.undo());
+        assert!(!model.state().tabs.contains_key(&id(2)));
+        assert_eq!(model.state().pane_tab(id(10)), Some(id(1)));
+    }
+
+    #[test]
+    fn removing_sole_tab_leaves_valid_empty_layout() {
+        let mut model = LayoutModel::default();
+        model.add_tab_metadata(id(1)).unwrap();
+        model.remove_tab_metadata(id(1)).unwrap();
+
+        assert!(model.state().tabs.is_empty());
+        LayoutModel::from_history(model.export_history()).unwrap();
+    }
+
+    #[test]
+    fn removing_missing_tab_does_not_mutate_model_or_history() {
+        let mut model = two_tab_transfer();
+        let before = model.export_history();
+
+        assert!(model.remove_tab_metadata(id(3)).is_err());
+        assert_eq!(model.export_history(), before);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

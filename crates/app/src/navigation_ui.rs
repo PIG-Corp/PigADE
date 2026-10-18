@@ -4,6 +4,7 @@ use crate::navigation::{PaletteEntry, search_matches, search_score};
 
 fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
     match action {
+        ProductAction::OpenCloseTab => &["close tab", "закрыть вкладку"],
         ProductAction::OpenPrompts => &["prompts", "шаблоны текста", "промпты"],
         ProductAction::RenamePane => &["rename", "alias", "имя"],
         ProductAction::OpenStop => &["stop", "terminate", "остановить"],

@@ -32,6 +32,10 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenCloseTab,
+    CloseManagedTab,
+    ConfirmCloseTab,
+    InspectCloseTab,
     OpenPrompts,
     ReloadPrompts,
     NewPrompt,
@@ -147,6 +151,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    CloseTab,
     Prompts,
     Prompt,
     DeletePrompt,
@@ -190,6 +195,7 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::CloseTab => "Закрыть вкладку?",
             Self::Prompts => "Библиотека промптов",
             Self::Prompt => "Сохранённый промпт",
             Self::DeletePrompt => "Удалить промпт?",
@@ -233,6 +239,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
             Self::AgentProfiles | Self::DeleteAgentProfile => &[],
@@ -275,6 +282,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::CloseTab => "Закрыть вкладку",
             Self::Prompts => "Готово",
             Self::Prompt => "Сохранить промпт",
             Self::DeletePrompt => "Удалить промпт",
@@ -349,6 +357,7 @@ pub(super) struct ProductUi {
     pub(super) management_target: Option<crate::catalog_flow::ManagedEntity>,
     pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
     pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
+    pub(super) tab_close_sheet: Option<crate::tab_close::Sheet>,
     pub(super) prompt_editor: Option<crate::prompt_flow::PromptEditor>,
     pub(super) prompt_delete: Option<pigade_storage::Prompt>,
     pub(super) prompt_origin: Option<Dialog>,
@@ -550,6 +559,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Остановить CLI", ProductAction::OpenStop),
         ("История панели · I", ProductAction::OpenHistory),
         ("Новая вкладка", ProductAction::CreateTab),
+        ("Закрыть вкладку · close tab", ProductAction::OpenCloseTab),
         (
             "Новая вкладка · implementer + reviewer",
             ProductAction::ChoosePreset(crate::template_flow::Preset::Review),
@@ -1004,6 +1014,7 @@ impl ProductUi {
                 Some(crate::catalog_flow::ManagedEntity::Tab(tab)) => vec![
                     ("Открыть вкладку".into(), ProductAction::SelectTab(tab.id)),
                     ("Переименовать вкладку".into(), ProductAction::RenameTarget),
+                    ("Закрыть вкладку…".into(), ProductAction::CloseManagedTab),
                 ],
                 None => vec![],
             },
@@ -2672,6 +2683,34 @@ impl ProductUi {
             fields = fields.child(field);
         }
 
+        if dialog.kind == DialogKind::CloseTab
+            && let Some(sheet) = &self.tab_close_sheet
+        {
+            fields=fields.child(div().text_size(px(14.)).child(sheet.tab.name.clone()))
+                .child(div().text_size(px(12.)).text_color(colors.muted).whitespace_normal()
+                    .child(format!("Панелей: {}. CLI продолжат работать; их можно вернуть через «Сессии». Файлы и история сохранятся.",sheet.panes)))
+                .child(div().text_size(px(11.)).text_color(colors.muted).whitespace_normal()
+                    .child("Вкладка будет убрана из каталога и истории раскладки. Undo не откроет её снова. Ctrl+Enter — закрыть · Ctrl+R — сверить состояние."));
+            if sheet.request.is_some() {
+                fields = fields.child(div().text_size(px(12.)).child("Ожидаем ответ host…"));
+            }
+            if sheet.uncertain {
+                fields = fields.child(div().text_size(px(12.)).whitespace_normal().child(
+                    "Закрытие не подтверждено. Сверьте состояние перед следующим действием.",
+                ));
+            }
+            fields = fields.child(self.action_control(
+                "close-tab-inspect".into(),
+                "Обновить состояние".into(),
+                ProductAction::InspectCloseTab,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
         fields = self.template_dialog_fields(dialog, fields, cx);
         fields = self.profile_dialog_fields(dialog, fields, cx);
         fields = self.prompt_dialog_fields(dialog, fields, cx);
@@ -2990,7 +3029,12 @@ impl ProductUi {
             );
         }
 
-        let submit = if !can_bind {
+        let close_blocked = dialog.kind == DialogKind::CloseTab
+            && self
+                .tab_close_sheet
+                .as_ref()
+                .is_none_or(|sheet| sheet.request.is_some() || sheet.uncertain);
+        let submit = if !can_bind || close_blocked {
             div().into_any_element()
         } else {
             self.action_control(

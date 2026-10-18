@@ -389,6 +389,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('exact-generation stop action', plan['input']['catalog'])
         self.assertIn('stop hidden bootstrap through Sessions', plan['input']['catalog'])
         self.assertIn('open/refresh private workspace Git', plan['input']['catalog'])
+        self.assertIn('review/cancel/confirm Close Tab', plan['input']['catalog'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         for action in ('open-library', 'close-library', 'open-save-dialog', 'save-template',
@@ -410,6 +411,20 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("untracked_name = 'untracked space\\nline.txt'", source)
         self.assertIn("mount_filesystem_type('/home') == 'tmpfs'", source)
         self.assertIn("'--tmpfs', '/home'", source)
+        self.assertIn("'tab_close_schema') == 1", source)
+        self.assertIn("'close_tab_confirm_removed_tab_and_reselected_adjacent_fallback': True", source)
+        self.assertIn("'close_tab_removed_closed_tab_from_all_undo_redo_snapshots': True", source)
+        self.assertIn("'closed_session_reattached_via_existing_layout_edit_without_launch': attach_session", source)
+        close_flow = source.split("report['stage'] = 'catalog-close-tab-review'", 1)[1].split(
+            "report['catalog'] =", 1)[0]
+        self.assertLess(close_flow.index("helper_call(config, 'catalog-close-cancel')"),
+                        close_flow.index("helper_call(config, 'catalog-close-confirm')"))
+        self.assertIn("close_layout_revision = before_close_catalog['layout'].get('revision')", source)
+        self.assertIn("close_selection_revision = fallback_selection.get('revision')", source)
+        self.assertIn("'root': None, 'focused': None, 'focus_mode': False", source)
+        self.assertIn("helper_call(config, 'catalog-close-inspect')", close_flow)
+        self.assertIn("'action': {'action': 'apply', 'command': {'Insert': {", close_flow)
+        self.assertIn("all(isinstance(state, dict) and tab_id not in state.get('tabs', {})", close_flow)
         self.assertIn("'private_home_tmpfs': True", source)
         self.assertIn("project['canonical_path'] != str(expected_project_path)", source)
         self.assertIn("expected_git_repo = (private_home / 'demo').resolve(strict=True)", source)
@@ -431,7 +446,9 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-stop-confirm', 'catalog-sessions-open',
                       'catalog-sessions-action', 'catalog-hidden-stop-review',
                       'catalog-hidden-stop-confirm', 'catalog-git-open',
-                      'catalog-git-query', 'catalog-git-refresh', 'catalog-git-close'):
+                      'catalog-git-query', 'catalog-git-refresh', 'catalog-git-close',
+                      'catalog-close-open', 'catalog-close-query', 'catalog-close-inspect',
+                      'catalog-close-cancel', 'catalog-close-confirm'):
             self.assertIn(f'\"{stage}\"', helper)
         self.assertIn('modified_key(dpy, XK_Shift_L, XK_r)', helper)
         rename_action = helper.split('} else if (!strcmp(a.stage, "catalog-pane-rename-action")) {', 1)[1].split(
@@ -476,8 +493,25 @@ class IsolatedImePlanTests(unittest.TestCase):
             '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
         self.assertLess(git_close.index('key(dpy, XK_Tab)'), git_close.index('key(dpy, XK_Return)'))
         for artifact in ('catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
-                         'catalog-git-refreshed.ppm'):
+                         'catalog-git-refreshed.ppm', 'catalog-close-tab-review.ppm',
+                         'catalog-close-tab-fallback.ppm'):
             self.assertIn(artifact, source)
+        close_query = helper.split('} else if (!strcmp(a.stage, "catalog-close-query")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-close-cancel")) {', 1)[0]
+        self.assertIn('XK_c, XK_l, XK_o, XK_s, XK_e, XK_space', close_query)
+        self.assertIn('XK_t, XK_a, XK_b', close_query)
+        self.assertLess(close_query.index('nanosleep'), close_query.index('key(dpy, XK_Return)'))
+        close_inspect = helper.split('} else if (!strcmp(a.stage, "catalog-close-inspect")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-close-cancel")) {', 1)[0]
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_r)', close_inspect)
+        self.assertLess(close_flow.index("helper_call(config, 'catalog-close-query')"),
+                        close_flow.index("helper_call(config, 'catalog-close-inspect')"))
+        self.assertLess(close_flow.index("helper_call(config, 'catalog-close-inspect')"),
+                        close_flow.index("'/artifacts/catalog-close-tab-review.ppm'"))
+        close_confirm = helper.split('} else if (!strcmp(a.stage, "catalog-close-confirm")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_Return)', close_confirm)
+        self.assertIn("!strcmp(a.stage, \"catalog-close-query\") ? \"10\"", helper)
         self.assertIn("'stage'] = 'catalog-pane-rename-action'", source)
         self.assertIn("'stage'] = 'catalog-pane-rename-input'", source)
         self.assertIn("time.sleep(.25)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-dialog.ppm')", source)

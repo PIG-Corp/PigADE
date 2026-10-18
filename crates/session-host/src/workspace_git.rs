@@ -993,6 +993,7 @@ mod tests {
             pane_labels: Some(Vec::new()),
             agent_profiles: None,
             prompts: None,
+            tab_close_schema: None,
         };
         assert!(target(&catalog, workspace_id, 3).is_err());
         assert_eq!(target(&catalog, workspace_id, 4)?.workspace_revision, 4);

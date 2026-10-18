@@ -27,6 +27,7 @@ mod selection;
 mod session_control;
 mod setup_flow;
 mod startup;
+mod tab_close;
 mod template_commands;
 mod template_flow;
 mod text_edit;
@@ -1026,6 +1027,7 @@ mod focus_placement_tests {
             pane_labels: Some(vec![]),
             agent_profiles: None,
             prompts: None,
+            tab_close_schema: None,
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1261,6 +1263,7 @@ impl CanvasApp {
                                         this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
+                                        let close_reply=this.product.tab_close_sheet.as_ref().is_some_and(|sheet|sheet.request.is_some() && sheet.request==ui_request);
                                         let prompt_refresh=this.prompt_reload.is_some_and(|request|Some(request)==ui_request);
                                         if prompt_refresh { this.prompt_reload=None; }
                                         let profile_refresh=this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==ui_request);
@@ -1290,9 +1293,10 @@ impl CanvasApp {
                                             }
                                             this.product.notice=Some(if changed {"Сохранено; новые правки ещё не сохранены".into()} else {edit.notice});
                                             this.product.dialog=if same_dialog && !changed {edit.return_dialog.or_else(||edit.return_to.map(product::Dialog::new))} else {current_dialog};
-                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh {
+                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply {
                                             this.product.dialog=current_dialog;
                                         }
+                                        this.receive_tab_close(ui_request);
                                     }
                                     if let (Some(run),Some(pending))=(reply.template_run,template_pending) {
                                         this.receive_template_run(run,pending,cx);
@@ -1371,6 +1375,7 @@ impl CanvasApp {
                                 }
                                 Err(error) => {
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
+                                    this.tab_close_failed(error.ui_request);
                                     let template_error=error.message.clone();
                                     let navigation_error=error.message.clone();
                                     if focus_reply {
@@ -3138,6 +3143,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::SubmitDialog
+                | A::ConfirmCloseTab
                 | A::ConfirmPreparedLaunch
                 | A::RefreshLaunchPreview
                 | A::ToggleMemory
@@ -3165,6 +3171,8 @@ impl CanvasApp {
         if matches!(
             action,
             A::CloseDialog
+                | A::OpenCloseTab
+                | A::CloseManagedTab
                 | A::OpenWorkspaceGit
                 | A::OpenControls
                 | A::OpenPalette
@@ -3199,6 +3207,9 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenCloseTab | A::CloseManagedTab | A::ConfirmCloseTab | A::InspectCloseTab => {
+                self.tab_close_action(action, cx)
+            }
             A::OpenPrompts
             | A::ReloadPrompts
             | A::NewPrompt
@@ -3973,6 +3984,10 @@ impl CanvasApp {
                     .map(|field| field.text().to_owned())
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
+                if kind == DialogKind::CloseTab {
+                    self.tab_close_action(A::ConfirmCloseTab, cx);
+                    return;
+                }
                 if self.submit_prompt_dialog(kind, &fields, cx) {
                     self.sync_editor_scope(window, cx);
                     cx.notify();
@@ -3989,7 +4004,8 @@ impl CanvasApp {
                     return;
                 }
                 match kind {
-                    DialogKind::Prompts
+                    DialogKind::CloseTab
+                    | DialogKind::Prompts
                     | DialogKind::Prompt
                     | DialogKind::DeletePrompt
                     | DialogKind::AgentProfiles
@@ -5660,6 +5676,18 @@ impl CanvasApp {
                     .is_some_and(|dialog| dialog.active_field == 1)
         }) {
             self.history_key(event, window, cx);
+            return;
+        }
+        if (k.modifiers.control || k.modifiers.platform)
+            && k.key == "r"
+            && self
+                .product
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.kind == product::DialogKind::CloseTab)
+        {
+            self.product_action(product::ProductAction::InspectCloseTab, window, cx);
+            cx.stop_propagation();
             return;
         }
         if k.modifiers.control

@@ -247,6 +247,7 @@ mod tests {
             pane_labels: None,
             agent_profiles: None,
             prompts: None,
+            tab_close_schema: None,
         };
         let target = Target::selected(&catalog).unwrap();
         let dialog = Uuid::new_v4();

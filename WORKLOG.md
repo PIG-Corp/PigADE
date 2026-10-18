@@ -3241,3 +3241,43 @@ Ship BridgeMind prompt library with revisioned storage, frozen instruction-draft
 - Files: crates/app/src/prompt_commands.rs, crates/app/src/prompt_flow.rs, crates/app/src/prompt_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/storage/src/prompt.rs, crates/storage/src/catalog.rs, crates/storage/src/lib.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Locked workspace332/app208/harness32 tests passed; strict workspace/app Clippy, first-party fmt, diff/version checks and locked release app/host builds passed. Native /tmp/pigade-prompts-release-20261018-01 passes Pinyin editor plus prompt create/edit/exact draft insertion/context save/delete cancel/confirm, preserving original generation/PID/frame/pin and journal hash; captures inspected. Read-only Luna review found no concrete prompt-specific correctness bug. Root made explicit primary labels/target-draft note and preserved post-submit edits/late-refresh scope.
 - Risks / next: Full BridgeMind runtime/chat/approval work and SPEC platform/reboot/soak gates remain open. Private X11 workflow does not certify native Wayland, accessibility or native clipboard side effects; save-as shortcut is code-covered but not separately traversed natively. Previous goal turn was progress; leave goal active. Preserve unrelated dirt/stash0.
+
+## 2026-10-18T01:07:18+00:00 — /root/close_tab_layout_luna
+
+Implement catalog tab metadata removal with undo/redo history rebasing and regression tests
+
+- Files: crates/layout/src/lib.rs, WORKLOG.md
+- Verification: cargo fmt -p pigade-layout; cargo test -p pigade-layout (20 passed); cargo clippy -p pigade-layout --all-targets -- -D warnings; git diff --check -- crates/layout/src/lib.rs (all passed)
+- Risks / next: Root owns host/UI integration and final broader verification; no known layout risks.
+
+## 2026-10-18T01:07:50+00:00 — close_tab_storage_luna
+
+Add atomic CAS tab deletion alongside catalog writes and advertise tab close schema support
+
+- Files: crates/storage/src/catalog.rs, crates/storage/src/lib.rs
+- Verification: cargo check -p pigade-storage passed; cargo test -p pigade-storage catalog::tests::tab_close -- --test-threads=1 passed (2 tests); cargo clippy -p pigade-storage --all-targets -- -D warnings passed; scoped git diff --check passed
+- Risks / next: Root owns host close command integration and external Catalog literal updates.
+
+## 2026-10-18T01:11:17+00:00 — /root/close_tab_layout_luna
+
+Extend the private catalog harness with Close Tab review, cancellation, confirmation, metadata-history checks, and IPC session reattachment
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); python3 scripts/isolated-ime-x11.py --compile-helper /tmp/pigade-close-tab-input-helper-2 (passed); git diff --check on owned files (passed); no native app run or app Cargo
+- Risks / next: Root owns production Close Tab integration and any private native fixture execution; harness is ready for that build.
+
+## 2026-10-18T01:15:35+00:00 — /root/close_tab_layout_luna
+
+Correct Close Tab fixture empty-tab encoding and refresh the app catalog before revision-frozen review
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); python3 scripts/isolated-ime-x11.py --compile-helper /tmp/pigade-close-tab-input-helper-4 (passed); git diff --check on owned files (passed); no native app run or app Cargo
+- Risks / next: Root owns production integration and private native fixture run.
+
+## 2026-10-18T01:19:14+00:00 — root
+
+Integrate confirmed tab closing with atomic selection/history rebasing, active-run protection and preserved CLI sessions
+
+- Files: crates/app/src/tab_close.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/layout/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, crates/session-host/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Workspace340/app210/harness32 tests passed; strict locked workspace/app Clippy, first-party fmt/version/diff checks and release app/host builds passed. Native /tmp/pigade-close-tab-release-20261018-03 passes refresh/review/cancel/confirm, adjacent fallback, all placement snapshots free of closed tab and same five generation/PID/state/frame/journal snapshots; existing running session attached by layout IPC without launch. Review/fallback captures inspected. Root fixed fixture required batch arrays and exclusive-capture filename reuse (native01/02 stopped before close), local palette busy handling, closed viewport cache cleanup and test-only macro/status spelling. Read-only Luna review found no concrete production bug.
+- Risks / next: Full MVP/BridgeMind runtime, Wayland/platform/accessibility/reboot/soak gates remain open. Last attachment uses existing IPC, not a new native Sessions traversal. No active-desktop input/config; preserve unrelated dirt and stash0. Goal remains active; prior goal turn was progress.

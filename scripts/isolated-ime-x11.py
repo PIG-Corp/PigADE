@@ -1281,6 +1281,23 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
             result[(session, generation)] = (pid, state)
         return result
 
+    def process_frame_snapshot():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'catalog close-tab frame snapshot exceeds bounds')
+        result = {}
+        for view in views:
+            session, generation = view.get('session'), view.get('generation')
+            frame = view.get('frame')
+            require(isinstance(session, str) and isinstance(generation, str) and
+                    isinstance(frame, dict) and (session, generation) not in result,
+                    'catalog close-tab frame snapshot has an invalid identity or frame')
+            result[(session, generation)] = {
+                'pid': view.get('pid'), 'state': view.get('state'),
+                'sequence': view.get('sequence'), 'frame': frame,
+            }
+        return result
+
     initial, original_layout = catalog_layout()
     original_panes = set(pane_ids(original_layout.get('root')))
     identities = process_identities()
@@ -1701,6 +1718,154 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     require_git_fixture_invariants(
         'closing the workspace Git dialog changed process states, pane aliases, selection, or layout')
 
+    # Add an adjacent empty destination through the catalog without changing
+    # the user's current selection. The native close flow must then select it.
+    fallback_tab_id = str(uuid.uuid4())
+    fallback_selection = host_request({'command': 'catalog'})['catalog']['selection']
+    require(fallback_selection.get('tab_id') == tab_id and
+            fallback_selection.get('workspace_id') == git_workspace['id'],
+            'close-tab fixture lost the current source tab/workspace')
+    host_request({'command': 'catalog_apply', 'batch': {'projects': [], 'workspaces': [], 'tabs': [{
+        'expected_revision': None,
+        'value': {'id': fallback_tab_id, 'workspace_id': git_workspace['id'],
+                  'name': 'Fallback', 'layout_json': 'null', 'active_pane': None,
+                  'revision': 0},
+    }]}})
+    before_close_catalog = host_request({'command': 'catalog'})['catalog']
+    require(before_close_catalog.get('tab_close_schema') == 1 and
+            before_close_catalog.get('selection') == fallback_selection,
+            'catalog did not expose tab-close support or fallback creation changed selection')
+    close_source = next((item for item in before_close_catalog['tabs']
+                         if item.get('id') == tab_id), None)
+    fallback_tab = next((item for item in before_close_catalog['tabs']
+                         if item.get('id') == fallback_tab_id), None)
+    tab_order = [item.get('id') for item in before_close_catalog['tabs']]
+    require(close_source is not None and fallback_tab is not None and
+            fallback_tab.get('workspace_id') == close_source.get('workspace_id') and
+            tab_order.index(fallback_tab_id) == tab_order.index(tab_id) + 1 and
+            json.loads(fallback_tab.get('layout_json', 'null')) == {
+                'root': None, 'focused': None, 'focus_mode': False},
+            'close-tab fixture did not create an adjacent empty same-workspace fallback')
+    close_tab_revision = close_source.get('revision')
+    close_layout_revision = before_close_catalog['layout'].get('revision')
+    close_selection_revision = fallback_selection.get('revision')
+    require(type(close_tab_revision) is int and type(close_layout_revision) is int and
+            type(close_selection_revision) is int,
+            'close-tab fixture could not freeze all three source revisions')
+
+    before_close_other_tabs = {
+        item['id']: (item.get('layout_json'), item.get('active_pane'))
+        for item in before_close_catalog['tabs'] if item.get('id') != tab_id
+    }
+    close_generations = fixture_generations()
+    close_processes = process_identities()
+    close_states = process_state_snapshot()
+    close_frames = process_frame_snapshot()
+    close_journals = fixture_journal_hashes([generation for _, generation in close_generations])
+    require(set(close_states) == set(close_frames) and len(close_generations) == 5 and
+            len(close_processes) == 5 and set(close_journals) ==
+            {generation for _, generation in close_generations},
+            'close-tab fixture could not freeze every process, frame, and journal')
+
+    def close_tab_review_unchanged(message):
+        current = host_request({'command': 'catalog'})['catalog']
+        current_tabs = {item['id']: (item.get('layout_json'), item.get('active_pane'))
+                        for item in current['tabs']}
+        source_revision = next(item for item in current['tabs']
+                               if item.get('id') == tab_id).get('revision')
+        require(tab_id in current_tabs and fallback_tab_id in current_tabs and
+                current['selection'] == fallback_selection and
+                source_revision == close_tab_revision and
+                current['layout'].get('revision') == close_layout_revision and
+                current['selection'].get('revision') == close_selection_revision and
+                current['layout'] == before_close_catalog['layout'] and
+                current_tabs[tab_id] == (close_source.get('layout_json'),
+                                          close_source.get('active_pane')) and
+                process_identities() == close_processes and
+                fixture_generations() == close_generations and
+                process_state_snapshot() == close_states and
+                process_frame_snapshot() == close_frames and
+                fixture_journal_hashes([generation for _, generation in close_generations]) ==
+                close_journals,
+                message)
+
+    report['stage'] = 'catalog-close-tab-review'
+    save()
+    helper_call(config, 'catalog-close-open')
+    helper_call(config, 'catalog-close-query')
+    helper_call(config, 'catalog-close-inspect')
+    time.sleep(.4)
+    helper_call(config, 'capture', '/artifacts/catalog-close-tab-review.ppm')
+    close_tab_review_unchanged(
+        'opening the Close Tab confirmation changed the current selection, layout, or a process')
+    report['stage'] = 'catalog-close-tab-cancel'
+    save()
+    helper_call(config, 'catalog-close-cancel')
+    close_tab_review_unchanged(
+        'cancelling Close Tab changed the source tab, selection, layout, process, frame, or journal')
+
+    report['stage'] = 'catalog-close-tab-confirm-review'
+    save()
+    helper_call(config, 'catalog-close-open')
+    helper_call(config, 'catalog-close-query')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-close-tab-confirm.ppm')
+    close_tab_review_unchanged(
+        'reopening Close Tab confirmation changed the source tab, selection, or process state')
+
+    report['stage'] = 'catalog-close-tab-confirm'
+    save()
+    helper_call(config, 'catalog-close-confirm')
+    closed_catalog = wait_until(
+        lambda: (value if all(item.get('id') != tab_id for item in value.get('tabs', []))
+                 else None)
+        if (value := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    closed_tabs = {item['id']: (item.get('layout_json'), item.get('active_pane'))
+                   for item in closed_catalog['tabs']}
+    closed_history = json.loads(closed_catalog['layout']['json'])
+    history_states = [closed_history.get('current')]
+    for step in closed_history.get('undo', []) + closed_history.get('redo', []):
+        history_states.extend((step.get('before'), step.get('after')))
+    require(closed_catalog.get('selection', {}).get('tab_id') == fallback_tab_id and
+            closed_catalog.get('selection', {}).get('workspace_id') == git_workspace['id'] and
+            set(closed_tabs) == set(before_close_other_tabs) and
+            all(closed_tabs[key] == value for key, value in before_close_other_tabs.items()) and
+            all(isinstance(state, dict) and tab_id not in state.get('tabs', {})
+                for state in history_states),
+            'closing the tab failed adjacent selection, changed another tree, or left a dead tab in history')
+    require(process_identities() == close_processes and fixture_generations() == close_generations and
+            process_state_snapshot() == close_states and process_frame_snapshot() == close_frames and
+            fixture_journal_hashes([generation for _, generation in close_generations]) == close_journals,
+            'closing the tab changed a generation, PID, process state, terminal frame, or journal')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/catalog-close-tab-fallback.ppm')
+
+    attachable_sessions = sorted(
+        session for session, generation in close_generations
+        if session in pane_ids(json.loads(close_source['layout_json']).get('root')) and
+        close_states.get((session, generation), (None, None))[1] == 'running')
+    require(attachable_sessions, 'closed tab has no existing running pane session to reattach')
+    attach_session = attachable_sessions[0]
+    attach_layout_revision = closed_catalog['layout']['revision']
+    host_request({'command': 'layout_edit', 'expected_revision': attach_layout_revision,
+                  'action': {'action': 'apply', 'command': {'Insert': {
+                      'tab': fallback_tab_id, 'pane': attach_session, 'target': None,
+                      'side': 'Right', 'split': str(uuid.uuid4()),
+                  }}}})
+    attached_catalog = wait_until(
+        lambda: (value if (tab := next((item for item in value.get('tabs', [])
+                                        if item.get('id') == fallback_tab_id), None)) and
+                 attach_session in pane_ids(json.loads(tab['layout_json']).get('root')) else None)
+        if (value := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    attached_tab = next(item for item in attached_catalog['tabs']
+                        if item.get('id') == fallback_tab_id)
+    require(attached_catalog.get('selection', {}).get('tab_id') == fallback_tab_id and
+            set(pane_ids(json.loads(attached_tab['layout_json']).get('root'))) == {attach_session} and
+            process_identities() == close_processes and fixture_generations() == close_generations,
+            'existing host layout IPC failed to reattach the exact session without launching a process')
+
     report['catalog'] = {
         'saved_geometry_schema': template['geometry']['schema'],
         'saved_template_survived_ui_reopen': True,
@@ -1720,6 +1885,13 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
         'workspace_git_refresh_reflects_private_file_removal': True,
         'workspace_git_ui_preserved_all_five_generation_states_aliases_selection_and_tree': True,
+        'close_tab_cancel_preserved_selection_layout_process_frames_and_journals': True,
+        'close_tab_confirm_removed_tab_and_reselected_adjacent_fallback': True,
+        'close_tab_removed_closed_tab_from_all_undo_redo_snapshots': True,
+        'closed_session_reattached_via_existing_layout_edit_without_launch': attach_session,
+        'close_tab_frozen_revisions': {'tab': close_tab_revision,
+                                       'layout': close_layout_revision,
+                                       'selection': close_selection_revision},
         'workspace_git': {
             'workspace_revision': git_workspace['revision'],
             'branch': git_before_refresh['branch'],
@@ -1745,7 +1917,8 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm',
                      'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm',
                      'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
-                     'catalog-git-refreshed.ppm'],
+                     'catalog-git-refreshed.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
+                     'catalog-close-tab-fallback.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
     save()
@@ -4153,7 +4326,8 @@ def outer_run(args) -> dict:
                   'catalog-pane-palette.ppm', 'catalog-stop-review.ppm',
                   'catalog-stop-complete.ppm', 'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm',
                   'catalog-hidden-stop-complete.ppm', 'catalog-git-query.ppm',
-                  'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm'] if args.fixture == 'catalog' else
+                  'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm',
+                  'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm', 'catalog-close-tab-fallback.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
@@ -4187,7 +4361,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, and open/refresh private workspace Git',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete using fixed ASCII values',

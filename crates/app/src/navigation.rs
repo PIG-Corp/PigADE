@@ -35,7 +35,12 @@ pub(crate) fn search_score(query: &str, label: &str) -> u8 {
 pub(crate) fn local_palette_command(action: &A) -> bool {
     matches!(
         action,
-        A::OpenPrompts | A::OpenAgentProfiles | A::OpenControls | A::OpenLayouts | A::OpenPaneMenu
+        A::OpenCloseTab
+            | A::OpenPrompts
+            | A::OpenAgentProfiles
+            | A::OpenControls
+            | A::OpenLayouts
+            | A::OpenPaneMenu
     )
 }
 
@@ -445,6 +450,7 @@ mod tests {
             query: "profiles".into(),
             after: None,
         };
+        assert!(can_choose_palette(&A::OpenCloseTab, Some(&search)));
         assert!(can_choose_palette(&A::OpenPrompts, Some(&search)));
         assert!(can_choose_palette(&A::OpenAgentProfiles, Some(&search)));
         assert!(can_choose_palette(&A::OpenControls, Some(&search)));

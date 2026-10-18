@@ -418,6 +418,7 @@ mod tests {
             pane_labels: None,
             agent_profiles: None,
             prompts: None,
+            tab_close_schema: None,
         })?;
         value.as_object_mut().unwrap().remove("prompts");
         let decoded: crate::Catalog = serde_json::from_value(value)?;

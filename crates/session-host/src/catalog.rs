@@ -165,6 +165,92 @@ pub(crate) fn rename_pane(
     })
 }
 
+/// Closing placement metadata cannot stop a process or remove its history.
+/// Rebase every placement snapshot before the same durable catalog transaction.
+pub(crate) fn close_tab(
+    store: &mut MetadataStore,
+    tab_id: Uuid,
+    expected_revision: u64,
+    expected_layout_revision: u64,
+    expected_selection_revision: u64,
+) -> Result<Catalog> {
+    let current = read_metadata(store)?;
+    ensure_revision(&current.layout, expected_layout_revision)?;
+    ensure!(
+        current.selection.revision == expected_selection_revision,
+        "selection changed; review the tab again"
+    );
+    let tab = current
+        .tabs
+        .iter()
+        .find(|tab| tab.id == tab_id)
+        .context("tab is already closed or unavailable")?;
+    ensure!(
+        tab.revision == expected_revision,
+        "tab changed; review it again"
+    );
+    ensure!(
+        current
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == tab.workspace_id
+                && workspace.status == pigade_storage::WorkspaceStatus::Ready),
+        "tab workspace is unavailable"
+    );
+    let mut before = None;
+    for page_number in 0..=32 {
+        let page = store.template_runs(before)?;
+        ensure!(
+            !page.entries.iter().any(|run| run.tab_id == tab_id),
+            "finish or cancel the tab's configured launch before closing it"
+        );
+        before = page.next_before;
+        if before.is_none() {
+            break;
+        }
+        ensure!(page_number < 32, "active template run page bound exceeded");
+    }
+    let mut model = load_layout(&current)?;
+    model.remove_tab_metadata(tab_id)?;
+    let mut remaining = current.clone();
+    remaining.tabs.retain(|tab| tab.id != tab_id);
+    ensure_membership(&remaining, &model)?;
+    let mut selection = current.selection.clone();
+    selection.window.canvas_offsets.remove(&tab_id);
+    if selection.tab_id == Some(tab_id) {
+        let peers: Vec<_> = current
+            .tabs
+            .iter()
+            .filter(|peer| peer.workspace_id == tab.workspace_id)
+            .collect();
+        let index = peers
+            .iter()
+            .position(|peer| peer.id == tab_id)
+            .context("tab is not in its workspace")?;
+        selection.tab_id = peers
+            .iter()
+            .skip(index + 1)
+            .chain(peers[..index].iter().rev())
+            .next()
+            .map(|peer| peer.id);
+    }
+    let batch = CatalogBatch {
+        layout: Some(history_write(&model, &current.layout)?),
+        selection: Some(CatalogWrite {
+            value: selection,
+            expected_revision: Some(expected_selection_revision),
+        }),
+        ..Default::default()
+    };
+    store.apply_catalog_closing_tab(
+        batch,
+        pigade_storage::TabClose {
+            id: tab_id,
+            expected_revision,
+        },
+    )
+}
+
 pub(crate) fn activate_pane(
     store: &mut MetadataStore,
     tab_id: Uuid,
@@ -680,6 +766,152 @@ mod tests {
             .iter()
             .find(|tab| tab.id == id(number))
             .unwrap()
+    }
+
+    #[test]
+    fn close_tab_commits_selection_and_history_rebase_without_resurrection() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        seed(&mut store)?;
+        insert(&mut store, 10, None, 100)?;
+        let current = apply_metadata(
+            &mut store,
+            CatalogBatch {
+                tabs: vec![new(tab(6, 2))],
+                ..Default::default()
+            },
+        )?;
+        let mut selection = current.selection.clone();
+        selection.project_id = Some(id(1));
+        selection.workspace_id = Some(id(2));
+        selection.tab_id = Some(id(4));
+        selection
+            .window
+            .canvas_offsets
+            .insert(id(4), CanvasOffset { x: 12., y: 30. });
+        selection.window.panel_generations.insert(id(10), id(99));
+        let current = apply_metadata(
+            &mut store,
+            CatalogBatch {
+                selection: Some(CatalogWrite {
+                    value: selection,
+                    expected_revision: Some(current.selection.revision),
+                }),
+                ..Default::default()
+            },
+        )?;
+        let tab_revision = find_tab(&current, 4).revision;
+        assert!(
+            close_tab(
+                &mut store,
+                id(4),
+                tab_revision,
+                current.layout.revision + 1,
+                current.selection.revision
+            )
+            .is_err()
+        );
+        assert!(
+            close_tab(
+                &mut store,
+                id(4),
+                tab_revision + 1,
+                current.layout.revision,
+                current.selection.revision
+            )
+            .is_err()
+        );
+        assert!(
+            close_tab(
+                &mut store,
+                id(4),
+                tab_revision,
+                current.layout.revision,
+                current.selection.revision + 1
+            )
+            .is_err()
+        );
+        assert_eq!(read_metadata(&store)?, current);
+        let closed = close_tab(
+            &mut store,
+            id(4),
+            tab_revision,
+            current.layout.revision,
+            current.selection.revision,
+        )?;
+        assert_eq!(closed.selection.tab_id, Some(id(6)));
+        assert!(!closed.selection.window.canvas_offsets.contains_key(&id(4)));
+        assert_eq!(
+            closed.selection.window.panel_generations.get(&id(10)),
+            Some(&id(99))
+        );
+        assert_eq!(find_tab(&closed, 5), find_tab(&current, 5));
+        let mut model = load_layout(&closed)?;
+        while model.undo() {
+            assert!(!model.state().tabs.contains_key(&id(4)));
+        }
+        while model.redo() {
+            assert!(!model.state().tabs.contains_key(&id(4)));
+        }
+        drop(store);
+        let mut store = MetadataStore::open(&path)?;
+        assert_eq!(read_metadata(&store)?, closed);
+        let last = close_tab(
+            &mut store,
+            id(6),
+            find_tab(&closed, 6).revision,
+            closed.layout.revision,
+            closed.selection.revision,
+        )?;
+        assert_eq!(last.selection.tab_id, None);
+        assert_eq!(last.selection.workspace_id, Some(id(2)));
+        assert_eq!(find_tab(&last, 5), find_tab(&current, 5));
+        Ok(())
+    }
+
+    #[test]
+    fn close_tab_refuses_active_template_run_and_preserves_all_metadata() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
+        let current = seed(&mut store)?;
+        let run = store.save_template_run(new(pigade_storage::StoredTemplateRun {
+            id: id(88),
+            workspace_id: id(2),
+            tab_id: id(4),
+            template_id: None,
+            name: "Pending".into(),
+            slots: 1,
+            status: "running".into(),
+            payload: "{}".into(),
+            revision: 0,
+        }))?;
+        assert!(
+            close_tab(
+                &mut store,
+                id(4),
+                find_tab(&current, 4).revision,
+                current.layout.revision,
+                current.selection.revision
+            )
+            .is_err()
+        );
+        assert_eq!(read_metadata(&store)?, current);
+        let mut canceled = run.clone();
+        canceled.status = "cancelled".into();
+        store.save_template_run(CatalogWrite {
+            value: canceled,
+            expected_revision: Some(run.revision),
+        })?;
+        let closed = close_tab(
+            &mut store,
+            id(4),
+            find_tab(&current, 4).revision,
+            current.layout.revision,
+            current.selection.revision,
+        )?;
+        assert!(closed.tabs.iter().all(|tab| tab.id != id(4)));
+        Ok(())
     }
 
     #[test]

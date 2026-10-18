@@ -276,6 +276,14 @@ pub struct Catalog {
     /// `None` means the connected host predates prompt library support.
     #[serde(default)]
     pub prompts: Option<Vec<Prompt>>,
+    /// `None` means the connected host predates atomic tab close support.
+    #[serde(default)]
+    pub tab_close_schema: Option<u16>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabClose {
+    pub id: Uuid,
+    pub expected_revision: u64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -415,7 +423,21 @@ impl MetadataStore {
     /// update both tab records in this batch. Source and encoded JSON byte
     /// bounds are checked before commit. No process lifecycle is affected.
     pub fn apply_catalog(&mut self, batch: CatalogBatch) -> Result<Catalog> {
-        self.apply_catalog_internal(batch, None)
+        self.apply_catalog_internal(batch, None, None)
+    }
+
+    /// Atomically apply catalog writes and compare-and-swap deletion of one tab.
+    /// Selection must be cleared or moved in `batch` when it refers to this tab.
+    pub fn apply_catalog_closing_tab(
+        &mut self,
+        batch: CatalogBatch,
+        close: TabClose,
+    ) -> Result<Catalog> {
+        ensure!(
+            close.expected_revision > 0 && close.expected_revision <= i64::MAX as u64,
+            "invalid tab close revision"
+        );
+        self.apply_catalog_internal(batch, None, Some(close))
     }
 
     /// Compare-and-swap one durable pane alias without exposing label writes to
@@ -438,18 +460,19 @@ impl MetadataStore {
         batch: CatalogBatch,
         run: CatalogWrite<crate::StoredTemplateRun>,
     ) -> Result<Catalog> {
-        self.apply_catalog_internal(batch, Some(run))
+        self.apply_catalog_internal(batch, Some(run), None)
     }
 
     fn apply_catalog_internal(
         &mut self,
         batch: CatalogBatch,
         run: Option<CatalogWrite<crate::StoredTemplateRun>>,
+        close: Option<TabClose>,
     ) -> Result<Catalog> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let catalog = apply_catalog_batch(&tx, batch, run)?;
+        let catalog = apply_catalog_batch(&tx, batch, run, close)?;
         tx.commit()?;
         Ok(catalog)
     }
@@ -459,6 +482,7 @@ fn apply_catalog_batch(
     tx: &Transaction<'_>,
     batch: CatalogBatch,
     run: Option<CatalogWrite<crate::StoredTemplateRun>>,
+    close: Option<TabClose>,
 ) -> Result<Catalog> {
     ensure!(
         batch.projects.len() <= MAX_PROJECTS
@@ -516,6 +540,12 @@ fn apply_catalog_batch(
     unique_ids(batch.projects.iter().map(|write| write.value.id))?;
     unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
     unique_ids(batch.tabs.iter().map(|write| write.value.id))?;
+    if let Some(close) = close {
+        ensure!(
+            !batch.tabs.iter().any(|write| write.value.id == close.id),
+            "tab cannot be written and deleted in one batch"
+        );
+    }
     for write in batch.projects {
         write_project(tx, write)?;
     }
@@ -551,6 +581,13 @@ fn apply_catalog_batch(
     }
     if let Some(run) = run {
         crate::template_run::write_template_run(tx, run)?;
+    }
+    if let Some(close) = close {
+        let changed = tx.execute(
+            "DELETE FROM tabs WHERE id=?1 AND revision=?2",
+            params![close.id.to_string(), close.expected_revision as i64],
+        )?;
+        conflict(changed, "tab", close.id, close.expected_revision)?;
     }
     read_catalog(tx)
 }
@@ -1263,6 +1300,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         pane_labels: Some(read_pane_labels(connection, pane_label_count)?),
         agent_profiles: Some(read_agent_profiles(connection, agent_profile_count)?),
         prompts: Some(read_prompts(connection)?),
+        tab_close_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1882,6 +1920,86 @@ mod tests {
         let store = MetadataStore::open(path)?;
         assert_eq!(store.catalog()?, committed);
         assert!(store.migration_backup_path().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn tab_close_commits_selection_layout_and_delete_atomically_and_reopens() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let seeded = seed(&mut store)?;
+        let tab_id = seeded.tabs[0].id;
+        let mut selection = seeded.selection.clone();
+        selection.tab_id = None;
+        selection.window.canvas_offsets.remove(&tab_id);
+        selection.window.panel_generations.remove(&tab_id);
+        let layout = LayoutDocument {
+            json: "{\"undo\":[]}".into(),
+            revision: seeded.layout.revision,
+        };
+        let committed = store.apply_catalog_closing_tab(
+            CatalogBatch {
+                selection: Some(update(selection, seeded.selection.revision)),
+                layout: Some(update(layout, seeded.layout.revision)),
+                ..CatalogBatch::default()
+            },
+            TabClose {
+                id: tab_id,
+                expected_revision: seeded.tabs[0].revision,
+            },
+        )?;
+        assert!(committed.tabs.is_empty());
+        assert_eq!(committed.selection.tab_id, None);
+        assert_eq!(committed.selection.revision, seeded.selection.revision + 1);
+        assert_eq!(committed.layout.revision, seeded.layout.revision + 1);
+        assert_eq!(committed.tab_close_schema, Some(1));
+        drop(store);
+        let reopened = MetadataStore::open(path)?;
+        assert_eq!(reopened.catalog()?, committed);
+        Ok(())
+    }
+
+    #[test]
+    fn tab_close_failure_rolls_back_batch_and_stale_revision_keeps_tab() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let root = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(root.path().join("state.sqlite"))?;
+        let seeded = seed(&mut store)?;
+        let tab = &seeded.tabs[0];
+        let mut selection = seeded.selection.clone();
+        selection.tab_id = None;
+        let layout = LayoutDocument {
+            json: "{\"attempt\":true}".into(),
+            revision: seeded.layout.revision,
+        };
+        let failed = store.apply_catalog_closing_tab(
+            CatalogBatch {
+                selection: Some(update(selection.clone(), seeded.selection.revision)),
+                layout: Some(update(layout, seeded.layout.revision)),
+                ..CatalogBatch::default()
+            },
+            TabClose {
+                id: tab.id,
+                expected_revision: tab.revision + 1,
+            },
+        );
+        assert!(failed.is_err());
+        assert_eq!(store.catalog()?, seeded);
+
+        let failed = store.apply_catalog_closing_tab(
+            CatalogBatch::default(),
+            TabClose {
+                id: tab.id,
+                expected_revision: tab.revision,
+            },
+        );
+        assert!(
+            failed.is_err(),
+            "selected tab must be cleared before deletion"
+        );
+        assert_eq!(store.catalog()?, seeded);
         Ok(())
     }
 

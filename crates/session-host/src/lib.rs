@@ -243,6 +243,12 @@ pub enum Command {
         tab: Uuid,
         offset: pigade_storage::CanvasOffset,
     },
+    CloseTab {
+        tab: Uuid,
+        expected_revision: u64,
+        expected_layout_revision: u64,
+        expected_selection_revision: u64,
+    },
     LayoutEdit {
         expected_revision: u64,
         action: LayoutAction,
@@ -1378,6 +1384,18 @@ impl Host {
                 projects::create_workspace(&mut self.metadata, &self.root, project, task, worktree)?
             }
             Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, *batch)?,
+            Command::CloseTab {
+                tab,
+                expected_revision,
+                expected_layout_revision,
+                expected_selection_revision,
+            } => catalog::close_tab(
+                &mut self.metadata,
+                tab,
+                expected_revision,
+                expected_layout_revision,
+                expected_selection_revision,
+            )?,
             Command::LayoutEdit {
                 expected_revision,
                 action,

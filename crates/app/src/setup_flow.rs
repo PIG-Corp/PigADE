@@ -115,6 +115,7 @@ mod tests {
             pane_labels: Some(vec![]),
             agent_profiles: None,
             prompts: None,
+            tab_close_schema: None,
         }
     }
 
