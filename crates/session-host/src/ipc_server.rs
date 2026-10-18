@@ -192,6 +192,7 @@ pub(crate) fn error_response(
         workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        workspace_sessions: None,
         host_status: None,
     }
 }
@@ -287,6 +288,7 @@ fn process_connection(
                 workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                workspace_sessions: None,
                 host_status: None,
             },
             Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
@@ -395,6 +397,7 @@ mod tests {
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             host_status: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
@@ -683,6 +686,7 @@ mod tests {
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             host_status: None,
         })?;
         assert!(receive::<Response>(&mut command_client)?.error.is_none());

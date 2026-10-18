@@ -2,7 +2,8 @@
 use anyhow::{Context, Result, bail, ensure};
 use pigade_layout::{Direction, TabLayout};
 use pigade_session_host::{
-    Command, Launch, PROTOCOL, PrepareRequest, Request, Response, View, receive, send,
+    Command, Launch, LaunchPreview, PROTOCOL, PrepareRequest, Request, Response, View, receive,
+    send,
 };
 use pigade_storage::{
     AgentProfile, AgentProfileDelete, CatalogBatch, CatalogWrite, ContextDocument, LaunchSettings,
@@ -43,6 +44,63 @@ fn success(socket: &Path, command: Command) -> Result<Response> {
         bail!("host command failed: {error}");
     }
     Ok(response)
+}
+
+fn start_codex_fixture(host: &TestHost, tab: Uuid) -> Result<LaunchPreview> {
+    let preview = success(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: PrepareRequest {
+                tab,
+                provider: "codex".into(),
+                side: Direction::Right,
+                target: None,
+                role_override: String::new(),
+                agent_instructions: "workspace session fixture".into(),
+                include_memory: false,
+                memory_selection: None,
+                deliver_context: true,
+                engine: Default::default(),
+                custom_command: None,
+            },
+        },
+    )?
+    .launch_preview
+    .context("fixture launch preview missing")?;
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: preview.plan_id,
+        },
+    )?;
+    host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == preview.session
+                && view.generation == preview.generation
+                && view.state == "exited"
+        })
+    })?;
+    Ok(preview)
+}
+
+fn reject_workspace_resume(
+    host: &TestHost,
+    workspace: Uuid,
+    expected_revision: u64,
+    session: Uuid,
+    expected_head: Uuid,
+    expected_binding_revision: u64,
+) -> Result<Response> {
+    exchange(
+        &host.socket(),
+        Command::PrepareWorkspaceResume {
+            workspace,
+            expected_revision,
+            session,
+            expected_head,
+            expected_binding_revision,
+        },
+    )
 }
 
 struct TestHost {
@@ -908,6 +966,459 @@ fn claude_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bindi
 #[test]
 fn claude_resume_without_context_omits_task_and_original_engine_options() -> Result<()> {
     frozen_context_resume("claude", false)
+}
+
+#[test]
+fn workspace_sessions_are_scoped_metadata_and_resume_requires_exact_review_scope() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let root = host.root().canonicalize()?;
+    let project = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let foreign_workspace = Uuid::new_v4();
+    let first_tab = Uuid::new_v4();
+    let second_tab = Uuid::new_v4();
+    let foreign_tab = Uuid::new_v4();
+    let seeded = success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                projects: vec![CatalogWrite {
+                    value: Project {
+                        id: project,
+                        canonical_path: root.clone(),
+                        git_common_dir: root.clone(),
+                        name: "Workspace sessions fixture".into(),
+                        roots: vec![],
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                workspaces: vec![
+                    CatalogWrite {
+                        value: Workspace {
+                            id: workspace,
+                            project_id: project,
+                            task: "recover this workspace".into(),
+                            cwd: root.clone(),
+                            mode: WorkspaceMode::SharedCheckout,
+                            status: WorkspaceStatus::Ready,
+                            error: None,
+                            context_revision: None,
+                            revision: 0,
+                        },
+                        expected_revision: None,
+                    },
+                    CatalogWrite {
+                        value: Workspace {
+                            id: foreign_workspace,
+                            project_id: project,
+                            task: "foreign workspace".into(),
+                            cwd: root.clone(),
+                            mode: WorkspaceMode::SharedCheckout,
+                            status: WorkspaceStatus::Ready,
+                            error: None,
+                            context_revision: None,
+                            revision: 0,
+                        },
+                        expected_revision: None,
+                    },
+                ],
+                tabs: [
+                    (first_tab, workspace, "Development"),
+                    (second_tab, workspace, "Review"),
+                    (foreign_tab, foreign_workspace, "Foreign"),
+                ]
+                .into_iter()
+                .map(|(id, workspace_id, name)| CatalogWrite {
+                    value: Tab {
+                        id,
+                        workspace_id,
+                        name: name.into(),
+                        layout_json: serde_json::to_string(&TabLayout::default()).unwrap(),
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                })
+                .collect(),
+                ..CatalogBatch::default()
+            }
+            .into(),
+        },
+    )?;
+    let seeded_catalog = seeded
+        .catalog
+        .context("workspace session fixture catalog missing")?;
+    let workspace_revision = seeded_catalog
+        .workspaces
+        .iter()
+        .find(|row| row.id == workspace)
+        .context("workspace fixture row missing")?
+        .revision;
+    let foreign_workspace_revision = seeded_catalog
+        .workspaces
+        .iter()
+        .find(|row| row.id == foreign_workspace)
+        .context("foreign workspace fixture row missing")?
+        .revision;
+    ensure!(workspace_revision > 0);
+
+    let first = start_codex_fixture(&host, first_tab)?;
+    let second = start_codex_fixture(&host, second_tab)?;
+    let foreign = start_codex_fixture(&host, foreign_tab)?;
+    let binding = success(
+        &host.socket(),
+        Command::BindConversation {
+            session: first.session,
+            generation: first.generation,
+            conversation_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
+            expected_revision: 0,
+        },
+    )?
+    .launch_preview
+    .context("conversation bind omitted preview")?
+    .conversation
+    .context("conversation bind omitted exact binding")?;
+    ensure!(binding.revision == 1);
+
+    // Restart proves the overview and exact binding are derived from durable
+    // metadata rather than a retained UI frame or process-local guess.
+    host.restart()?;
+    let before_list = success(&host.socket(), Command::List)?.views;
+    let before_generations = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("first generation list missing")?;
+    let page_response = success(
+        &host.socket(),
+        Command::WorkspaceSessions {
+            workspace,
+            expected_revision: workspace_revision,
+            after: None,
+        },
+    )?;
+    ensure!(
+        page_response.views.is_empty(),
+        "overview returned terminal views or cells"
+    );
+    let page = page_response
+        .workspace_sessions
+        .context("workspace overview missing")?;
+    ensure!(page.schema == 1 && page.workspace_id == workspace && page.cwd == root);
+    ensure!(page.workspace_revision == workspace_revision && page.project_id == project);
+    ensure!(page.entries.len() == 2 && page.next_after.is_none());
+    ensure!(
+        page.entries
+            .windows(2)
+            .all(|pair| pair[0].session < pair[1].session)
+    );
+    let first_entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.session == first.session)
+        .context("first tab session missing from overview")?;
+    let second_entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.session == second.session)
+        .context("second tab session missing from overview")?;
+    ensure!(first_entry.tab_id == first_tab && first_entry.tab_name == "Development");
+    ensure!(second_entry.tab_id == second_tab && second_entry.tab_name == "Review");
+    ensure!(
+        page.entries
+            .iter()
+            .all(|entry| entry.session != foreign.session)
+    );
+    ensure!(first_entry.head == Some(first.generation));
+    ensure!(first_entry.selected_generation == Some(first.generation));
+    ensure!(first_entry.head_state == "exited" && first_entry.head_pid.is_none());
+    ensure!(first_entry.provider.as_deref() == Some("codex"));
+    ensure!(first_entry.conversation.as_ref().is_some_and(|value| {
+        value.provider == "codex"
+            && value.conversation_id == binding.conversation_id
+            && value.revision == binding.revision
+            && value.source_generation == first.generation
+    }));
+    ensure!(serde_json::to_value(first_entry.resume_state)? == "check_available");
+    let after_list = success(&host.socket(), Command::List)?.views;
+    ensure!(
+        before_list
+            .iter()
+            .map(|v| (v.session, v.generation, v.state.as_str(), v.pid))
+            .eq(after_list
+                .iter()
+                .map(|v| (v.session, v.generation, v.state.as_str(), v.pid))),
+        "listing changed process/generation state"
+    );
+    let after_generations = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation list missing after overview")?;
+    ensure!(after_generations.head == before_generations.head);
+
+    for response in [
+        reject_workspace_resume(
+            &host,
+            workspace,
+            workspace_revision + 1,
+            first.session,
+            first.generation,
+            binding.revision,
+        )?,
+        reject_workspace_resume(
+            &host,
+            workspace,
+            workspace_revision,
+            first.session,
+            Uuid::new_v4(),
+            binding.revision,
+        )?,
+        reject_workspace_resume(
+            &host,
+            workspace,
+            workspace_revision,
+            first.session,
+            first.generation,
+            binding.revision + 1,
+        )?,
+        reject_workspace_resume(
+            &host,
+            foreign_workspace,
+            foreign_workspace_revision,
+            first.session,
+            first.generation,
+            binding.revision,
+        )?,
+    ] {
+        ensure!(
+            response.error.is_some(),
+            "stale or foreign resume scope was accepted"
+        );
+        ensure!(response.views.is_empty());
+    }
+    let unchanged = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation list missing after rejected scopes")?;
+    ensure!(unchanged.head == Some(first.generation));
+
+    let preview_response = success(
+        &host.socket(),
+        Command::PrepareWorkspaceResume {
+            workspace,
+            expected_revision: workspace_revision,
+            session: first.session,
+            expected_head: first.generation,
+            expected_binding_revision: binding.revision,
+        },
+    )?;
+    ensure!(preview_response.views.is_empty());
+    let preview = preview_response
+        .launch_preview
+        .context("workspace resume omitted native preview")?;
+    ensure!(preview.session == first.session && preview.generation != first.generation);
+    ensure!(preview.resume.as_ref().is_some_and(|resume| {
+        resume.previous_head == first.generation && resume.binding == binding
+    }));
+    ensure!(preview_response.launch_phase.is_none());
+    let still_unlaunched = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation list missing after prepare")?;
+    ensure!(still_unlaunched.head == Some(first.generation));
+
+    fs::write(host.root().join("hold-resume"), b"hold")?;
+    success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: preview.plan_id,
+        },
+    )?;
+    host.active = Some((preview.session, preview.generation));
+    let running = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == preview.session
+                && view.generation == preview.generation
+                && view.state == "running"
+                && view.pid.is_some()
+        })
+    })?;
+    ensure!(running.len() == 4);
+    let running_page = success(
+        &host.socket(),
+        Command::WorkspaceSessions {
+            workspace,
+            expected_revision: workspace_revision,
+            after: None,
+        },
+    )?
+    .workspace_sessions
+    .context("running overview missing")?;
+    ensure!(running_page.entries.iter().any(|entry| {
+        entry.session == first.session
+            && entry.head == Some(preview.generation)
+            && serde_json::to_value(entry.resume_state).ok().as_ref()
+                == Some(&serde_json::json!("running"))
+    }));
+    let running_rejected = reject_workspace_resume(
+        &host,
+        workspace,
+        workspace_revision,
+        first.session,
+        preview.generation,
+        binding.revision,
+    )?;
+    ensure!(
+        running_rejected.error.is_some(),
+        "running generation was offered for resume"
+    );
+    ensure!(running_rejected.views.is_empty());
+    let after_running_reject = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation list missing after running refusal")?;
+    ensure!(after_running_reject.head == Some(preview.generation));
+
+    fs::remove_file(host.root().join("hold-resume"))?;
+    host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == preview.session
+                && view.generation == preview.generation
+                && view.state == "exited"
+        })
+    })?;
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session: first.session,
+            generation: Some(first.generation),
+        },
+    )?;
+    let pinned_page = success(
+        &host.socket(),
+        Command::WorkspaceSessions {
+            workspace,
+            expected_revision: workspace_revision,
+            after: None,
+        },
+    )?
+    .workspace_sessions
+    .context("pinned history overview missing")?;
+    ensure!(pinned_page.entries.iter().any(|entry| {
+        entry.session == first.session
+            && entry.selected_generation == Some(first.generation)
+            && entry.head == Some(preview.generation)
+            && serde_json::to_value(entry.resume_state).ok().as_ref()
+                == Some(&serde_json::json!("pinned_history"))
+    }));
+    let pinned_rejected = reject_workspace_resume(
+        &host,
+        workspace,
+        workspace_revision,
+        first.session,
+        preview.generation,
+        binding.revision,
+    )?;
+    ensure!(
+        pinned_rejected.error.is_some(),
+        "historical pin was accepted for resume"
+    );
+    let final_generations = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("final generation list missing")?;
+    ensure!(final_generations.head == Some(preview.generation));
+
+    success(
+        &host.socket(),
+        Command::SelectGeneration {
+            session: first.session,
+            generation: None,
+        },
+    )?;
+    // Exercise the durable unknown-outcome branch without simulating a crash
+    // or launching a duplicate process. This is fault injection on the exact
+    // generation record, following the fixture pattern used above.
+    let database = rusqlite::Connection::open(host.root().join("metadata.sqlite"))?;
+    database.busy_timeout(Duration::from_secs(3))?;
+    let changed = database.execute(
+        "UPDATE launch_intents SET state='unknown',reason='test unknown outcome' WHERE operation_id=?1",
+        [preview.plan_id.to_string()],
+    )?;
+    ensure!(
+        changed == 1,
+        "fixture could not mark the resume outcome unknown"
+    );
+    let unknown_page = success(
+        &host.socket(),
+        Command::WorkspaceSessions {
+            workspace,
+            expected_revision: workspace_revision,
+            after: None,
+        },
+    )?
+    .workspace_sessions
+    .context("unknown outcome overview missing")?;
+    let unknown_entry = unknown_page
+        .entries
+        .iter()
+        .find(|entry| entry.session == first.session)
+        .context("unknown outcome session missing")?;
+    ensure!(unknown_entry.head_state == "launch_outcome_unknown");
+    ensure!(serde_json::to_value(unknown_entry.resume_state)? == "unknown");
+    let unknown_rejected = reject_workspace_resume(
+        &host,
+        workspace,
+        workspace_revision,
+        first.session,
+        preview.generation,
+        binding.revision,
+    )?;
+    ensure!(
+        unknown_rejected.error.is_some(),
+        "unknown outcome was offered for resume"
+    );
+    let after_unknown = success(
+        &host.socket(),
+        Command::Generations {
+            session: first.session,
+            before: None,
+        },
+    )?
+    .generations
+    .context("generation list missing after unknown refusal")?;
+    ensure!(after_unknown.head == Some(preview.generation));
+    Ok(())
 }
 
 fn frozen_context_resume(provider: &str, deliver_context: bool) -> Result<()> {

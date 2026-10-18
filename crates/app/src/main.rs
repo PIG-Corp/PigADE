@@ -61,6 +61,8 @@ mod workspace_git;
 mod workspace_nav_store;
 mod workspace_navigation;
 mod workspace_navigation_commands;
+mod workspace_session_commands;
+mod workspace_sessions;
 use command_worker::{
     CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
     confirmed_ended_state,
@@ -1185,6 +1187,7 @@ mod focus_placement_tests {
             workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
+            workspace_sessions_schema: None,
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1262,6 +1265,7 @@ struct CanvasApp {
     pending_context_inspection: bool,
     pending_conversation_inspection: bool,
     pending_generation_picker: bool,
+    pending_workspace_resume: Option<workspace_session_commands::ResumeRequest>,
     pending_context_editor: Option<uuid::Uuid>,
     editor_dialog: Option<uuid::Uuid>,
     layout_geometry: Option<pigade_layout::CanvasGeometry>,
@@ -1415,6 +1419,22 @@ impl CanvasApp {
                         }
                         this.service_workspace_git(cx);
                         while let Ok(reply) = this.product_rx.try_recv() {
+                            let workspace_request = match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request};
+                            if workspace_request.is_some_and(|id|this.product.workspace_sessions.matches_request(id)) {
+                                this.product.busy=false;
+                                let dialog=this.product.dialog.as_ref().filter(|dialog|dialog.kind==product::DialogKind::WorkspaceSessions).map(|dialog|dialog.id);
+                                this.product.workspace_sessions.receive(reply,dialog,this.product.catalog.as_ref());
+                                if let Some(sheet)=&this.product.workspace_sessions.sheet { this.product.workspace_sessions_scroll.scroll_to_item(sheet.selected); }
+
+                                cx.notify();
+                                continue;
+                            }
+                            if this.receive_workspace_session_reply(&reply) {
+                                this.product.busy=false;
+                                cx.notify();
+                                continue;
+                            }
+
                             let stop_pending=this.stop_control.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let mut navigation_pending=this.navigation.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let template_pending=this.template_flow.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
@@ -1585,7 +1605,7 @@ impl CanvasApp {
                                         if direct_request { this.pending_direct_launch = None; }
                                         this.product.launch_phase = reply.launch_phase;
                                         if reply.launch_confirmed {
-                                            if this.product.dialog.as_ref().is_some_and(|dialog| matches!(dialog.kind, product::DialogKind::LaunchReview | product::DialogKind::CustomLaunchReview)) {
+                                            if this.product.dialog.as_ref().is_some_and(|dialog| matches!(dialog.kind, product::DialogKind::LaunchReview | product::DialogKind::CustomLaunchReview | product::DialogKind::ResumeReview)) {
                                                 this.product.dialog = None;
                                             }
                                             this.product.notice = Some(if preview.resume.is_some() {
@@ -1918,6 +1938,7 @@ impl CanvasApp {
             pending_context_inspection: false,
             pending_conversation_inspection: false,
             pending_generation_picker: false,
+            pending_workspace_resume: None,
             pending_context_editor: None,
             editor_dialog: None,
             layout_geometry: None,
@@ -3917,6 +3938,7 @@ impl CanvasApp {
                 | A::OpenActivity
                 | A::OpenHostMaintenance
                 | A::OpenWorkspaceSwitcher
+                | A::OpenWorkspaceSessions
                 | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
@@ -3954,6 +3976,13 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenWorkspaceSessions
+            | A::RefreshWorkspaceSessions
+            | A::FirstWorkspaceSessions
+            | A::WorkspaceSessionsPage(_)
+            | A::SelectWorkspaceSession(_)
+            | A::OpenWorkspaceSession
+            | A::PrepareWorkspaceSessionResume => self.workspace_session_action(action, cx),
             A::OpenWorkspaceSwitcher
             | A::ChooseWorkspace(_)
             | A::ToggleProjectFold(_)
@@ -4639,6 +4668,14 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if let Some(dialog) = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == DialogKind::WorkspaceSessions)
+                {
+                    self.product.workspace_sessions.close(dialog.id);
+                }
                 if self
                     .product
                     .dialog
@@ -5238,6 +5275,9 @@ impl CanvasApp {
                     DialogKind::RenamePane => self.submit_pane_name(cx),
                     DialogKind::WorkspaceGit => {
                         self.workspace_git_action(A::RefreshWorkspaceGit, cx)
+                    }
+                    DialogKind::WorkspaceSessions => {
+                        self.workspace_session_action(A::OpenWorkspaceSession, cx)
                     }
                     DialogKind::WorkspaceGitBatch => self.git_batch_action(A::GitConfirmBatch, cx),
                     DialogKind::WorkspaceGitCommit => {
@@ -7229,6 +7269,70 @@ impl CanvasApp {
             .product
             .dialog
             .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceSessions)
+        {
+            use product::ProductAction as A;
+            let control = k.modifiers.control || k.modifiers.platform;
+            let action = match k.key.as_str() {
+                "escape" if !event.is_held => Some(A::CloseDialog),
+                "enter" if !event.is_held && !k.modifiers.alt && !k.modifiers.shift => {
+                    Some(if control {
+                        A::PrepareWorkspaceSessionResume
+                    } else {
+                        A::OpenWorkspaceSession
+                    })
+                }
+                "r" if control && !event.is_held && !k.modifiers.alt => {
+                    Some(A::RefreshWorkspaceSessions)
+                }
+                "home" if control && !event.is_held => Some(A::FirstWorkspaceSessions),
+                "home" | "end" => {
+                    if !self.product.busy {
+                        let index = if k.key == "home" {
+                            0
+                        } else {
+                            self.product
+                                .workspace_sessions
+                                .sheet
+                                .as_ref()
+                                .and_then(|sheet| sheet.page.as_ref())
+                                .map_or(0, |page| page.entries.len().saturating_sub(1))
+                        };
+                        self.product.workspace_sessions.select(index);
+                        self.product.workspace_sessions_scroll.scroll_to_item(index);
+                        cx.notify();
+                    }
+                    None
+                }
+                "up" | "down" => {
+                    if !self.product.busy {
+                        self.product
+                            .workspace_sessions
+                            .move_selection(if k.key == "up" { -1 } else { 1 });
+                        if let Some(sheet) = &self.product.workspace_sessions.sheet {
+                            self.product
+                                .workspace_sessions_scroll
+                                .scroll_to_item(sheet.selected);
+                        }
+                        cx.notify();
+                    }
+                    None
+                }
+                "pageup" | "pagedown" if !event.is_held => {
+                    Some(A::WorkspaceSessionsPage(k.key == "pagedown"))
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
             .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceGitBatch)
         {
             use product::ProductAction as A;
@@ -8206,6 +8310,7 @@ impl CanvasApp {
             }
             let action = match k.key.as_str() {
                 "a" => Some(product::ProductAction::OpenWorkspaceSwitcher),
+                "u" => Some(product::ProductAction::OpenWorkspaceSessions),
                 "p" => Some(product::ProductAction::OpenPalette),
                 "e" => Some(if k.modifiers.shift {
                     product::ProductAction::EditProjectContext

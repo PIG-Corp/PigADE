@@ -227,6 +227,8 @@ struct Response {
     workspace_git_index_batch_plan: Option<WorkspaceGitIndexBatchPlan>,
     #[serde(default)]
     workspace_git_index_batch: Option<WorkspaceGitIndexBatchResult>,
+    #[serde(default)]
+    workspace_sessions: Option<WorkspaceSessions>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1195,6 +1197,7 @@ pub struct ResumeSource {
     pub previous_head: uuid::Uuid,
 }
 
+#[derive(Default)]
 pub struct ProductReply {
     pub ui_request: Option<uuid::Uuid>,
     pub providers_local: bool,
@@ -1225,6 +1228,143 @@ pub struct ProductReply {
     pub workspace_git_commit: Option<WorkspaceGitCommitResult>,
     pub workspace_git_index_batch_plan: Option<WorkspaceGitIndexBatchPlan>,
     pub workspace_git_index_batch: Option<WorkspaceGitIndexBatchResult>,
+    pub workspace_sessions: Option<WorkspaceSessions>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSessions {
+    pub schema: u16,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub after: Option<uuid::Uuid>,
+    pub entries: Vec<WorkspaceSessionEntry>,
+    pub next_after: Option<uuid::Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSessionEntry {
+    pub session: uuid::Uuid,
+    pub tab_id: uuid::Uuid,
+    pub tab_name: String,
+    pub selected_generation: Option<uuid::Uuid>,
+    pub head: Option<uuid::Uuid>,
+    pub title: String,
+    pub provider: Option<String>,
+    pub state: String,
+    pub head_state: String,
+    pub head_pid: Option<u32>,
+    pub conversation: Option<WorkspaceConversation>,
+    pub resume_state: WorkspaceResumeState,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConversation {
+    pub provider: String,
+    pub conversation_id: String,
+    pub revision: u64,
+    pub source_generation: uuid::Uuid,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceResumeState {
+    CheckAvailable,
+    NeedsBinding,
+    Running,
+    Unknown,
+    PinnedHistory,
+    Unsupported,
+    Unavailable,
+}
+
+impl WorkspaceSessions {
+    fn validate(
+        &self,
+        target: Option<(uuid::Uuid, u64, Option<uuid::Uuid>)>,
+    ) -> Result<(), String> {
+        if self.schema != 1
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || self.workspace_revision >= i64::MAX as u64
+            || !self.cwd.is_absolute()
+            || self.cwd.as_os_str().len() > 4096
+            || self.entries.len() > 32
+            || (self.next_after.is_some() && self.entries.len() != 32)
+            || self.after.is_some_and(|id| id.is_nil())
+            || self.next_after.is_some_and(|id| id.is_nil())
+            || target != Some((self.workspace_id, self.workspace_revision, self.after))
+        {
+            return Err(
+                "Некорректная или несоответствующая запросу страница сессий воркспейса".into(),
+            );
+        }
+        let mut ids = std::collections::HashSet::new();
+        for entry in &self.entries {
+            if entry.session.is_nil()
+                || entry.tab_id.is_nil()
+                || !ids.insert(entry.session)
+                || entry.tab_name.len() > 256
+                || entry.title.len() > 65536
+                || entry.state.len() > 64
+                || entry.head_state.len() > 64
+                || entry
+                    .provider
+                    .as_ref()
+                    .is_some_and(|value| value.len() > 64)
+                || entry.head_pid == Some(0)
+                || entry.head.is_some_and(|id| id.is_nil())
+                || entry.selected_generation.is_some_and(|id| id.is_nil())
+                || (entry.resume_state == WorkspaceResumeState::CheckAvailable
+                    && (entry.head.is_none()
+                        || entry.selected_generation != entry.head
+                        || entry.head_pid.is_some()
+                        || !matches!(
+                            entry.state.as_str(),
+                            "exited" | "history" | "historical" | "history_unavailable"
+                        )
+                        || entry.head_state != "exited"
+                        || entry.conversation.is_none()))
+                || entry.conversation.as_ref().is_some_and(|conversation| {
+                    conversation.provider.is_empty()
+                        || conversation.provider.len() > 64
+                        || conversation.conversation_id.is_empty()
+                        || conversation.conversation_id.len() > 256
+                        || conversation.revision == 0
+                        || conversation.source_generation.is_nil()
+                        || entry.resume_state == WorkspaceResumeState::CheckAvailable
+                            && entry
+                                .provider
+                                .as_ref()
+                                .is_none_or(|provider| provider != &conversation.provider)
+                })
+            {
+                return Err("Некорректная запись сессии воркспейса".into());
+            }
+        }
+        if self
+            .entries
+            .windows(2)
+            .any(|pair| pair[0].session >= pair[1].session)
+            || self.next_after.is_some_and(|cursor| {
+                self.entries
+                    .last()
+                    .is_none_or(|last| last.session != cursor)
+            })
+            || self.after.is_some_and(|cursor| {
+                self.entries
+                    .first()
+                    .is_some_and(|first| first.session <= cursor)
+            })
+        {
+            return Err("Нарушен порядок или курсор страницы сессий воркспейса".into());
+        }
+        Ok(())
+    }
 }
 
 pub struct ProductError {
@@ -1309,6 +1449,88 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         .flatten();
     let git_request = command_name == Some("workspace_git_snapshot");
     let git_watch_request = command_name == Some("workspace_git_watch");
+    let workspace_sessions_request = command_name == Some("workspace_sessions");
+    let workspace_sessions_target = if workspace_sessions_request {
+        let parse_id = |field: &str| {
+            command
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        };
+        let workspace = parse_id("workspace");
+        let revision = command.get("expected_revision").and_then(Value::as_u64);
+        let after = match command.get("after") {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::String(value)) => uuid::Uuid::parse_str(value).ok().map(Some),
+            _ => None,
+        };
+        match (workspace, revision, after) {
+            (Some(workspace), Some(revision), Some(after))
+                if !workspace.is_nil() && revision < i64::MAX as u64 =>
+            {
+                Some((workspace, revision, after))
+            }
+            _ => {
+                return Err(ProductError {
+                    ui_request: None,
+                    providers_request: false,
+                    message: "Некорректная область запроса сессий воркспейса".into(),
+                    rejected_before_launch: false,
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let workspace_resume_request = command_name == Some("prepare_workspace_resume");
+    let workspace_resume_target = if workspace_resume_request {
+        let parse_id = |field: &str| {
+            command
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        };
+        match (
+            parse_id("workspace"),
+            parse_id("session"),
+            parse_id("expected_head"),
+            command.get("expected_revision").and_then(Value::as_u64),
+            command
+                .get("expected_binding_revision")
+                .and_then(Value::as_u64),
+        ) {
+            (
+                Some(workspace),
+                Some(session),
+                Some(head),
+                Some(workspace_revision),
+                Some(binding_revision),
+            ) if !workspace.is_nil()
+                && !session.is_nil()
+                && !head.is_nil()
+                && workspace_revision < i64::MAX as u64
+                && binding_revision <= i64::MAX as u64 =>
+            {
+                Some((
+                    workspace,
+                    workspace_revision,
+                    session,
+                    head,
+                    binding_revision,
+                ))
+            }
+            _ => {
+                return Err(ProductError {
+                    ui_request: None,
+                    providers_request: false,
+                    message: "Некорректная область подготовки продолжения сессии".into(),
+                    rejected_before_launch: false,
+                });
+            }
+        }
+    } else {
+        None
+    };
     let git_target = (git_request || git_watch_request)
         .then(|| {
             Some((
@@ -1380,6 +1602,39 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
                     Some("launch_preflight" | "queue_full" | "host_shutting_down")
                 ),
         });
+    }
+    if workspace_sessions_request || response.workspace_sessions.is_some() {
+        response
+            .workspace_sessions
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул страницу сессий воркспейса".to_owned())
+            .and_then(|page| page.validate(workspace_sessions_target))
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
+    if workspace_resume_request {
+        let target = workspace_resume_target.expect("validated workspace resume target");
+        let valid = response.launch_preview.as_ref().is_some_and(|preview| {
+            preview.session == target.2
+                && preview.resume.as_ref().is_some_and(|resume| {
+                    resume.binding.session_id == target.2
+                        && resume.previous_head == target.3
+                        && resume.binding.revision == target.4
+                })
+        });
+        if !valid {
+            return Err(ProductError {
+                ui_request: None,
+                providers_request: false,
+                message: "План продолжения не соответствует выбранной сессии, поколению и привязке"
+                    .into(),
+                rejected_before_launch: false,
+            });
+        }
     }
     if let Some(page) = &response.generations {
         let mut unique = std::collections::HashSet::new();
@@ -1610,6 +1865,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         workspace_git_commit: response.workspace_git_commit,
         workspace_git_index_batch_plan: response.workspace_git_index_batch_plan,
         workspace_git_index_batch: response.workspace_git_index_batch,
+        workspace_sessions: response.workspace_sessions,
     })
 }
 
@@ -2610,6 +2866,7 @@ mod tests {
             workspace_git_commit: None,
             workspace_git_index_batch_plan: None,
             workspace_git_index_batch: None,
+            workspace_sessions: None,
             generations: None,
             generation_selection: None,
             history_view: None,
@@ -2621,6 +2878,85 @@ mod tests {
             recovery: None,
             change_token: None,
         }
+    }
+
+    #[test]
+    fn workspace_session_page_is_bounded_ordered_and_bound_to_requested_cursor() {
+        let page = WorkspaceSessions {
+            schema: 1,
+            workspace_id: uuid::Uuid::from_u128(1),
+            workspace_revision: 7,
+            project_id: uuid::Uuid::from_u128(2),
+            cwd: "/repo".into(),
+            after: None,
+            entries: vec![WorkspaceSessionEntry {
+                session: uuid::Uuid::from_u128(10),
+                tab_id: uuid::Uuid::from_u128(11),
+                tab_name: "Main".into(),
+                selected_generation: Some(uuid::Uuid::from_u128(12)),
+                head: Some(uuid::Uuid::from_u128(12)),
+                title: "Conversation".into(),
+                provider: Some("codex".into()),
+                state: "exited".into(),
+                head_state: "exited".into(),
+                head_pid: None,
+                conversation: Some(WorkspaceConversation {
+                    provider: "codex".into(),
+                    conversation_id: "thread-id".into(),
+                    revision: 4,
+                    // Binding provenance can remain on an older generation after resume.
+                    source_generation: uuid::Uuid::from_u128(9),
+                }),
+                resume_state: WorkspaceResumeState::CheckAvailable,
+            }],
+            next_after: None,
+        };
+        let target = Some((uuid::Uuid::from_u128(1), 7, None));
+        let wire = serde_json::to_value(page.clone()).unwrap();
+        let decoded: WorkspaceSessions = serde_json::from_value(wire).unwrap();
+        assert!(decoded.validate(target).is_ok());
+        assert!(
+            page.validate(Some((uuid::Uuid::from_u128(1), 8, None)))
+                .is_err()
+        );
+
+        let mut foreign_unavailable = page.entries[0].clone();
+        foreign_unavailable.provider = Some("codex".into());
+        foreign_unavailable.conversation.as_mut().unwrap().provider = "claude".into();
+        foreign_unavailable.resume_state = WorkspaceResumeState::Unavailable;
+        let mut foreign_page = page.clone();
+        foreign_page.entries = vec![foreign_unavailable.clone()];
+        assert!(foreign_page.validate(target).is_ok());
+        foreign_unavailable.resume_state = WorkspaceResumeState::CheckAvailable;
+        foreign_page.entries = vec![foreign_unavailable];
+        assert!(foreign_page.validate(target).is_err());
+
+        let mut malformed = page.clone();
+        malformed.entries[0].session = uuid::Uuid::nil();
+        assert!(malformed.validate(target).is_err());
+        malformed = page.clone();
+        let duplicate = malformed.entries[0].clone();
+        malformed.entries.push(duplicate);
+        assert!(malformed.validate(target).is_err());
+        malformed = page.clone();
+        malformed.after = Some(uuid::Uuid::from_u128(12));
+        assert!(
+            malformed
+                .validate(Some((uuid::Uuid::from_u128(1), 7, malformed.after)))
+                .is_err()
+        );
+        malformed = page.clone();
+        malformed.next_after = Some(uuid::Uuid::from_u128(99));
+        assert!(malformed.validate(target).is_err());
+        malformed = page.clone();
+        malformed.entries = (0..33)
+            .map(|index| {
+                let mut entry = page.entries[0].clone();
+                entry.session = uuid::Uuid::from_u128(100 + index);
+                entry
+            })
+            .collect();
+        assert!(malformed.validate(target).is_err());
     }
 
     fn diagnostics(journal: &str, message: &str) -> RecoveryDiagnostics {

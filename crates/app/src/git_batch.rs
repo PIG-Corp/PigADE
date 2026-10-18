@@ -667,6 +667,7 @@ mod tests {
             workspace_recovery_schema: None,
             history_grid_schema: None,
             custom_cli_schema: None,
+            workspace_sessions_schema: None,
         }
     }
 
@@ -727,6 +728,7 @@ mod tests {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             workspace_git_index_batch_plan: plan,
             workspace_git_index_batch: result,
         }

@@ -145,6 +145,47 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('XTestFakeButtonEvent(dpy, 4, True, CurrentTime)', helper)
         self.assertIn('pointer_position(dpy, app, 640, 400)', helper)
 
+    def test_resume_fixture_drives_workspace_overview_and_gates_exact_native_resume(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'resume']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['fixture'], 'resume')
+        self.assertIn('Ctrl+Shift+Space,U opens workspace session overview', plan['input']['resume'])
+        self.assertIn('Ctrl+Enter prepares only', plan['input']['resume'])
+        self.assertFalse(plan['input']['arbitrary_text_argument'])
+
+        harness = SCRIPT.read_text()
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        flow = harness.split('def run_resume_fixture(', 1)[1].split(
+            '\n\ndef run_controls_fixture(', 1)[0]
+        for stage in ('workspace-sessions-open', 'workspace-sessions-row-down',
+                      'workspace-sessions-enter', 'workspace-sessions-prepare',
+                      'workspace-sessions-refresh', 'workspace-sessions-cancel',
+                      'resume-confirm'):
+            self.assertIn(f'"{stage}"', helper)
+            self.assertIn(f"helper_call(config, '{stage}'", flow)
+        self.assertIn("{'command': 'workspace_sessions'", flow)
+        self.assertIn('codex_index <= 31 and raw_index <= 31', flow)
+        self.assertIn('for _ in range(codex_index)', flow)
+        self.assertIn("raw_entry.get('resume_state') != 'check_available'", flow)
+        self.assertIn('require_overview_read_only()', flow)
+        self.assertIn('require_review_read_only(first_review_plans)', flow)
+        self.assertIn("expected_resume_layout['selection']['revision'] += 1", flow)
+        self.assertIn("expected_resume_layout['selection']['window']['panel_generations'].pop(session, None)", flow)
+        self.assertIn('catalog_snapshot() == expected_resume_layout', flow)
+        self.assertIn("calls[-1].count(fixture['conversation_id']) == 1", flow)
+        self.assertIn("(after_entry.get('conversation') or {}).get('source_generation') == generation",
+                      flow)
+        self.assertIn("'workspace-session-resume-cancelled.ppm'", flow)
+        self.assertIn("'workspace-session-resumed.ppm'", flow)
+        self.assertIn("'workspace-sessions-cancelled.ppm'", harness)
+        self.assertIn("'workspace-session-resumed.ppm'", harness)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_Return)', helper)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_r)', helper)
+
     def test_setup_fixture_reviews_and_runs_exact_custom_cli_argv_only_after_confirmation(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \

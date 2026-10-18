@@ -2,6 +2,10 @@
 
 ## 0.0.1-dev — in development
 
+- Workspace session overview distinguishes live processes, saved history, pinned generations and uncertain launches across all tabs. Opening preserves processes; exact-ID continuation uses scoped preflight and a separate native resume confirmation.
+
+- Reviewed whole-status Stage All/Unstage All with exact literal paths, one native index replacement, durable receipts and mutually enforced unknown-outcome gates. Existing files and CLI processes are preserved; release private X11 and real-Git/restart/fault coverage pass.
+
 - Explicit workspace recovery reconciles interrupted/missing-folder entries against existing Git worktrees, preserves user files and placements, and returns concrete failure reasons without duplicate setup or CLI launch.
 
 - Sidebar workspace drop moves an existing pane into the remembered/first destination tab with an exact layout preview, atomic transfer and activation, stale workspace/tab guards and one-step placement undo. CLI process, cwd and frozen context are preserved.
@@ -22,7 +26,7 @@
 
 - Fixed hover entry before window activation and matched Dwindle nearest-pane fallback for drops across canvas gaps.
 
-- Bounded per-file Git Stage/Unstage from a frozen diff ticket (Ctrl+S): exact HEAD/index/file validation, private candidate index and native `index.lock` CAS. It never overwrites the worktree or automatically reapplies. Durable receipts survive dialog close and host restart; Ctrl+R inspects Unknown or refreshes, Ctrl+Shift+R explicitly acknowledges viewing Unknown/Unavailable. Limits: file256KiB, index8MiB,8 leases/10min,4096 receipts. Sparse/split index, symlink and conflict entries are unsupported. Normal Git clean/EOL filters may run on explicit Stage. Discard/pull/push/Stage All/live watcher are absent; Git MVP remains incomplete.
+- Bounded per-file Git Stage/Unstage from a frozen diff ticket (Ctrl+S): exact HEAD/index/file validation, private candidate index and native `index.lock` CAS. It never overwrites the worktree or automatically reapplies. Durable receipts survive dialog close and host restart; Ctrl+R inspects Unknown or refreshes, Ctrl+Shift+R explicitly acknowledges viewing Unknown/Unavailable. Limits: file256KiB, index8MiB,8 leases/10min,4096 receipts. Sparse/split index, symlink and conflict entries are unsupported. Normal Git clean/EOL filters may run on explicit Stage. Discard/pull/push remain absent; Git MVP remains incomplete.
 - Dwindle drag now shows the exact resulting layout and insertion side before release; the moved pane is highlighted. Hover focus still follows real cursor motion without clicking.
 - Read-only per-file Git diffs for index, worktree, untracked and conflict text, with bounded background reads, explicit unsupported/binary/truncated states and keyboard paging.
 

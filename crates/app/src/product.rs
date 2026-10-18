@@ -40,6 +40,8 @@ mod prompt_ui;
 mod session_control_ui;
 #[path = "template_ui.rs"]
 mod template_ui;
+#[path = "workspace_sessions_ui.rs"]
+mod workspace_sessions_ui;
 #[path = "workspace_switcher_ui.rs"]
 mod workspace_switcher_ui;
 
@@ -58,6 +60,13 @@ pub(super) enum ProductAction {
     UpdateHost,
     ReconcileHost,
     OpenActivity,
+    OpenWorkspaceSessions,
+    RefreshWorkspaceSessions,
+    FirstWorkspaceSessions,
+    WorkspaceSessionsPage(bool),
+    SelectWorkspaceSession(usize),
+    OpenWorkspaceSession,
+    PrepareWorkspaceSessionResume,
     MarkActivityRead(Uuid, Uuid, u64),
     MarkAllActivityRead,
     RetryActivitySave,
@@ -230,6 +239,7 @@ pub(super) enum DialogKind {
     WorkspaceSwitcher,
     HostMaintenance,
     Activity,
+    WorkspaceSessions,
     Appearance,
     CloseTab,
     Prompts,
@@ -286,6 +296,7 @@ impl DialogKind {
             Self::WorkspaceSwitcher => "Переключить воркспейс",
             Self::HostMaintenance => "Служба PigADE",
             Self::Activity => "Активность",
+            Self::WorkspaceSessions => "Сессии воркспейса",
             Self::Appearance => "Внешний вид",
             Self::CloseTab => "Закрыть вкладку?",
             Self::Prompts => "Библиотека промптов",
@@ -342,7 +353,7 @@ impl DialogKind {
                 "Запрос новому агенту",
             ],
             Self::WorkspaceSwitcher => &["Проект, задача или путь…"],
-            Self::HostMaintenance | Self::Activity => &[],
+            Self::HostMaintenance | Self::Activity | Self::WorkspaceSessions => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
             Self::Prompts => &["Найти по названию или тексту…"],
@@ -443,7 +454,7 @@ impl DialogKind {
             Self::Conversation => "Сохранить привязку",
             Self::Generations => "Показать поколение",
             Self::Transfer => "Закрыть",
-            Self::Sessions => "Закрыть",
+            Self::Sessions | Self::WorkspaceSessions => "Закрыть",
             Self::StopSession => "Остановить CLI",
             Self::History => "Закрыть",
             Self::TerminalInsert => "Вставить",
@@ -535,6 +546,8 @@ pub(super) struct ProductUi {
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) workspace_sessions: crate::workspace_sessions::Model,
+    pub(super) workspace_sessions_scroll: gpui::ScrollHandle,
     pub(super) git_watch_view: Option<crate::git_watch::View>,
     pub(super) git_batch: crate::git_batch::Model,
     pub(super) git_sheet: Option<crate::workspace_git::GitSheet>,
@@ -785,6 +798,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Поколения панели · история · O",
             ProductAction::OpenGenerations,
+        ),
+        (
+            "Сессии воркспейса · восстановление",
+            ProductAction::OpenWorkspaceSessions,
         ),
         ("Сессии", ProductAction::OpenSessions),
         ("Остановить CLI", ProductAction::OpenStop),
@@ -2108,6 +2125,24 @@ impl ProductUi {
                 cx,
             ))
             .pr(px(8.));
+        if self
+            .catalog
+            .as_ref()
+            .and_then(crate::workspace_sessions::Target::selected)
+            .is_some()
+        {
+            bar = bar.child(self.action_control(
+                "open-workspace-sessions".into(),
+                "Сессии".into(),
+                ProductAction::OpenWorkspaceSessions,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
         bar = bar
             .child(
                 self.action_control(
@@ -3140,6 +3175,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::WorkspaceSessions {
+            return self.workspace_sessions_overlay(cx);
         }
         if dialog.kind == DialogKind::WorkspaceGitBatch {
             return self.git_batch_overlay(cx);

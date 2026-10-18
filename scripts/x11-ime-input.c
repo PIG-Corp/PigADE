@@ -1,6 +1,6 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only fixed compose/commit,
- * EN/RU/CLI, workspace-context, generation-history and template-recipe sequences can synthesize input,
+ * EN/RU/CLI, workspace-context/session recovery, generation-history and template-recipe sequences can synthesize input,
  * after private-server ownership checks. The latency stage uses50 fixed
  * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
@@ -120,6 +120,13 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "memory-select") && strcmp(a.stage, "generations-open") &&
         strcmp(a.stage, "generations-select-old") && strcmp(a.stage, "generations-follow") &&
         strcmp(a.stage, "resume-open") && strcmp(a.stage, "resume-confirm") &&
+        strcmp(a.stage, "workspace-sessions-open") &&
+        strcmp(a.stage, "workspace-sessions-row-down") &&
+        strcmp(a.stage, "workspace-sessions-enter") &&
+        strcmp(a.stage, "workspace-sessions-prepare") &&
+        strcmp(a.stage, "workspace-sessions-confirm") &&
+        strcmp(a.stage, "workspace-sessions-refresh") &&
+        strcmp(a.stage, "workspace-sessions-cancel") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
         strcmp(a.stage, "history-readonly") && strcmp(a.stage, "scrollback-open") &&
         strcmp(a.stage, "scrollback-wheel") && strcmp(a.stage, "scrollback-top") &&
@@ -599,6 +606,10 @@ static void setup_prefix(Display *dpy, KeySym final_key, int shift_final) {
     if (!XTestFakeKeyEvent(dpy,control,False,CurrentTime) ||
         !XTestFakeKeyEvent(dpy,shift,False,CurrentTime)) fail("setup prefix release failed");
     if (shift_final) modified_key(dpy,XK_Shift_L,final_key); else key(dpy,final_key);
+}
+
+static void workspace_sessions_open_sequence(Display *dpy) {
+    setup_prefix(dpy, XK_u, 0);
 }
 
 static void control_shift_key(Display *dpy, KeySym sym) {
@@ -1554,6 +1565,20 @@ int main(int argc, char **argv) {
             resume_open_sequence(dpy);
         } else if (!strcmp(a.stage, "resume-confirm")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-sessions-open")) {
+            workspace_sessions_open_sequence(dpy);
+        } else if (!strcmp(a.stage, "workspace-sessions-row-down")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "workspace-sessions-enter")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-sessions-prepare")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-sessions-confirm")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-sessions-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "workspace-sessions-cancel")) {
+            key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "history-open")) {
             history_open_sequence(dpy);
         } else if (!strcmp(a.stage, "history-search")) {

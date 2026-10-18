@@ -687,6 +687,7 @@ mod tests {
             workspace_recovery_schema: None,
             history_grid_schema: None,
             custom_cli_schema: None,
+            workspace_sessions_schema: None,
         });
         ui.dialog = Some(Dialog::new(DialogKind::Activity));
         ui.refresh_activity_badges();

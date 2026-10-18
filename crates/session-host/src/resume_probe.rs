@@ -121,6 +121,26 @@ impl Reader {
 
 pub(crate) fn target(host: &mut Host, command: &Command) -> Result<Option<Target>> {
     let (session, plan_id, start) = match command {
+        Command::PrepareWorkspaceResume {
+            workspace,
+            expected_revision,
+            session,
+            expected_head,
+            expected_binding_revision,
+        } => {
+            crate::workspace_sessions::validate_resume_scope(
+                host,
+                *workspace,
+                *expected_revision,
+                *session,
+                *expected_head,
+                *expected_binding_revision,
+            )?;
+            let Some(binding) = host.metadata.conversation_binding(*session)? else {
+                return Ok(None);
+            };
+            (*session, binding.plan_id, false)
+        }
         Command::PrepareResume { session } => {
             let Some(binding) = host.metadata.conversation_binding(*session)? else {
                 return Ok(None);

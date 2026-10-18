@@ -909,64 +909,266 @@ def run_history_fixture(config, report, control, env, save):
 
 
 def run_resume_fixture(config, report, env, save):
-    report['stage'] = 'codex-resume-review'
+    report['stage'] = 'workspace-session-overview'
     save()
-
-
     deactivate_private_fcitx(config, env)
-    session = report['fixture']['codex_session']
-    generation = report['fixture']['codex_generation']
+    fixture = report['fixture']
+    session = fixture['codex_session']
+    generation = fixture['codex_generation']
+    workspace = fixture['workspace']
     baseline_models = fixture_session_models(session)
     require(set(baseline_models) == {generation} and
             'OLD_RESUME_FRAME' in view_text(baseline_models[generation]),
             'private Codex bootstrap generation is missing')
     old_frame = baseline_models[generation].get('frame')
-    old_layout = host_request({'command': 'catalog'})['catalog']['layout']
-    old_generations = fixture_generations()
-    old_plans = prepared_launches_read_only()
-    helper_call(config, 'resume-open')
-    plans = wait_until(lambda: (value if len(value := prepared_launches_read_only()) > len(old_plans)
-        and any((plan['payload'].get('preview', {}).get('resume') or {}).get('binding', {}).get(
-            'conversation_id') == report['fixture']['conversation_id']
-            for plan in value.values()) else None), time.monotonic() + 8)
-    fresh = [(plan_id, plan) for plan_id, plan in plans.items() if plan_id not in old_plans and
-             (plan['payload'].get('preview', {}).get('resume') or {}).get('binding', {}).get(
-                 'conversation_id') == report['fixture']['conversation_id']]
-    require(len(fresh) == 1 and fresh[0][1]['phase'] == 'prepared',
-            'resume review did not create one unstarted frozen plan')
-    preview = fresh[0][1]['payload']['preview']
-    new_generation = preview.get('generation')
-    require(preview.get('session') == session and new_generation != generation and
-            preview.get('context', {}).get('text', '').find(report['fixture']['frozen_context']) >= 0,
-            'resume preview differs from the bound session or frozen context')
-    require(fixture_generations() == old_generations,
-            'opening resume review created a terminal generation')
+
+    def catalog_snapshot():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        return {'layout': catalog['layout'], 'tabs': catalog['tabs'],
+                'selection': catalog['selection']}
+
+    def process_snapshot():
+        views = host_request({'command': 'list'}).get('views', [])
+        return sorted((view['session'], view['generation'], view.get('pid'), view.get('state'))
+                      for view in views)
+
+    def overview_page():
+        catalog = host_request({'command': 'catalog'})['catalog']
+        selected_workspace = next((item for item in catalog['workspaces']
+                                   if item['id'] == workspace), None)
+        require(selected_workspace is not None and selected_workspace['status'] == 'ready',
+                'fixture workspace is not Ready')
+        reply = host_request({'command': 'workspace_sessions', 'workspace': workspace,
+                              'expected_revision': selected_workspace['revision'], 'after': None})
+        page = reply.get('workspace_sessions')
+        require(reply.get('error') is None and isinstance(page, dict) and
+                page.get('workspace_id') == workspace and page.get('schema') == 1,
+                'workspace session metadata request failed')
+        return page
+
+    def codex_call_log():
+        path = Path('/artifacts/codex-starts.jsonl')
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    baseline_generations = fixture_generations()
+    baseline_processes = process_snapshot()
+    baseline_layout = catalog_snapshot()
+    baseline_journals = fixture_journal_hashes([generation_id for _, generation_id in baseline_generations])
+    baseline_plans = prepared_launches_read_only()
+    baseline_codex_calls = codex_call_log()
+
+    def require_overview_read_only(plans=baseline_plans):
+        require(fixture_generations() == baseline_generations,
+                'workspace overview changed generation membership')
+        require(process_snapshot() == baseline_processes,
+                'workspace overview changed process identity/state')
+        require(catalog_snapshot() == baseline_layout,
+                'workspace overview changed layout, tab projection, or selection')
+        require(fixture_journal_hashes([generation_id for _, generation_id in baseline_generations]) ==
+                baseline_journals, 'workspace overview changed generation journals')
+        require(prepared_launches_read_only() == plans,
+                'workspace overview or cancelled review changed prepared plans')
+        require(codex_call_log() == baseline_codex_calls,
+                'workspace overview started or resumed Codex')
+
+    page = overview_page()
+    entries = page.get('entries')
+    require(isinstance(entries, list) and len(entries) <= 32 and
+            [entry['session'] for entry in entries] == sorted(entry['session'] for entry in entries),
+            'workspace overview is not a bounded UUID-sorted page')
+    codex_index = next((index for index, entry in enumerate(entries)
+                        if entry.get('session') == session), None)
+    raw_index = next((index for index, entry in enumerate(entries)
+                      if entry.get('session') == fixture['session']), None)
+    require(codex_index is not None and raw_index is not None and codex_index <= 31 and raw_index <= 31,
+            'workspace page omitted the private Codex or raw shell pane')
+    codex_entry = entries[codex_index]
+    raw_entry = entries[raw_index]
+    require(codex_entry.get('head') == generation and
+            codex_entry.get('selected_generation') == generation and
+            codex_entry.get('resume_state') == 'check_available',
+            'overview did not identify the exact bound Codex head')
+    require(raw_entry.get('resume_state') != 'check_available',
+            'raw shell pane was exposed as resumable')
+
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/workspace-sessions-open.ppm')
+    helper_call(config, 'workspace-sessions-cancel')
+    time.sleep(0.15)
+    helper_call(config, 'capture', '/artifacts/workspace-sessions-cancelled.ppm')
+    require_overview_read_only()
+
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    helper_call(config, 'workspace-sessions-refresh')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/workspace-sessions-refresh.ppm')
+    helper_call(config, 'workspace-sessions-cancel')
+    time.sleep(0.15)
+    require_overview_read_only()
+
+    # A raw bootstrap shell row cannot enter resume review. Return selection to
+    # the exact Codex row using only fixed Down events from the page's UUID index.
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    for _ in range(raw_index):
+        helper_call(config, 'workspace-sessions-row-down')
+    helper_call(config, 'workspace-sessions-prepare')
+    time.sleep(0.15)
+    require(prepared_launches_read_only() == baseline_plans and
+            fixture_generations() == baseline_generations and
+            codex_call_log() == baseline_codex_calls,
+            'non-Codex/unbound shell row opened resume review or started a process')
+    helper_call(config, 'workspace-sessions-cancel')
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    for _ in range(codex_index):
+        helper_call(config, 'workspace-sessions-row-down')
+    helper_call(config, 'workspace-sessions-enter')
+    time.sleep(0.25)
+    opened_catalog = host_request({'command': 'catalog'})['catalog']
+    opened_tab = next((item for item in opened_catalog['tabs']
+                       if item['id'] == codex_entry['tab_id']), None)
+    require(opened_catalog['selection'].get('tab_id') == codex_entry['tab_id'] and
+            opened_tab is not None and opened_tab.get('active_pane') == session,
+            'plain Enter did not activate the exact Codex pane')
+    require(fixture_generations() == baseline_generations and
+            process_snapshot() == baseline_processes and
+            codex_call_log() == baseline_codex_calls,
+            'opening the selected pane changed process or generation membership')
+    helper_call(config, 'capture', '/artifacts/workspace-sessions-open-pane.ppm')
+
+    # Pane activation changes focus metadata by design; all recovery-review
+    # no-side-effect checks use this exact post-navigation baseline.
+    review_generations = fixture_generations()
+    review_processes = process_snapshot()
+    review_layout = catalog_snapshot()
+    review_journals = fixture_journal_hashes([generation_id for _, generation_id in review_generations])
+    review_plans = prepared_launches_read_only()
+    review_calls = codex_call_log()
+
+    def require_review_read_only(plans):
+        require(fixture_generations() == review_generations,
+                'resume review changed generation membership before confirmation')
+        require(process_snapshot() == review_processes,
+                'resume review started a process before confirmation')
+        require(catalog_snapshot() == review_layout,
+                'resume review changed tab layout or selection')
+        require(fixture_journal_hashes([generation_id for _, generation_id in review_generations]) ==
+                review_journals, 'resume review changed prior generation journals')
+        require(codex_call_log() == review_calls,
+                'resume review invoked the private Codex CLI')
+        require(prepared_launches_read_only() == plans,
+                'resume review plan set changed unexpectedly')
+
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    for _ in range(codex_index):
+        helper_call(config, 'workspace-sessions-row-down')
+    helper_call(config, 'workspace-sessions-prepare')
+    first_review_plans = wait_until(lambda: (plans if len(plans := prepared_launches_read_only()) ==
+        len(review_plans) + 1 else None), time.monotonic() + 8)
+    first_fresh = [(plan_id, plan) for plan_id, plan in first_review_plans.items()
+                   if plan_id not in review_plans]
+    require(len(first_fresh) == 1 and first_fresh[0][1]['phase'] == 'prepared',
+            'Ctrl+Enter did not create one unstarted resume plan')
+    first_payload = first_fresh[0][1]['payload']
+    first_preview = first_payload['preview']
+    resume = first_preview.get('resume') or {}
+    first_binding = resume.get('binding') or {}
+    require(first_preview.get('session') == session and
+            resume.get('previous_head') == generation and
+            first_binding.get('source_generation') == generation and
+            first_binding.get('conversation_id') == fixture['conversation_id'] and
+            fixture['frozen_context'] in first_preview.get('context', {}).get('text', ''),
+            'resume review did not freeze the exact head, conversation ID, and context')
+    require_review_read_only(first_review_plans)
     time.sleep(0.2)
-    helper_call(config, 'capture', '/artifacts/resume-review.ppm')
+    helper_call(config, 'capture', '/artifacts/workspace-session-resume-review.ppm')
+    helper_call(config, 'workspace-sessions-cancel')
+    time.sleep(0.15)
+    require_review_read_only(first_review_plans)
+    helper_call(config, 'capture', '/artifacts/workspace-session-resume-cancelled.ppm')
+
+    helper_call(config, 'workspace-sessions-open')
+    time.sleep(0.25)
+    for _ in range(codex_index):
+        helper_call(config, 'workspace-sessions-row-down')
+    helper_call(config, 'workspace-sessions-prepare')
+    final_plans = wait_until(lambda: (plans if len(plans := prepared_launches_read_only()) ==
+        len(review_plans) + 2 else None), time.monotonic() + 8)
+    final_fresh = [(plan_id, plan) for plan_id, plan in final_plans.items()
+                   if plan_id not in review_plans]
+    require(len(final_fresh) == 2 and all(plan['phase'] == 'prepared' for _, plan in final_fresh),
+            'second resume review did not retain exactly two unstarted review snapshots')
+    for _, plan in final_fresh:
+        candidate = plan['payload']['preview']
+        require(candidate.get('session') == session and
+                candidate.get('generation') != generation and
+                (candidate.get('resume') or {}).get('binding', {}).get('conversation_id') ==
+                fixture['conversation_id'], 'second review changed the exact resume target')
+    require_review_read_only(final_plans)
     helper_call(config, 'resume-confirm')
+
     def resumed():
         models = fixture_session_models(session)
-        view = models.get(new_generation)
-        return models if view and view.get('state') == 'exited' and \
-            'NEW_RESUME_FRAME' in view_text(view) else None
+        return models if any(value.get('state') == 'exited' and
+                             'NEW_RESUME_FRAME' in view_text(value)
+                             for key, value in models.items() if key != generation) else None
     models = wait_until(resumed, time.monotonic() + 10)
+    new_generation = next(key for key, value in models.items()
+                          if key != generation and 'NEW_RESUME_FRAME' in view_text(value))
+    final_phases = prepared_launches_read_only()
+    launched_reviews = [(plan_id, plan) for plan_id, plan in final_phases.items()
+                        if plan_id in {item[0] for item in final_fresh}
+                        and plan['phase'] != 'prepared']
+    require(len(launched_reviews) == 1 and
+            launched_reviews[0][1]['phase'] == 'delivered_unconfirmed',
+            'confirmation did not launch exactly one of the reviewed native resume plans')
     require(set(models) == {generation, new_generation} and
             models[generation].get('frame') == old_frame,
             'resume changed the old frame or created an extra generation')
-    require(fixture_generations() == sorted(old_generations + [(session, new_generation)]),
+    require(fixture_generations() == sorted(review_generations + [(session, new_generation)]),
             'resume changed another session or created an extra process')
-    require(host_request({'command': 'catalog'})['catalog']['layout'] == old_layout,
-            'resume changed layout placement or undo history')
+    # Explicit resume follows the new head through generations::select. This
+    # writes one selection revision even when no historical pin was present;
+    # every placement, tab and other selection field must remain byte-exact.
+    expected_resume_layout = json.loads(json.dumps(review_layout))
+    expected_resume_layout['selection']['revision'] += 1
+    expected_resume_layout['selection']['window']['panel_generations'].pop(session, None)
+    require(catalog_snapshot() == expected_resume_layout,
+            'resume changed placement/undo or more than the expected head selection')
     generation_list = fixture_generation_list(session)
     require(generation_list.get('head') == new_generation and
             {entry.get('generation') for entry in generation_list['entries']} ==
             {generation, new_generation}, 'resume did not preserve old head history')
+    calls = codex_call_log()
+    require(len(calls) == len(review_calls) + 1 and calls[-1][:1] == ['resume'] and
+            calls[-1].count(fixture['conversation_id']) == 1,
+            'explicit confirmation did not resume the exact native conversation ID once')
+    after_page = overview_page()
+    after_entry = next((entry for entry in after_page['entries'] if entry['session'] == session), None)
+    require(after_entry is not None and after_entry.get('head') == new_generation and
+            (after_entry.get('conversation') or {}).get('source_generation') == generation,
+            'current conversation binding lost its original source-generation provenance')
+    require(fixture_journal_hashes([generation]) == {generation: review_journals[generation]},
+            'resume changed the immutable prior generation journal')
     time.sleep(0.2)
-    helper_call(config, 'capture', '/artifacts/resume-new-generation.ppm')
+    helper_call(config, 'capture', '/artifacts/workspace-session-resumed.ppm')
     report['resume'] = {'session': session, 'previous_generation': generation,
         'new_generation': new_generation, 'frozen_context_reviewed': True,
         'old_frame_unchanged': True, 'layout_undo_history_unchanged': True,
-        'extra_generation': False, 'captures': ['resume-review.ppm', 'resume-new-generation.ppm'],
+        'old_binding_source_generation_preserved': True,
+        'overview_cancel_refresh_read_only': True,
+        'resume_review_cancelled_before_second_prepare': True,
+        'raw_shell_row_not_resumable': True,
+        'exact_native_conversation_resumed_once_after_confirmation': True,
+        'extra_generation': False,
+        'captures': ['workspace-sessions-open.ppm', 'workspace-sessions-cancelled.ppm',
+                     'workspace-sessions-refresh.ppm',
+                     'workspace-sessions-open-pane.ppm', 'workspace-session-resume-review.ppm',
+                     'workspace-session-resume-cancelled.ppm', 'workspace-session-resumed.ppm'],
         'scope': 'private fake Codex and isolated host metadata'}
     report.update({'status': RESUME_PASS, 'stage': 'complete'})
     save()
@@ -7852,7 +8054,11 @@ def outer_run(args) -> dict:
                  ['memory-review-initial.ppm', 'memory-review-selected.ppm'] if args.fixture == 'memory' else
                  ['generations-picker.ppm', 'generation-pinned-old.ppm',
                   'generation-follow-head.ppm'] if args.fixture == 'generations' else
-                 ['resume-review.ppm', 'resume-new-generation.ppm'] if args.fixture == 'resume' else
+                 ['workspace-sessions-open.ppm', 'workspace-sessions-cancelled.ppm',
+                  'workspace-sessions-refresh.ppm', 'workspace-sessions-open-pane.ppm',
+                  'workspace-session-resume-review.ppm',
+                  'workspace-session-resume-cancelled.ppm',
+                  'workspace-session-resumed.ppm'] if args.fixture == 'resume' else
                  ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                   'scrollback-newer.ppm', 'scrollback-escape-live.ppm', 'scrollback-live.ppm',
                   'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
@@ -7953,7 +8159,7 @@ def plan(args) -> dict:
                   'context': 'fixed private shortcut and Pinyin editing; native WM_DELETE_WINDOW close review cancels with Escape and explicitly discards an unsaved draft with Ctrl+Enter; create/rename/delete-cancel/delete a prompt through the palette, then Ctrl+Shift+P inserts its exact text into the frozen saved workspace draft; no terminal input',
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
-                  'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
+                  'resume': 'fixed Ctrl+Shift+Space,U opens workspace session overview; Up/Down selects UUID-sorted rows, Enter opens exact pane, Ctrl+R refreshes, Ctrl+Enter prepares only; Escape cancels; a bounded fixed Down sequence selects the readonly-queried Codex row before the existing native resume confirmation',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
@@ -7973,7 +8179,7 @@ def plan(args) -> dict:
                        if args.fixture == 'memory' else
                        'generation history changes only a per-panel pin; private fixture journals and models are checked unchanged'
                        if args.fixture == 'generations' else
-                       'private fake Codex only; resume review is captured before explicit confirmation'
+                       'private fake Codex only; workspace overview and native resume review are captured before explicit confirmation'
                        if args.fixture == 'resume' else
                        'colored 256-row pane scrollback is navigated without PTY input, return routes one fixed marker to live PTY, and existing history sheet selects/copies/searches without mutation'
                        if args.fixture == 'history' else
@@ -7987,7 +8193,7 @@ def plan(args) -> dict:
                     if args.fixture == 'memory' else
                     'picker, pinned-old, and followed-head generation captures are retained for human review'
                     if args.fixture == 'generations' else
-                    'resume review and new-generation captures are retained for human review'
+                    'workspace overview, review cancellation, and confirmed new-generation captures are retained for human review'
                     if args.fixture == 'resume' else
                     'history open/search/readonly captures are retained for human review'
                     if args.fixture == 'history' else

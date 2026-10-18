@@ -5253,3 +5253,59 @@ Integrate durable reviewed Stage All and Unstage All with host RPC, shared worke
 - Files: README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/close_ui.rs, crates/app/src/workspace_git.rs, crates/app/src/git_batch.rs, crates/app/src/git_batch_ui.rs, crates/app/src/git_status_ui.rs, crates/app/src/git_watch.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git_index_batch.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0014-diff-bound-git-index-actions.md
 - Verification: 434 app tests;60 focused host Git tests;13 real-host project tests;37 harness tests; strict workspace/app Clippy, formats/version/diff and host/app release builds pass. Private native catalog04 complete pass; root inspected batch review/result and commit captures.01-02 failed original U shortcut (cause unproven);03 passed batches but later commit fixture lacked refresh after private reseeding;04 repairs explicit refresh. Final unstage chord Ctrl+Shift+Backspace passes. No active-desktop input or live user host/CLI restart.
 - Risks / next: Broader goal remains active; full MVP/Wayland/reboot/soak/performance/accessibility gates open. Git discard/remotes and receipt maintenance absent. Preserve unrelated dirt and stash0.
+
+## 2026-10-18T12:23:37+00:00 — workspace_sessions_host_luna
+
+Add metadata-only workspace session overview with exact resume scope validation
+
+- Files: crates/session-host/src/workspace_sessions.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_sessions.rs and git diff --check on new module passed; Cargo was not run per lane instruction
+- Risks / next: Root to wire DTO/RPC variants and run focused/session-host Cargo checks; compile/API feedback remains unverified in this lane
+
+## 2026-10-18T12:25:25+00:00 — /root/workspace_sessions_model_luna
+
+Added scoped workspace session recovery protocol validation and bounded page/resume state model.
+
+- Files: crates/app/src/protocol.rs, crates/app/src/workspace_sessions.rs
+- Verification: rustfmt --edition 2024 on both owned Rust files passed; git diff --check passed. Cargo/app tests not run because root owns the single Cargo verification lane.
+- Risks / next: Root wires the model into the UI and runs the coordinated app checks; verify the returned launch preview matches the frozen session, head, and binding revision.
+
+## 2026-10-18T12:26:43+00:00 — workspace_sessions_ipc_tests_luna
+
+Add real-host IPC coverage for scoped workspace session recovery overview and guarded native resume
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/context_launch.rs and git diff --check passed; Cargo/integration execution left to root lane
+- Risks / next: Root to run workspace_sessions_are_scoped_metadata_and_resume_requires_exact_review_scope; runtime behavior remains unverified in this lane
+
+## 2026-10-18T12:33:12+00:00 — /root/workspace_sessions_model_luna
+
+Added protocol and model regressions for recovered session histories, invalid pages, stale replies, scope errors, and paging/selection stability.
+
+- Files: crates/app/src/protocol.rs, crates/app/src/workspace_sessions.rs
+- Verification: rustfmt --edition 2024 on both owned files and git diff --check passed. Cargo tests not run because root owns the active single Cargo verification lane.
+- Risks / next: Root to finish the in-progress app test run and integrate any failures.
+
+## 2026-10-18T12:35:04+00:00 — /root/workspace_sessions_model_luna
+
+Kept workspace session browsing reachable beyond 32 pages with a bounded sliding back-history window and rollback-safe first-page navigation.
+
+- Files: crates/app/src/workspace_sessions.rs
+- Verification: rustfmt --edition 2024 crates/app/src/workspace_sessions.rs and git diff --check passed. Cargo was not run; root owns app verification.
+- Risks / next: Root to wire the First action and run the extended workspace session app tests.
+
+## 2026-10-18T12:37:13+00:00 — workspace_sessions_ui_fixture_luna
+
+Extend isolated resume fixture through workspace session overview, cancellation, and exact Codex confirmation
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; python3 -m unittest discover -s scripts -p test_isolated_ime_x11.py passed (38 tests including strict C helper compilation); git diff --check passed; no native fixture or Cargo run per lane instruction
+- Risks / next: Root to run the explicit private release fixture and review captures; the raw bootstrap row is non-resumable and may classify Unavailable without provider provenance; runtime UI behavior remains unverified here
+
+## 2026-10-18T12:45:32+00:00 — /root
+
+Integrate workspace session recovery overview with scoped exact-ID resume, atomic pane activation and successful-review dismissal; document capability and correct stale Git batch claims
+
+- Files: crates/app/src/workspace_session_commands.rs, crates/app/src/workspace_sessions.rs, crates/app/src/workspace_sessions_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/activity_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/git_batch.rs, crates/app/src/git_watch.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_drop.rs, crates/app/src/workspace_git.rs, crates/session-host/src/workspace_sessions.rs, crates/session-host/src/lib.rs, crates/session-host/src/resume_probe.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Root verified 442 app,89 storage,3 overview unit,9 context_launch real-host IPC and38 harness tests; strict workspace/app Clippy, workspace/package formatting, version/diff checks, release host bins/examples and app builds pass. Private native resume02 passes; overview/review/new-frame captures inspected. Run01 selection-revision expectation corrected to exact +1 plus pin removal with all other selection/layout/undo bytes unchanged; successful ResumeReview now closes. No desktop input/config/live host changes. Luna separately logged bounded model/backend/fixture edits and reviewed integration.
+- Risks / next: Commit this coherent feature preserving unrelated stress/research/GPUI dirt and stash0. Workspace overview is metadata-only and private fake-Codex X11 acceptance does not close real-provider/full-platform/reboot/24h/performance/a11y MVP gates; broad product goal remains active.

@@ -535,6 +535,7 @@ mod tests {
             workspace_git_watch: watch,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_sessions: None,
             workspace_git_index_batch_plan: None,
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,

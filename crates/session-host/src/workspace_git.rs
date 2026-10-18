@@ -1838,6 +1838,7 @@ pub(crate) fn response(
         workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        workspace_sessions: None,
         host_status: None,
     }
 }
@@ -2409,6 +2410,7 @@ mod tests {
             workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
+            workspace_sessions_schema: None,
         };
         assert!(target(&catalog, workspace_id, 3).is_err());
         assert_eq!(target(&catalog, workspace_id, 4)?.workspace_revision, 4);

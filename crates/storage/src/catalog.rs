@@ -403,6 +403,9 @@ pub struct Catalog {
     /// Generic custom CLI prepare/start support.
     #[serde(default)]
     pub custom_cli_schema: Option<u16>,
+    /// Metadata-only workspace session overview and explicitly scoped resume.
+    #[serde(default)]
+    pub workspace_sessions_schema: Option<u16>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabClose {
@@ -1459,6 +1462,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         workspace_recovery_schema: Some(1),
         history_grid_schema: Some(1),
         custom_cli_schema: Some(1),
+        workspace_sessions_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing

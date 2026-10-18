@@ -13,6 +13,12 @@ fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
         ProductAction::RenamePane => &["rename", "alias", "имя"],
         ProductAction::OpenStop => &["stop", "terminate", "остановить"],
         ProductAction::OpenWorkspaceGit => &["git", "status", "branch", "изменения"],
+        ProductAction::OpenWorkspaceSessions => &[
+            "recovery",
+            "восстановление",
+            "workspace sessions",
+            "сессии воркспейса",
+        ],
         ProductAction::OpenSessions => &["sessions", "hidden", "сессии"],
         _ => &[],
     }

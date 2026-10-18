@@ -1809,6 +1809,7 @@ mod tests {
             workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
+            workspace_sessions_schema: None,
         };
         let target = Target::selected(&catalog).unwrap();
         let dialog = Uuid::new_v4();

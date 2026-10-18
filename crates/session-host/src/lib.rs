@@ -18,6 +18,7 @@ mod resume_probe;
 mod template_run;
 mod workspace_git;
 mod workspace_recovery;
+mod workspace_sessions;
 pub use catalog::LayoutAction;
 pub use panel_directory::{PanelDirectory, PanelEntry};
 mod ipc_server;
@@ -194,6 +195,18 @@ pub enum Command {
     },
     PrepareResume {
         session: Uuid,
+    },
+    WorkspaceSessions {
+        workspace: Uuid,
+        expected_revision: u64,
+        after: Option<Uuid>,
+    },
+    PrepareWorkspaceResume {
+        workspace: Uuid,
+        expected_revision: u64,
+        session: Uuid,
+        expected_head: Uuid,
+        expected_binding_revision: u64,
     },
     PrepareTemplateRun {
         request: TemplateRunRequest,
@@ -438,6 +451,8 @@ pub struct Response {
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_directory: Option<PanelDirectory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_sessions: Option<workspace_sessions::WorkspaceSessions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -827,6 +842,7 @@ fn provider_response(
         workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        workspace_sessions: None,
         host_status: None,
     }
 }
@@ -864,6 +880,7 @@ fn maintenance_response(status: maintenance::Status, error: Option<String>) -> R
         workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        workspace_sessions: None,
         host_status: Some(status),
     }
 }
@@ -1210,6 +1227,7 @@ impl Host {
                 workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                workspace_sessions: None,
                 host_status: None,
             });
         }
@@ -1268,6 +1286,7 @@ impl Host {
                 workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                workspace_sessions: None,
                 host_status: None,
             });
         }
@@ -1305,6 +1324,7 @@ impl Host {
                 workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                workspace_sessions: None,
                 host_status: None,
             });
         }
@@ -1352,6 +1372,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1390,6 +1411,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1436,6 +1458,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1473,6 +1496,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1514,6 +1538,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1564,6 +1589,35 @@ impl Host {
             Command::ListTemplateRuns { before } => {
                 let runs = template_run::list(self, *before)?;
                 return Ok(self.template_run_response(None, Some(runs), None));
+            }
+            Command::WorkspaceSessions {
+                workspace,
+                expected_revision,
+                after,
+            } => {
+                let page = workspace_sessions::list(self, *workspace, *expected_revision, *after)?;
+                let mut reply = ipc_server::error_response("", None);
+                reply.error = None;
+                reply.recovery = self.recovery.response();
+                reply.workspace_sessions = Some(page);
+                return Ok(reply);
+            }
+            Command::PrepareWorkspaceResume {
+                workspace,
+                expected_revision,
+                session,
+                expected_head,
+                expected_binding_revision,
+            } => {
+                let preview = workspace_sessions::prepare_resume(
+                    self,
+                    *workspace,
+                    *expected_revision,
+                    *session,
+                    *expected_head,
+                    *expected_binding_revision,
+                )?;
+                return Ok(self.launch_response(None, preview, None));
             }
             Command::PrepareResume { session } => {
                 let preview = prepared::prepare_resume(self, *session)?;
@@ -1711,6 +1765,7 @@ impl Host {
                     workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    workspace_sessions: None,
                     host_status: None,
                 });
             }
@@ -1747,6 +1802,7 @@ impl Host {
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             host_status: None,
         })
     }
@@ -1788,6 +1844,7 @@ impl Host {
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             host_status: None,
         }
     }
@@ -1829,6 +1886,7 @@ impl Host {
             workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_sessions: None,
             host_status: None,
         }
     }
@@ -3480,6 +3538,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                workspace_sessions: None,
                 host_status: None,
             },
         };

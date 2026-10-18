@@ -38,6 +38,7 @@ pub(crate) fn local_palette_command(action: &A) -> bool {
         A::OpenHostMaintenance
             | A::OpenWorkspaceSwitcher
             | A::OpenActivity
+            | A::OpenWorkspaceSessions
             | A::OpenAppearance
             | A::AdjustTerminalFont(_)
             | A::ResetTerminalFont

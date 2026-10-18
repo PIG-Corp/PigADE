@@ -315,6 +315,7 @@ fn response(
         workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        workspace_sessions: None,
         host_status: None,
     }
 }
