@@ -229,6 +229,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('loopback session creation', plan['input']['opencode'])
         self.assertIn('exact-ID resume', plan['input']['opencode'])
         self.assertIn('public export/import of a synthetic text-only exchange', plan['input']['opencode'])
+        self.assertIn('UI profile create/review/launch/edit/delete', plan['input']['opencode'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         sequence = source.split('static void opencode_input_sequence', 1)[1].split('\n}', 1)[0]
@@ -254,6 +255,30 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'GET /session/{id}/message'", harness)
         self.assertIn("'opencode-resume-review.ppm'", harness)
         self.assertIn("'opencode-resumed-session.ppm'", harness)
+        self.assertIn("'opencode-profile-launch-review.ppm'", harness)
+        self.assertIn('def run_opencode_profile_fixture(', harness)
+        for assertion in (
+                "'command': 'detect_providers'", "'preview', {}).get('profile') or {}).get('id') == profile['id']",
+                "'role_override') == expected_settings['role']",
+                "'agent_instructions') == expected_settings['instructions']",
+                "launch.get('args') == [] and launch.get('env', {}) == {}",
+                "'frame_unchanged': (after_edit_view or {}).get('frame') == profile_frame",
+                "'1.19.3' not in text or text.count('█') < 8",
+                "final_plans.get(profile_plan_id, {}).get('payload') == payload",
+                "'delete_cancel_preserved_profile': True"):
+            self.assertIn(assertion, harness)
+        for stage in ('profile-open', 'profile-new', 'profile-create-fields',
+                      'profile-context-off', 'profile-save', 'profile-select-first',
+                      'profile-launch', 'profile-confirm', 'profile-edit', 'profile-rename',
+                      'profile-save-edit', 'profile-delete', 'profile-cancel-delete',
+                      'profile-confirm-delete'):
+            self.assertIn(f'"{stage}"', source)
+            self.assertIn(f"helper_call(config, '{stage}'", harness)
+        profile_input = source.split('} else if (!strcmp(a.stage, "profile-create-fields")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "profile-context-off")) {', 1)[0]
+        self.assertIn('XK_3', profile_input)
+        self.assertNotIn('XK_m', profile_input)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_m)', source)
         self.assertIn("'public_metadata_directory': '/home/pigade/.local/share/opencode'", harness)
         self.assertIn("'private_loopback_enabled_for_fixture': config.get('fixture') == 'opencode'", harness)
         self.assertNotIn("'/global/auth'", harness)

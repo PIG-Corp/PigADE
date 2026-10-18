@@ -52,16 +52,16 @@ impl ProductUi {
             .panel_directory
             .as_ref()
             .filter(|page| page.query == query);
-        if dialog.kind == DialogKind::Palette
+        let waiting_for_directory = dialog.kind == DialogKind::Palette
             && !query.is_empty()
             && self.pane_names_supported()
             && directory.is_none()
-            && self.palette_error.is_none()
-        {
-            return vec![];
-        }
+            && self.palette_error.is_none();
         let mut result = Vec::new();
         for (label, action) in palette_commands() {
+            if waiting_for_directory && !crate::navigation::local_palette_command(&action) {
+                continue;
+            }
             if dialog.kind == DialogKind::PaneMenu && !panel_action(&action) {
                 continue;
             }
@@ -78,7 +78,7 @@ impl ProductUi {
                 });
             }
         }
-        if dialog.kind == DialogKind::PaneMenu {
+        if dialog.kind == DialogKind::PaneMenu || waiting_for_directory {
             return result;
         }
         if let Some(catalog) = &self.catalog {
@@ -225,6 +225,12 @@ impl ProductUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn profiles_are_available_before_a_remote_panel_search_finishes() {
+        let ui = ui("profiles");
+        assert_eq!(ui.palette_action(), Some(ProductAction::OpenAgentProfiles));
+        assert!(ui.panel_directory.is_none());
+    }
     fn ui(query: &str) -> ProductUi {
         let catalog:Catalog=serde_json::from_value(serde_json::json!({
             "projects":[],"workspaces":[],"tabs":[],"selection":pigade_storage::Selection::default(),

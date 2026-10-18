@@ -5,8 +5,8 @@ use pigade_session_host::{
     Command, Launch, PROTOCOL, PrepareRequest, Request, Response, View, receive, send,
 };
 use pigade_storage::{
-    CatalogBatch, CatalogWrite, ContextDocument, MemorySelection, Project, Tab, Workspace,
-    WorkspaceMode, WorkspaceStatus,
+    AgentProfile, AgentProfileDelete, CatalogBatch, CatalogWrite, ContextDocument, LaunchSettings,
+    MemorySelection, Project, Tab, Workspace, WorkspaceMode, WorkspaceStatus,
 };
 use std::{
     fs,
@@ -294,7 +294,8 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
     let catalog = response.catalog.context("catalog fixture was not saved")?;
@@ -681,7 +682,8 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
     let old_project_text = "FROZEN_PROJECT_CONTEXT";
@@ -1278,7 +1280,8 @@ fn opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery() ->
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
     let frozen_context = "FROZEN_CONTEXT_MUST_NOT_BE_DELIVERED";
@@ -1671,6 +1674,247 @@ fn opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery() ->
     ensure!(
         success(&host.socket(), Command::List)?.views.len() == 2,
         "duplicate OpenCode resume created an extra generation"
+    );
+    Ok(())
+}
+
+#[test]
+fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let root = host.root().canonicalize()?;
+    let project = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let tab = Uuid::new_v4();
+    let profile_id = Uuid::new_v4();
+    let original_name = "Persistent review profile";
+    let original_role = "profile architect";
+    let original_instructions = "PROFILE_ORIGINAL_INSTRUCTIONS λ";
+    let initial = success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                projects: vec![CatalogWrite {
+                    value: Project {
+                        id: project,
+                        canonical_path: root.clone(),
+                        git_common_dir: root.clone(),
+                        name: "Profile launch fixture".into(),
+                        roots: vec![],
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                workspaces: vec![CatalogWrite {
+                    value: Workspace {
+                        id: workspace,
+                        project_id: project,
+                        task: "profile snapshot task".into(),
+                        cwd: root.clone(),
+                        mode: WorkspaceMode::SharedCheckout,
+                        status: WorkspaceStatus::Ready,
+                        error: None,
+                        context_revision: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                tabs: vec![CatalogWrite {
+                    value: Tab {
+                        id: tab,
+                        workspace_id: workspace,
+                        name: "Profile fixture".into(),
+                        layout_json: serde_json::to_string(&TabLayout::default())?,
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                agent_profiles: vec![CatalogWrite {
+                    value: AgentProfile {
+                        id: profile_id,
+                        name: original_name.into(),
+                        settings: LaunchSettings {
+                            provider: "codex".into(),
+                            role: original_role.into(),
+                            instructions: original_instructions.into(),
+                            deliver_context: true,
+                        },
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            }
+            .into(),
+        },
+    )?
+    .catalog
+    .context("profile fixture catalog missing")?;
+    let layout_before = initial.layout.clone();
+    success(
+        &host.socket(),
+        Command::SaveContext {
+            document: context(project, 0, "PROFILE_PROJECT_CONTEXT", "", ""),
+            expected_revision: 0,
+        },
+    )?;
+    success(
+        &host.socket(),
+        Command::SaveContext {
+            document: context(workspace, 0, "PROFILE_WORKSPACE_CONTEXT", "", ""),
+            expected_revision: 0,
+        },
+    )?;
+
+    let stale = exchange(
+        &host.socket(),
+        Command::PrepareProfileLaunch {
+            tab,
+            profile: profile_id,
+            expected_revision: 2,
+            side: Direction::Right,
+            target: None,
+        },
+    )?;
+    ensure!(stale.error.is_some(), "stale profile revision was accepted");
+    ensure!(stale.launch_preview.is_none());
+    ensure!(
+        success(&host.socket(), Command::List)?.views.is_empty(),
+        "stale profile revision created a generation"
+    );
+
+    let prepared = success(
+        &host.socket(),
+        Command::PrepareProfileLaunch {
+            tab,
+            profile: profile_id,
+            expected_revision: 1,
+            side: Direction::Right,
+            target: None,
+        },
+    )?;
+    ensure!(prepared.views.is_empty(), "profile prepare launched a PTY");
+    let preview = prepared
+        .launch_preview
+        .context("profile prepare omitted launch preview")?;
+    let source = preview
+        .profile
+        .as_ref()
+        .context("profile provenance missing from preview")?;
+    ensure!(
+        source.id == profile_id && source.name == original_name && source.revision == 1,
+        "profile provenance did not match the selected revision"
+    );
+    ensure!(
+        preview.role_override == original_role
+            && preview.agent_instructions == original_instructions
+            && preview.deliver_context,
+        "profile settings were not copied into the prepared launch"
+    );
+    for expected in [
+        "PROFILE_PROJECT_CONTEXT",
+        "PROFILE_WORKSPACE_CONTEXT",
+        original_role,
+        original_instructions,
+    ] {
+        ensure!(
+            preview.context.text.contains(expected),
+            "prepared context omitted {expected:?}"
+        );
+    }
+    let plan_id = preview.plan_id;
+    ensure!(success(&host.socket(), Command::List)?.views.is_empty());
+
+    let mut replacement = AgentProfile {
+        id: profile_id,
+        name: "Updated profile name".into(),
+        settings: LaunchSettings {
+            provider: "codex".into(),
+            role: "changed role".into(),
+            instructions: "PROFILE_CHANGED_INSTRUCTIONS".into(),
+            deliver_context: false,
+        },
+        revision: 1,
+    };
+    let after_update = success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                agent_profiles: vec![CatalogWrite {
+                    value: replacement.clone(),
+                    expected_revision: Some(1),
+                }],
+                ..CatalogBatch::default()
+            }
+            .into(),
+        },
+    )?
+    .catalog
+    .context("updated profile catalog missing")?;
+    ensure!(after_update.layout == layout_before);
+    ensure!(success(&host.socket(), Command::List)?.views.is_empty());
+
+    replacement.revision = 2;
+    let after_delete = success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                remove_agent_profiles: vec![AgentProfileDelete {
+                    id: profile_id,
+                    expected_revision: replacement.revision,
+                }],
+                ..CatalogBatch::default()
+            }
+            .into(),
+        },
+    )?
+    .catalog
+    .context("deleted profile catalog missing")?;
+    ensure!(after_delete.agent_profiles.as_ref().unwrap().is_empty());
+    ensure!(after_delete.layout == layout_before);
+    ensure!(
+        success(&host.socket(), Command::List)?.views.is_empty(),
+        "profile update or deletion created a CLI generation"
+    );
+
+    host.active = Some((preview.session, preview.generation));
+    let started = success(&host.socket(), Command::StartPrepared { plan_id })?;
+    ensure!(started.launch_phase.as_deref() == Some("delivered_unconfirmed"));
+    let views = host.wait_for(|views| {
+        views.iter().any(|view| {
+            view.session == preview.session
+                && view.generation == preview.generation
+                && view.state == "exited"
+                && view.frame.text().contains("FIXTURE_ARGS")
+        })
+    })?;
+    ensure!(views.len() == 1, "profile launch created extra generations");
+    let output = views[0].frame.text();
+    ensure!(
+        output.contains(&format!(
+            "FIXTURE_CONTEXT_CRC32={}",
+            crc32fast::hash(preview.context.text.as_bytes())
+        )),
+        "profile launch did not deliver the frozen context snapshot"
+    );
+    let stored = success(
+        &host.socket(),
+        Command::GetSessionContext {
+            session: preview.session,
+            generation: preview.generation,
+        },
+    )?
+    .launch_preview
+    .context("session context omitted frozen profile provenance")?;
+    ensure!(stored.profile.as_ref().is_some_and(|source| {
+        source.id == profile_id && source.name == original_name && source.revision == 1
+    }));
+    ensure!(stored.role_override == original_role);
+    ensure!(stored.agent_instructions == original_instructions);
+    ensure!(stored.context.content_hash == preview.context.content_hash);
+    ensure!(
+        success(&host.socket(), Command::List)?.views.len() == 1,
+        "profile snapshot lookup or library deletion created another generation"
     );
     Ok(())
 }

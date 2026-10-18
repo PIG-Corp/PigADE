@@ -161,7 +161,8 @@ impl Fixture {
                         })
                         .collect(),
                     ..CatalogBatch::default()
-                },
+                }
+                .into(),
             },
         )?;
         Ok((project, workspace, tab, other_tab))
@@ -238,7 +239,8 @@ fn run_freezes_slots_then_advances_once_and_commits_template_with_undo() -> Resu
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
     let template = added
@@ -651,7 +653,8 @@ fn pane_directory_rename_search_and_cross_workspace_activation_are_durable() -> 
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
 
@@ -797,7 +800,8 @@ fn pane_directory_rename_search_and_cross_workspace_activation_are_durable() -> 
                     expected_revision: Some(selection_revision),
                 }),
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         },
     )?;
     let before = exchange(&fixture.socket(), Command::Catalog)?

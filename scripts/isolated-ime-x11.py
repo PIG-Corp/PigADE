@@ -2893,8 +2893,232 @@ def run_opencode_resume_fixture(config, report, app, env, artifacts, save):
             'no_browser_or_host_desktop_access': True,
         })
         save()
+        run_opencode_profile_fixture(config, report, app, artifacts, save)
     finally:
         stop_owned_group(server, server_identity)
+
+
+def run_opencode_profile_fixture(config, report, app, artifacts, save):
+    """Exercise profile create, frozen launch, edit, cancel-delete and delete in the same private OpenCode stand."""
+    report['stage'] = 'opencode-agent-profile-create'
+    save()
+
+    def catalog_now():
+        return host_request({'command': 'catalog'})['catalog']
+
+    def process_identities():
+        return sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                      for view in host_request({'command': 'list'}).get('views', []))
+
+    def profile_by_name(catalog, name):
+        profiles = catalog.get('agent_profiles')
+        require(isinstance(profiles, list) and len(profiles) <= 128,
+                'profile fixture did not receive a bounded supported profile catalog')
+        matches = [profile for profile in profiles if profile.get('name') == name]
+        require(len(matches) <= 1, 'profile fixture name is duplicated')
+        return matches[0] if matches else None
+
+    before_catalog = catalog_now()
+    require(before_catalog.get('selection', {}).get('tab_id') == report['opencode']['tab'],
+            'profile fixture is not on the OpenCode fixture tab')
+    require(before_catalog.get('agent_profiles') == [],
+            'isolated profile library was not empty before the fixed UI flow')
+    provider_reply = host_request({'command': 'detect_providers'})
+    available = {item.get('provider') for item in provider_reply.get('providers', [])
+                 if item.get('available') is True}
+    default_provider = next((name for name in ('codex', 'claude', 'opencode')
+                             if name in available), 'codex')
+    default_context_delivery = default_provider in ('claude', 'codex')
+    generations_before_create = fixture_generations()
+    identities_before_create = process_identities()
+    helper_call(config, 'profile-open')
+    helper_call(config, 'capture', '/artifacts/opencode-profile-library.ppm')
+    helper_call(config, 'profile-new')
+    helper_call(config, 'profile-create-fields', timeout=12)
+    if default_context_delivery:
+        helper_call(config, 'profile-context-off')
+    helper_call(config, 'capture', '/artifacts/opencode-profile-editor.ppm')
+    helper_call(config, 'profile-save')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/opencode-profile-after-save.ppm')
+
+    saved_catalog = wait_until(
+        lambda: (value if (value := catalog_now()).get('agent_profiles') and
+                 profile_by_name(value, 'ReviewerFixture') else None),
+        time.monotonic() + 8)
+    profile = profile_by_name(saved_catalog, 'ReviewerFixture')
+    expected_settings = {'provider': 'opencode', 'role': 'reviewer profile role',
+                         'instructions': 'profile instruction fixture', 'deliver_context': False}
+    require(profile is not None and profile.get('revision') == 1 and
+            profile.get('settings') == expected_settings,
+            'profile editor did not persist the exact fixed OpenCode settings')
+    require(fixture_generations() == generations_before_create and
+            process_identities() == identities_before_create,
+            'saving an agent profile launched a process or changed a generation')
+
+    report['stage'] = 'opencode-agent-profile-prepare'
+    save()
+    plans_before_profile = prepared_launches_read_only()
+    helper_call(config, 'profile-select-first')
+    helper_call(config, 'profile-launch')
+    prepared_profiles = wait_until(
+        lambda: (plans if len(plans := prepared_launches_read_only()) > len(plans_before_profile)
+                 and any((plan.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') ==
+                         profile['id'] for plan in plans.values()) else None),
+        time.monotonic() + 10)
+    candidate_plans = [(plan_id, plan) for plan_id, plan in prepared_profiles.items()
+                       if (plan.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') == profile['id']]
+    require(len(candidate_plans) == 1, 'profile prepare did not freeze exactly one profile-owned plan')
+    profile_plan_id, stored = candidate_plans[0]
+    payload = stored['payload']
+    preview = payload.get('preview', {})
+    launch = payload.get('launch', {})
+    source = preview.get('profile')
+    require(stored.get('phase') == 'prepared' and source == {
+                'id': profile['id'], 'name': 'ReviewerFixture', 'revision': profile['revision']} and
+            preview.get('tab_id') == report['opencode']['tab'] and
+            preview.get('provider') == 'opencode' and preview.get('deliver_context') is False and
+            preview.get('role_override') == expected_settings['role'] and
+            preview.get('agent_instructions') == expected_settings['instructions'] and
+            launch.get('args') == [] and launch.get('env', {}) == {},
+            'profile plan does not preserve exact provenance/settings without task arguments')
+    require(fixture_generations() == generations_before_create and
+            process_identities() == identities_before_create,
+            'profile preparation created a process before explicit review confirmation')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/opencode-profile-launch-review.ppm')
+    require(0 < (artifacts / 'opencode-profile-launch-review.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'profile launch review capture exceeds bound')
+    helper_call(config, 'profile-confirm')
+    session, generation = preview['session'], preview['generation']
+    profile_view = wait_until(
+        lambda: (view if (view := fixture_session_models(session)).get(generation, {}).get(
+            'state') == 'running' else None), time.monotonic() + 12)[generation]
+    expected_generations = sorted(generations_before_create + [(session, generation)])
+    require(fixture_generations() == expected_generations and
+            profile_view.get('pid') is not None and profile_view.get('pid') > 0,
+            'confirmed profile launch did not create exactly one running generation')
+    stable_frame = {'value': None, 'since': None}
+    def stable_profile_view():
+        current = fixture_session_models(session).get(generation)
+        if not current or current.get('state') != 'running' or current.get('frame') is None:
+            stable_frame.update({'value': None, 'since': None})
+            return None
+        # Exec/running and an unchanged blank frame do not acknowledge that
+        # OpenCode has finished starting its TUI. Use the same actual-version
+        # receipt as the original OpenCode fixture before freezing its frame.
+        text = view_text(current)
+        if '1.19.3' not in text or text.count('█') < 8 or not ('▀' in text or '▄' in text):
+            stable_frame.update({'value': None, 'since': None})
+            return None
+        frame = current['frame']
+        if frame != stable_frame['value']:
+            stable_frame.update({'value': frame, 'since': time.monotonic()})
+            return None
+        return current if time.monotonic() - stable_frame['since'] >= 0.4 else None
+    profile_view = wait_until(stable_profile_view, time.monotonic() + 15)
+    profile_frame = profile_view.get('frame')
+    require(profile_frame is not None and report['opencode']['tab'] == preview['tab_id'],
+            'profile launch did not retain its current-tab frame')
+    catalog_after_launch = catalog_now()
+    require(catalog_after_launch.get('selection', {}).get('tab_id') == report['opencode']['tab'],
+            'profile launch moved selection away from the current tab')
+    profile_tab = next((item for item in catalog_after_launch.get('tabs', [])
+                        if item.get('id') == report['opencode']['tab']), None)
+    require(profile_tab is not None and session in pane_ids(
+                json.loads(profile_tab['layout_json']).get('root')),
+            'profile launch is not visible in the selected current tab')
+    profile_layout_after_launch = profile_tab['layout_json']
+    plans_after_launch = prepared_launches_read_only()
+    launched_record = plans_after_launch.get(profile_plan_id)
+    require(launched_record is not None and launched_record.get('payload') == payload and
+            launched_record.get('phase') == 'not_requested',
+            'confirmed profile launch lost its frozen plan provenance')
+
+    report['stage'] = 'opencode-agent-profile-edit'
+    save()
+    helper_call(config, 'profile-open')
+    helper_call(config, 'profile-select-first')
+    helper_call(config, 'profile-edit')
+    helper_call(config, 'profile-rename')
+    helper_call(config, 'profile-save-edit')
+    renamed_catalog = wait_until(
+        lambda: (value if (value := catalog_now()).get('agent_profiles') and
+                 profile_by_name(value, 'ReviewerRenamed') else None),
+        time.monotonic() + 8)
+    renamed = profile_by_name(renamed_catalog, 'ReviewerRenamed')
+    require(renamed is not None and renamed.get('id') == profile['id'] and
+            renamed.get('revision') == profile['revision'] + 1 and
+            renamed.get('settings') == expected_settings,
+            'profile edit did not save the exact renamed revision')
+    after_edit_view = fixture_session_models(session).get(generation)
+    plans_after_edit = prepared_launches_read_only()
+    edit_checks = {
+        'generations_unchanged': fixture_generations() == expected_generations,
+        'generation_present': after_edit_view is not None,
+        'pid_unchanged': (after_edit_view or {}).get('pid') == profile_view.get('pid'),
+        'frame_unchanged': (after_edit_view or {}).get('frame') == profile_frame,
+        'source_payload_unchanged': plans_after_edit.get(profile_plan_id, {}).get('payload') == payload,
+        'before_sequence': profile_view.get('sequence'),
+        'after_sequence': (after_edit_view or {}).get('sequence'),
+        'before_geometry': profile_frame.get('geometry'),
+        'after_geometry': ((after_edit_view or {}).get('frame') or {}).get('geometry'),
+    }
+    report['agent_profile_edit_checks'] = edit_checks
+    save()
+    require(all(edit_checks[key] for key in ('generations_unchanged', 'generation_present',
+                'pid_unchanged', 'frame_unchanged', 'source_payload_unchanged')),
+            'editing a profile changed the live generation/frame or its immutable source snapshot')
+
+    report['stage'] = 'opencode-agent-profile-delete-cancel'
+    save()
+    helper_call(config, 'profile-select-first')
+    helper_call(config, 'profile-delete')
+    helper_call(config, 'profile-cancel-delete')
+    still_saved = profile_by_name(catalog_now(), 'ReviewerRenamed')
+    require(still_saved is not None and still_saved.get('id') == profile['id'] and
+            fixture_generations() == expected_generations,
+            'Escape from profile deletion did not preserve the saved profile and live generation')
+
+    report['stage'] = 'opencode-agent-profile-delete-confirm'
+    save()
+    helper_call(config, 'profile-select-first')
+    helper_call(config, 'profile-delete')
+    helper_call(config, 'profile-confirm-delete')
+    def profiles_deleted():
+        value = catalog_now()
+        return value if value.get('agent_profiles') == [] else None
+    deleted_catalog = wait_until(profiles_deleted, time.monotonic() + 8)
+    final_view = fixture_session_models(session).get(generation)
+    final_plans = prepared_launches_read_only()
+    require(deleted_catalog.get('agent_profiles') == [] and
+            fixture_generations() == expected_generations and final_view is not None and
+            final_view.get('state') == 'running' and final_view.get('pid') == profile_view.get('pid') and
+            final_view.get('frame') == profile_frame and
+            next((item for item in deleted_catalog.get('tabs', [])
+                  if item.get('id') == report['opencode']['tab']), {}).get('layout_json') ==
+                profile_layout_after_launch and
+            final_plans.get(profile_plan_id, {}).get('payload') == payload,
+            'profile deletion removed or changed the retained launch source/live session')
+    report['agent_profile'] = {
+        'profile_name_before_edit': 'ReviewerFixture', 'profile_name_after_edit': 'ReviewerRenamed',
+        'provider': 'opencode', 'context_delivery': False,
+        'role_and_instructions_saved_without_cli_arguments': True,
+        'profile_provenance_revision_frozen_in_prepared_launch': profile['revision'],
+        'prepare_created_no_process': True, 'one_generation_after_confirmation': True,
+        'edit_left_live_pid_generation_frame_and_plan_unchanged': True,
+        'delete_cancel_preserved_profile': True,
+        'delete_removed_only_reusable_profile': True,
+        'live_profile_launch_visible_after_delete': True,
+        'task_sent': False,
+        'captures': ['opencode-profile-library.ppm', 'opencode-profile-editor.ppm',
+                     'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm'],
+    }
+    report['opencode']['captures'].extend(report['agent_profile']['captures'])
+    report['opencode']['profile_plan_id'] = profile_plan_id
+    report['opencode']['profile_session'] = session
+    report['opencode']['profile_generation'] = generation
+    save()
 
 
 def wait_for_private_xim(config: dict, timeout: float = 8.0) -> dict:
@@ -3792,7 +4016,9 @@ def outer_run(args) -> dict:
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm',
-                  'opencode-resume-review.ppm', 'opencode-resumed-session.ppm']
+                  'opencode-resume-review.ppm', 'opencode-resumed-session.ppm',
+                  'opencode-profile-library.ppm', 'opencode-profile-editor.ppm',
+                  'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm']
                  if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
@@ -3822,7 +4048,7 @@ def plan(args) -> dict:
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, and open/refresh private workspace Git',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
-                  'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, and missing-ID pre-TUI negative check',
+                  'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete using fixed ASCII values',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',

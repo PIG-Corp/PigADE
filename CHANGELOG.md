@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Именованные профили запуска агентов: библиотека, редактор, сохранение настроек из review, проверка ревизии при подготовке и неизменяемый источник профиля в снимке запуска. Схема11 мигрирует библиотеку с durable backup; CRUD не меняет живые CLI.
+
 - Ручное продолжение точного диалога OpenCode1.19.3: проверка сохранённой папки через публичный локальный API перед review/start, отдельный bounded worker, новое поколение при сохранении прежней истории и раскладки. Контекст PigADE и последнее задание повторно не отправляются; неизвестный исход запуска остаётся заблокированным.
 
 - Native read-only workspace Git snapshot: branch/worktree, staged/unstaged/untracked/conflicted groups, explicit async refresh, bounded incomplete state and generation/process-preserving UI.

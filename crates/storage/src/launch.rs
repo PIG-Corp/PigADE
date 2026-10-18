@@ -99,7 +99,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 10,
+            version <= 11,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -108,13 +108,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 10 {
-            Some(backup_before_migration(&connection, path, version, 10)?)
+        let migration_backup = if version > 0 && version < 11 {
+            Some(backup_before_migration(&connection, path, version, 11)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 10 {
+        if version < 11 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -155,7 +155,10 @@ impl MetadataStore {
             if version < 10 {
                 crate::catalog::migrate_pane_labels(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 10)?;
+            if version < 11 {
+                crate::catalog::migrate_agent_profiles(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 11)?;
             tx.commit()?;
         }
         File::open(
@@ -603,7 +606,7 @@ mod tests {
             let connection = Connection::open(&path)?;
             connection.execute_batch(
                 "DROP INDEX prepared_launch_generation_lookup;
-                 DROP TABLE pane_labels; DROP TABLE template_runs; DROP TABLE layout_templates;
+                 DROP TABLE agent_profiles; DROP TABLE pane_labels; DROP TABLE template_runs; DROP TABLE layout_templates;
                  PRAGMA user_version=7;",
             )?;
         }
@@ -614,12 +617,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            10
+            11
         );
         let backup = store
             .migration_backup_path()
             .context("schema-7 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v10."));
+        assert!(backup.to_string_lossy().contains(".pre-v11."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -672,7 +675,7 @@ mod tests {
                  DROP TABLE layout_templates_v9;
                  DROP TABLE template_runs;
                  DROP INDEX prepared_launch_generation_lookup;
-                 DROP TABLE pane_labels;
+                 DROP TABLE agent_profiles; DROP TABLE pane_labels;
                  PRAGMA user_version=8;",
             )?;
         }
@@ -685,7 +688,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            10
+            11
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -698,7 +701,7 @@ mod tests {
         let backup_path = store
             .migration_backup_path()
             .context("schema-8 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v10."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v11."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -715,7 +718,7 @@ mod tests {
         drop(MetadataStore::open(&path)?);
         {
             let connection = Connection::open(&path)?;
-            connection.execute_batch("DROP INDEX prepared_launch_generation_lookup; DROP TABLE pane_labels; PRAGMA user_version=9;")?;
+            connection.execute_batch("DROP INDEX prepared_launch_generation_lookup; DROP TABLE agent_profiles; DROP TABLE pane_labels; PRAGMA user_version=9;")?;
         }
         let store = MetadataStore::open(&path)?;
         assert_eq!(store.catalog()?.pane_labels, Some(Vec::new()));
@@ -723,12 +726,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            10
+            11
         );
         let backup = store
             .migration_backup_path()
             .context("schema-9 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v10."));
+        assert!(backup.to_string_lossy().contains(".pre-v11."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -919,7 +922,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            10
+            11
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -930,7 +933,7 @@ mod tests {
             1
         );
         let backup_path = store.migration_backup_path().context("v6 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v10."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v11."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1098,7 +1101,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 11)?;
+        store.connection.pragma_update(None, "user_version", 12)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

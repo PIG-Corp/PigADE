@@ -17,6 +17,8 @@ mod navigation;
 mod palette;
 mod pointer_layout;
 mod product;
+mod profile_commands;
+mod profile_flow;
 mod protocol;
 mod publication_trace;
 mod selection;
@@ -1020,6 +1022,7 @@ mod focus_placement_tests {
             layout_templates: Some(vec![]),
             template_launch_schema: Some(1),
             pane_labels: Some(vec![]),
+            agent_profiles: None,
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1045,6 +1048,8 @@ mod focus_placement_tests {
 }
 
 struct CatalogEdit {
+    return_dialog: Option<product::Dialog>,
+    field_values: Option<Vec<String>>,
     request: uuid::Uuid,
     dialog: Option<uuid::Uuid>,
     return_to: Option<product::DialogKind>,
@@ -1062,6 +1067,8 @@ struct CanvasApp {
     git_worker: workspace_git::Worker,
     product_launch_unknown: bool,
     catalog_edit: Option<CatalogEdit>,
+    profile_prepare: Option<profile_flow::Pending>,
+    profile_reload: Option<(uuid::Uuid, uuid::Uuid)>,
     template_flow: template_flow::RunFlow,
     deferred_product_action: Option<product::ProductAction>,
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
@@ -1250,6 +1257,8 @@ impl CanvasApp {
                                         this.pending_launch = None;
                                     }
                                     if let Some(catalog) = reply.catalog {
+                                        let profile_refresh=this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==ui_request);
+                                        if profile_refresh { this.profile_reload=None; }
                                         let edit = if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==ui_request) {this.catalog_edit.take()} else {None};
                                         let keep_local = (focus_reply || edit.is_some()) && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
                                         let same_dialog=edit.as_ref().is_some_and(|edit|edit.dialog == this.product.dialog.as_ref().map(|dialog|dialog.id));
@@ -1265,9 +1274,13 @@ impl CanvasApp {
                                             this.sync_product_selection(window, cx);
                                         }
                                         if let Some(edit)=edit {
-                                            this.product.notice=Some(edit.notice);
-                                            this.product.dialog=if same_dialog {edit.return_to.map(product::Dialog::new)} else {current_dialog};
-                                        } else if template_pending.is_some() || navigation_pending.is_some() {
+                                            let changed = same_dialog && edit.field_values.as_ref().is_some_and(|saved|current_dialog.as_ref().is_some_and(|dialog|dialog.fields.iter().map(|buffer|buffer.text().to_owned()).collect::<Vec<_>>()!=*saved));
+                                            if same_dialog && edit.field_values.is_some() && let Some(editor)=&mut this.product.profile_editor {
+                                                editor.saved=this.product.catalog.as_ref().and_then(|catalog|catalog.agent_profiles.as_ref()).and_then(|profiles|profiles.iter().find(|profile|profile.id==editor.id)).cloned();
+                                            }
+                                            this.product.notice=Some(if changed {"Профиль сохранён; новые правки ещё не сохранены".into()} else {edit.notice});
+                                            this.product.dialog=if same_dialog && !changed {edit.return_dialog.or_else(||edit.return_to.map(product::Dialog::new))} else {current_dialog};
+                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh {
                                             this.product.dialog=current_dialog;
                                         }
                                     }
@@ -1290,7 +1303,8 @@ impl CanvasApp {
                                         }
                                         this.product.replace_sessions(sessions.into_iter().map(Into::into).collect());
                                     }
-                                    if let Some(preview) = reply.launch_preview {
+                                    let profile_preview_ok=reply.launch_preview.as_ref().is_none_or(|preview|this.accept_profile_preview(ui_request,preview,reply.launch_confirmed,reply.launch_phase.as_deref()));
+                                    if let Some(preview) = reply.launch_preview.filter(|_|profile_preview_ok) {
                                         let direct_request = this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(ui_request));
                                         let direct_start = this.pending_direct_launch.as_ref().is_some_and(|pending|
                                             pending.matches(ui_request) && pending.target_matches(this.product.catalog.as_ref().and_then(|catalog| catalog.selection.tab_id), preview.tab_id, &preview.provider)
@@ -1355,6 +1369,8 @@ impl CanvasApp {
                                         this.deferred_placement=None;
                                         this.deferred_product_action=None;
                                     }
+                                    if this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==error.ui_request) {this.profile_reload=None;}
+                                    if this.profile_prepare.as_ref().is_some_and(|pending|Some(pending.request)==error.ui_request) {this.profile_prepare=None;}
                                     if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==error.ui_request) {this.catalog_edit=None;}
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
                                     if this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(error.ui_request)) { this.pending_direct_launch=None; }
@@ -1549,6 +1565,8 @@ impl CanvasApp {
             git_flow: Default::default(),
             product_launch_unknown: false,
             catalog_edit: None,
+            profile_prepare: None,
+            profile_reload: None,
             template_flow: Default::default(),
             deferred_product_action: None,
             pending_launch: None,
@@ -1650,6 +1668,29 @@ impl CanvasApp {
             cx,
         ) {
             self.catalog_edit = Some(CatalogEdit {
+                return_dialog: self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == product::DialogKind::AgentProfile)
+                    .and_then(|_| {
+                        self.product
+                            .profile_editor
+                            .as_ref()
+                            .and_then(|editor| editor.origin.clone())
+                    }),
+                field_values: self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == product::DialogKind::AgentProfile)
+                    .map(|dialog| {
+                        dialog
+                            .fields
+                            .iter()
+                            .map(|buffer| buffer.text().to_owned())
+                            .collect()
+                    }),
                 request,
                 dialog: self.product.dialog.as_ref().map(|dialog| dialog.id),
                 return_to,
@@ -3074,6 +3115,9 @@ impl CanvasApp {
                 | A::ToggleMemorySection(_)
                 | A::ReloadMemory
                 | A::ToggleContextDelivery
+                | A::SaveLaunchAsProfile
+                | A::SetProfileProvider(_)
+                | A::ToggleProfileContext
                 | A::SetTemplateRole(_)
                 | A::EditTemplateSlot(_)
                 | A::EditRecipe
@@ -3105,6 +3149,7 @@ impl CanvasApp {
                 | A::ManageProject(_)
                 | A::ManageWorkspace(_)
                 | A::ManageTab(_)
+                | A::OpenAgentProfiles
                 | A::OpenLayouts
                 | A::SaveLayout
                 | A::ChoosePreset(_)
@@ -3115,6 +3160,7 @@ impl CanvasApp {
                 | A::OpenSessions
         ) {
             self.pending_launch_review = false;
+            self.profile_prepare = None;
             self.pending_direct_launch = None;
             self.pending_context_inspection = false;
             self.pending_conversation_inspection = false;
@@ -3122,6 +3168,15 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenAgentProfiles
+            | A::ReloadAgentProfiles
+            | A::NewAgentProfile
+            | A::EditAgentProfile(_)
+            | A::LaunchAgentProfile(_)
+            | A::DeleteAgentProfile(_)
+            | A::SetProfileProvider(_)
+            | A::ToggleProfileContext
+            | A::SaveLaunchAsProfile => self.profile_action(action, cx),
             A::OpenWorkspaceGit | A::RefreshWorkspaceGit => self.workspace_git_action(action, cx),
             A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
                 self.session_control_action(action, cx)
@@ -3623,7 +3678,25 @@ impl CanvasApp {
                 {
                     self.close_history(false, cx);
                 } else {
-                    self.product.dialog = None;
+                    let profile_child = self.product.dialog.as_ref().is_some_and(|dialog| {
+                        matches!(
+                            dialog.kind,
+                            DialogKind::AgentProfile | DialogKind::DeleteAgentProfile
+                        )
+                    });
+                    let origin = self
+                        .product
+                        .dialog
+                        .as_ref()
+                        .filter(|dialog| dialog.kind == DialogKind::AgentProfile)
+                        .and_then(|_| {
+                            self.product
+                                .profile_editor
+                                .as_ref()
+                                .and_then(|editor| editor.origin.clone())
+                        });
+                    self.product.dialog = origin
+                        .or_else(|| profile_child.then(|| Dialog::new(DialogKind::AgentProfiles)));
                     self.text_input.cancel();
                 }
             }
@@ -3859,12 +3932,22 @@ impl CanvasApp {
                     .map(|field| field.text().to_owned())
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
+                if self.submit_profile_dialog(kind, &fields, cx) {
+                    self.sync_editor_scope(window, cx);
+                    cx.notify();
+                    return;
+                }
                 if self.submit_template_dialog(kind, &fields, cx) {
                     self.sync_editor_scope(window, cx);
                     cx.notify();
                     return;
                 }
                 match kind {
+                    DialogKind::AgentProfiles
+                    | DialogKind::AgentProfile
+                    | DialogKind::DeleteAgentProfile => {
+                        unreachable!("profile dialog handled above")
+                    }
                     DialogKind::Recipe
                     | DialogKind::RecipeSlot
                     | DialogKind::NewTemplateTab
@@ -5292,6 +5375,7 @@ impl CanvasApp {
                     | product::DialogKind::WorkspaceGit
                     | product::DialogKind::StopSession
                     | product::DialogKind::Sessions
+                    | product::DialogKind::AgentProfiles
                     | product::DialogKind::Layouts
                     | product::DialogKind::Recipe
                     | product::DialogKind::TemplateRun
@@ -5329,8 +5413,18 @@ impl CanvasApp {
                             _ => action.clone(),
                         })
                     }
+                    "r" if (k.modifiers.control || k.modifiers.platform)
+                        && self.product.dialog.as_ref().is_some_and(|dialog| {
+                            dialog.kind == product::DialogKind::AgentProfiles
+                        }) =>
+                    {
+                        Some(product::ProductAction::ReloadAgentProfiles)
+                    }
                     "e" if k.modifiers.control || k.modifiers.platform => {
                         entries.get(selected).and_then(|(_, action)| match action {
+                            product::ProductAction::LaunchAgentProfile(id) => {
+                                Some(product::ProductAction::EditAgentProfile(*id))
+                            }
                             product::ProductAction::ApplyLayout(id) => {
                                 Some(product::ProductAction::ConfigureTemplate(*id))
                             }
@@ -5346,6 +5440,18 @@ impl CanvasApp {
                     }
                     "escape" => Some(product::ProductAction::CloseDialog),
                     "enter" => entries.get(selected).map(|(_, action)| action.clone()),
+                    "delete"
+                        if self.product.dialog.as_ref().is_some_and(|dialog| {
+                            dialog.kind == product::DialogKind::AgentProfiles
+                        }) =>
+                    {
+                        entries.get(selected).and_then(|(_, action)| match action {
+                            product::ProductAction::LaunchAgentProfile(id) => {
+                                Some(product::ProductAction::DeleteAgentProfile(*id))
+                            }
+                            _ => None,
+                        })
+                    }
                     "delete" if k.modifiers.shift => {
                         entries.get(selected).and_then(|(_, action)| match action {
                             product::ProductAction::ApplyLayout(id) => {
@@ -5367,7 +5473,10 @@ impl CanvasApp {
                     if kind == product::DialogKind::Sessions {
                         let row = self.product.session_action_row(selected);
                         self.product.layout_scroll.scroll_to_item(row);
-                    } else if kind == product::DialogKind::Layouts {
+                    } else if matches!(
+                        kind,
+                        product::DialogKind::Layouts | product::DialogKind::AgentProfiles
+                    ) {
                         self.product.layout_scroll.scroll_to_item(selected);
                     }
                 }
@@ -5478,6 +5587,28 @@ impl CanvasApp {
             self.history_key(event, window, cx);
             return;
         }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::AgentProfile)
+            && (k.modifiers.control || k.modifiers.platform)
+        {
+            let action = match k.key.as_str() {
+                "1" => Some(product::ProductAction::SetProfileProvider("claude".into())),
+                "2" => Some(product::ProductAction::SetProfileProvider("codex".into())),
+                "3" => Some(product::ProductAction::SetProfileProvider(
+                    "opencode".into(),
+                )),
+                "m" => Some(product::ProductAction::ToggleProfileContext),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+        }
         if self.product.dialog.is_some() {
             if k.modifiers.control
                 && self
@@ -5487,6 +5618,7 @@ impl CanvasApp {
                     .is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview)
             {
                 let action = match k.key.as_str() {
+                    "s" if k.modifiers.shift => Some(product::ProductAction::SaveLaunchAsProfile),
                     "r" => Some(if k.modifiers.shift {
                         product::ProductAction::ReloadMemory
                     } else {

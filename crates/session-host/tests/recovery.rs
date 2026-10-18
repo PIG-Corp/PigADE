@@ -1118,7 +1118,12 @@ fn layout_cross_workspace_commit_reopens_with_undo_and_does_not_restart_cli() ->
             .collect(),
         ..CatalogBatch::default()
     };
-    let mut catalog = catalog_call(&host, Command::CatalogApply { batch })?;
+    let mut catalog = catalog_call(
+        &host,
+        Command::CatalogApply {
+            batch: batch.into(),
+        },
+    )?;
     catalog = edit(
         &host,
         catalog.layout.revision,

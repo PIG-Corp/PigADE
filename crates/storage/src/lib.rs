@@ -2,6 +2,7 @@
 //!
 //! A journal receipt is produced only after fsync. Callers may publish terminal
 //! model changes only after obtaining it. Recovery never modifies source bytes.
+mod agent_profile;
 pub mod archive;
 mod catalog;
 mod context;
@@ -12,6 +13,7 @@ mod memory;
 mod prepared_launch;
 mod template_run;
 
+pub use agent_profile::*;
 pub use catalog::*;
 pub use context::*;
 pub use conversation::*;

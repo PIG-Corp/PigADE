@@ -9,7 +9,9 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
 | crates/terminal/examples/allocation_census.rs | Actual-model capacity-census diagnostics and bounded traversal cost; excludes process RSS and transient allocations |
 | crates/terminal/examples/resource_preflight.rs, wide_clear_allocations.rs | Actual-parser nonmutating callback costs and scoped allocator-request comparison for shared wide-cell clearing; source-bound samples in benchmarks/results/resource-preflight-20261017 |
-| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema10, launch locks, catalog CAS, optional template launch settings, durable template runs and CAS pane aliases |
+| crates/storage | CRC/sequence/generation journal with actual read-byte counters, fsync receipts, SQLite sole-writer schema11, launch locks, catalog CAS, optional template launch settings, durable template runs and CAS pane aliases |
+| crates/storage/src/agent_profile.rs, catalog.rs | Bounded128-entry named launch-profile library; settings-only records, revision CAS writes/deletes, schema11 durable migration backup |
+| crates/app/src/profile_flow.rs, profile_commands.rs, profile_ui.rs | Native reusable profile editor/library, exact dialog/request prepare receipts, retained post-save edits, explicit review and unchanged live sessions |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run routes and exact-generation asynchronous Stop |
@@ -42,7 +44,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/conversation.rs | Immutable user conversation bindings, per-session CAS, current provider/ID uniqueness and schema6 migration with durable backup |
 | crates/storage/src/launch.rs, catalog.rs | Schema7 launch-order ordinals allocated with intent/lock, indexed exclusive-cursor pages, durable pre-v7 backups and per-pane generation pins in WindowState |
 | crates/storage/src/prepared_launch.rs | Create-only reviewed launch payloads; durable prepared → attempting → unconfirmed/unknown phase CAS |
-| crates/session-host/src/prepared.rs | Review/start/session-context and explicit PrepareResume routes; frozen binding/context/cwd, unchanged exited-head checks and one durable attempt; resumed generations preserve layout |
+| crates/session-host/src/prepared.rs | Review/start/session-context, exact-revision PrepareProfileLaunch and explicit PrepareResume routes; frozen binding/context/cwd, unchanged exited-head checks and one durable attempt; resumed generations preserve layout |
 | crates/session-host/src/resume_probe.rs, opencode_resume.rs | Bounded asynchronous exact-ID OpenCode metadata preflight through authenticated pure loopback server; frozen binding/head/executable/directory identity, no provider transcript parsing or IPC-supplied permit |
 | crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1/OpenCode1.19.3 resume argv; unknown versions remain generic |
 | crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |

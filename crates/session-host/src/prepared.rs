@@ -57,6 +57,16 @@ pub struct LaunchPreview {
     pub conversation: Option<pigade_storage::ConversationBinding>,
     #[serde(default)]
     pub resume: Option<ResumeSource>,
+    #[serde(default)]
+    pub profile: Option<ProfileSource>,
+}
+
+/// Immutable provenance; later library edits do not alter this launch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfileSource {
+    pub id: Uuid,
+    pub name: String,
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +118,50 @@ pub(crate) fn prepare(host: &mut Host, request: PrepareRequest) -> Result<Launch
     panel_launch::mark_preflight((|| {
         let catalog = catalog::read_metadata(&host.metadata)?;
         let plan = build_plan(host, &catalog, request)?;
+        let preview = plan.preview.clone();
+        host.metadata
+            .save_prepared_launch(preview.plan_id, &serde_json::to_string(&plan)?)?;
+        Ok(preview)
+    })())
+}
+
+pub(crate) fn prepare_profile(
+    host: &mut Host,
+    tab: Uuid,
+    profile: Uuid,
+    expected_revision: u64,
+    side: Direction,
+    target: Option<Uuid>,
+) -> Result<LaunchPreview> {
+    panel_launch::mark_preflight((|| {
+        let catalog = catalog::read_metadata(&host.metadata)?;
+        let saved = catalog
+            .agent_profiles
+            .as_ref()
+            .and_then(|profiles| profiles.iter().find(|value| value.id == profile))
+            .context("Профиль удалён или недоступен; обновите библиотеку")?;
+        ensure!(
+            saved.revision == expected_revision,
+            "Профиль изменён; обновите библиотеку перед запуском"
+        );
+        pigade_storage::validate_agent_profile_settings(&saved.settings)?;
+        let request = PrepareRequest {
+            tab,
+            provider: saved.settings.provider.clone(),
+            side,
+            target,
+            role_override: saved.settings.role.clone(),
+            agent_instructions: saved.settings.instructions.clone(),
+            include_memory: false,
+            memory_selection: None,
+            deliver_context: saved.settings.deliver_context,
+        };
+        let mut plan = build_plan(host, &catalog, request)?;
+        plan.preview.profile = Some(ProfileSource {
+            id: saved.id,
+            name: saved.name.clone(),
+            revision: saved.revision,
+        });
         let preview = plan.preview.clone();
         host.metadata
             .save_prepared_launch(preview.plan_id, &serde_json::to_string(&plan)?)?;
@@ -218,6 +272,7 @@ pub(crate) fn build_plan(
         cwd: Some(workspace.cwd.clone()),
         conversation: None,
         resume: None,
+        profile: None,
     };
     Ok(StoredPlan {
         requested_revision: preview.context.id,

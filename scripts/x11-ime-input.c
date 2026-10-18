@@ -102,7 +102,15 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "recipe-open-editor") &&
         strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
         strcmp(a.stage, "recipe-name-tab") && strcmp(a.stage, "recipe-submit-name") &&
-        strcmp(a.stage, "recipe-confirm-run") && strcmp(a.stage, "setup-open") &&
+        strcmp(a.stage, "recipe-confirm-run") && strcmp(a.stage, "profile-open") &&
+        strcmp(a.stage, "profile-new") && strcmp(a.stage, "profile-create-fields") &&
+        strcmp(a.stage, "profile-context-off") &&
+        strcmp(a.stage, "profile-save") && strcmp(a.stage, "profile-select-first") &&
+        strcmp(a.stage, "profile-launch") && strcmp(a.stage, "profile-confirm") &&
+        strcmp(a.stage, "profile-edit") && strcmp(a.stage, "profile-rename") &&
+        strcmp(a.stage, "profile-save-edit") && strcmp(a.stage, "profile-delete") &&
+        strcmp(a.stage, "profile-cancel-delete") && strcmp(a.stage, "profile-confirm-delete") &&
+        strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
         strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
@@ -960,6 +968,61 @@ int main(int argc, char **argv) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "recipe-confirm-run")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "profile-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_s };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            key(dpy, XK_Return);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 300000000 };
+            nanosleep(&settle, NULL);
+        } else if (!strcmp(a.stage, "profile-new")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "profile-create-fields")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym first[] = { XK_e, XK_v, XK_i, XK_e, XK_w, XK_e, XK_r };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_f);
+            const KeySym second[] = { XK_i, XK_x, XK_t, XK_u, XK_r, XK_e };
+            for (size_t i = 0; i < sizeof(second) / sizeof(second[0]); ++i) key(dpy, second[i]);
+            key(dpy, XK_Tab);
+            const KeySym role[] = { XK_r, XK_e, XK_v, XK_i, XK_e, XK_w, XK_e, XK_r,
+                XK_space, XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_space,
+                XK_r, XK_o, XK_l, XK_e };
+            for (size_t i = 0; i < sizeof(role) / sizeof(role[0]); ++i) key(dpy, role[i]);
+            key(dpy, XK_Tab);
+            const KeySym instructions[] = { XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e,
+                XK_space, XK_i, XK_n, XK_s, XK_t, XK_r, XK_u, XK_c, XK_t, XK_i, XK_o,
+                XK_n, XK_space, XK_f, XK_i, XK_x, XK_t, XK_u, XK_r, XK_e };
+            for (size_t i = 0; i < sizeof(instructions) / sizeof(instructions[0]); ++i)
+                key(dpy, instructions[i]);
+            modified_key(dpy, XK_Control_L, XK_3);
+        } else if (!strcmp(a.stage, "profile-context-off")) {
+            modified_key(dpy, XK_Control_L, XK_m);
+        } else if (!strcmp(a.stage, "profile-save") || !strcmp(a.stage, "profile-save-edit")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "profile-select-first")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "profile-launch")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "profile-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "profile-edit")) {
+            modified_key(dpy, XK_Control_L, XK_e);
+        } else if (!strcmp(a.stage, "profile-rename")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym first[] = { XK_e, XK_v, XK_i, XK_e, XK_w, XK_e, XK_r };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym second[] = { XK_e, XK_n, XK_a, XK_m, XK_e, XK_d };
+            for (size_t i = 0; i < sizeof(second) / sizeof(second[0]); ++i) key(dpy, second[i]);
+        } else if (!strcmp(a.stage, "profile-delete")) {
+            key(dpy, XK_Delete);
+        } else if (!strcmp(a.stage, "profile-cancel-delete")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "profile-confirm-delete")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "setup-open")) {
             setup_click(dpy, app_window, 885, 435);
         } else if (!strcmp(a.stage, "setup-create")) {
@@ -1131,6 +1194,20 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "recipe-name-tab") ? "7" :
                             !strcmp(a.stage, "recipe-submit-name") ? "1" :
                             !strcmp(a.stage, "recipe-confirm-run") ? "1" :
+                            !strcmp(a.stage, "profile-open") ? "11" :
+                            !strcmp(a.stage, "profile-new") ? "1" :
+                            !strcmp(a.stage, "profile-create-fields") ? "67" :
+                            !strcmp(a.stage, "profile-context-off") ? "2" :
+                            !strcmp(a.stage, "profile-save") ? "2" :
+                            !strcmp(a.stage, "profile-select-first") ? "1" :
+                            !strcmp(a.stage, "profile-launch") ? "1" :
+                            !strcmp(a.stage, "profile-confirm") ? "2" :
+                            !strcmp(a.stage, "profile-edit") ? "2" :
+                            !strcmp(a.stage, "profile-rename") ? "16" :
+                            !strcmp(a.stage, "profile-save-edit") ? "2" :
+                            !strcmp(a.stage, "profile-delete") ? "1" :
+                            !strcmp(a.stage, "profile-cancel-delete") ? "1" :
+                            !strcmp(a.stage, "profile-confirm-delete") ? "1" :
                             !strcmp(a.stage, "context-edit") ? "7" : "1";
         printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s}\n",
                a.stage, (long)a.app, count);

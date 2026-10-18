@@ -157,6 +157,13 @@ pub enum Command {
     PrepareLaunch {
         request: prepared::PrepareRequest,
     },
+    PrepareProfileLaunch {
+        tab: Uuid,
+        profile: Uuid,
+        expected_revision: u64,
+        side: pigade_layout::Direction,
+        target: Option<Uuid>,
+    },
     StartPrepared {
         plan_id: Uuid,
     },
@@ -230,7 +237,7 @@ pub enum Command {
         expected_revision: u64,
     },
     CatalogApply {
-        batch: pigade_storage::CatalogBatch,
+        batch: Box<pigade_storage::CatalogBatch>,
     },
     SetCanvasOffset {
         tab: Uuid,
@@ -1259,6 +1266,23 @@ impl Host {
                 let preview = prepared::prepare(self, request.clone())?;
                 return Ok(self.launch_response(None, preview, None));
             }
+            Command::PrepareProfileLaunch {
+                tab,
+                profile,
+                expected_revision,
+                side,
+                target,
+            } => {
+                let preview = prepared::prepare_profile(
+                    self,
+                    *tab,
+                    *profile,
+                    *expected_revision,
+                    *side,
+                    *target,
+                )?;
+                return Ok(self.launch_response(None, preview, None));
+            }
             Command::PrepareTemplateRun { request } => {
                 let run = template_run::prepare(self, request.clone())?;
                 return Ok(self.template_run_response(Some(run), None, None));
@@ -1353,7 +1377,7 @@ impl Host {
             } => {
                 projects::create_workspace(&mut self.metadata, &self.root, project, task, worktree)?
             }
-            Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, batch)?,
+            Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, *batch)?,
             Command::LayoutEdit {
                 expected_revision,
                 action,

@@ -1014,7 +1014,7 @@ mod tests {
             DROP TABLE layout_revisions;
             DROP TABLE template_runs;
             DROP TABLE layout_templates;
-            DROP TABLE pane_labels;
+            DROP TABLE agent_profiles; DROP TABLE pane_labels;
             DROP INDEX launch_session_generation_ordinal;
             ALTER TABLE launch_intents DROP COLUMN generation_ordinal;
             PRAGMA user_version=2; COMMIT;",

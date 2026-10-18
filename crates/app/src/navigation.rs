@@ -32,6 +32,21 @@ pub(crate) fn search_score(query: &str, label: &str) -> u8 {
     }
 }
 
+pub(crate) fn local_palette_command(action: &A) -> bool {
+    matches!(
+        action,
+        A::OpenAgentProfiles | A::OpenControls | A::OpenLayouts | A::OpenPaneMenu
+    )
+}
+
+fn can_choose_palette(action: &A, pending: Option<&Kind>) -> bool {
+    match pending {
+        None => true,
+        Some(Kind::Search { .. }) => local_palette_command(action),
+        Some(_) => false,
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum Kind {
     Search {
@@ -183,7 +198,13 @@ impl CanvasApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.navigation.pending.is_some() {
+        if !can_choose_palette(
+            &action,
+            self.navigation
+                .pending
+                .as_ref()
+                .map(|pending| &pending.kind),
+        ) {
             self.product.notice = Some("Дождитесь результата поиска".into());
             cx.notify();
             return;
@@ -418,6 +439,25 @@ impl CanvasApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_palette_commands_do_not_wait_for_remote_search_but_mutations_do() {
+        let search = Kind::Search {
+            query: "profiles".into(),
+            after: None,
+        };
+        assert!(can_choose_palette(&A::OpenAgentProfiles, Some(&search)));
+        assert!(can_choose_palette(&A::OpenControls, Some(&search)));
+        let activation = A::ActivatePane {
+            tab: uuid::Uuid::new_v4(),
+            session: uuid::Uuid::new_v4(),
+        };
+        assert!(!can_choose_palette(&activation, Some(&search)));
+        assert!(can_choose_palette(&activation, None));
+        assert!(!can_choose_palette(
+            &A::OpenAgentProfiles,
+            Some(&Kind::Reload)
+        ));
+    }
     #[test]
     fn unicode_words_match_all_terms_and_exact_titles_rank_first() {
         assert!(search_matches("РЕВЬЮ codex", "Codex • Ревью проекта"));

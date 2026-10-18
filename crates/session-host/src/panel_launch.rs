@@ -318,7 +318,8 @@ mod tests {
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         })?;
 
         let placed = host.call(crate::Command::LaunchInTab {
@@ -372,7 +373,8 @@ mod tests {
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
-            },
+            }
+            .into(),
         })?;
         let placeholder = Uuid::new_v4();
         let catalog = host

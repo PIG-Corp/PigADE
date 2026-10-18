@@ -3161,3 +3161,51 @@ Integrate OpenCode1.19.3 manual exact-ID resume with asynchronous public-metadat
 - Files: crates/session-host/src/adapters.rs, crates/session-host/src/prepared.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/resume_probe.rs, crates/session-host/src/opencode_resume.rs, crates/session-host/tests/context_launch.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/compatibility/CLI.md
 - Verification: 140 host library tests and4 context real-PTY integration tests passed; strict locked workspace Clippy and release host build passed;31 harness tests, py_compile, fmt/diff/version checks passed. Private native /tmp/pigade-opencode-resume-release-20261018-06 passes actual1.19.3 exact argv/cwd, preserved ID/two synthetic messages, response displayed in host cells, one new generation, old frame/tree unchanged and missing-ID exit1/no new conversation. Captures inspected. Root repaired noisy-output deadline starvation, directory/symlink identity revalidation, import stdout/empty-env/TUI-receipt fixture assumptions; preflight01-03 attempted an unnecessary interface write, removed in favor of read-only existing-loopback observation. No app code changed.
 - Risks / next: Manual support only; OpenCode startup context/native workspaces/overridden configuration, Claude resume, two-version matrix, account mismatch/reboot and full MVP gates remain open. Synthetic offline model is absent from private model catalog; no provider-task result claimed. Preserve unrelated stress/research/GPUI patches and stash0.
+
+## 2026-10-18T00:33:57+00:00 — /root/profiles_flow_luna
+
+Added shared-product-chrome rendering for agent profile library, editor controls, provider availability notes, and deletion summary
+
+- Files: crates/app/src/profile_ui.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/profile_ui.rs passed; git diff --check -- crates/app/src/profile_ui.rs passed; Cargo/app integration not run because this new module is not yet wired by root
+- Risks / next: Root wires profile_ui as a product submodule and invokes the renderer from generic dialog; root owns app compile/integration verification.
+
+## 2026-10-18T00:34:39+00:00 — profiles_storage_luna
+
+Add bounded agent profile storage with CAS catalog operations and schema 11 migration support
+
+- Files: crates/storage/src/agent_profile.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs
+- Verification: cargo test -p pigade-storage catalog::tests::agent_profiles -- --test-threads=1 (2 passed); cargo test -p pigade-storage catalog::tests::schema_v10_migration_adds_profiles_and_preserves_catalog_backup -- --test-threads=1 (passed); cargo clippy -p pigade-storage --all-targets -- -D warnings, cargo fmt --all --check, git diff --check passed. Full crate suite exposed pre-existing schema-10 final-version expectations outside owned files; first failure context.rs:767 then test mutex poison cascades.
+- Risks / next: Root owns schema 11 launcher wiring and remaining migration fixture version assertions; rerun pigade-storage suite after those are aligned.
+
+## 2026-10-18T00:35:24+00:00 — profiles_storage_luna
+
+Record final storage crate verification after schema 11 fixture integration
+
+- Files: crates/storage/src/agent_profile.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs
+- Verification: cargo test -p pigade-storage -- --test-threads=1: 72 passed, 0 failed; cargo fmt --all --check and git diff --check passed. Earlier full run had one outdated schema-10 expectation in launch.rs, fixed by root to schema 12 for the newer-version refusal test.
+- Risks / next: Storage profile implementation is ready for root integration; root owns final host/UI integration and workspace verification.
+
+## 2026-10-18T00:38:36+00:00 — profiles_storage_luna
+
+Add real-host coverage for frozen named profile launch snapshots
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: cargo test -p pigade-session-host --test context_launch profile_launch_keeps_frozen_source_after_profile_update_and_delete -- --exact --nocapture: passed; cargo fmt --all --check and git diff --check passed.
+- Risks / next: Profile launch host integration test is ready; root owns broader host/UI validation.
+
+## 2026-10-18T00:42:02+00:00 — /root/profiles_flow_luna
+
+Extended the existing private OpenCode fixture with fixed-key profile create, frozen launch review, rename, delete-cancel and delete-confirm checks
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; python3 scripts/test_isolated_ime_x11.py passed (31 tests); python3 scripts/isolated-ime-x11.py --fixture opencode returned plan-only-no-process-no-write; git diff --check passed; no native or app Cargo execution
+- Risks / next: Root owns release app/host rebuild and the isolated native run; this agent did not run UI input or processes.
+
+## 2026-10-18T00:57:09+00:00 — root
+
+Integrate revisioned agent launch profiles, repair local palette readiness, and reverify requested hover focus/Dwindle dragging
+
+- Files: crates/storage/src/agent_profile.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/storage/src/lib.rs, crates/session-host/src/prepared.rs, crates/session-host/src/lib.rs, crates/session-host/src/catalog.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/workspace_git.rs, crates/session-host/tests/context_launch.rs, crates/session-host/tests/recovery.rs, crates/session-host/tests/template_run.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Workspace326 tests, current context5, app206, harness31 and pointer6 passed; strict locked workspace/app Clippy and release builds passed. Native profiles07 passes create/save/prepare/explicit launch/rename/delete cancel/confirm with unchanged live frame/generation/PID/tree/source. Native pointer02 passes four real shells, hover input routing, relative grab, sibling insertion, Escape/undo, unchanged processes; captures inspected. Native06 froze startup frame too early;07 requires actual TUI version/logo and retains strict equality plus diagnostic booleans. Earlier palette first Enter issue now regression-tested. Workspace fmt, first-party app fmt, py_compile/diff/version pass; app fmt --all also reports existing pinned-upstream patch formatting, left intact.
+- Risks / next: Manual runtime/chat/model/permission functions and full SPEC gates remain open. Private X11 evidence is not native Wayland certification. Preserve unrelated stress/research/GPUI dirt and stash0; never active-desktop automation.

@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::MetadataStore;
+use crate::agent_profile::{
+    AgentProfile, AgentProfileDelete, MAX_AGENT_PROFILE_SETTINGS_BYTES, MAX_AGENT_PROFILES,
+    validate_agent_profile_settings,
+};
 
 const MAX_PROJECTS: usize = 256;
 const MAX_WORKSPACES: usize = 4096;
@@ -265,6 +269,9 @@ pub struct Catalog {
     pub template_launch_schema: Option<u16>,
     #[serde(default)]
     pub pane_labels: Option<Vec<PaneLabel>>,
+    /// `None` means the connected host predates agent profile support.
+    #[serde(default)]
+    pub agent_profiles: Option<Vec<AgentProfile>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogWrite<T> {
@@ -282,6 +289,10 @@ pub struct CatalogBatch {
     pub layout_templates: Vec<CatalogWrite<LayoutTemplate>>,
     #[serde(default)]
     pub remove_layout_templates: Vec<LayoutTemplateDelete>,
+    #[serde(default)]
+    pub agent_profiles: Vec<CatalogWrite<AgentProfile>>,
+    #[serde(default)]
+    pub remove_agent_profiles: Vec<AgentProfileDelete>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionConflict {
@@ -377,6 +388,16 @@ pub(crate) fn migrate_pane_labels(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn migrate_agent_profiles(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE agent_profiles (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, settings_json TEXT NOT NULL,
+          revision INTEGER NOT NULL CHECK(revision>0)
+        );",
+    )?;
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
@@ -445,6 +466,14 @@ fn apply_catalog_batch(
         batch.remove_layout_templates.len() <= MAX_LAYOUT_TEMPLATES,
         "too many layout template deletions"
     );
+    ensure!(
+        batch.agent_profiles.len() <= MAX_AGENT_PROFILES,
+        "too many agent profiles"
+    );
+    ensure!(
+        batch.remove_agent_profiles.len() <= MAX_AGENT_PROFILES,
+        "too many agent profile deletions"
+    );
     unique_ids(batch.layout_templates.iter().map(|write| write.value.id))?;
     unique_ids(batch.remove_layout_templates.iter().map(|delete| delete.id))?;
     ensure!(
@@ -453,6 +482,15 @@ fn apply_catalog_batch(
             .iter()
             .any(|delete| delete.id == write.value.id)),
         "template cannot be written and deleted in one batch"
+    );
+    unique_ids(batch.agent_profiles.iter().map(|write| write.value.id))?;
+    unique_ids(batch.remove_agent_profiles.iter().map(|delete| delete.id))?;
+    ensure!(
+        batch.agent_profiles.iter().all(|write| !batch
+            .remove_agent_profiles
+            .iter()
+            .any(|delete| delete.id == write.value.id)),
+        "agent profile cannot be written and deleted in one batch"
     );
     unique_ids(batch.projects.iter().map(|write| write.value.id))?;
     unique_ids(batch.workspaces.iter().map(|write| write.value.id))?;
@@ -471,6 +509,12 @@ fn apply_catalog_batch(
     }
     for delete in batch.remove_layout_templates {
         delete_layout_template(tx, delete)?;
+    }
+    for write in batch.agent_profiles {
+        write_agent_profile(tx, write)?;
+    }
+    for delete in batch.remove_agent_profiles {
+        delete_agent_profile(tx, delete)?;
     }
     if let Some(write) = batch.selection {
         write_selection(tx, write)?;
@@ -745,6 +789,56 @@ fn write_layout_template(tx: &Transaction<'_>, write: CatalogWrite<LayoutTemplat
     }
     Ok(())
 }
+
+fn write_agent_profile(tx: &Transaction<'_>, write: CatalogWrite<AgentProfile>) -> Result<()> {
+    let profile = write.value;
+    ensure!(!profile.id.is_nil(), "agent profile ID cannot be nil");
+    let next = revision(profile.revision, write.expected_revision)?;
+    text(&profile.name, 256, false)?;
+    ensure!(
+        profile.name.trim() == profile.name,
+        "agent profile name must not have surrounding whitespace"
+    );
+    validate_agent_profile_settings(&profile.settings)?;
+    let settings = serde_json::to_string(&profile.settings)?;
+    ensure!(
+        settings.len() <= MAX_AGENT_PROFILE_SETTINGS_BYTES,
+        "agent profile settings exceed byte bound"
+    );
+    match write.expected_revision {
+        None => {
+            tx.execute(
+                "INSERT INTO agent_profiles(id,name,settings_json,revision) VALUES(?1,?2,?3,1)",
+                params![profile.id.to_string(), profile.name, settings],
+            )?;
+        }
+        Some(expected) => {
+            let changed = tx.execute(
+                "UPDATE agent_profiles SET name=?2,settings_json=?3,revision=?4 WHERE id=?1 AND revision=?5",
+                params![profile.id.to_string(), profile.name, settings, next, expected as i64],
+            )?;
+            conflict(changed, "agent profile", profile.id, expected)?;
+        }
+    }
+    Ok(())
+}
+
+fn delete_agent_profile(tx: &Transaction<'_>, delete: AgentProfileDelete) -> Result<()> {
+    ensure!(
+        delete.expected_revision > 0 && delete.expected_revision < i64::MAX as u64,
+        "invalid agent profile deletion revision"
+    );
+    let changed = tx.execute(
+        "DELETE FROM agent_profiles WHERE id=?1 AND revision=?2",
+        params![delete.id.to_string(), delete.expected_revision as i64],
+    )?;
+    conflict(
+        changed,
+        "agent profile",
+        delete.id,
+        delete.expected_revision,
+    )
+}
 fn delete_layout_template(tx: &Transaction<'_>, delete: LayoutTemplateDelete) -> Result<()> {
     ensure!(
         delete.expected_revision > 0 && delete.expected_revision < i64::MAX as u64,
@@ -906,6 +1000,36 @@ fn read_pane_labels(connection: &Connection, count: usize) -> Result<Vec<PaneLab
     Ok(labels)
 }
 
+fn read_agent_profiles(connection: &Connection, count: usize) -> Result<Vec<AgentProfile>> {
+    let mut profiles = Vec::with_capacity(count);
+    let mut statement = connection
+        .prepare("SELECT id,name,settings_json,revision FROM agent_profiles ORDER BY rowid")?;
+    for row in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, u64>(3)?,
+        ))
+    })? {
+        let (id, name, settings_json, revision) = row?;
+        ensure!(
+            settings_json.len() <= MAX_AGENT_PROFILE_SETTINGS_BYTES,
+            "stored agent profile settings exceed byte bound"
+        );
+        let settings: LaunchSettings = serde_json::from_str(&settings_json)
+            .context("invalid stored agent profile settings")?;
+        validate_agent_profile_settings(&settings)?;
+        profiles.push(AgentProfile {
+            id: Uuid::parse_str(&id)?,
+            name,
+            settings,
+            revision,
+        });
+    }
+    Ok(profiles)
+}
+
 fn read_catalog(connection: &Connection) -> Result<Catalog> {
     let counts:(usize,usize,usize,usize)=connection.query_row("SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM workspaces),(SELECT COUNT(*) FROM tabs),(SELECT COUNT(*) FROM project_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))?;
     ensure!(
@@ -926,6 +1050,12 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
     let pane_label_count: usize =
         connection.query_row("SELECT COUNT(*) FROM pane_labels", [], |row| row.get(0))?;
     ensure!(pane_label_count <= 100_000, "too many stored pane labels");
+    let agent_profile_count: usize =
+        connection.query_row("SELECT COUNT(*) FROM agent_profiles", [], |row| row.get(0))?;
+    ensure!(
+        agent_profile_count <= MAX_AGENT_PROFILES,
+        "too many stored agent profiles"
+    );
     let bytes:usize=connection.query_row("SELECT
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(canonical_path AS BLOB))+length(CAST(git_common_dir AS BLOB))) FROM projects),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(relative_path AS BLOB))) FROM project_roots),0)+
@@ -934,6 +1064,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
       COALESCE((SELECT length(CAST(window_json AS BLOB)) FROM catalog_selection WHERE singleton=1),0)+
       COALESCE((SELECT length(CAST(json AS BLOB)) FROM layout_revisions WHERE singleton=1),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(geometry_json AS BLOB))+COALESCE(length(CAST(launches_json AS BLOB)),0)) FROM layout_templates),0)+
+      COALESCE((SELECT SUM(length(CAST(name AS BLOB))+length(CAST(settings_json AS BLOB))) FROM agent_profiles),0)+
       COALESCE((SELECT SUM(length(CAST(name AS BLOB))) FROM pane_labels),0)",[],|row|row.get(0))?;
     ensure!(
         bytes <= MAX_MANIFEST_BYTES,
@@ -1102,6 +1233,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         layout_templates: Some(layout_templates),
         template_launch_schema: Some(1),
         pane_labels: Some(read_pane_labels(connection, pane_label_count)?),
+        agent_profiles: Some(read_agent_profiles(connection, agent_profile_count)?),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1122,6 +1254,182 @@ mod tests {
             schema: 1,
             root: Some(pigade_layout::TemplateNode::Pane),
         }
+    }
+
+    fn profile(id: Uuid, revision: u64, provider: &str) -> AgentProfile {
+        AgentProfile {
+            id,
+            name: "Review profile".into(),
+            settings: LaunchSettings {
+                provider: provider.into(),
+                role: "reviewer".into(),
+                instructions: "Review the change".into(),
+                deliver_context: false,
+            },
+            revision,
+        }
+    }
+
+    #[test]
+    fn agent_profiles_use_cas_and_survive_reopen() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let id = Uuid::new_v4();
+        {
+            let mut store = MetadataStore::open(&path)?;
+            let catalog = store.apply_catalog(CatalogBatch {
+                agent_profiles: vec![CatalogWrite {
+                    value: profile(id, 0, "claude"),
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            })?;
+            assert_eq!(catalog.agent_profiles.as_ref().unwrap()[0].revision, 1);
+            let mut updated = profile(id, 1, "codex");
+            updated.name = "Updated profile".into();
+            let catalog = store.apply_catalog(CatalogBatch {
+                agent_profiles: vec![CatalogWrite {
+                    value: updated,
+                    expected_revision: Some(1),
+                }],
+                ..CatalogBatch::default()
+            })?;
+            let saved = catalog.agent_profiles.as_ref().unwrap();
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].revision, 2);
+            assert_eq!(saved[0].settings.provider, "codex");
+            assert!(
+                store
+                    .apply_catalog(CatalogBatch {
+                        agent_profiles: vec![CatalogWrite {
+                            value: profile(id, 1, "claude"),
+                            expected_revision: Some(1),
+                        }],
+                        ..CatalogBatch::default()
+                    })
+                    .is_err()
+            );
+        }
+        let mut store = MetadataStore::open(&path)?;
+        assert_eq!(
+            store.catalog()?.agent_profiles.unwrap()[0]
+                .settings
+                .provider,
+            "codex"
+        );
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    remove_agent_profiles: vec![AgentProfileDelete {
+                        id,
+                        expected_revision: 1,
+                    }],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        store.apply_catalog(CatalogBatch {
+            remove_agent_profiles: vec![AgentProfileDelete {
+                id,
+                expected_revision: 2,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert!(store.catalog()?.agent_profiles.unwrap().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn agent_profiles_reject_shell_provider_and_capacity_overflow() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    agent_profiles: vec![CatalogWrite {
+                        value: profile(Uuid::new_v4(), 0, "shell"),
+                        expected_revision: None,
+                    }],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        let writes = (0..=MAX_AGENT_PROFILES)
+            .map(|_| CatalogWrite {
+                value: profile(Uuid::new_v4(), 0, "opencode"),
+                expected_revision: None,
+            })
+            .collect();
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    agent_profiles: writes,
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schema_v10_migration_adds_profiles_and_preserves_catalog_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        {
+            let mut store = MetadataStore::open(&path)?;
+            store.apply_catalog(CatalogBatch {
+                layout_templates: vec![CatalogWrite {
+                    value: LayoutTemplate {
+                        id: Uuid::new_v4(),
+                        name: "Existing template".into(),
+                        geometry: one_pane_template(),
+                        launches: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            })?;
+        }
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch("DROP TABLE agent_profiles; PRAGMA user_version=10;")?;
+        }
+        let store = MetadataStore::open(&path)?;
+        let catalog = store.catalog()?;
+        assert_eq!(catalog.agent_profiles, Some(Vec::new()));
+        assert_eq!(
+            catalog.layout_templates.unwrap()[0].name,
+            "Existing template"
+        );
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            11
+        );
+        let backup_path = store
+            .migration_backup_path()
+            .context("schema-10 backup absent")?;
+        assert!(backup_path.to_string_lossy().contains(".pre-v11."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            10
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_profiles'",
+                [],
+                |row| row.get(0),
+            )?,
+            0
+        );
+        Ok(())
     }
 
     #[test]
@@ -2046,7 +2354,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            10
+            11
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -2141,7 +2449,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                10
+                11
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

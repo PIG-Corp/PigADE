@@ -18,6 +18,8 @@ use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 mod git_status_ui;
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
+#[path = "profile_ui.rs"]
+mod profile_ui;
 #[path = "session_control_ui.rs"]
 mod session_control_ui;
 #[path = "template_ui.rs"]
@@ -28,6 +30,15 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenAgentProfiles,
+    ReloadAgentProfiles,
+    NewAgentProfile,
+    EditAgentProfile(Uuid),
+    LaunchAgentProfile(Uuid),
+    DeleteAgentProfile(Uuid),
+    SetProfileProvider(String),
+    ToggleProfileContext,
+    SaveLaunchAsProfile,
     OpenControls,
     OpenWorkspaceGit,
     RefreshWorkspaceGit,
@@ -126,6 +137,9 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    AgentProfiles,
+    AgentProfile,
+    DeleteAgentProfile,
     WorkspaceGit,
     Controls,
     AddProject,
@@ -163,6 +177,9 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::AgentProfiles => "Профили агентов",
+            Self::AgentProfile => "Настройки профиля",
+            Self::DeleteAgentProfile => "Удалить профиль?",
             Self::WorkspaceGit => "Git воркспейса",
             Self::Controls => "Клавиша управления панелями",
             Self::AddProject => "Добавить проект",
@@ -200,6 +217,8 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::AgentProfiles | Self::DeleteAgentProfile => &[],
+            Self::AgentProfile => &["Название профиля", "Роль", "Инструкции"],
             Self::WorkspaceGit => &[],
             Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
@@ -238,6 +257,9 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::AgentProfiles => "Готово",
+            Self::AgentProfile => "Сохранить профиль",
+            Self::DeleteAgentProfile => "Удалить профиль",
             Self::WorkspaceGit => "Закрыть",
             Self::Controls => "Готово",
             Self::AddProject => "Добавить проект",
@@ -306,6 +328,8 @@ pub(super) struct ProductUi {
     pub(super) management_target: Option<crate::catalog_flow::ManagedEntity>,
     pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
     pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
+    pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
+    pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
     pub(super) recipe_editor: Option<crate::template_flow::RecipeEditor>,
     pub(super) template_run: Option<protocol::TemplateRunView>,
     pub(super) template_runs: Option<pigade_storage::TemplateRunPage>,
@@ -526,6 +550,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
             ProductAction::ManageSelected(crate::catalog_flow::EntityKind::Tab),
         ),
         ("Сохранённые раскладки · D", ProductAction::OpenLayouts),
+        (
+            "Профили агентов · profiles",
+            ProductAction::OpenAgentProfiles,
+        ),
         ("Сохранить текущую раскладку", ProductAction::SaveLayout),
         (
             "Показать / скрыть архив воркспейсов",
@@ -747,6 +775,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Context => index != 1,
         DialogKind::ProjectContext => true,
         DialogKind::LaunchReview => index == 1,
+        DialogKind::AgentProfile => index > 0,
         DialogKind::RecipeSlot => true,
         DialogKind::History => index == 1,
         _ => false,
@@ -901,6 +930,7 @@ impl ProductUi {
                 ("Обновить".into(), ProductAction::RefreshWorkspaceGit),
                 ("Закрыть".into(), ProductAction::CloseDialog),
             ],
+            Some(DialogKind::AgentProfiles) => self.profile_menu_entries(),
             Some(DialogKind::Sessions) => self.session_menu_entries(),
             Some(DialogKind::StopSession) => self.stop_menu_entries(),
             Some(
@@ -2616,6 +2646,7 @@ impl ProductUi {
         }
 
         fields = self.template_dialog_fields(dialog, fields, cx);
+        fields = self.profile_dialog_fields(dialog, fields, cx);
 
         if dialog.kind == DialogKind::CreateProject {
             fields = fields.child(self.action_control(
@@ -3204,6 +3235,17 @@ impl ProductUi {
                     .child(self.provider_choice(provider, label, cx)),
             );
         }
+        choices = choices.child(self.action_control(
+            "launcher-profiles".into(),
+            "Профили агентов…".into(),
+            ProductAction::OpenAgentProfiles,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: false,
+            },
+            cx,
+        ));
         let availability = if self.providers.is_none() {
             self.provider_error
                 .as_deref()
@@ -3543,6 +3585,30 @@ impl ProductUi {
                 "{} · CLI {}",
                 preview.provider, preview.cli_version
             ));
+            if let Some(profile) = &preview.profile {
+                metadata = metadata.child(format!(
+                    "Профиль {} · ревизия {} · снимок для этого запуска",
+                    profile.name, profile.revision
+                ));
+            }
+            if self
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.agent_profiles.is_some())
+                && matches!(preview.provider.as_str(), "claude" | "codex" | "opencode")
+            {
+                metadata = metadata.child(self.action_control(
+                    "launch-save-profile".into(),
+                    "Сохранить настройки как профиль…".into(),
+                    ProductAction::SaveLaunchAsProfile,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
             let details = div()
                 .id("launch-review-details")
                 .flex()
@@ -3910,7 +3976,7 @@ impl ProductUi {
         }
 
         warnings = warnings.child(div().text_size(px(11.)).text_color(colors.muted).child(
-            "Ctrl+R — обновить · Ctrl+M — память · Ctrl+D — контекст · Ctrl+Enter — запуск",
+            "Ctrl+R — обновить · Ctrl+M — память · Ctrl+D — контекст · Ctrl+Shift+S — профиль · Ctrl+Enter — запуск",
         ));
         let refresh = self.action_control(
             "launch-review-refresh".into(),
@@ -4054,6 +4120,12 @@ impl ProductUi {
         let colors = ProductColors::dark();
         let mut content = div().flex().flex_col().gap_2();
         if let Some(preview) = &self.launch_preview {
+            if let Some(profile) = &preview.profile {
+                content = content.child(format!(
+                    "Профиль {} · сохранённая ревизия {}",
+                    profile.name, profile.revision
+                ));
+            }
             content = content
                 .child(format!(
                     "{} · CLI {} · адаптер v{}",

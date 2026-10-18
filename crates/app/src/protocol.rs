@@ -450,6 +450,15 @@ pub struct LaunchPreview {
     pub conversation: Option<pigade_storage::ConversationBinding>,
     #[serde(default)]
     pub resume: Option<ResumeSource>,
+    #[serde(default)]
+    pub profile: Option<ProfileSource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProfileSource {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
