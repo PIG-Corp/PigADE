@@ -1713,6 +1713,8 @@ pub(crate) fn response(
         selected: None,
         history_chunk: None,
         change_token: None,
+        activity: None,
+        activity_error: None,
         generations: None,
         generation_selection: None,
         history_view: None,

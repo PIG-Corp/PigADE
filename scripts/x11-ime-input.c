@@ -201,6 +201,10 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "appearance-font-increase") && strcmp(a.stage, "appearance-font-decrease") &&
         strcmp(a.stage, "appearance-font-reset") &&
         strcmp(a.stage, "appearance-reload") && strcmp(a.stage, "appearance-close") &&
+        strcmp(a.stage, "activity-open") && strcmp(a.stage, "activity-close") &&
+        strcmp(a.stage, "activity-mark-all") && strcmp(a.stage, "activity-mark-current") &&
+        strcmp(a.stage, "activity-enter-target") && strcmp(a.stage, "activity-next") &&
+        strcmp(a.stage, "activity-select-source-tab") &&
         strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
         strcmp(a.stage, "pointer-hover-header") &&
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
@@ -1912,6 +1916,25 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_r);
         } else if (!strcmp(a.stage, "appearance-close")) {
             key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "activity-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_a, XK_c, XK_t, XK_i, XK_v, XK_i, XK_t, XK_y };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "activity-close")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "activity-mark-all")) {
+            control_shift_key(dpy, XK_r);
+        } else if (!strcmp(a.stage, "activity-mark-current")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "activity-enter-target")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "activity-next")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "activity-select-source-tab")) {
+            setup_click(dpy, app_window, 295, 57);
         } else if (!strcmp(a.stage, "pointer-hover-left")) {
             pointer_hover(dpy, app_window, 485, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hover-header")) {
@@ -2101,6 +2124,15 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "appearance-terminal-dark") ? "1" :
                             !strcmp(a.stage, "appearance-terminal-light") ? "1" :
                             !strcmp(a.stage, "appearance-terminal-follow") ? "1" :
+                            !strcmp(a.stage, "activity-open") ? "10" :
+                            !strcmp(a.stage, "activity-close") ? "1" :
+                            !strcmp(a.stage, "activity-mark-all") ? "1" :
+                            !strcmp(a.stage, "activity-mark-current") ? "1" :
+                            !strcmp(a.stage, "activity-enter-target") ? "1" :
+                            !strcmp(a.stage, "activity-next") ? "1" :
+                            !strcmp(a.stage, "activity-select-source-tab") ? "0" :
+                            !strcmp(a.stage, "pointer-create-transfer-tab") ? "10" :
+                            !strcmp(a.stage, "pointer-select-first-tab") ? "1" :
                             !strcmp(a.stage, "appearance-font-increase") ? "1" :
                             !strcmp(a.stage, "appearance-font-decrease") ? "1" :
                             !strcmp(a.stage, "appearance-font-reset") ? "1" :

@@ -184,6 +184,10 @@ struct Response {
     #[serde(default)]
     change_token: Option<ChangeToken>,
     #[serde(default)]
+    activity: Option<Value>,
+    #[serde(default)]
+    activity_error: Option<String>,
+    #[serde(default)]
     catalog: Option<pigade_storage::Catalog>,
     #[serde(default)]
     selection: Option<pigade_storage::Selection>,
@@ -1387,6 +1391,8 @@ pub struct Poll {
     pub selected: Vec<Known>,
     pub views: Vec<View>,
     pub recovery: Option<RecoveryDiagnostics>,
+    pub activity: Option<crate::activity::Snapshot>,
+    pub activity_error: Option<String>,
 }
 
 fn poll_response(reply: Response) -> Result<Poll, String> {
@@ -1394,12 +1400,40 @@ fn poll_response(reply: Response) -> Result<Poll, String> {
         return Err(error);
     }
     validate_recovery(reply.recovery.as_ref())?;
+    let activity = reply
+        .activity
+        .map(|value| -> Result<crate::activity::Snapshot, String> {
+            let activity: crate::activity::Snapshot = serde_json::from_value(value)
+                .map_err(|e| format!("Invalid activity metadata: {e}"))?;
+            activity.validate()?;
+            let token = reply
+                .change_token
+                .as_ref()
+                .ok_or("Activity without host token")?;
+            if token.host_instance.parse::<uuid::Uuid>().ok() != Some(activity.host_instance)
+                || token.revision != activity.revision
+            {
+                return Err("Activity host token mismatch".into());
+            }
+            Ok(activity)
+        });
+    let (mut activity, mut activity_error) = match activity {
+        None => (None, None),
+        Some(Ok(snapshot)) => (Some(snapshot), None),
+        Some(Err(error)) => (None, Some(error)),
+    };
+    if let Some(error) = reply.activity_error {
+        activity = None;
+        activity_error = Some(error.chars().take(256).collect());
+    }
     Ok(Poll {
         selected: reply
             .selected
             .ok_or("Host does not support conditional cell polling")?,
         views: reply.views,
         recovery: reply.recovery,
+        activity,
+        activity_error,
     })
 }
 
@@ -2180,6 +2214,8 @@ mod tests {
 
     fn error_response(error: &str, rejection: Option<&str>) -> Response {
         Response {
+            activity: None,
+            activity_error: None,
             protocol: 2,
             catalog: None,
             selection: None,
@@ -2335,6 +2371,8 @@ mod tests {
                 &mut cached,
                 &mut recovery,
                 Poll {
+                    activity: None,
+                    activity_error: None,
                     selected,
                     views: vec![],
                     recovery: None,
@@ -2377,9 +2415,50 @@ mod tests {
     }
 
     #[test]
+    fn invalid_optional_activity_does_not_fail_terminal_polling() {
+        let host = uuid::Uuid::new_v4();
+        for activity in [
+            json!({"schema": 99}),
+            json!({"schema":1,"host_instance":host,"revision":4,"sessions":[]}),
+        ] {
+            let mut response: Response = serde_json::from_value(json!({
+                "protocol":2,"views":[],"selected":[],"error":null,
+                "change_token":{"host_instance":host,"revision":3},"activity":activity
+            }))
+            .unwrap();
+            let frame = fixture();
+            response.selected = Some(vec![frame.known()]);
+            response.views = vec![frame.clone()];
+            let poll = poll_response(response).unwrap();
+            assert!(poll.activity.is_none());
+            assert!(poll.activity_error.is_some());
+            let mut replica = Vec::new();
+            let changes = merge_poll(&mut replica, &mut None, poll).unwrap();
+            assert!(changes.views);
+            assert_eq!(
+                replica,
+                vec![frame],
+                "optional metadata must not withhold authoritative cells"
+            );
+        }
+        let response: Response =
+            serde_json::from_value(json!({"protocol":2,"views":[],"selected":[],"error":null}))
+                .unwrap();
+        let poll = poll_response(response).unwrap();
+        assert!(poll.activity.is_none());
+        assert!(poll.activity_error.is_none());
+        let response: Response = serde_json::from_value(json!({"protocol":2,"views":[],"selected":[],"error":null,"activity_error":"summary unavailable"})).unwrap();
+        let poll = poll_response(response).unwrap();
+        assert!(poll.activity.is_none());
+        assert_eq!(poll.activity_error.as_deref(), Some("summary unavailable"));
+    }
+
+    #[test]
     fn recovery_diagnostics_are_carried_even_when_there_are_no_views() {
         let recovery = diagnostics("session-7.journal", "checkpoint could not be read");
         let poll = Poll {
+            activity: None,
+            activity_error: None,
             selected: vec![],
             views: vec![],
             recovery: Some(recovery.clone()),
@@ -2435,6 +2514,8 @@ mod tests {
         let mut regression = fixture();
         regression.sequence = 0;
         let invalid = Poll {
+            activity: None,
+            activity_error: None,
             selected: vec![regression.known()],
             views: vec![regression],
             recovery: Some(diagnostics("new.journal", "new warning")),
@@ -2445,6 +2526,8 @@ mod tests {
         assert_eq!(recovery, previous_recovery);
 
         let invalid_diagnostics = Poll {
+            activity: None,
+            activity_error: None,
             selected: vec![cached[0].known()],
             views: vec![],
             recovery: Some(diagnostics("bad.journal", &"x".repeat(1025))),
@@ -2472,6 +2555,8 @@ mod tests {
                     &mut cached,
                     &mut recovery,
                     Poll {
+                        activity: None,
+                        activity_error: None,
                         selected: vec![next.known()],
                         views: vec![next],
                         recovery: None
@@ -2496,6 +2581,8 @@ mod tests {
                 &mut cached,
                 &mut recovery,
                 Poll {
+                    activity: None,
+                    activity_error: None,
                     selected: vec![next.known()],
                     views: vec![next.clone()],
                     recovery: None,
@@ -2518,6 +2605,8 @@ mod tests {
                 &mut cached,
                 &mut recovery,
                 Poll {
+                    activity: None,
+                    activity_error: None,
                     selected: vec![next.known()],
                     views: vec![next.clone()],
                     recovery: None,
@@ -2532,6 +2621,8 @@ mod tests {
                 &mut cached,
                 &mut recovery,
                 Poll {
+                    activity: None,
+                    activity_error: None,
                     selected: vec![],
                     views: vec![],
                     recovery: None,
@@ -2549,26 +2640,36 @@ mod tests {
         regression.sequence = 0;
         let invalid = vec![
             Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![regression.known()],
                 views: vec![regression],
                 recovery: None,
             },
             Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![fixture().known(), fixture().known()],
                 views: vec![],
                 recovery: None,
             },
             Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![],
                 views: vec![fixture()],
                 recovery: None,
             },
             Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![fixture().known()],
                 views: vec![fixture(), fixture()],
                 recovery: None,
             },
             Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![Known {
                     sequence: 2,
                     ..fixture().known()

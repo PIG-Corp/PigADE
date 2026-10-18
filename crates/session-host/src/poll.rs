@@ -52,6 +52,103 @@ pub struct SessionInfo {
     pub title: String,
 }
 
+/// Bounded host snapshot for lightweight tab and workspace activity badges.
+/// It intentionally excludes terminal cells, title, and input state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Activity {
+    pub schema: u32,
+    pub host_instance: Uuid,
+    pub revision: u64,
+    pub sessions: Vec<ActivitySession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivitySession {
+    pub session: Uuid,
+    pub generation: Uuid,
+    pub sequence: u64,
+    pub output_bytes: u64,
+    pub state: String,
+    pub storage_error: bool,
+}
+
+/// Build activity only from the host's authoritative generation heads. The
+/// caller supplies the token sampled before any view metadata reads.
+pub fn activity_snapshot<'a>(
+    views: impl IntoIterator<Item = &'a Mutex<View>>,
+    heads: &std::collections::BTreeMap<Uuid, Uuid>,
+    token: Option<Token>,
+) -> Result<Option<Activity>> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    ensure!(
+        heads.len() <= MAX_VIEWS,
+        "too many activity generation heads"
+    );
+    let mut unique_heads = HashSet::with_capacity(heads.len());
+    for (session, generation) in heads {
+        ensure!(!session.is_nil(), "nil activity session head");
+        ensure!(!generation.is_nil(), "nil activity generation head");
+        ensure!(
+            unique_heads.insert(*generation),
+            "duplicate activity generation head"
+        );
+    }
+
+    let mut by_pair = std::collections::HashMap::with_capacity(MAX_VIEWS);
+    for view in views {
+        ensure!(by_pair.len() < MAX_VIEWS, "too many host views");
+        let current = view
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session view lock poisoned"))?;
+        let key = (current.session, current.generation);
+        drop(current);
+        ensure!(
+            by_pair.insert(key, view).is_none(),
+            "duplicate host session generation view"
+        );
+    }
+
+    let mut sessions = Vec::with_capacity(heads.len());
+    for (session, generation) in heads {
+        let Some(view) = by_pair.get(&(*session, *generation)) else {
+            continue;
+        };
+        let current = view
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session view lock poisoned"))?;
+        sessions.push(ActivitySession {
+            session: current.session,
+            generation: current.generation,
+            sequence: current.sequence,
+            output_bytes: current.metrics.output_bytes,
+            state: current.state.clone(),
+            storage_error: current.storage_error.is_some(),
+        });
+    }
+
+    Ok(Some(Activity {
+        schema: 1,
+        host_instance: token.host_instance,
+        revision: token.revision,
+        sessions,
+    }))
+}
+
+/// Keep optional activity failures separate from the terminal poll result.
+/// The error is deliberately bounded because it crosses the local IPC boundary.
+pub fn activity_snapshot_nonfatal<'a>(
+    views: impl IntoIterator<Item = &'a Mutex<View>>,
+    heads: &std::collections::BTreeMap<Uuid, Uuid>,
+    token: Option<Token>,
+) -> (Option<Activity>, Option<String>) {
+    match activity_snapshot(views, heads, token) {
+        Ok(activity) => (activity, None),
+        Err(error) => (None, Some(error.to_string().chars().take(256).collect())),
+    }
+}
+
 impl SessionInfo {
     pub fn known(&self) -> Known {
         Known {
@@ -347,6 +444,153 @@ mod tests {
             pid: view.pid,
             storage_error: view.storage_error.clone(),
         }
+    }
+
+    fn activity_heads(items: &[(Uuid, Uuid)]) -> std::collections::BTreeMap<Uuid, Uuid> {
+        items.iter().copied().collect()
+    }
+
+    fn token() -> Token {
+        Token {
+            host_instance: Uuid::from_u128(99),
+            revision: 12,
+        }
+    }
+
+    #[test]
+    fn activity_uses_only_exact_authoritative_heads_and_includes_hidden_metadata() {
+        let session = Uuid::from_u128(10);
+        let head_generation = Uuid::from_u128(20);
+        let other_generation = Uuid::from_u128(21);
+        let hidden_session = Uuid::from_u128(11);
+        let hidden_generation = Uuid::from_u128(22);
+        let head = view(session, head_generation);
+        let non_head = view(session, other_generation);
+        let hidden = view(hidden_session, hidden_generation);
+        head.lock().unwrap().metrics.output_bytes = 41;
+        non_head.lock().unwrap().metrics.output_bytes = 999;
+        hidden.lock().unwrap().metrics.output_bytes = 73;
+        hidden.lock().unwrap().state = "exited".into();
+        hidden.lock().unwrap().storage_error = Some("durability issue".into());
+
+        let snapshot = activity_snapshot(
+            [&non_head, &hidden, &head],
+            &activity_heads(&[
+                (session, head_generation),
+                (hidden_session, hidden_generation),
+            ]),
+            Some(token()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(snapshot.schema, 1);
+        assert_eq!(snapshot.host_instance, token().host_instance);
+        assert_eq!(snapshot.revision, token().revision);
+        assert_eq!(snapshot.sessions.len(), 2);
+        assert_eq!(snapshot.sessions[0].generation, head_generation);
+        assert_eq!(snapshot.sessions[0].output_bytes, 41);
+        assert_eq!(snapshot.sessions[1].session, hidden_session);
+        assert_eq!(snapshot.sessions[1].output_bytes, 73);
+        assert_eq!(snapshot.sessions[1].state, "exited");
+        assert!(snapshot.sessions[1].storage_error);
+
+        let encoded = serde_json::to_value(snapshot).unwrap();
+        assert!(encoded.get("title").is_none());
+        assert!(encoded.get("frame").is_none());
+    }
+
+    #[test]
+    fn activity_omits_missing_exact_head_instead_of_falling_back() {
+        let session = Uuid::from_u128(10);
+        let available = view(session, Uuid::from_u128(20));
+        let absent_head = Uuid::from_u128(21);
+        let snapshot = activity_snapshot(
+            [&available],
+            &activity_heads(&[(session, absent_head)]),
+            Some(token()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(snapshot.sessions.is_empty());
+    }
+
+    #[test]
+    fn activity_is_omitted_without_a_sampled_change_token() {
+        let current = view(Uuid::from_u128(10), Uuid::from_u128(20));
+        assert!(
+            activity_snapshot(
+                [&current],
+                &activity_heads(&[(Uuid::from_u128(10), Uuid::from_u128(20))]),
+                None,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn optional_activity_failure_keeps_normal_poll_payload() {
+        let session = Uuid::from_u128(10);
+        let generation = Uuid::from_u128(20);
+        let current = view(session, generation);
+        let changes = ChangeHub::new();
+        let result = poll([&current], &[], &changes).unwrap();
+        assert_eq!(result.selected.len(), 1);
+        assert_eq!(result.views.len(), 1);
+
+        let invalid_heads =
+            activity_heads(&[(session, generation), (Uuid::from_u128(11), generation)]);
+        let (activity, activity_error) =
+            activity_snapshot_nonfatal([&current], &invalid_heads, result.change_token);
+
+        assert!(activity.is_none());
+        let error = activity_error.unwrap();
+        assert!(error.chars().count() <= 256);
+        // The independent terminal poll data remains available to the caller.
+        assert_eq!(result.selected[0].session, session);
+        assert_eq!(result.views[0].session, session);
+    }
+
+    #[test]
+    fn activity_rejects_invalid_or_oversized_heads() {
+        let current = view(Uuid::from_u128(10), Uuid::from_u128(20));
+        let duplicate_generation = activity_heads(&[
+            (Uuid::from_u128(10), Uuid::from_u128(20)),
+            (Uuid::from_u128(11), Uuid::from_u128(20)),
+        ]);
+        assert!(activity_snapshot([&current], &duplicate_generation, Some(token())).is_err());
+
+        let nil_session = activity_heads(&[(Uuid::nil(), Uuid::from_u128(20))]);
+        assert!(activity_snapshot([&current], &nil_session, Some(token())).is_err());
+        let nil_generation = activity_heads(&[(Uuid::from_u128(10), Uuid::nil())]);
+        assert!(activity_snapshot([&current], &nil_generation, Some(token())).is_err());
+
+        let oversized = (0..=MAX_VIEWS)
+            .map(|index| {
+                (
+                    Uuid::from_u128(index as u128 + 1),
+                    Uuid::from_u128(index as u128 + 100),
+                )
+            })
+            .collect();
+        assert!(activity_snapshot([&current], &oversized, Some(token())).is_err());
+    }
+
+    #[test]
+    fn activity_output_bytes_remain_unchanged_for_metadata_only_resize() {
+        let current = view(Uuid::from_u128(10), Uuid::from_u128(20));
+        current.lock().unwrap().metrics.output_bytes = 55;
+        // Resize updates frame geometry but does not add to the output-byte metric.
+        current.lock().unwrap().frame.geometry = Geometry::new(9, 41).unwrap();
+        let snapshot = activity_snapshot(
+            [&current],
+            &activity_heads(&[(Uuid::from_u128(10), Uuid::from_u128(20))]),
+            Some(token()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(snapshot.sessions[0].output_bytes, 55);
     }
 
     #[test]

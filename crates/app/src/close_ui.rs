@@ -31,6 +31,9 @@ impl CanvasApp {
 
     fn close_pending(&self) -> Vec<&'static str> {
         let mut pending = Vec::new();
+        if self.activity_writer.pending(&self.product.activity.saved()) {
+            pending.push("Отметки просмотра активности");
+        }
         if self.product.busy || self.catalog_edit.is_some() || self.picker_request.is_some() {
             pending.push("Ответ session host на отправленную операцию");
         }

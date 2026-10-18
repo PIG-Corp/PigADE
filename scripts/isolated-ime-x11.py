@@ -1547,8 +1547,396 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                                                        'appearance-terminal-follow-light.ppm',
                                                        'appearance-terminal-follow-dark-again.ppm',
                                                        'appearance-terminal-dark.ppm']})
+    report['controls']['background_activity'] = run_background_activity_fixture(
+        config, report, save, tab_id)
     report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
     save()
+
+
+def run_background_activity_fixture(config, report, save, source_tab):
+    """Verify hidden-head activity metadata, acknowledgement, and activation."""
+    def step(stage):
+        report['stage'] = stage
+        save()
+        helper_call(config, stage)
+
+    def catalog():
+        return host_request({'command': 'catalog'})['catalog']
+
+    def process_ids():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'activity process snapshot exceeds bounds')
+        result = {}
+        for view in views:
+            key = (view.get('session'), view.get('generation'))
+            pid = view.get('pid')
+            require(all(isinstance(part, str) and part for part in key) and
+                    (pid is None or (type(pid) is int and pid > 0)),
+                    'activity process identity is malformed')
+            result[key] = pid
+        require(len(result) == len(views), 'activity process snapshot has duplicate views')
+        return result
+
+    def activity_snapshot():
+        reply = host_request({'command': 'poll_panels', 'panels': [], 'known': []})
+        require(reply.get('views') == [],
+                'empty-panel activity poll unexpectedly returned terminal frames')
+        value = reply.get('activity')
+        require(isinstance(value, dict) and value.get('schema') == 1 and
+                isinstance(value.get('host_instance'), str) and
+                _bounded_uint(value.get('revision')) and
+                isinstance(value.get('sessions'), list) and len(value['sessions']) <= 32,
+                'host omitted bounded activity metadata for hidden session heads')
+        seen = set()
+        previous = None
+        for entry in value['sessions']:
+            require(isinstance(entry, dict) and
+                    isinstance(entry.get('session'), str) and
+                    isinstance(entry.get('generation'), str) and
+                    _bounded_uint(entry.get('sequence')) and
+                    _bounded_uint(entry.get('output_bytes')) and
+                    entry.get('state') in HOST_STATES and
+                    type(entry.get('storage_error')) is bool,
+                    'host activity session metadata is malformed')
+            key = (entry['session'], entry['generation'])
+            require(key not in seen and (previous is None or previous < key),
+                    'activity heads are duplicated or not UUID-sorted')
+            seen.add(key)
+            previous = key
+        return value
+
+    def activity_entry(snapshot, pair):
+        entries = [entry for entry in snapshot['sessions']
+                   if (entry['session'], entry['generation']) == pair]
+        require(len(entries) <= 1, 'activity contains duplicate target generation')
+        return entries[0] if entries else None
+
+    def saved_ack_path():
+        socket_bytes = b'/artifacts/state/host.sock'
+        return Path('/home/pigade/.config/pigade') / (
+            'activity-' + socket_bytes.hex() + '.json')
+
+    def saved_ack():
+        path = saved_ack_path()
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
+                stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size <= 32768,
+                'per-host activity acknowledgement file is not private/bounded')
+        value = json.loads(path.read_text())
+        require(isinstance(value, dict) and value.get('schema') == 1 and
+                _bounded_uint(value.get('revision')) and
+                isinstance(value.get('host_instance'), str) and
+                isinstance(value.get('seen'), list) and len(value['seen']) <= 32,
+                'activity acknowledgement document is malformed')
+        return value
+
+    def wait_saved(pair, entry, host_instance, require_source_sequence=False):
+        def acknowledged():
+            try:
+                document = saved_ack()
+            except FileNotFoundError:
+                return None
+            matches = [item for item in document['seen'] if
+                       isinstance(item, dict) and
+                       (item.get('session'), item.get('generation')) == pair and
+                       (not require_source_sequence or
+                        item.get('sequence', -1) >= entry['sequence']) and
+                       item.get('output_bytes') >= entry['output_bytes'] and
+                       item.get('state') == entry['state'] and
+                       item.get('storage_error') == entry['storage_error']]
+            return (document if document.get('host_instance') == host_instance and matches else None)
+        return wait_until(acknowledged, time.monotonic() + 10)
+
+    def catalog_state(value):
+        return {
+            'selection': value.get('selection'),
+            'layout': value.get('layout'),
+            'projects': sorted((item.get('id'), item.get('revision'))
+                               for item in value.get('projects', [])),
+            'workspaces': sorted((item.get('id'), item.get('revision'), item.get('status'))
+                                 for item in value.get('workspaces', [])),
+            'tabs': {tab['id']: (tab.get('layout_json'), tab.get('active_pane'), tab.get('revision'))
+                     for tab in value.get('tabs', [])},
+        }
+
+    def send_hidden(session, generation, payload):
+        reply = host_request({'command': 'input', 'session': session,
+                              'generation': generation, 'bytes': list(payload)})
+        require(reply.get('error') is None and
+                reply.get('rejected_before_admission') is None,
+                'fixed activity marker input was rejected')
+
+    before_processes = process_ids()
+    before_generations = fixture_generations()
+    before_catalog = catalog_state(catalog())
+    require(before_catalog['selection'].get('tab_id') == source_tab,
+            'activity fixture did not start on the original controls tab')
+    placed = set()
+    for tab in before_catalog['tabs'].values():
+        placed.update(pane_ids(json.loads(tab[0]).get('root')))
+    prior_sessions = {session for session, _ in before_generations}
+    bootstrap_session = report['fixture']['session']
+    unplaced = sorted((prior_sessions - placed) - {bootstrap_session})
+    require(len(unplaced) == 1,
+            'activity fixture expected exactly one still-running pane removed from layout')
+    unplaced_session = unplaced[0]
+    unplaced_generation = next(generation for session, generation in before_generations
+                               if session == unplaced_session)
+    unplaced_model = fixture_session_models(unplaced_session).get(unplaced_generation)
+    require(unplaced_model is not None and unplaced_model.get('state') == 'running',
+            'unplaced activity generation is not still running')
+    unplaced_pair = (unplaced_session, unplaced_generation)
+    tabs_before = set(before_catalog['tabs'])
+    report['stage'] = 'activity-create-hidden-tab'
+    save()
+    helper_call(config, 'pointer-create-transfer-tab')
+    destination = wait_until(
+        lambda: (value if len(value['tabs']) == len(tabs_before) + 1 and
+                 value['selection'].get('tab_id') not in tabs_before else None)
+        if (value := catalog()) else None, time.monotonic() + 8)
+    target_tab = destination['selection']['tab_id']
+    require(next(tab for tab in destination['tabs'] if tab['id'] == target_tab)['name'] == 'Transfer' and
+            json.loads(next(tab for tab in destination['tabs'] if tab['id'] == target_tab)
+                       ['layout_json']).get('root') is None,
+            'activity fixture destination tab was not empty')
+    # Let the newly selected tab finish painting before using the fixed
+    # toolbar coordinate to add its fixture-owned shell.
+    time.sleep(0.35)
+    helper_call(config, 'setup-shell')
+    new_pairs = wait_until(
+        lambda: (pairs if len(pairs := [pair for pair in fixture_generations()
+                                       if pair not in before_generations]) == 1 else None),
+        time.monotonic() + 10)
+    target_pair = new_pairs[0]
+    target_session, target_generation = target_pair
+    running_target = fixture_session_models(target_session).get(target_generation)
+    require(running_target is not None and running_target.get('state') == 'running',
+            'activity fixture shell did not reach its live generation')
+    populated = wait_until(
+        lambda: (value if set(pane_ids(json.loads(next(tab for tab in value['tabs']
+                          if tab['id'] == target_tab)['layout_json']).get('root'))) ==
+                          {target_session} else None) if (value := catalog()) else None,
+        time.monotonic() + 8)
+    require(len(fixture_generations()) == len(before_generations) + 1 and
+            set(before_processes).issubset(process_ids()) and
+            next(tab for tab in populated['tabs'] if tab['id'] == target_tab)['id'] == target_tab,
+            'activity fixture shell did not occupy only its new tab')
+    time.sleep(0.35)
+    activity_processes = process_ids()
+    activity_generations = fixture_generations()
+    step('activity-select-source-tab')
+    wait_until(lambda: (value if value.get('selection', {}).get('tab_id') == source_tab else None)
+               if (value := catalog()) else None, time.monotonic() + 8)
+    time.sleep(0.35)
+
+    host_snapshot = activity_snapshot()
+    host_instance = host_snapshot['host_instance']
+    initial_entries = { (entry['session'], entry['generation']): entry
+                        for entry in host_snapshot['sessions'] }
+    require(target_pair in initial_entries and unplaced_pair in initial_entries and
+            initial_entries[target_pair]['state'] == 'running' and
+            initial_entries[unplaced_pair]['state'] == 'running',
+            'activity metadata omitted one of the two exact hidden generations')
+    initial_entry = initial_entries[target_pair]
+    unplaced_initial = initial_entries[unplaced_pair]
+    step('activity-open')
+    step('activity-mark-all')
+    cleared = activity_snapshot()
+    cleared_ack = wait_saved(target_pair, initial_entries[target_pair], host_instance)
+    cleared_ack = wait_saved(unplaced_pair, initial_entries[unplaced_pair], host_instance)
+    for pair, entry in initial_entries.items():
+        if pair not in (target_pair, unplaced_pair):
+            cleared_ack = wait_saved(pair, entry, host_instance)
+    step('activity-close')
+    cleared_seen = {(item['session'], item['generation']): item
+                    for item in cleared_ack['seen']}
+    require(all(pair in cleared_seen and
+                cleared_seen[pair]['output_bytes'] >= entry['output_bytes']
+                for pair, entry in initial_entries.items()),
+            'initial Mark all did not acknowledge every authoritative activity head')
+
+    output_a = b"printf 'PIGADE_ACTIVITY_OUTPUT_A\\n'\n"
+    send_hidden(target_session, target_generation, output_a)
+    send_hidden(unplaced_session, unplaced_generation,
+                b"printf 'PIGADE_ACTIVITY_OUTPUT_UNPLACED\\n'\n")
+    first_snapshot = wait_until(
+        lambda: (snapshot if (entry := activity_entry(snapshot := activity_snapshot(), target_pair)) and
+                 (unplaced_entry := activity_entry(snapshot, unplaced_pair)) and
+                 entry['output_bytes'] > initial_entry['output_bytes'] and
+                 entry['sequence'] > initial_entry['sequence'] and entry['state'] == 'running' and
+                 unplaced_entry['output_bytes'] > unplaced_initial['output_bytes'] and
+                 unplaced_entry['sequence'] > unplaced_initial['sequence'] and
+                 unplaced_entry['state'] == 'running' else None), time.monotonic() + 8)
+    first_entry = activity_entry(first_snapshot, target_pair)
+    first_unplaced_entry = activity_entry(first_snapshot, unplaced_pair)
+    initial_seen = cleared_seen[target_pair]
+    initial_unplaced_seen = cleared_seen[unplaced_pair]
+    require(initial_seen['sequence'] < first_entry['sequence'] and
+            initial_seen['output_bytes'] < first_entry['output_bytes'] and
+            initial_unplaced_seen['sequence'] < first_unplaced_entry['sequence'] and
+            initial_unplaced_seen['output_bytes'] < first_unplaced_entry['output_bytes'],
+            'background output was already acknowledged before opening the Activity sheet')
+    require(host_request({'command': 'poll_panels', 'panels': [], 'known': []}).get('views') == [],
+            'hidden activity poll returned terminal frames')
+    before_activity_ui_catalog = catalog_state(catalog())
+    before_activity_ui_journals = fixture_journal_hashes(
+        [generation for _, generation in activity_generations])
+    report['stage'] = 'activity-background-unread'
+    save()
+    step('activity-open')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-background-unread.ppm')
+    dialog_catalog = catalog_state(catalog())
+    require(dialog_catalog == before_activity_ui_catalog and
+            fixture_generations() == activity_generations and
+            process_ids() == activity_processes and
+            fixture_journal_hashes([generation for _, generation in activity_generations]) ==
+            before_activity_ui_journals,
+            'opening the Activity sheet changed host layout or process generations')
+    all_unread_ack = saved_ack()
+    require(all_unread_ack['host_instance'] == host_instance and
+            all(cleared_seen[pair]['sequence'] < entry['sequence'] and
+                cleared_seen[pair]['output_bytes'] < entry['output_bytes']
+                for pair, entry in ((target_pair, first_entry),
+                                    (unplaced_pair, first_unplaced_entry))),
+            'background output did not create two unread exact activity heads')
+    unread_pairs = sorted(
+        (entry['session'], entry['generation']) for entry in first_snapshot['sessions']
+        if (entry['session'], entry['generation']) in cleared_seen and
+        (cleared_seen[(entry['session'], entry['generation'])]['output_bytes'] < entry['output_bytes'] or
+         cleared_seen[(entry['session'], entry['generation'])]['state'] != entry['state'] or
+         cleared_seen[(entry['session'], entry['generation'])]['storage_error'] !=
+         entry['storage_error']))
+    require(unread_pairs == sorted((target_pair, unplaced_pair)),
+            'Activity unread rows did not contain exactly the two changed hidden heads')
+    # ActivityMenu filters out already-read heads, so its row indexes are over
+    # this two-entry unread subset rather than all authoritative session heads.
+    ordered_pairs = unread_pairs
+    target_index = ordered_pairs.index(target_pair)
+    for _ in range(target_index):
+        helper_call(config, 'activity-next')
+    step('activity-mark-current')
+    first_ack = wait_saved(target_pair, first_entry, host_instance, True)
+    after_selected = {(item['session'], item['generation']): item
+                      for item in first_ack['seen']}
+    require(after_selected.get(unplaced_pair) == cleared_seen[unplaced_pair],
+            'Mark read on the selected row also acknowledged the other unread generation')
+    require(first_ack['host_instance'] == host_instance and
+            fixture_generations() == activity_generations and
+            process_ids() == activity_processes and
+            catalog_state(catalog()) == dialog_catalog and
+            fixture_journal_hashes([generation for _, generation in activity_generations]) ==
+            before_activity_ui_journals,
+            'selected Mark read changed terminal state or failed to persist the current head')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-selected-read.ppm')
+    step('activity-mark-all')
+    all_ack = wait_saved(unplaced_pair, first_unplaced_entry, host_instance)
+    all_seen = {(item['session'], item['generation']): item for item in all_ack['seen']}
+    require(all(pair in all_seen and
+                all_seen[pair]['sequence'] >= entry['sequence'] and
+                all_seen[pair]['output_bytes'] >= entry['output_bytes']
+                for pair, entry in ((target_pair, first_entry),
+                                    (unplaced_pair, first_unplaced_entry))),
+            'Mark all did not acknowledge both hidden generation watermarks')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-marked-read.ppm')
+    step('activity-close')
+
+    output_b = b"printf 'PIGADE_ACTIVITY_OUTPUT_B\\n'\n"
+    before_exit = activity_entry(activity_snapshot(), target_pair)
+    require(before_exit is not None and before_exit['state'] == 'running',
+            'activity target exited before the explicit fixed exit input')
+    send_hidden(target_session, target_generation, output_b)
+    second_snapshot = wait_until(
+        lambda: (snapshot if (entry := activity_entry(snapshot := activity_snapshot(), target_pair)) and
+                 entry['output_bytes'] > before_exit['output_bytes'] and
+                 entry['sequence'] > before_exit['sequence'] and entry['state'] == 'running'
+                 else None), time.monotonic() + 8)
+    second_entry = activity_entry(second_snapshot, target_pair)
+    second_unread = sorted(
+        (entry['session'], entry['generation']) for entry in second_snapshot['sessions']
+        if (entry['session'], entry['generation']) in all_seen and
+        (all_seen[(entry['session'], entry['generation'])]['output_bytes'] < entry['output_bytes'] or
+         all_seen[(entry['session'], entry['generation'])]['state'] != entry['state'] or
+         all_seen[(entry['session'], entry['generation'])]['storage_error'] !=
+         entry['storage_error']))
+    require(second_unread == [target_pair],
+            'second output should leave exactly the target generation unread')
+    step('activity-open')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-background-second-output.ppm')
+    # Mark all above consumed the other unread row; this new output is the sole
+    # unread head and therefore the only row in the reopened Activity menu.
+    step('activity-mark-current')
+    second_ack = wait_saved(target_pair, second_entry, host_instance, True)
+    require(second_ack['host_instance'] == host_instance and
+            fixture_generations() == activity_generations and process_ids() == activity_processes,
+            'selected-row acknowledgement changed fixture generations or process identities')
+    step('activity-close')
+
+    output_c_and_exit = b"printf 'PIGADE_ACTIVITY_EXIT_MARKER\\n'; exit\n"
+    before_exit = activity_entry(activity_snapshot(), target_pair)
+    require(before_exit is not None and before_exit['state'] == 'running',
+            'activity target was not running before the explicit exit marker')
+    send_hidden(target_session, target_generation, output_c_and_exit)
+    ended_snapshot = wait_until(
+        lambda: (snapshot if (entry := activity_entry(snapshot := activity_snapshot(), target_pair)) and
+                 entry['state'] == 'exited' and entry['output_bytes'] > before_exit['output_bytes'] and
+                 entry['sequence'] > before_exit['sequence'] else None), time.monotonic() + 10)
+    ended_entry = activity_entry(ended_snapshot, target_pair)
+    require(host_request({'command': 'poll_panels', 'panels': [], 'known': []}).get('views') == [] and
+            fixture_generations() == sorted(before_generations + [target_pair]),
+            'hidden exit activity poll returned frames or changed generation membership')
+    report['stage'] = 'activity-background-exited'
+    save()
+    step('activity-open')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-background-exited.ppm')
+    step('activity-enter-target')
+    activated = wait_until(
+        lambda: (value if value.get('selection', {}).get('tab_id') == target_tab else None)
+        if (value := catalog()) else None, time.monotonic() + 8)
+    target_view = fixture_session_models(target_session).get(target_generation)
+    require(target_view is not None and target_view.get('state') == 'exited' and
+            'PIGADE_ACTIVITY_EXIT_MARKER' in view_text(target_view) and
+            next(tab for tab in activated['tabs'] if tab['id'] == target_tab)
+                .get('active_pane') == target_session and
+            set(pane_ids(json.loads(next(tab for tab in activated['tabs']
+                    if tab['id'] == target_tab)['layout_json']).get('root'))) == {target_session} and
+            fixture_generations() == sorted(before_generations + [target_pair]),
+            'activity Enter did not activate the exact exited source without a new generation')
+    ended_ack = wait_saved(target_pair, ended_entry, host_instance, True)
+    current_processes = process_ids()
+    unplaced_after = fixture_session_models(unplaced_session).get(unplaced_generation)
+    require(ended_ack['host_instance'] == host_instance and
+            all(current_processes.get(key) == pid for key, pid in before_processes.items()) and
+            current_processes.get(unplaced_pair) == activity_processes.get(unplaced_pair) and
+            unplaced_after is not None and unplaced_after.get('state') == 'running' and
+            fixture_generations() == activity_generations,
+            'visible-current-head acknowledgement changed an existing process or generation')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/activity-visible-current-head.ppm')
+    return {
+        'activity_uses_hidden_host_heads_without_frames': True,
+        'mark_all_persisted_current_hidden_watermarks': True,
+        'selected_mark_read_advanced_only_selected_generation': True,
+        'two_exact_hidden_generations_sorted_and_navigable': True,
+        'ended_state_and_hidden_output_bytes_reported': True,
+        'enter_activated_exact_exited_generation': True,
+        'visible_current_head_acknowledged': True,
+        'target': {'session': target_session, 'generation': target_generation,
+                   'sequence': ended_entry['sequence'], 'output_bytes': ended_entry['output_bytes'],
+                   'state': ended_entry['state']},
+        'unplaced_running_head': {'session': unplaced_session,
+                                  'generation': unplaced_generation},
+        'host_instance': host_instance,
+        'captures': ['activity-background-unread.ppm', 'activity-marked-read.ppm',
+                     'activity-background-second-output.ppm', 'activity-selected-read.ppm',
+                     'activity-background-exited.ppm',
+                     'activity-visible-current-head.ppm'],
+    }
 
 
 def split_ids(node):
@@ -6840,7 +7228,11 @@ def outer_run(args) -> dict:
                   'appearance-terminal-controls.ppm',
                   'appearance-terminal-light.ppm', 'appearance-terminal-follow-dark.ppm',
                   'appearance-terminal-follow-light.ppm',
-                  'appearance-terminal-follow-dark-again.ppm', 'appearance-terminal-dark.ppm']
+                  'appearance-terminal-follow-dark-again.ppm', 'appearance-terminal-dark.ppm',
+                  'activity-background-unread.ppm', 'activity-marked-read.ppm',
+                  'activity-background-second-output.ppm', 'activity-selected-read.ppm',
+                  'activity-background-exited.ppm',
+                  'activity-visible-current-head.ppm']
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
@@ -6914,7 +7306,7 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
-                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure and run four shell slots; then copy a saved literal custom CLI profile into a recipe slot, prove picker cancellation preserves its dirty draft, freeze the command across source-profile mutation/deletion, preview without launching, and explicitly confirm one custom plus three shell slots',

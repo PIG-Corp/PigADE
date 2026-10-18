@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
+#[path = "activity_ui.rs"]
+mod activity_ui;
 #[path = "appearance_ui.rs"]
 mod appearance_ui;
 #[path = "custom_launch_ui.rs"]
@@ -38,6 +40,10 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenActivity,
+    MarkActivityRead(Uuid, Uuid, u64),
+    MarkAllActivityRead,
+    RetryActivitySave,
     OpenAppearance,
     SetTheme(crate::appearance::Theme),
     SetTerminalTheme(crate::appearance::TerminalTheme),
@@ -188,6 +194,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    Activity,
     Appearance,
     CloseTab,
     Prompts,
@@ -238,6 +245,7 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Activity => "Активность",
             Self::Appearance => "Внешний вид",
             Self::CloseTab => "Закрыть вкладку?",
             Self::Prompts => "Библиотека промптов",
@@ -288,6 +296,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Activity => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
@@ -347,6 +356,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::Activity => "Закрыть",
             Self::Appearance => "Готово",
             Self::CloseTab => "Закрыть вкладку",
             Self::Prompts => "Готово",
@@ -413,6 +423,14 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) activity: crate::activity::Tracker,
+    pub(super) activity_error: Option<String>,
+    pub(super) activity_feed_error: Option<String>,
+    pub(super) activity_supported: bool,
+    pub(super) activity_scroll: gpui::ScrollHandle,
+    pub(super) activity_badge_key: Option<(u64, Vec<Uuid>)>,
+    pub(super) activity_tab_counts: HashMap<Uuid, usize>,
+    pub(super) activity_workspace_counts: HashMap<Uuid, usize>,
     pub(super) create_project_parent_baseline: Option<String>,
     pub(super) tab_drop_target: Option<Uuid>,
     pub(super) transfer_source: Option<crate::transfer_flow::Source>,
@@ -624,6 +642,10 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
+        (
+            "Активность фоновых панелей · activity",
+            ProductAction::OpenActivity,
+        ),
         (
             "Внешний вид · appearance · тема",
             ProductAction::OpenAppearance,
@@ -1116,6 +1138,7 @@ impl ProductUi {
 
     pub(super) fn menu_entries(&self) -> Vec<(String, ProductAction)> {
         match self.dialog.as_ref().map(|dialog| dialog.kind) {
+            Some(DialogKind::Activity) => self.activity_menu_entries(),
             Some(DialogKind::WorkspaceGit) => vec![
                 ("Обновить".into(), ProductAction::RefreshWorkspaceGit),
                 ("Закрыть".into(), ProductAction::CloseDialog),
@@ -1546,11 +1569,13 @@ impl ProductUi {
                     } else {
                         title.clone()
                     };
-                    let mut workspace_row = div().flex().items_center().min_w_0().child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(self.action_control_with_accessible_name(
+                    let mut workspace_row = div()
+                        .id(format!("workspace-row-{}", workspace.id))
+                        .flex()
+                        .items_center()
+                        .min_w_0()
+                        .child(div().flex_1().min_w_0().child(
+                            self.action_control_with_accessible_name(
                                 format!("workspace-{}", workspace.id),
                                 label,
                                 title,
@@ -1561,8 +1586,10 @@ impl ProductUi {
                                     compact: false,
                                 },
                                 cx,
-                            )),
-                    );
+                            ),
+                        ));
+                    workspace_row = workspace_row
+                        .child(self.activity_badge(self.workspace_activity(workspace.id)));
                     if !compact {
                         workspace_row = workspace_row.child(self.icon_control(
                             &format!("workspace-manage-{}", workspace.id),
@@ -1858,6 +1885,21 @@ impl ProductUi {
             .flex()
             .items_center()
             .gap_1()
+            .child(self.action_control(
+                "open-activity".into(),
+                if self.activity_count() == 0 {
+                    "Активность".into()
+                } else {
+                    format!("Активность · {}", self.activity_count())
+                },
+                ProductAction::OpenActivity,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ))
             .pr(px(8.));
         bar = bar
             .child(self.action_control(
@@ -2522,6 +2564,7 @@ impl ProductUi {
             .hover(|style| style.bg(colors.hover))
             .gap_1()
             .child(div().min_w_0().truncate().child(tab.name.clone()))
+            .child(self.activity_badge(self.tab_activity(id)))
             // The target style must not change tab width beneath the pointer.
             .child(bounds_observer)
             .when(selected, |row| {
@@ -2862,6 +2905,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Launcher {
             return self.launcher_overlay(cx);
+        }
+        if dialog.kind == DialogKind::Activity {
+            return self.activity_overlay(cx);
         }
         if dialog.kind == DialogKind::ProfilePreparing {
             return self.profile_preparing_overlay(cx);

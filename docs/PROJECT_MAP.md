@@ -18,6 +18,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/agent_profile_roster.rs | Schema14 independent roster CAS for profile order/pins; exact current membership, migration backup, atomic create/delete maintenance and no launch/placement side effects |
 | crates/app/src/recipe_profiles.rs | Frozen pinned-first searchable profile chooser, unchanged-slot/capability guarded copy into template settings; no launch or live profile link |
 | crates/app/src/profile_access_ui.rs | Validated pinned-profile rail and launcher, selected ready-tab gate and readonly preparation modal; existing profile launch protocol remains authoritative |
+| crates/app/src/activity.rs, activity_commands.rs, activity_ui.rs | Bounded background-output/exit/error summaries, painter-bound read watermarks, socket-scoped coalesced persistence, cached badges and activity navigation; ADR0020 |
 | crates/app/src/profile_roster.rs | Pure pinned-first projection, partition moves, validated mutation payload and stable selected-profile identity; absent capability preserves old-host order |
 | crates/app/src/profile_flow.rs, profile_commands.rs, profile_ui.rs | Native profile editor/library with optional model/effort, exact dialog/request receipts, retained post-save edits, explicit review and unchanged live sessions |
 | crates/storage/src/custom_command.rs; session-host/src/prepared.rs | Bounded exact executable/argv settings, canonical identity freeze and generic one-shot launch with no probe/context/resume; additive custom_cli_schema capability |
@@ -43,7 +44,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/replay_cache.rs | Leased, marked private replay caches and bounded fail-closed orphan collection; sources are preserved |
 | crates/session-host/tests/query_backpressure.rs | Real PTY cyclic-wait regression, exact50k query FIFO and bounded-response degradation/raw-tail recovery |
 | crates/session-host/src/metrics.rs | Bounded cumulative counters plus independent fixed-size actor/reader stage probe in liveSnapshot/List; no terminal content or input bytes |
-| crates/session-host/src/poll.rs | Conditional bounded polling: exact panel generation or authoritative durable head, one model per logical session, metadata-only replies when current |
+| crates/session-host/src/poll.rs | Conditional bounded polling: exact panel generation or authoritative durable head, unchanged-cell reuse and optional metadata-only background activity; activity failure does not withhold frames |
 | crates/session-host/src/generations.rs | Indexed launch-order pages, explicit historical pins and follow-head selection; metadata-only catalog CAS, no spawn |
 | crates/session-host/src/recovery_diagnostics.rs | Bounded unavailable-artifact notices with escaped display basenames; no fabricated sessions or source changes |
 | crates/session-host/src/request_decode.rs | Streaming Input-array preflight before internally tagged Serde buffering; bounded raw IPC frame remains a separate limit |

@@ -1,4 +1,6 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod activity;
+mod activity_commands;
 mod appearance;
 mod appearance_commands;
 mod block_glyph;
@@ -86,6 +88,8 @@ struct State {
     poll_backpressured: bool,
     visible_panels: Option<Vec<protocol::PanelTarget>>,
     supports_generation_selection: bool,
+    activity: Option<activity::Snapshot>,
+    activity_error: Option<String>,
 }
 impl State {
     fn set_visible_panels(&mut self, panels: Vec<protocol::PanelTarget>) {
@@ -137,6 +141,8 @@ struct StateUpdate {
     command_notices: Vec<CommandNotice>,
     recovery: Option<RecoveryDiagnostics>,
     poll_backpressured: bool,
+    activity: Option<activity::Snapshot>,
+    activity_error: Option<String>,
 }
 
 fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
@@ -148,6 +154,8 @@ fn state_update(current: &State, shared: &State) -> Option<StateUpdate> {
         command_notices: shared.command_notices.clone(),
         recovery: shared.recovery.clone(),
         poll_backpressured: shared.poll_backpressured,
+        activity: shared.activity.clone(),
+        activity_error: shared.activity_error.clone(),
     })
 }
 
@@ -157,6 +165,8 @@ fn apply_state_update(state: &mut State, update: StateUpdate) {
     state.command_notices = update.command_notices;
     state.recovery = update.recovery;
     state.poll_backpressured = update.poll_backpressured;
+    state.activity = update.activity;
+    state.activity_error = update.activity_error;
     if let Some(views) = update.views {
         state.views_revision = update.views_revision;
         state.views = views;
@@ -227,11 +237,16 @@ fn can_send_to_view(view: &View, state: &State, local_error: Option<&str>) -> bo
 }
 
 fn apply_poll(state: &mut State, reply: Poll) -> Result<PollChanges, String> {
+    let activity = reply.activity.clone();
+    let activity_error = reply.activity_error.clone();
     let changes = protocol::merge_poll(&mut state.views, &mut state.recovery, reply)?;
     if changes.views {
         state.views_revision = state.views_revision.wrapping_add(1);
     }
-    if changes.views || changes.recovery {
+    let activity_changed = state.activity != activity || state.activity_error != activity_error;
+    state.activity = activity;
+    state.activity_error = activity_error;
+    if changes.views || changes.recovery || activity_changed {
         state.revision = state.revision.wrapping_add(1);
     }
     Ok(changes)
@@ -466,6 +481,7 @@ fn catalog_panel_targets_for(
 }
 
 struct WorkerConnection {
+    activity_writer: activity_commands::Writer,
     tx: mpsc::SyncSender<IpcMessage>,
     shared: Arc<Mutex<State>>,
     receipts: mpsc::Receiver<WorkerReceipt>,
@@ -482,6 +498,7 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
     let shared = Arc::new(Mutex::new(State::default()));
     let output = shared.clone();
     let wake = WakeSignal::default();
+    let activity_writer = activity_commands::Writer::new(&socket, wake.clone());
     let worker_wake = wake.clone();
     let (product_tx, product_commands) = mpsc::sync_channel(8);
     let (product_results, product_rx) = mpsc::sync_channel(8);
@@ -703,6 +720,7 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
         trace.clone(),
     );
     WorkerConnection {
+        activity_writer,
         tx,
         shared,
         receipts: receipt_rx,
@@ -1183,6 +1201,8 @@ struct TransferReload {
 }
 
 struct CanvasApp {
+    activity_writer: activity_commands::Writer,
+    activity_sample: Option<activity::Snapshot>,
     product: product::ProductUi,
     editor_layouts: std::collections::BTreeMap<usize, edit_field::FieldLayout>,
     editor_scroll: std::collections::BTreeMap<usize, Pixels>,
@@ -1283,6 +1303,7 @@ impl CanvasApp {
         diagnostic_selection: bool,
     ) -> Self {
         let WorkerConnection {
+            activity_writer,
             tx,
             shared,
             receipts,
@@ -1733,6 +1754,7 @@ impl CanvasApp {
                         this.service_panel_search(cx);
                         this.service_stops(cx);
                         this.service_scrollback(window,cx);
+                        this.service_activity(cx);
                         if this.service_window_close(window, cx) { return; }
                         let blinking = this.state.error.is_none()
                             && this.state.views.get(this.selected).is_some_and(|view| {
@@ -1780,11 +1802,15 @@ impl CanvasApp {
                     Some(format!("Не удалось загрузить внешний вид: {error}"))
             }
         }
+        product.activity = activity::Tracker::new(activity_writer.initial.clone());
+        product.activity_error = activity_writer.initial_error.clone();
         product.motion_forced = std::env::args()
             .skip(2)
             .any(|arg| arg == "--reduced-motion");
         cx.set_reduce_motion(product.appearance.reduced_motion || product.motion_forced);
         Self {
+            activity_writer,
+            activity_sample: None,
             product,
             editor_layouts: Default::default(),
             editor_scroll: Default::default(),
@@ -3605,6 +3631,10 @@ impl CanvasApp {
         if !matches!(
             action,
             A::CloseDialog
+                | A::OpenActivity
+                | A::MarkActivityRead(..)
+                | A::MarkAllActivityRead
+                | A::RetryActivitySave
                 | A::ConfirmTerminalInsert
                 | A::GitSelect(_)
                 | A::GitOpen(..)
@@ -3673,6 +3703,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::CloseDialog
+                | A::OpenActivity
                 | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
@@ -3710,6 +3741,10 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenActivity
+            | A::MarkActivityRead(..)
+            | A::MarkAllActivityRead
+            | A::RetryActivitySave => self.activity_action(action, cx),
             A::ConfirmTerminalInsert => self.confirm_terminal_insert(window, cx),
             A::OpenAppearance
             | A::SetTheme(_)
@@ -4707,7 +4742,8 @@ impl CanvasApp {
                     return;
                 }
                 match kind {
-                    DialogKind::Appearance
+                    DialogKind::Activity
+                    | DialogKind::Appearance
                     | DialogKind::CloseTab
                     | DialogKind::Prompts
                     | DialogKind::Prompt
@@ -6463,6 +6499,66 @@ impl CanvasApp {
         {
             if !event.is_held && self.text_input.preedit.is_empty() && k.key == "escape" {
                 self.product_action(product::ProductAction::CloseDialog, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::Activity)
+        {
+            use product::ProductAction as A;
+            if !self.text_input.preedit.is_empty() || event.is_held {
+                cx.stop_propagation();
+                return;
+            }
+            let control = k.modifiers.control || k.modifiers.platform;
+            let entries = self.product.activity_menu_entries();
+            let index = self
+                .product
+                .dialog
+                .as_ref()
+                .map_or(0, |dialog| dialog.active_field)
+                .min(entries.len().saturating_sub(1));
+            let action = match k.key.as_str() {
+                "escape" => Some(A::CloseDialog),
+                "r" if control && !k.modifiers.alt && k.modifiers.shift => {
+                    Some(A::MarkAllActivityRead)
+                }
+                "r" if control && !k.modifiers.alt => self.product.selected_activity_target().map(
+                    |(session, generation, sequence)| {
+                        A::MarkActivityRead(session, generation, sequence)
+                    },
+                ),
+                "s" if control && !k.modifiers.alt => Some(A::RetryActivitySave),
+                "enter" if !control && !k.modifiers.alt => {
+                    entries.get(index).map(|(_, action)| action.clone())
+                }
+                "up" | "down" | "home" | "end" | "pageup" | "pagedown"
+                    if !control && !k.modifiers.alt =>
+                {
+                    let next = match k.key.as_str() {
+                        "up" => index.saturating_sub(1),
+                        "down" => index.saturating_add(1),
+                        "home" => 0,
+                        "end" => entries.len().saturating_sub(1),
+                        "pageup" => index.saturating_sub(5),
+                        _ => index.saturating_add(5),
+                    }
+                    .min(entries.len().saturating_sub(1));
+                    if let Some(dialog) = &mut self.product.dialog {
+                        dialog.active_field = next;
+                    }
+                    self.product.activity_scroll.scroll_to_item(next);
+                    cx.notify();
+                    None
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
             }
             cx.stop_propagation();
             return;
@@ -8359,6 +8455,7 @@ impl EntityInputHandler for CanvasApp {
 impl Render for CanvasApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tab_drop_bounds.clear();
+        self.product.refresh_activity_badges();
         let width = f32::from(window.viewport_size().width);
         self.product.compact = width < 900.;
         self.product.sidebar_compact = self.product.sidebar_override.unwrap_or(width < 1100.);
@@ -8602,6 +8699,7 @@ impl Render for CanvasApp {
                                             (font, panes, content, bars)
                                         },
                                         move |bounds, (font, panes, content, bars), window, cx| {
+                                            let mut activity_painted = Vec::new();
                                             let mut sequences = [0; 4];
                                             let count = views.len().min(sequences.len());
                                             for (sequence, view) in sequences.iter_mut().zip(&views)
@@ -8693,6 +8791,9 @@ impl Render for CanvasApp {
                                                             window,
                                                             cx,
                                                         );
+                                                        if let Some(view) = views.get(index) {
+                                                            activity_painted.push(view.known());
+                                                        }
                                                         if index == selected && !preedit.is_empty()
                                                         {
                                                             paint_preedit(
@@ -8724,6 +8825,7 @@ impl Render for CanvasApp {
                                                     }
                                                 },
                                             );
+                                            painter.update(cx, |this, cx| this.activity_painted(&activity_painted, window, cx));
                                         },
                                     )
                                     .size_full(),
@@ -9592,6 +9694,8 @@ mod tests {
                         next.sequence = 2;
                         Ok((
                             super::Poll {
+                                activity: None,
+                                activity_error: None,
                                 selected: vec![next.known()],
                                 views: vec![next],
                                 recovery: None,
@@ -9624,6 +9728,8 @@ mod tests {
                         next.sequence = 3;
                         Ok((
                             super::Poll {
+                                activity: None,
+                                activity_error: None,
                                 selected: vec![next.known()],
                                 views: vec![next],
                                 recovery: None,
@@ -10089,6 +10195,8 @@ mod tests {
         let changes = apply_poll(
             &mut shared,
             super::protocol::Poll {
+                activity: None,
+                activity_error: None,
                 selected: vec![selected],
                 views: vec![],
                 recovery: Some(recovery()),
@@ -10510,6 +10618,8 @@ mod notification_transport_tests {
             &mut state,
             Ok((
                 Poll {
+                    activity: None,
+                    activity_error: None,
                     selected: vec![],
                     views: vec![],
                     recovery: None,

@@ -4485,3 +4485,115 @@ Revalidate requested hover focus and Hyprland-style drag on final release; repai
 - Files: scripts/isolated-ime-x11.py, docs/AGENT_HANDOFF.md, WORKLOG.md
 - Verification: 20 pointer_layout tests pass. Root private pointer04 exits0/pass for full hover/header/input/activation/immediate-pickup/stationary-release/Dwindle/gutter/cancel/undo/cross-tab/IME/file-and-clipboard flow.01 failed exit-mode paint race;02 froze selection before tab ACK;03 captured clipboard before paint. Added selected-tab wait and existing-style .35/.25 paint settles; all original invariants retained with named preview failures.37 harness tests and py_compile pass. Luna readonly review confirms predicates preserved. Inspected03 pickup/gutter captures on same release binary. Version checks pass after correcting check-versions.py typo to existing check-version.py.
 - Risks / next: Commit profile feature and verified pointer harness fixes. Actual Hyprland/Wayland parity remains unverified; no product pointer edits, active-desktop interaction, user config/host/process mutation. Broad goal stays active; preserve unrelated dirt/stash0.
+
+## 2026-10-18T07:48:55+00:00 — attention_discovery_luna
+
+Added optional authoritative-head activity metadata to poll responses with exact-generation, bounds, missing-token, hidden-session, and output-byte coverage.
+
+- Files: crates/session-host/src/poll.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/ipc_server.rs
+- Verification: cargo test -p pigade-session-host poll::tests --lib (18 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); cargo fmt -p pigade-session-host --check (passed); git diff --check (passed).
+- Risks / next: App protocol/UI integration is owned by root; legacy clients ignore the optional activity field. No parser, replay, schema, command, or polling changes.
+
+## 2026-10-18T07:49:23+00:00 — activity_model_luna
+
+Add bounded activity snapshot tracking, unread watermarks, and atomic local persistence
+
+- Files: crates/app/src/activity.rs
+- Verification: rustfmt --edition 2024 crates/app/src/activity.rs; git diff --check -- crates/app/src/activity.rs (passed); Cargo/native checks not run per task scope
+- Risks / next: Root integrates the module with Poll and owns Cargo/native verification and UI save coalescing.
+
+## 2026-10-18T07:50:02+00:00 — /root/activity_ui_luna
+
+Added the product activity badge, unread-entry mapping, and bounded activity overlay.
+
+- Files: crates/app/src/activity_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/activity_ui.rs; git diff --check -- crates/app/src/activity_ui.rs (passed); app bootstrap format/build unavailable until root registers and integrates the activity UI module.
+- Risks / next: Root integration should add #[path = "activity_ui.rs"] mod activity_ui; route DialogKind::Activity to activity_overlay; and verify the app build.
+
+## 2026-10-18T07:51:14+00:00 — activity_model_luna
+
+Refine activity tracking and host-scoped persistence for poll races and concurrent windows
+
+- Files: crates/app/src/activity.rs
+- Verification: rustfmt --edition 2024 crates/app/src/activity.rs; rg confirmed no libc usage/default path wrappers; git diff --check -- crates/app/src/activity.rs (passed); Cargo/native checks not run per task scope
+- Risks / next: Root uses path_for_socket with load_from/save_to, integrates Poll and owns Cargo/native verification.
+
+## 2026-10-18T07:51:37+00:00 — activity_model_luna
+
+Scope unread activity state by host socket and bound standard-library file locking
+
+- Files: crates/app/src/activity.rs
+- Verification: rustfmt --edition 2024 crates/app/src/activity.rs; rg confirmed no libc/default persistence wrappers; git diff --check -- crates/app/src/activity.rs (passed); Cargo/native checks not run per task scope
+- Risks / next: Root integrates per-socket path variants and owns app build/tests.
+
+## 2026-10-18T07:52:15+00:00 — /root/activity_ui_luna
+
+Added supported-host gating, keyboard-selected activity target and row state, scroll tracking, and activity error retry feedback.
+
+- Files: crates/app/src/activity_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/activity_ui.rs; git diff --check -- crates/app/src/activity_ui.rs (passed); app Cargo/native checks not run per task scope.
+- Risks / next: Root integration should verify activity dialog keyboard behavior against selected_activity_target and RetryActivitySave after its event handling lands.
+
+## 2026-10-18T08:02:14+00:00 — /root/activity_ui_luna
+
+Cached activity tab/workspace badge counts by layout revision and sorted unread session IDs, parsing each tab layout once per refresh.
+
+- Files: crates/app/src/activity_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/activity_ui.rs; git diff --check -- crates/app/src/activity_ui.rs (passed); app Cargo tests not run per task scope.
+- Risks / next: Root should retain the render-start refresh_activity_badges hook and include the module in final app build verification.
+
+## 2026-10-18T08:03:23+00:00 — git_commit_research_luna
+
+Extended the existing controls fixture with two hidden activity heads, exact sorted-row navigation, per-row and mark-all acknowledgement checks, exit-state activation, and fixed X11 helper stages.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c; git diff --check
+- Risks / next: Root to inspect and run the final native controls fixture against the release binary; native/Cargo runs intentionally not performed in this lane.
+
+## 2026-10-18T08:04:22+00:00 — /root
+
+Integrate background terminal activity center, painter-bound reads and coalesced per-host receipts
+
+- Files: crates/app/src/activity.rs, crates/app/src/activity_commands.rs, crates/app/src/activity_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/close_ui.rs, crates/app/src/navigation.rs, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/adr/0020-background-terminal-activity.md
+- Verification: 363 app tests, strict app Clippy, package fmt and debug/release builds pass. Host all-targets suite passes serial with real IPC/PTY tests and release host builds; first parallel run183/184 had existing catalog reopen metadata-lock EAGAIN, read-only review localizes unrelated fork-inherited flock timing. Root repaired Seen reference clone/color/Response/Saved test initialization and6Clippy conditions; bounded config reread, standard locks, socket filename limits, same-epoch forward metadata, stale-window head membership, sequence-only no-write, optional activity failure isolation and async worker/reopen tests integrated. Root uses actual painter-submitted identities/state/sequence before autoack; no metadata-only read. Cached unique tab/workspace badges avoid repeated per-row parse.
+- Risks / next: Run existing private controls flow extended with2hidden sessions, selected/all reads, durablefile and exact exited-head navigation; inspect UI, resolve real defects, finalize handoff/commit. No newdependency/schema/parser/poller or user host/config/desktop changes. Broad goal remains active; preserve unrelated research/stress/unused GPUI patches and stash0.
+
+## 2026-10-18T08:06:21+00:00 — attention_discovery_luna
+
+Made optional activity snapshot failures nonfatal to terminal poll responses; added bounded activity_error metadata and failure-path coverage.
+
+- Files: crates/session-host/src/poll.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/ipc_server.rs
+- Verification: cargo test -p pigade-session-host poll::tests --lib (19 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); cargo fmt -p pigade-session-host --check (passed); git diff --check (passed).
+- Risks / next: Root app parses optional activity_error nonfatally; root owns final integration and release verification.
+
+## 2026-10-18T08:07:26+00:00 — git_commit_research_luna
+
+Corrected the activity fixture acknowledgement contract so baseline acknowledgements are matched by host, generation, output watermark, and state rather than unrelated global revisions or resize sequence changes; retained sequence checks for new output and exit events. Excluded the exact bootstrap session from the removed-pane candidate.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c; git diff --check
+- Risks / next: Root to run the final native controls fixture.
+
+## 2026-10-18T08:10:49+00:00 — git_commit_research_luna
+
+Aligned keyboard navigation indexes with the Activity dialog unread-only row set, asserted the initial two-row and later one-row unread sets explicitly, and corrected baseline acknowledgement semantics without weakening output-event sequence checks.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); cc -fsyntax-only -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c; git diff --check
+- Risks / next: Root to rerun controls01 natively after fixture correction.
+
+## 2026-10-18T08:14:47+00:00 — /root
+
+Verify and finalize background activity center with real hidden PTY output, persisted reads and exact exited-head navigation
+
+- Files: crates/app/src/activity_ui.rs, crates/app/src/protocol.rs, docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: Root controls02 private X11 exits0/pass on final release: two unread exact heads, selected-only CtrlR/all CtrlShiftR persistence, hidden output and actual exit metadata withoutframes, Enter exact exited generation, painter-bound visible acknowledgement, existing process identities and generation membership unchanged. Inspected final unread/empty/exit/visible captures; initial01 harness used all6heads to index2unreadrows and was corrected.363 app tests/strictClippy/packagefmt/debug+release and version/diff checks pass; final textual labels being checked by another fresh test run. Host fullserial all-targets/IPC/PTY pass; final nonfatal optional activity path19poll tests and hostClippy/release pass. Parallel earlier183/184 had existing catalog reopen EAGAIN, source review suggests fork/FD inheritance; no production lock change.37 harness/Python/C static checks passed in Luna lane.
+- Risks / next: Commit coherent activity block; broader goal active. No dependency/schema/parser/extra poller/active-desktop or user-host restart. OS notices/bell/waiting/timeline/native UIreopen/Wayland/GPU/full a11y/performance/soak/reboot/MVP gates remain explicit. Preserve unrelated dirt/stash0.
+
+## 2026-10-18T08:15:32+00:00 — /root
+
+Final activity source verification completed before commit
+
+- Files: WORKLOG.md
+- Verification: Fresh final-source app run363/363 passes (0failed); final controls02 private X11 pass previously recorded, all selected/all/exit/painter-read assertions true. Version0.0.1-dev/diff/format checks pass; app debug/release and strictClippy current. Root visual review finds readable rows, correct unplaced label, empty state and exact exited terminal with cleared badges.
+- Risks / next: Commit this block and leave broad product goal active; preserve unrelated dirt/stash0 and explicit platform/performance/notification limitations.

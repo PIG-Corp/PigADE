@@ -493,6 +493,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('Alt+F', plan['input']['controls'])
         self.assertIn('Appearance persists independent terminal Dark/Light/Follow app palette',
                       plan['input']['controls'])
+        self.assertIn('verify hidden output/end metadata with PollPanels returning no frames',
+                      plan['input']['controls'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-move',
@@ -503,7 +505,11 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'appearance-terminal-light', 'appearance-terminal-follow',
                       'appearance-font-increase',
                       'appearance-font-decrease', 'appearance-font-reset',
-                      'appearance-reload', 'appearance-close'):
+                      'appearance-reload', 'appearance-close', 'activity-open',
+                      'activity-close', 'activity-mark-all', 'activity-mark-current',
+                      'activity-enter-target', 'activity-next',
+                      'activity-select-source-tab', 'pointer-create-transfer-tab',
+                      'pointer-select-first-tab', 'setup-shell'):
             self.assertIn(f'"{stage}"', source)
         helper_sequences = {
             'appearance-terminal-dark': 'XK_3',
@@ -573,6 +579,27 @@ class IsolatedImePlanTests(unittest.TestCase):
                         terminal_capture.index("helper_call(config, 'capture'"))
         self.assertLess(terminal_capture.index("helper_call(config, 'capture'"),
                         terminal_capture.index("step('appearance-open')"))
+        activity_flow = harness.split('def run_background_activity_fixture(', 1)[1].split(
+            '\ndef split_ids(', 1)[0]
+        self.assertIn("'command': 'poll_panels', 'panels': [], 'known': []", activity_flow)
+        self.assertIn("reply.get('views') == []", activity_flow)
+        self.assertIn("b\"printf 'PIGADE_ACTIVITY_OUTPUT_A", activity_flow)
+        self.assertIn("b\"printf 'PIGADE_ACTIVITY_EXIT_MARKER", activity_flow)
+        self.assertIn("wait_saved(target_pair, first_entry, host_instance, True)",
+                      activity_flow)
+        self.assertIn("wait_saved(target_pair, second_entry, host_instance, True)",
+                      activity_flow)
+        self.assertIn("wait_saved(target_pair, ended_entry, host_instance, True)",
+                      activity_flow)
+        self.assertIn("def wait_saved(pair, entry, host_instance, require_source_sequence=False):",
+                      activity_flow)
+        self.assertIn("document.get('host_instance') == host_instance and matches", activity_flow)
+        self.assertIn("(prior_sessions - placed) - {bootstrap_session}", activity_flow)
+        self.assertIn("cleared_seen[pair]['output_bytes'] >= entry['output_bytes']", activity_flow)
+        self.assertIn("ordered_pairs = unread_pairs", activity_flow)
+        self.assertIn("second_unread == [target_pair]", activity_flow)
+        self.assertIn("'activity-selected-read.ppm'", activity_flow)
+        self.assertIn("'activity-visible-current-head.ppm'", harness)
         self.assertIn('appearance_terminal_light_independent_of_dark_chrome', harness)
         self.assertIn('appearance_follow_app_changed_with_chrome_both_directions', harness)
         self.assertIn('appearance_terminal_dark_explicitly_restored', harness)
