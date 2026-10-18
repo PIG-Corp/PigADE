@@ -11,6 +11,14 @@ fn main() -> Result<()> {
             println!("PigADE {} (stage-0 prototype)", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Some("detect-providers") => {
+            anyhow::ensure!(args.len() == 1, "detect-providers takes no arguments");
+            println!(
+                "{}",
+                serde_json::to_string(&pigade_session_host::detect_providers())?
+            );
+            Ok(())
+        }
         Some("serve") => {
             let root = PathBuf::from(
                 args.get(1)

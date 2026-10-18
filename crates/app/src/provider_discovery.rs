@@ -1,0 +1,195 @@
+//! Bounded local CLI metadata fallback for hosts without the discovery request.
+use crate::protocol::ProviderInfo;
+use std::{
+    io::{self, Read},
+    os::fd::OwnedFd,
+    os::unix::net::UnixStream,
+    path::Path,
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+const DEADLINE: Duration = Duration::from_secs(8);
+const MAX_OUTPUT_BYTES: usize = 128 * 1024;
+const READ_CHUNK_BYTES: usize = 8 * 1024;
+
+/// Query the application's own session host without opening its server or
+/// reading provider state. The host command performs its existing bounded
+/// parallel version probes and emits the ProviderInfo DTO as JSON.
+pub(crate) fn detect() -> Result<Vec<ProviderInfo>, String> {
+    let binary = crate::startup::resolve_host_binary()?;
+    detect_with_binary(&binary, DEADLINE)
+}
+
+fn detect_with_binary(binary: &Path, timeout: Duration) -> Result<Vec<ProviderInfo>, String> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| "provider discovery deadline is out of range".to_owned())?;
+    let (mut reader, writer) =
+        UnixStream::pair().map_err(|error| format!("create provider discovery pipe: {error}"))?;
+    let stderr_writer = writer
+        .try_clone()
+        .map_err(|error| format!("clone provider discovery pipe: {error}"))?;
+
+    let mut child = ChildOnFailure(Some(
+        Command::new(binary)
+            .arg("detect-providers")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(OwnedFd::from(writer)))
+            .stderr(Stdio::from(OwnedFd::from(stderr_writer)))
+            .spawn()
+            .map_err(|error| format!("start local provider discovery: {error}"))?,
+    ));
+
+    let mut output = Vec::with_capacity(4096);
+    let mut chunk = [0_u8; READ_CHUNK_BYTES];
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(deadline_error)?;
+        reader
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| format!("set provider discovery deadline: {error}"))?;
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                if output.len().saturating_add(count) > MAX_OUTPUT_BYTES {
+                    return Err("local provider discovery exceeded 128 KiB of output".into());
+                }
+                output.extend_from_slice(&chunk[..count]);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(deadline_error());
+            }
+            Err(error) => return Err(format!("read local provider discovery output: {error}")),
+        }
+    }
+
+    let status = wait_until_deadline(&mut child, deadline)?;
+    if !status.success() {
+        return Err(format!(
+            "local provider discovery exited with status {status}"
+        ));
+    }
+    serde_json::from_slice(&output)
+        .map_err(|error| format!("decode local provider discovery output: {error}"))
+}
+
+fn wait_until_deadline(
+    child: &mut ChildOnFailure,
+    deadline: Instant,
+) -> Result<ExitStatus, String> {
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(deadline_error)?;
+        let process = child
+            .0
+            .as_mut()
+            .expect("provider discovery child is present until successful wait");
+        if let Some(status) = process
+            .try_wait()
+            .map_err(|error| format!("wait for local provider discovery: {error}"))?
+        {
+            child.0.take();
+            return Ok(status);
+        }
+        thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
+fn deadline_error() -> String {
+    "локальное обнаружение CLI превысило временной лимит".into()
+}
+
+/// Kill and reap the child on every error path. Taking it is reserved for a
+/// successful wait, after the caller has observed its final exit status.
+struct ChildOnFailure(Option<Child>);
+
+impl Drop for ChildOnFailure {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_TEST_BINARY: AtomicU64 = AtomicU64::new(1);
+
+    struct FakeBinary {
+        directory: std::path::PathBuf,
+        path: std::path::PathBuf,
+    }
+
+    impl FakeBinary {
+        fn new(body: &str) -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "pigade-provider-discovery-{}-{}",
+                std::process::id(),
+                NEXT_TEST_BINARY.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&directory).unwrap();
+            let path = directory.join("fake-host");
+            fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            Self { directory, path }
+        }
+    }
+
+    impl Drop for FakeBinary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[test]
+    fn invokes_only_the_discovery_subcommand_and_decodes_provider_info() {
+        let binary = FakeBinary::new(
+            "[ \"$#\" -eq 1 ] && [ \"$1\" = detect-providers ] || exit 21\nprintf '%s' '[{\"provider\":\"codex\",\"executable\":null,\"version\":null,\"available\":false,\"reason\":\"not installed\"}]'",
+        );
+
+        let result = detect_with_binary(&binary.path, Duration::from_secs(2)).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].provider, "codex");
+        assert_eq!(result[0].reason.as_deref(), Some("not installed"));
+    }
+
+    #[test]
+    fn kills_and_reaps_a_timed_out_discovery_child() {
+        let binary = FakeBinary::new("exec sleep 5");
+        let started = Instant::now();
+
+        let error = detect_with_binary(&binary.path, Duration::from_millis(150)).unwrap_err();
+
+        assert!(error.contains("временной лимит"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn rejects_output_above_the_combined_limit() {
+        let binary = FakeBinary::new("exec head -c 131073 /dev/zero");
+
+        let error = detect_with_binary(&binary.path, Duration::from_secs(2)).unwrap_err();
+
+        assert!(error.contains("exceeded 128 KiB"));
+    }
+}

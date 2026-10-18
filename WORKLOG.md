@@ -4725,3 +4725,27 @@ Fix confirmed deleted host helper image and repair existing live hosts without r
 - Files: crates/session-host/src/lib.rs, crates/session-host/tests/self_exec_after_unlink.rs, scripts/legacy-host-helper.sh, docs/AGENT_HANDOFF.md
 - Verification: User screenshot definitively identifies stale current_exe pathname ending deleted, superseding prior unresolved shortcut hypothesis. Luna targeted real IPC unlink+dedup test and hostClippy pass; root release host builds0. Root private copy of actual legacy /proc/2429685/exe verifies unlink + parent-image shim + actual shell output/exit + one execution on repeated operation while parent alive. Installed target/release deleted-name symlink only after matching user-owned live host images2429685 and2540063; wrapper preserves helper PID/nonce handshake and rejects unrelated parents/actions. Shell syntax passes. Final Linux cfg-targeted test running.
 - Risks / next: Finish final targeted test and commit hotfix. Current user UI Unknown is not silently cleared/retried; fresh UI may be opened without closing existing drafts. New native handoff setup verification running separately. Preserve unrelated dirt/stash0 and broad goal.
+
+## 2026-10-18T08:48:01+00:00 — host_self_exec_luna
+
+Expose standalone provider discovery for clients connected to older live hosts
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/main.rs, crates/session-host/tests/provider_discovery_cli.rs
+- Verification: cargo test -p pigade-session-host --test provider_discovery_cli: 1 passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and git diff --check on owned files passed
+- Risks / next: Root owns app fallback integration and final release build; command uses the existing bounded --version probes only.
+
+## 2026-10-18T08:49:38+00:00 — /root/handoff_ui_luna
+
+Add bounded std-only local session-host provider discovery fallback using its detect-providers CLI mode, with deadline, output cap, child cleanup and fake-binary tests.
+
+- Files: crates/app/src/provider_discovery.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/app/src/provider_discovery.rs passed; git diff --no-index --check /dev/null crates/app/src/provider_discovery.rs reported no whitespace errors (exit 1 expected for new-file diff). App Cargo/tests intentionally left to root after wiring.
+- Risks / next: Root wires module and exact old-host unsupported-response fallback; then run app compile/tests and inspect failures.
+
+## 2026-10-18T08:54:24+00:00 — /root
+
+Verify and ship handoff plus old-host CLI discovery compatibility; open the fixed installed launcher
+
+- Files: crates/app/src/handoff.rs, crates/app/src/handoff_commands.rs, crates/app/src/handoff_ui.rs, crates/app/src/provider_discovery.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/startup.rs, crates/app/src/dirty_documents.rs, crates/session-host/src/main.rs, crates/session-host/src/lib.rs, crates/session-host/tests/provider_discovery_cli.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Final app377 tests, strictClippy, packagefmt and release pass. Private handoff setup01 passes cancel/no-spawn, exact frozen source+ask/full-context argv, one new session/generation and untouched source frame/journal; captures inspected, existing setup/custom/profile cases pass. Root source-reviewed final bounded helper and final hostmode; targeted host discovery fake-PATH/no-task test and hostClippy passed in Luna lane; release host builds. Actual old host rejects DetectProviders, all3executables exist; standalone new binary reports Claude2.1.259/Codex0.162.1/OpenCode1.19.3. Exact-error fallback integrated and full validated DTO retained; real reason surfaced on failure. Opened final release via installed pigade wrapper as PID88229 and verified mapped1912x1046 window, no startup stderr. Live host/6runningCLI retained. Counted59929 production Rust code lines excluding tests/comments/blanks/vendor/docs/scripts.
+- Risks / next: Commit coherent app/context and legacy-discovery block; broad goal active. No model receipt, auto submit, structured full-dialogue export or universal platform claim. Current independent old-host capabilities remain limited until planned safe update; preserve unrelated dirt/stash0.

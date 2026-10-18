@@ -927,6 +927,7 @@ pub struct ResumeSource {
 
 pub struct ProductReply {
     pub ui_request: Option<uuid::Uuid>,
+    pub providers_local: bool,
     pub providers: Option<Vec<ProviderInfo>>,
     pub providers_request: bool,
     pub generation_selection: Option<bool>,
@@ -1034,6 +1035,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             ))
         })
         .flatten();
+    let discovery_request = command_name == Some("detect_providers");
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
     let git_diff_request = command_name == Some("workspace_git_diff");
@@ -1071,6 +1073,16 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             message,
             rejected_before_launch: false,
         })?;
+    let providers_local = discovery_request
+        && response.error.as_deref() == Some("invalid request framing or payload");
+    if providers_local {
+        response.providers = Some(crate::provider_discovery::detect().map_err(|message| ProductError {
+            ui_request: None, providers_request: true,
+            message: format!("Работающий host не поддерживает проверку CLI; локальная проверка не выполнена: {message}"),
+            rejected_before_launch: false,
+        })?);
+        response.error = None;
+    }
     if let Some(message) = response.error {
         return Err(ProductError {
             ui_request: None,
@@ -1219,6 +1231,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
     };
     Ok(ProductReply {
         ui_request: None,
+        providers_local,
         providers: response.providers,
         providers_request: false,
         generation_selection: response.generation_selection,

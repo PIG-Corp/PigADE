@@ -150,6 +150,14 @@ fn dialog_changed(
                 "Черновик контекста воркспейса"
             })
         }
+        DialogKind::Handoff
+            if !field(dialog, 1).trim().is_empty()
+                || product.handoff_sheet.as_ref().is_some_and(|sheet| {
+                    sheet.dialog == dialog.id && field(dialog, 0) != sheet.initial_text
+                }) =>
+        {
+            Some("Черновик передачи контекста")
+        }
         DialogKind::Prompt if prompt_changed(product, dialog) => Some("Черновик промпта"),
         DialogKind::AgentProfile if profile_changed(product, dialog) => {
             Some("Черновик профиля агента")

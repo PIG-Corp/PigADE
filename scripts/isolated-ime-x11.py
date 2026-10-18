@@ -4745,6 +4745,97 @@ def run_setup_fixture(config, report, control, app, env, save):
             'direct agent received context/prompt arguments or launched more than once')
     time.sleep(.6)
     helper_call(config, 'capture', '/artifacts/agent-direct.ppm')
+
+    # A handoff opens from the selected fake Codex output, remains prepare-only
+    # until the second Ctrl+Enter, and never writes input back to its source.
+    source_session, source_generation = direct_agent['session'], direct_agent['generation']
+    source_before = fixture_session_models(source_session).get(source_generation)
+    require(source_before is not None and source_before.get('state') == 'exited' and
+            'OLD_RESUME_FRAME' in view_text(source_before),
+            'handoff source is not the completed fake Codex terminal')
+    source_sequence = source_before.get('sequence')
+    require(type(source_sequence) is int and source_sequence >= 0,
+            'handoff source view omitted its durable output sequence')
+    def handoff_source_state(view):
+        if view is None:
+            return None
+        return {key: view.get(key) for key in
+                ('session', 'generation', 'pid', 'sequence', 'state', 'frame')}
+    source_state_before = handoff_source_state(source_before)
+    handoff_generations = fixture_generations()
+    handoff_source_journals = fixture_journal_hashes([source_generation])
+    handoff_plans_before = prepared_launches_read_only()
+    helper_call(config, 'handoff-open')
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/handoff-open.ppm')
+    helper_call(config, 'handoff-cancel')
+    def handoff_source_unchanged():
+        current = fixture_session_models(source_session).get(source_generation)
+        return (handoff_source_state(current) == source_state_before and
+                fixture_journal_hashes([source_generation]) == handoff_source_journals)
+    require(fixture_generations() == handoff_generations and
+            prepared_launches_read_only() == handoff_plans_before and handoff_source_unchanged(),
+            'opening and cancelling handoff created a plan, PTY, or source-terminal write')
+
+    helper_call(config, 'handoff-open')
+    helper_call(config, 'handoff-type-ask')
+    helper_call(config, 'handoff-prepare')
+    handoff_plans = wait_until(
+        lambda: (items if len(items := prepared_launches_read_only()) == len(handoff_plans_before) + 1
+                 else None), time.monotonic() + 10)
+    handoff_plan_ids = set(handoff_plans) - set(handoff_plans_before)
+    require(len(handoff_plan_ids) == 1,
+            'Ctrl+Enter preparation did not create exactly one durable handoff plan')
+    handoff_plan_id = next(iter(handoff_plan_ids))
+    handoff_stored = handoff_plans[handoff_plan_id]
+    handoff_preview = handoff_stored['payload'].get('preview', {})
+    handoff_instructions = handoff_preview.get('agent_instructions', '')
+    handoff_context = handoff_preview.get('context', {})
+    handoff_context_text = handoff_context.get('text', '')
+    instruction_blocks = [block.get('text') for block in handoff_context.get('blocks', [])
+                          if block.get('source') == 'agent_instructions']
+    expected_ask = 'Review this visible result'
+    require(handoff_stored.get('phase') == 'prepared' and
+            handoff_preview.get('provider') == 'codex' and
+            handoff_preview.get('include_memory') is False and
+            handoff_preview.get('deliver_context') is True and
+            handoff_preview.get('session') not in {session for session, _ in handoff_generations} and
+            handoff_preview.get('generation') not in {generation for _, generation in handoff_generations} and
+            f'Session: {source_session}' in handoff_instructions and
+            f'Generation: {source_generation}' in handoff_instructions and
+            f'Sequence: {source_sequence}' in handoff_instructions and
+            'OLD_RESUME_FRAME' in handoff_instructions and
+            handoff_instructions.endswith(expected_ask) and
+            'visible terminal material' in handoff_instructions.lower() and
+            instruction_blocks == [handoff_instructions] and
+            handoff_instructions in handoff_context_text and
+            'OLD_RESUME_FRAME' in handoff_context_text and
+            fixture_generations() == handoff_generations and handoff_source_unchanged(),
+            'handoff plan did not freeze the exact source and ask without launching or writing input')
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/handoff-preview.ppm')
+    helper_call(config, 'handoff-confirm')
+    handoff_session, handoff_generation = handoff_preview['session'], handoff_preview['generation']
+    launched_handoff = wait_until(
+        lambda: (view if (view := fixture_session_models(handoff_session).get(handoff_generation)) and
+                 view.get('state') == 'exited' and 'OLD_RESUME_FRAME' in view_text(view) else None),
+        time.monotonic() + 10)
+    require(fixture_generations() == sorted(handoff_generations + [(handoff_session, handoff_generation)]) and
+            handoff_source_unchanged(),
+            'confirmed handoff did not create only its fresh generation or changed the source')
+    final_starts = [json.loads(line) for line in Path('/artifacts/codex-starts.jsonl').read_text().splitlines()]
+    require(len(final_starts) == 2 and final_starts[0] == [] and
+            len(final_starts[1]) == 2 and final_starts[1][0] == '-c' and
+            final_starts[1][1].startswith('developer_instructions=') and
+            json.loads(final_starts[1][1].split('=', 1)[1]) == handoff_context_text and
+            not any(value in ('--last', '--continue', 'resume') or
+                    value.startswith(('--last=', '--continue=')) for value in final_starts[1]),
+            'confirmed handoff did not use the exact frozen Codex context or attempted implicit resume')
+    handoff_models = fixture_session_models(handoff_session)
+    require(launched_handoff == handoff_models.get(handoff_generation) and
+            'OLD_RESUME_FRAME' in view_text(handoff_models[handoff_generation]),
+            'fresh handoff Codex generation did not finish with its fixture output')
+
     run_custom_cli_profile_fixture(config, report, app, save, session, focused, tab['id'],
                                    direct_agent['session'], direct_agent['generation'])
     report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
@@ -4752,8 +4843,11 @@ def run_setup_fixture(config, report, control, app, env, save):
         'no_automatic_cli': True, 'one_shell_generation': True,
         'ctrl_enter_shell_launch_once': True,
         'bootstrap_pty_received_no_input': True, 'fake_codex_direct_launch_no_context': True, 'four_panes_accept_native_input': True,
+        'handoff_prepare_then_confirm_once': True,
+        'handoff_cancel_and_source_immutable': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                     'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                     'agent-picker.ppm', 'agent-direct.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
+                     'welcome-compact.ppm', 'workspace-compact.ppm',
                      'four-panels.ppm', 'four-panels-compact.ppm']}
     report['setup']['captures'].extend([
         'custom-profile-editor.ppm', 'custom-launch-review.ppm',
@@ -7215,7 +7309,8 @@ def outer_run(args) -> dict:
                   'scrollback-newer.ppm', 'scrollback-escape-live.ppm', 'scrollback-live.ppm',
                   'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                  'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
+                  'agent-picker.ppm', 'agent-direct.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
+                  'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm',
                   'profile-duplicate-editor.ppm', 'profile-sidebar-pinned.ppm',
                   'profile-sidebar-preparing.ppm', 'profile-sidebar-review.ppm',
@@ -7306,7 +7401,7 @@ def plan(args) -> dict:
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
-                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
+                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',

@@ -342,7 +342,7 @@ fn validate_log_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), Str
     Ok(())
 }
 
-fn resolve_host_binary() -> Result<PathBuf, String> {
+pub(crate) fn resolve_host_binary() -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("PIGADE_HOST_BINARY") {
         return executable(PathBuf::from(path))
             .ok_or_else(|| "PIGADE_HOST_BINARY does not name an executable regular file".into());

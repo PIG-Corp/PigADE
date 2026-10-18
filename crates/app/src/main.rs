@@ -16,6 +16,8 @@ mod custom_cli;
 mod dirty_documents;
 mod edit_field;
 mod font;
+mod handoff;
+mod handoff_commands;
 mod history_view;
 mod input;
 mod memory_choice;
@@ -31,6 +33,7 @@ mod profile_roster;
 mod prompt_commands;
 mod prompt_flow;
 mod protocol;
+mod provider_discovery;
 mod publication_trace;
 mod recipe_profiles;
 mod scrollback;
@@ -1223,6 +1226,7 @@ struct CanvasApp {
     pending_launch: Option<(uuid::Uuid, uuid::Uuid)>,
     pending_launch_review: bool,
     pending_direct_launch: Option<DirectLaunch>,
+    handoff_pending: Option<handoff_commands::Pending>,
     setup_flow: Option<setup_flow::SetupFlow>,
     picker_request: Option<uuid::Uuid>,
     providers_checked: bool,
@@ -1388,6 +1392,7 @@ impl CanvasApp {
                                     if let Some(pending)=stop_pending { this.receive_stop(pending,reply.process_view,cx); }
                                     if let Some(providers) = reply.providers {
                                         this.product.providers = Some(providers);
+                                        this.product.providers_local = reply.providers_local;
                                         this.product.provider_error = None;
                                     }
                                     if reply.history_view_request {
@@ -1513,8 +1518,9 @@ impl CanvasApp {
                                         }
                                         this.product.replace_sessions(sessions.into_iter().map(Into::into).collect());
                                     }
+                                    let handoff_consumed=this.receive_handoff(ui_request,reply.launch_preview.as_ref(),reply.launch_phase.as_deref(),reply.launch_confirmed,None);
                                     let profile_preview_ok=reply.launch_preview.as_ref().is_none_or(|preview|this.accept_profile_preview(ui_request,preview,reply.launch_confirmed,reply.launch_phase.as_deref()));
-                                    if let Some(preview) = reply.launch_preview.filter(|_|profile_preview_ok) {
+                                    if let Some(preview) = reply.launch_preview.filter(|_|profile_preview_ok && !handoff_consumed) {
                                         let direct_request = this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(ui_request));
                                         let direct_start = this.pending_direct_launch.as_ref().is_some_and(|pending|
                                             pending.matches(ui_request) && pending.target_matches(this.product.catalog.as_ref().and_then(|catalog| catalog.selection.tab_id), preview.tab_id, &preview.provider)
@@ -1570,6 +1576,7 @@ impl CanvasApp {
                                     }
                                 }
                                 Err(error) => {
+                                    this.receive_handoff(error.ui_request,None,None,false,Some(&error.message));
                                     if this.fail_scrollback(error.ui_request,&error.message,cx) { continue; }
                                     this.close_flow.fail(format!("Операция session host не подтверждена: {}", error.message));
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
@@ -1612,7 +1619,7 @@ impl CanvasApp {
                                     if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==error.ui_request) {this.catalog_edit=None;}
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
                                     if this.pending_direct_launch.as_ref().is_some_and(|pending| pending.matches(error.ui_request)) { this.pending_direct_launch=None; }
-                                    if error.providers_request { this.product.provider_error=Some("Не удалось проверить CLI. Терминал можно открыть сразу; проверку агентов можно повторить.".into()); }
+                                    if error.providers_request { this.product.provider_error=Some(format!("Проверка CLI не выполнена: {}", error.message.chars().filter(|ch| !ch.is_control()).take(240).collect::<String>())); }
                                     if this.product.history_sheet.as_ref().is_some_and(|history| history.pending.is_some()) {
                                         this.apply_history_error(error.message.clone(), cx);
                                     }
@@ -1838,6 +1845,7 @@ impl CanvasApp {
             pending_launch: None,
             pending_launch_review: false,
             pending_direct_launch: None,
+            handoff_pending: None,
             setup_flow: None,
             picker_request: None,
             providers_checked: false,
@@ -2333,6 +2341,13 @@ impl CanvasApp {
         let key = &event.keystroke;
         let control = key.modifiers.control || key.modifiers.platform;
         let shift = key.modifiers.shift;
+        if control && shift && !key.modifiers.alt && key.key == "h" {
+            if !event.is_held {
+                self.product_action(product::ProductAction::OpenHandoff, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         let Some(history) = self.product.history_sheet.as_ref() else {
             return;
         };
@@ -3674,6 +3689,9 @@ impl CanvasApp {
                 | A::RefreshTransfer
                 | A::ConfirmCloseTab
                 | A::ConfirmPreparedLaunch
+                | A::PrepareHandoff
+                | A::ConfirmHandoff
+                | A::CopyHandoff
                 | A::RefreshLaunchPreview
                 | A::ToggleMemory
                 | A::ToggleMemorySection(_)
@@ -4049,6 +4067,11 @@ impl CanvasApp {
                 }
             }
             A::OpenHistory => self.open_history(cx),
+            A::OpenHandoff
+            | A::SetHandoffProvider(_)
+            | A::PrepareHandoff
+            | A::ConfirmHandoff
+            | A::CopyHandoff => self.handoff_action(action, cx),
             A::HistoryStart => {
                 if self
                     .product
@@ -4367,6 +4390,21 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::Handoff)
+                {
+                    self.product.dialog = self
+                        .product
+                        .handoff_sheet
+                        .take()
+                        .and_then(|sheet| sheet.origin);
+                    self.sync_editor_scope(window, cx);
+                    cx.notify();
+                    return;
+                }
                 if self
                     .product
                     .dialog
@@ -4911,6 +4949,14 @@ impl CanvasApp {
                     DialogKind::LaunchReview
                     | DialogKind::CustomLaunchReview
                     | DialogKind::ResumeReview => self.confirm_prepared_launch(cx),
+                    DialogKind::Handoff => {
+                        let action = if self.product.handoff_ready() {
+                            A::ConfirmHandoff
+                        } else {
+                            A::PrepareHandoff
+                        };
+                        self.handoff_action(action, cx);
+                    }
                     DialogKind::History => self.history_search(None, cx),
                     DialogKind::Launcher | DialogKind::Controls => self.product.dialog = None,
                     DialogKind::SessionContext
@@ -7139,6 +7185,9 @@ impl CanvasApp {
         {
             let control = k.modifiers.control || k.modifiers.platform;
             let action = match k.key.as_str() {
+                "h" if control && k.modifiers.shift && !k.modifiers.alt && !event.is_held => {
+                    Some(product::ProductAction::OpenHandoff)
+                }
                 "f3" => Some(if k.modifiers.shift {
                     product::ProductAction::HistorySearch
                 } else {
@@ -7299,6 +7348,43 @@ impl CanvasApp {
             }
             cx.stop_propagation();
             return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::Handoff)
+        {
+            let control = k.modifiers.control || k.modifiers.platform;
+            let action = if !event.is_held && !k.modifiers.alt && !k.modifiers.shift && control {
+                match k.key.as_str() {
+                    "1" => Some(product::ProductAction::SetHandoffProvider("claude".into())),
+                    "2" => Some(product::ProductAction::SetHandoffProvider("codex".into())),
+                    "3" => Some(product::ProductAction::SetHandoffProvider(
+                        "opencode".into(),
+                    )),
+                    "enter" => Some(product::ProductAction::SubmitDialog),
+                    _ => None,
+                }
+            } else if !event.is_held
+                && control
+                && k.modifiers.shift
+                && !k.modifiers.alt
+                && k.key == "c"
+            {
+                Some(product::ProductAction::CopyHandoff)
+            } else {
+                None
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if control && matches!(k.key.as_str(), "enter" | "s") {
+                cx.stop_propagation();
+                return;
+            }
         }
         if self.product.dialog.is_some() {
             if self.product.dialog.as_ref().is_some_and(|dialog| {

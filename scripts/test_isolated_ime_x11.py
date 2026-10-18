@@ -156,13 +156,16 @@ class IsolatedImePlanTests(unittest.TestCase):
                       plan['input']['setup'])
         self.assertIn('read-only launch review', plan['input']['setup'])
         self.assertIn('Ctrl+Enter runs the exact argv once', plan['input']['setup'])
+        self.assertIn('hand off its visible output through prepare then explicit Ctrl+Enter',
+                      plan['input']['setup'])
         self.assertIn('duplicate it with independent settings, pin it', plan['input']['setup'])
 
         harness = SCRIPT.read_text()
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
         stages = ('custom-open', 'custom-fields', 'custom-save', 'custom-select',
                   'custom-review-enter', 'custom-review-cancel', 'custom-reopen-profiles',
-                  'custom-confirm', 'setup-ctrl-enter-shell')
+                  'custom-confirm', 'setup-ctrl-enter-shell', 'handoff-open',
+                  'handoff-type-ask', 'handoff-prepare', 'handoff-cancel', 'handoff-confirm')
         for stage in stages:
             self.assertIn(f'"{stage}"', helper)
             self.assertIn(f"helper_call(config, '{stage}'", harness)
@@ -188,6 +191,27 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('fixture_journal_prefixes_preserved(original_journal_prefixes)', custom_flow)
         self.assertIn("'existing_journal_prefix_preserved': True", harness)
         self.assertIn('config, report, app, save, session, focused, tab', harness)
+        setup_flow = harness.split('def run_setup_fixture(', 1)[1].split(
+            '\ndef run_custom_cli_profile_fixture(', 1)[0]
+        handoff_flow = setup_flow.split("helper_call(config, 'capture', '/artifacts/agent-direct.ppm')", 1)[1]
+        first_open = handoff_flow.index("helper_call(config, 'handoff-open')")
+        cancel = handoff_flow.index("helper_call(config, 'handoff-cancel')", first_open)
+        second_open = handoff_flow.index("helper_call(config, 'handoff-open')", first_open + 1)
+        prepare = handoff_flow.index("helper_call(config, 'handoff-prepare')", second_open)
+        confirm = handoff_flow.index("helper_call(config, 'handoff-confirm')", prepare)
+        self.assertLess(first_open, cancel)
+        self.assertLess(cancel, second_open)
+        self.assertLess(second_open, prepare)
+        self.assertLess(prepare, confirm)
+        for evidence in ('OLD_RESUME_FRAME', 'handoff_source_unchanged()',
+                         "'include_memory') is False", "'deliver_context') is True",
+                         "'developer_instructions='", 'expected_ask', 'handoff_context_text',
+                         'instruction_blocks == [handoff_instructions]',
+                         'fixture_generations() == handoff_generations'):
+            self.assertIn(evidence, handoff_flow)
+        for capture in ('handoff-open.ppm', 'handoff-preview.ppm'):
+            self.assertIn(capture, setup_flow)
+            self.assertGreaterEqual(harness.count(f"'{capture}'"), 2)
         self.assertIn('live_input_session in {key[0] for key in final_models}', custom_flow)
         self.assertIn("view_text(final_models[(live_input_session,", custom_flow)
 

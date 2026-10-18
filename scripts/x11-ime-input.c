@@ -184,6 +184,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "custom-reopen-profiles") &&
         strcmp(a.stage, "custom-review-enter") && strcmp(a.stage, "custom-review-cancel") &&
         strcmp(a.stage, "custom-confirm") &&
+        strcmp(a.stage, "handoff-open") && strcmp(a.stage, "handoff-type-ask") &&
+        strcmp(a.stage, "handoff-prepare") && strcmp(a.stage, "handoff-cancel") &&
+        strcmp(a.stage, "handoff-confirm") &&
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
         strcmp(a.stage, "setup-split-right") && strcmp(a.stage, "setup-split-down") &&
         strcmp(a.stage, "setup-close") && strcmp(a.stage, "setup-focus-left") &&
@@ -1844,6 +1847,21 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a.stage, "custom-review-cancel")) {
             key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "custom-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "handoff-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_h, XK_a, XK_n, XK_d, XK_o, XK_f, XK_f };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "handoff-type-ask")) {
+            custom_ascii(dpy, "Review this visible result");
+        } else if (!strcmp(a.stage, "handoff-prepare")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "handoff-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "handoff-confirm")) {
             modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "setup-compact")) {
             XResizeWindow(dpy, app_window, 675, 734); XSync(dpy,False);

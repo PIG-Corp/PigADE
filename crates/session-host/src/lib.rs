@@ -690,7 +690,7 @@ impl ProviderDetector {
     }
 }
 
-fn detect_providers() -> Vec<ProviderInfo> {
+pub fn detect_providers() -> Vec<ProviderInfo> {
     let providers = ["shell", "claude", "codex", "opencode"];
     let (sender, receiver) = mpsc::channel();
     for provider in providers {

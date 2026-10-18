@@ -22,6 +22,8 @@ mod appearance_ui;
 mod custom_launch_ui;
 #[path = "git_status_ui.rs"]
 mod git_status_ui;
+#[path = "handoff_ui.rs"]
+mod handoff_ui;
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
 #[path = "profile_access_ui.rs"]
@@ -166,6 +168,11 @@ pub(super) enum ProductAction {
     LoadGenerations(Option<u64>),
     SelectGeneration(Option<Uuid>),
     OpenHistory,
+    OpenHandoff,
+    SetHandoffProvider(String),
+    PrepareHandoff,
+    ConfirmHandoff,
+    CopyHandoff,
     HistoryStart,
     HistoryPrevious,
     HistoryNext,
@@ -240,11 +247,13 @@ pub(super) enum DialogKind {
     StopSession,
     History,
     TerminalInsert,
+    Handoff,
 }
 
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Handoff => "Передать контекст",
             Self::Activity => "Активность",
             Self::Appearance => "Внешний вид",
             Self::CloseTab => "Закрыть вкладку?",
@@ -296,6 +305,10 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Handoff => &[
+                "Видимый текст · можно отредактировать",
+                "Запрос новому агенту",
+            ],
             Self::Activity => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
@@ -356,6 +369,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::Handoff => "Проверить запуск",
             Self::Activity => "Закрыть",
             Self::Appearance => "Готово",
             Self::CloseTab => "Закрыть вкладку",
@@ -487,6 +501,7 @@ pub(super) struct ProductUi {
     pub(super) launch_phase: Option<String>,
     pub(super) providers: Option<Vec<protocol::ProviderInfo>>,
     pub(super) provider_error: Option<String>,
+    pub(super) providers_local: bool,
     pub(super) launch_details: bool,
     pub(super) generation_page: Option<protocol::GenerationList>,
     pub(super) notice: Option<String>,
@@ -494,6 +509,7 @@ pub(super) struct ProductUi {
     pub(super) dialog: Option<Dialog>,
     pub(super) workspace_isolated: bool,
     pub(super) workspace_project: Option<Uuid>,
+    pub(super) handoff_sheet: Option<crate::handoff_commands::Sheet>,
     pub(super) history_sheet: Option<crate::history_view::HistorySheet>,
     pub(super) insert_review: Option<crate::terminal_insert::Review>,
     pub(super) insert_scroll: gpui::ScrollHandle,
@@ -720,6 +736,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Сессии", ProductAction::OpenSessions),
         ("Остановить CLI", ProductAction::OpenStop),
         ("История панели · I", ProductAction::OpenHistory),
+        (
+            "Передать контекст другому агенту · handoff",
+            ProductAction::OpenHandoff,
+        ),
         ("Новая вкладка", ProductAction::CreateTab),
         ("Закрыть вкладку · close tab", ProductAction::OpenCloseTab),
         (
@@ -803,6 +823,7 @@ fn panel_action(action: &ProductAction) -> bool {
         ProductAction::Layout(_)
             | ProductAction::RenamePane
             | ProductAction::OpenStop
+            | ProductAction::OpenHandoff
             | ProductAction::OpenHistory
             | ProductAction::OpenGenerations
             | ProductAction::OpenTransfer
@@ -980,7 +1001,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Prompt => index == 1,
         DialogKind::RecipeSlot => index < 2,
         DialogKind::History => index == 1,
-        DialogKind::WorkspaceGitCommit => true,
+        DialogKind::WorkspaceGitCommit | DialogKind::Handoff => true,
         _ => false,
     }
 }
@@ -2885,6 +2906,9 @@ impl ProductUi {
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
         let colors = self.colors();
+        if dialog.kind == DialogKind::Handoff {
+            return self.handoff_overlay(dialog, layouts, cx);
+        }
         if dialog.kind == DialogKind::LaunchReview {
             return self.launch_review_overlay(dialog, layouts, cx);
         }
@@ -3970,6 +3994,8 @@ impl ProductUi {
             self.provider_error
                 .as_deref()
                 .unwrap_or("Проверяем доступность CLI…")
+        } else if self.providers_local {
+            "CLI обнаружены локально. Работающий host старой версии; его возможности проверяются отдельно при запуске."
         } else {
             "Недоступные CLI показаны с причиной установки."
         };
@@ -5689,6 +5715,12 @@ impl ProductUi {
                 "Следующее совпадение",
                 ProductAction::HistoryNextMatch,
                 history.search_next.is_some() && !self.busy,
+            ),
+            (
+                "history-handoff",
+                "Передать страницу · Ctrl+Shift+H",
+                ProductAction::OpenHandoff,
+                !self.busy && !body.is_empty(),
             ),
             (
                 "history-copy",
