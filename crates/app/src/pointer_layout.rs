@@ -5,9 +5,34 @@ use std::collections::BTreeMap;
 use pigade_layout::{Command, Direction, LayoutModel, LayoutState, PaneRect, Rect, TabLayout};
 use uuid::Uuid;
 
-/// A modifier grab begins moving only after the pointer travels more than 10px.
-pub(crate) fn travelled(grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
-    [grab_x, grab_y, x, y].into_iter().all(f64::is_finite) && (x - grab_x).hypot(y - grab_y) > 10.0
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GrabOrigin {
+    /// Hyprland's default drag_threshold=0: pick up on modifier+button down.
+    Modifier,
+    /// Keep ordinary header clicks from accidentally rearranging panes.
+    Header,
+}
+
+impl GrabOrigin {
+    pub(crate) fn picked_up(self, grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
+        valid_points(grab_x, grab_y, x, y)
+            && (matches!(self, Self::Modifier) || (x - grab_x).hypot(y - grab_y) > 10.0)
+    }
+
+    /// Picking up is transient; a stationary modifier click never commits a move.
+    pub(crate) fn travelled(self, grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
+        valid_points(grab_x, grab_y, x, y)
+            && (x - grab_x).hypot(y - grab_y)
+                > if matches!(self, Self::Modifier) {
+                    0.0
+                } else {
+                    10.0
+                }
+    }
+}
+
+fn valid_points(grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
+    [grab_x, grab_y, x, y].into_iter().all(f64::is_finite)
 }
 
 /// Map the original grab point onto the temporary, smaller dragged pane.
@@ -76,8 +101,9 @@ pub(crate) fn drop_command(
     })
 }
 
-/// Select the closest non-source pane for a drop, including pointer positions
-/// in gaps between panes. UUID order breaks equal-distance ties consistently.
+/// Drop on the pane under the pointer, never on an arbitrary nearest pane.
+/// Gaps and positions outside a pane have no target. Half-open bounds avoid
+/// ambiguous ownership when panes share an edge.
 pub(crate) fn drop_target(panes: &[PaneRect], source: Uuid, x: f64, y: f64) -> Option<PaneRect> {
     if !x.is_finite() || !y.is_finite() {
         return None;
@@ -86,31 +112,13 @@ pub(crate) fn drop_target(panes: &[PaneRect], source: Uuid, x: f64, y: f64) -> O
         .iter()
         .copied()
         .filter(|pane| pane.pane != source && valid_rect(pane.rect))
-        .min_by(|first, second| {
-            distance_squared(first.rect, x, y)
-                .total_cmp(&distance_squared(second.rect, x, y))
-                .then_with(|| first.pane.cmp(&second.pane))
+        .filter(|pane| {
+            x >= pane.rect.x
+                && x < pane.rect.x + pane.rect.width
+                && y >= pane.rect.y
+                && y < pane.rect.y + pane.rect.height
         })
-}
-
-fn distance_squared(rect: Rect, x: f64, y: f64) -> f64 {
-    let right = rect.x + rect.width;
-    let bottom = rect.y + rect.height;
-    let dx = if x < rect.x {
-        rect.x - x
-    } else if x > right {
-        x - right
-    } else {
-        0.0
-    };
-    let dy = if y < rect.y {
-        rect.y - y
-    } else if y > bottom {
-        y - bottom
-    } else {
-        0.0
-    };
-    dx.mul_add(dx, dy * dy)
+        .min_by_key(|pane| pane.pane)
 }
 
 /// Preview removing a pane for the floating portion of a drag.
@@ -271,8 +279,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        FocusIntent, FocusQueue, detached_layout, drop_command, drop_target, floating_rect,
-        move_preview, tab_transfer_preview, travelled,
+        FocusIntent, FocusQueue, GrabOrigin, detached_layout, drop_command, drop_target,
+        floating_rect, move_preview, tab_transfer_preview,
     };
 
     fn id(value: u128) -> Uuid {
@@ -293,18 +301,35 @@ mod tests {
     }
 
     #[test]
-    fn a_grab_click_or_jitter_does_not_authorize_placement() {
-        assert!(!travelled(300., 200., 300., 200.));
-        assert!(!travelled(300., 200., 310., 200.));
-        assert!(!travelled(300., 200., 306., 208.));
-        assert!(travelled(300., 200., 310.01, 200.));
-        assert!(travelled(300., 200., 308., 208.));
-        assert!(!travelled(f64::NAN, 200., 307., 200.));
-        assert!(!travelled(300., 200., f64::INFINITY, 200.));
+    fn modifier_picks_up_immediately_but_stationary_release_cannot_commit() {
+        let grab = GrabOrigin::Modifier;
+        assert!(grab.picked_up(300., 200., 300., 200.));
+        assert!(!grab.travelled(300., 200., 300., 200.));
+        for (x, y) in [(300.01, 200.), (300., 199.99), (305., 200.)] {
+            assert!(grab.picked_up(300., 200., x, y));
+            assert!(grab.travelled(300., 200., x, y));
+        }
     }
 
     #[test]
-    fn drop_target_uses_nearest_rectangle_through_gutters_and_outside_canvas() {
+    fn ordinary_header_click_and_jitter_keep_the_tiled_layout() {
+        let grab = GrabOrigin::Header;
+        for (x, y) in [(300., 200.), (310., 200.), (306., 208.)] {
+            assert!(!grab.picked_up(300., 200., x, y));
+            assert!(!grab.travelled(300., 200., x, y));
+        }
+        for (x, y) in [(310.01, 200.), (308., 208.)] {
+            assert!(grab.picked_up(300., 200., x, y));
+            assert!(grab.travelled(300., 200., x, y));
+        }
+        for grab in [GrabOrigin::Header, GrabOrigin::Modifier] {
+            assert!(!grab.picked_up(f64::NAN, 200., 307., 200.));
+            assert!(!grab.travelled(300., 200., f64::INFINITY, 200.));
+        }
+    }
+
+    #[test]
+    fn drop_target_requires_an_actual_pane_under_the_pointer() {
         let panes = [
             PaneRect {
                 pane: id(1),
@@ -325,14 +350,22 @@ mod tests {
                 },
             },
         ];
-        assert_eq!(drop_target(&panes, id(1), 110., 50.).unwrap().pane, id(2));
-        assert_eq!(drop_target(&panes, id(1), -20., 50.).unwrap().pane, id(2));
+        assert_eq!(drop_target(&panes, id(1), 120., 50.).unwrap().pane, id(2));
+        for (x, y) in [
+            (110., 50.),
+            (-20., 50.),
+            (220., 50.),
+            (150., 100.),
+            (50., 50.),
+        ] {
+            assert!(drop_target(&panes, id(1), x, y).is_none());
+        }
         assert!(drop_target(&panes, id(1), f64::NAN, 50.).is_none());
         assert!(drop_target(&[], id(1), 50., 50.).is_none());
     }
 
     #[test]
-    fn drop_target_ignores_source_and_breaks_distance_ties_by_identity() {
+    fn drop_target_ignores_source_and_resolves_overlaps_by_identity() {
         let panes = [
             PaneRect {
                 pane: id(3),
@@ -355,14 +388,15 @@ mod tests {
             PaneRect {
                 pane: id(1),
                 rect: Rect {
-                    x: -20.,
+                    x: 20.,
                     y: 0.,
                     width: 10.,
                     height: 10.,
                 },
             },
         ];
-        assert_eq!(drop_target(&panes, id(3), 5., 5.).unwrap().pane, id(1));
+        assert!(drop_target(&panes, id(3), 5., 5.).is_none());
+        assert_eq!(drop_target(&panes, id(3), 25., 5.).unwrap().pane, id(1));
     }
 
     #[test]

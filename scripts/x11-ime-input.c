@@ -179,12 +179,15 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-hover-header") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-hover-header.ppm")))
         fail("pointer header hover capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-no-motion-release") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-no-motion-held.ppm")))
+        fail("pointer no-motion capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-selection-hold") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-selection.ppm")))
         fail("pointer selection capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-subthreshold-hold") &&
-        (!a.output || strcmp(a.output, "/artifacts/pointer-subthreshold-held.ppm")))
-        fail("subthreshold pointer capture path must be the fixed artifact");
+        (!a.output || strcmp(a.output, "/artifacts/pointer-small-motion-held.ppm")))
+        fail("small-motion pointer capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-focus-mode-preview") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-focus-mode-drag.ppm")))
         fail("focus-mode pointer capture path must be the fixed artifact");
@@ -1646,6 +1649,11 @@ int main(int argc, char **argv) {
             pointer_no_motion_begin(dpy, app_window);
             struct timespec settle = { .tv_sec = 0, .tv_nsec = 200000000 };
             nanosleep(&settle, NULL);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RELEASE\n"))
+                fail("pointer no-motion probe accepts only fixed button release");
             pointer_drag_release(dpy, 0);
         } else if (!strcmp(a.stage, "pointer-hover-source")) {
             pointer_hover(dpy, app_window, 350, 250, 0);
@@ -1673,10 +1681,10 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a.stage, "pointer-subthreshold-hold")) {
             KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
             if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
-                fail("subthreshold drag modifier press failed");
+                fail("small-motion drag modifier press failed");
             pointer_position(dpy, app_window, 350, 250);
             if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
-                fail("subthreshold drag button press failed");
+                fail("small-motion drag button press failed");
             pointer_position(dpy, app_window, 355, 250);
             struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
             nanosleep(&settle, NULL);
@@ -1684,9 +1692,9 @@ int main(int argc, char **argv) {
             capture(dpy, a.output);
             puts("HELD"); fflush(stdout);
             char response[32];
-            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RELEASE\n"))
-                fail("subthreshold pointer probe accepts only fixed button release");
-            pointer_drag_release(dpy, 0);
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "CANCEL\n"))
+                fail("small-motion pointer preview accepts only fixed cancel release");
+            pointer_drag_release(dpy, 1);
         } else if (!strcmp(a.stage, "pointer-focus-toggle")) {
             modified_key(dpy, XK_Control_L, XK_f);
         } else if (!strcmp(a.stage, "pointer-keyboard-away")) {

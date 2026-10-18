@@ -414,8 +414,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['fixture'], 'pointer')
         self.assertIn('last-hover unsent text', plan['input']['pointer'])
-        self.assertIn('no-motion Ctrl+LMB release preserves placement/history', plan['input']['pointer'])
-        self.assertIn('subthreshold modifier drag preserves placement', plan['input']['pointer'])
+        self.assertIn('held zero-motion Ctrl+LMB visibly picks up', plan['input']['pointer'])
+        self.assertIn('five-pixel modifier drag preview is cancelled with Escape', plan['input']['pointer'])
         self.assertIn('focus-mode drag preview/cancel from nonzero pane index', plan['input']['pointer'])
         self.assertIn('cross-tab pane drag preview/cancel and atomic transfer undo', plan['input']['pointer'])
         self.assertIn('Ctrl+Shift+2 and searchable-prefix keyboard transfers', plan['input']['pointer'])
@@ -460,14 +460,23 @@ class IsolatedImePlanTests(unittest.TestCase):
             '} else if (!strcmp(a.stage, "pointer-no-motion-release")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "pointer-hover-source")) {', 1)[0]
         self.assertIn('pointer_no_motion_begin(dpy, app_window)', no_motion_stage)
+        self.assertIn('capture(dpy, a.output)', no_motion_stage)
+        self.assertIn('puts("HELD")', no_motion_stage)
         self.assertIn('pointer_drag_release(dpy, 0)', no_motion_stage)
         self.assertNotIn('pointer_position', no_motion_stage)
         no_motion_begin = source.split('static void pointer_no_motion_begin', 1)[1].split(
             'static void pointer_drag_release', 1)[0]
         press_end = no_motion_begin.index('XTestFakeButtonEvent(dpy, 1, True')
         self.assertNotIn('pointer_position', no_motion_begin[press_end:])
+        self.assertIn('"/artifacts/pointer-no-motion-held.ppm"', source)
+        self.assertIn('"/artifacts/pointer-small-motion-held.ppm"', source)
         fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
-        self.assertIn("step('pointer-no-motion-release')", fixture)
+        self.assertIn("step('pointer-hover-source')", fixture)
+        self.assertIn("ppm_changed_pixels('pointer-no-motion-before.ppm', 'pointer-no-motion-held.ppm') > 1000", fixture)
+        self.assertIn("ppm_changed_pixels('pointer-subthreshold-before.ppm', 'pointer-small-motion-held.ppm') > 1000", fixture)
+        self.assertIn("held_stage('pointer-no-motion-release', 'HELD', 'RELEASE'", fixture)
+        self.assertIn("held_stage('pointer-subthreshold-hold', 'HELD', 'CANCEL'", fixture)
+        self.assertIn('five_pixel_modifier_drag_preview_cancelled_to_exact_layout_without_pty_or_process_changes', fixture)
         self.assertIn('hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input',
                       fixture)
         self.assertIn("helper_call(config, 'pointer-hover-header', '/artifacts/pointer-hover-header.ppm')",
@@ -510,15 +519,16 @@ class IsolatedImePlanTests(unittest.TestCase):
             'static void pointer_no_motion_begin', 1)[0]
         self.assertIn('pointer_position(dpy, app, 350, 250)', tab_drag)
         self.assertIn('pointer_position(dpy, app, 405, 57)', tab_drag)
-        self.assertIn("no_motion_layout.get('root') == placement_before", fixture)
-        self.assertIn('history_lengths_before', fixture)
+        self.assertIn('after_no_motion_layout == no_motion_layout', fixture)
+        self.assertIn('after_no_motion_tab.get(\'layout_json\')', fixture)
         self.assertIn('strcmp(response, "CANCEL\\n")', source)
         self.assertIn('XK_p, XK_i, XK_g, XK_a, XK_d, XK_e', source)
         self.assertIn('pointer_position(dpy, app, 350, 250)', source)
         self.assertIn("move_siblings == ('Horizontal', [right_pane, left_pane])",
                       Path(__file__).with_name('isolated-ime-x11.py').read_text())
         fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
-        self.assertIn("'pointer-subthreshold-held.ppm'", fixture)
+        self.assertIn("'pointer-small-motion-held.ppm'", fixture)
+        self.assertIn("'pointer-no-motion-held.ppm'", fixture)
         self.assertIn("'focus_mode_drag_preview_and_cancel_preserved_nonzero_index_source_and_layout': True", fixture)
         self.assertIn("focus_layout.get('focused') == right_pane", fixture)
         ime_stage = source.split('} else if (!strcmp(a.stage, "pointer-ime-input")) {', 1)[1].split(

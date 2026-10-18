@@ -1339,6 +1339,24 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
             result[session] = dict(geometry)
         return result
 
+    def ppm_pixels(name):
+        raw = (Path('/artifacts') / name).read_bytes()
+        match = re.match(rb'P6\n([0-9]+) ([0-9]+)\n255\n', raw)
+        require(match is not None and len(raw) <= MAX_CAPTURE_BYTES,
+                'pointer screenshot is not a bounded PPM image')
+        width, height = int(match.group(1)), int(match.group(2))
+        pixels = raw[match.end():]
+        require((width, height) == SCREEN[:2] and len(pixels) == width * height * 3,
+                'pointer screenshot geometry or pixel data is invalid')
+        return pixels
+
+    def ppm_changed_pixels(first, second):
+        first_pixels, second_pixels = ppm_pixels(first), ppm_pixels(second)
+        require(len(first_pixels) == len(second_pixels),
+                'pointer screenshot dimensions changed during held gesture')
+        return sum(first_pixels[offset:offset + 3] != second_pixels[offset:offset + 3]
+                   for offset in range(0, len(first_pixels), 3))
+
     def step(stage):
         report['stage'] = stage
         save()
@@ -1391,23 +1409,49 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     require(live_unchanged(generations, expected_processes),
             'a pointer fixture terminal was not live before hover tests')
 
-    # Press modifier+LMB on a pane and release at the same coordinates. A
-    # no-motion gesture may change focus, but it must not commit a placement or
-    # add an undo step. Compare the full root wire so split weights are covered.
-    placement_before = original_root
-    history_before = json.loads(catalog_layout()[0]['layout']['json'])
-    history_lengths_before = (len(history_before.get('undo', [])),
-                              len(history_before.get('redo', [])))
-    step('pointer-no-motion-release')
-    time.sleep(0.35)
+    # With the source already selected and the cursor fixed, modifier+LMB must
+    # pick up the pane immediately. Releasing without motion must still leave
+    # the durable layout/history and live terminal geometry untouched.
+    step('pointer-hover-source')
+    time.sleep(0.35)  # bounded UI/focus persistence settle, not a latency measurement
     no_motion_catalog, no_motion_layout = catalog_layout()
+    no_motion_geometry = frame_geometries(panes)
     no_motion_history = json.loads(no_motion_catalog['layout']['json'])
-    require(no_motion_layout.get('root') == placement_before and
-            no_motion_layout.get('focus_mode') == before.get('focus_mode') and
-            (len(no_motion_history.get('undo', [])), len(no_motion_history.get('redo', []))) ==
-            history_lengths_before and
+    helper_call(config, 'capture', '/artifacts/pointer-no-motion-before.ppm')
+
+    def check_no_motion_hold():
+        held_catalog, held_layout = catalog_layout()
+        held_history = json.loads(held_catalog['layout']['json'])
+        require(held_layout == no_motion_layout and
+                held_catalog.get('layout') == no_motion_catalog.get('layout') and
+                (len(held_history.get('undo', [])), len(held_history.get('redo', []))) ==
+                (len(no_motion_history.get('undo', [])), len(no_motion_history.get('redo', []))) and
+                frame_geometries(panes) == no_motion_geometry and
+                live_unchanged(generations, expected_processes) and
+                0 < Path('/artifacts/pointer-no-motion-held.ppm').stat().st_size <= MAX_CAPTURE_BYTES and
+                ppm_changed_pixels('pointer-no-motion-before.ppm', 'pointer-no-motion-held.ppm') > 1000,
+                'stationary modifier+LMB did not show immediate pickup or changed durable layout, PTYs, processes, or capture')
+
+    report['stage'] = 'pointer-no-motion-release'
+    save()
+    held_stage('pointer-no-motion-release', 'HELD', 'RELEASE',
+               '/artifacts/pointer-no-motion-held.ppm', check_no_motion_hold)
+    time.sleep(0.35)
+    after_no_motion_catalog, after_no_motion_layout = catalog_layout()
+    after_no_motion_history = json.loads(after_no_motion_catalog['layout']['json'])
+    after_no_motion_tab = next(item for item in after_no_motion_catalog['tabs'] if item['id'] == tab_id)
+    saved_no_motion_tab = next(item for item in no_motion_catalog['tabs'] if item['id'] == tab_id)
+    require(after_no_motion_layout == no_motion_layout and
+            after_no_motion_catalog.get('layout') == no_motion_catalog.get('layout') and
+            (after_no_motion_tab.get('layout_json'), after_no_motion_tab.get('active_pane'),
+             after_no_motion_tab.get('revision')) ==
+            (saved_no_motion_tab.get('layout_json'), saved_no_motion_tab.get('active_pane'),
+             saved_no_motion_tab.get('revision')) and
+            (len(after_no_motion_history.get('undo', [])), len(after_no_motion_history.get('redo', []))) ==
+            (len(no_motion_history.get('undo', [])), len(no_motion_history.get('redo', []))) and
+            frame_geometries(panes) == no_motion_geometry and
             live_unchanged(generations, expected_processes),
-            'modifier+LMB release without pointer travel changed pane placement, weights, undo history, or processes')
+            'releasing a stationary modifier+LMB pickup changed the exact layout/history, PTYs, or processes')
 
     step('pointer-hover-left')
     time.sleep(0.2)
@@ -1498,7 +1542,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     require(catalog_layout()[1].get('focused') == left_pane,
             'off-center drag start did not select the expected source pane')
 
-    # A held Ctrl+LMB movement under the 10px threshold must remain a click.
+    # A small five-pixel Ctrl+LMB movement now opens a transient drag preview.
     subthreshold_catalog, subthreshold_layout = catalog_layout()
     subthreshold_geometry = frame_geometries(panes)
     helper_call(config, 'capture', '/artifacts/pointer-subthreshold-before.ppm')
@@ -1512,16 +1556,30 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                 (saved_tab.get('layout_json'), saved_tab.get('active_pane'), saved_tab.get('revision')) and
                 frame_geometries(panes) == subthreshold_geometry and
                 live_unchanged(generations, expected_processes) and
-                0 < Path('/artifacts/pointer-subthreshold-held.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
-                'subthreshold modifier+LMB motion changed host placement, PTYs, processes, or capture')
+                0 < Path('/artifacts/pointer-small-motion-held.ppm').stat().st_size <= MAX_CAPTURE_BYTES and
+                ppm_changed_pixels('pointer-subthreshold-before.ppm', 'pointer-small-motion-held.ppm') > 1000,
+                'small modifier+LMB movement did not show a transient preview or changed host placement, PTYs, processes, or capture')
     report['stage'] = 'pointer-subthreshold-hold'
     save()
-    held_stage('pointer-subthreshold-hold', 'HELD', 'RELEASE',
-               '/artifacts/pointer-subthreshold-held.ppm', check_subthreshold_hold)
+    held_stage('pointer-subthreshold-hold', 'HELD', 'CANCEL',
+               '/artifacts/pointer-small-motion-held.ppm', check_subthreshold_hold)
     wait_until(lambda: catalog_layout()[1] == subthreshold_layout and
                frame_geometries(panes) == subthreshold_geometry, time.monotonic() + 5)
-    require(live_unchanged(generations, expected_processes),
-            'releasing subthreshold modifier+LMB changed a process or PTY geometry')
+    cancelled_small_catalog, cancelled_small_layout = catalog_layout()
+    cancelled_small_history = json.loads(cancelled_small_catalog['layout']['json'])
+    cancelled_small_tab = next(item for item in cancelled_small_catalog['tabs'] if item['id'] == tab_id)
+    saved_small_tab = next(item for item in subthreshold_catalog['tabs'] if item['id'] == tab_id)
+    require(cancelled_small_layout == subthreshold_layout and
+            cancelled_small_catalog.get('layout') == subthreshold_catalog.get('layout') and
+            (cancelled_small_tab.get('layout_json'), cancelled_small_tab.get('active_pane'),
+             cancelled_small_tab.get('revision')) ==
+            (saved_small_tab.get('layout_json'), saved_small_tab.get('active_pane'),
+             saved_small_tab.get('revision')) and
+            (len(cancelled_small_history.get('undo', [])), len(cancelled_small_history.get('redo', []))) ==
+            (len(json.loads(subthreshold_catalog['layout']['json']).get('undo', [])),
+             len(json.loads(subthreshold_catalog['layout']['json']).get('redo', []))) and
+            live_unchanged(generations, expected_processes),
+            'Escape did not restore the exact small-motion layout/history and live process identities')
 
     # Exercise drag preview from a nonzero view index while focus mode keeps
     # the remaining panes visually suppressed. The held capture is retained
@@ -2178,8 +2236,9 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input': True,
         'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
-        'modifier_button_release_without_pointer_travel_preserved_root_weights_and_history_lengths': True,
-        'subthreshold_modifier_drag_preserved_full_layout_processes_and_pty_geometry': True,
+        'zero_motion_modifier_pickup_was_visible_without_durable_layout_or_pty_changes': True,
+        'zero_motion_modifier_release_preserved_exact_layout_history_processes_and_pty_geometry': True,
+        'five_pixel_modifier_drag_preview_cancelled_to_exact_layout_without_pty_or_process_changes': True,
         'focus_mode_drag_preview_and_cancel_preserved_nonzero_index_source_and_layout': True,
         'focus_mode_drag_capture_retained_for_remainder_reveal_review': True,
         'held_drag_preview_did_not_commit_or_resize_ptys': True,
@@ -2199,8 +2258,9 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'multiline_clipboard_review_ignored_enter_cancelled_without_input_and_confirmed_only_with_bracketed_mode': True,
         'one_fixture_shell_was_explicitly_added_before_populated_transfer': destination_pair,
         'captures': ['pointer-hover.ppm', 'pointer-hover-header.ppm',
+                     'pointer-no-motion-before.ppm', 'pointer-no-motion-held.ppm',
                      'pointer-subthreshold-before.ppm',
-                     'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
+                     'pointer-small-motion-held.ppm', 'pointer-focus-mode-before.ppm',
                      'pointer-focus-mode-drag.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
                      'pointer-dropped.ppm', 'pointer-undo.ppm',
@@ -5347,7 +5407,8 @@ def outer_run(args) -> dict:
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
                   'pointer-hover-header.ppm',
-                  'pointer-subthreshold-before.ppm', 'pointer-subthreshold-held.ppm',
+                  'pointer-no-motion-before.ppm', 'pointer-no-motion-held.ppm',
+                  'pointer-subthreshold-before.ppm', 'pointer-small-motion-held.ppm',
                   'pointer-focus-mode-before.ppm', 'pointer-focus-mode-drag.ppm',
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
@@ -5407,7 +5468,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

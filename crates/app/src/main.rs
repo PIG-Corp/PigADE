@@ -970,6 +970,7 @@ struct ResizeGesture {
 }
 
 struct PaneDrag {
+    origin: pointer_layout::GrabOrigin,
     pane: uuid::Uuid,
     split: uuid::Uuid,
     tab: uuid::Uuid,
@@ -1305,6 +1306,9 @@ impl CanvasApp {
                 cx.notify();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
+                // Re-entry may arrive at the last local coordinate. The next
+                // actual motion must be eligible to focus the pane beneath it.
+                this.hover_position = None;
                 this.reset_cursor_blink(cx);
                 cx.notify();
                 if !window.is_window_active() {
@@ -2989,6 +2993,7 @@ impl CanvasApp {
         &mut self,
         pane: uuid::Uuid,
         position: Point<Pixels>,
+        origin: pointer_layout::GrabOrigin,
         cx: &mut Context<Self>,
     ) {
         let Some((tab, base)) = self.tab_layout() else {
@@ -3005,6 +3010,7 @@ impl CanvasApp {
             return;
         };
         self.pane_drag = Some(PaneDrag {
+            origin,
             pane,
             split: uuid::Uuid::new_v4(),
             tab,
@@ -3048,15 +3054,20 @@ impl CanvasApp {
             return;
         };
         drag.position = position;
-        drag.travelled |= pointer_layout::travelled(
+        drag.travelled |= drag.origin.travelled(
             f64::from(f32::from(drag.start.x)),
             f64::from(f32::from(drag.start.y)),
             f64::from(f32::from(position.x)),
             f64::from(f32::from(position.y)),
         );
-        drag.moved |= drag.travelled;
-        // Do not tear a pane out on a modifier click or hand jitter. Once the
-        // threshold is crossed, project the detached remainder synchronously:
+        drag.moved |= drag.origin.picked_up(
+            f64::from(f32::from(drag.start.x)),
+            f64::from(f32::from(drag.start.y)),
+            f64::from(f32::from(position.x)),
+            f64::from(f32::from(position.y)),
+        );
+        // Modifier grabs pick up immediately; header clicks retain a threshold.
+        // Project the detached remainder synchronously:
         // a coalesced move/up must use the same targets as the painted preview.
         if drag.moved && self.layout_preview.is_none() {
             self.layout_preview = pointer_layout::detached_layout(&drag.base, drag.pane)
@@ -3070,7 +3081,7 @@ impl CanvasApp {
             }
         }
         let tab_drop = self.pane_drag.as_ref().and_then(|drag| {
-            if !drag.moved {
+            if !drag.moved || !drag.travelled {
                 return None;
             }
             let destination = self
@@ -3092,6 +3103,7 @@ impl CanvasApp {
         drag.tab_drop = tab_drop;
         let previous = drag.drop.take();
         if drag.moved
+            && drag.travelled
             && drag.tab_drop.is_none()
             && self
                 .canvas_bounds
@@ -5416,7 +5428,12 @@ impl CanvasApp {
                 window.notify_text_input_changed(&self.focus);
                 if let Some(pane) = self.selected_pane() {
                     if event.button == MouseButton::Left {
-                        self.begin_pane_drag(pane, event.position, cx);
+                        self.begin_pane_drag(
+                            pane,
+                            event.position,
+                            pointer_layout::GrabOrigin::Modifier,
+                            cx,
+                        );
                     } else if let Some((tab, base)) = self.tab_layout()
                         && let Some(geometry) = &self.layout_geometry
                         && let Some((divider, extent)) = tiling::pointer_boundary(
@@ -5519,7 +5536,7 @@ impl CanvasApp {
                 && let Some(pane) = self.selected_pane()
             {
                 self.finish_pointer(cx);
-                self.begin_pane_drag(pane, event.position, cx);
+                self.begin_pane_drag(pane, event.position, pointer_layout::GrabOrigin::Header, cx);
                 cx.stop_propagation();
                 cx.notify();
                 return;
@@ -5718,6 +5735,10 @@ impl CanvasApp {
         }
         if moved
             && event.pressed_button.is_none()
+            && !self
+                .pointer
+                .as_ref()
+                .is_some_and(|route| route.encoder.has_pressed())
             && window.is_window_active()
             && !self.prefix
             && self.layout_mode.is_none()

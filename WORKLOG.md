@@ -3781,3 +3781,75 @@ Verify body/header focus follows cursor; show exact Dwindle post-drop tree and i
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/pointer_layout.rs, crates/app/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 251 app tests,355 workspace tests on final full rerun, strict app/workspace Clippy, release builds and app debug build, formats/version/diff checks passed; child34 harness tests include strictC compile. Private release pointer02 passes full existing flow plus no-click header focus; settled focus and normal/focus-mode drop captures visually inspected. Pointer01 behavior passed but header image preceded paint; fixture timing repaired before02. Initial metadata writer-lock collision and initial Clippy/test fixture errors are not acceptance results.
 - Risks / next: Commit integration. Current native proof is private softwareX11 only; actualHyprland/Wayland pointer and dedicated nativeGitdiff UI acceptance remain open alongside broadMVP gates. Preserve unrelated dirt/stash0; no desktop configuration was modified.
+
+## 2026-10-18T03:48:03+00:00 — /root/appearance_colors_luna
+
+Added diff-bound Git Stage/Unstage ticket and receipt protocol validation, preserving optional action controls for older hosts.
+
+- Files: crates/app/src/protocol.rs
+- Verification: rustfmt --check crates/app/src/protocol.rs passed; git diff --check -- crates/app/src/protocol.rs passed. Cargo tests were not run because root owns that lane.
+- Risks / next: Root should integrate matching host DTO/RPC fields and run app protocol tests.
+
+## 2026-10-18T03:48:59+00:00 — /root/close_tab_layout_luna
+
+Added stage/unstage index controls to the bounded Git diff sheet, tied to the exact snapshot ticket and side. Added a persistent GitSheet index outcome banner with safe inspect and explicit dismiss controls for uncertain/unavailable outcomes; disabled refresh during an in-flight index operation and retained explicit post-operation refresh messaging.
+
+- Files: crates/app/src/git_status_ui.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/git_status_ui.rs passed; git diff --check passed. No app Cargo/native run per ownership.
+- Risks / next: Root owns index action handling and app-level verification; confirm keyboard actions and exact-ticket host flow in root build/tests.
+
+## 2026-10-18T03:51:52+00:00 — /root/appearance_colors_luna
+
+Extended Git index receipts with durable pending-operation snapshot validation and explicit acknowledgement protocol.
+
+- Files: crates/app/src/protocol.rs
+- Verification: rustfmt --check crates/app/src/protocol.rs passed; git diff --check -- crates/app/src/protocol.rs passed. Cargo tests were not run because root owns that lane.
+- Risks / next: Root should integrate host snapshot pending receipt/ack RPC fields and run app protocol tests.
+
+## 2026-10-18T03:52:12+00:00 — /root/appearance_colors_luna
+
+Hardened index acknowledgement receipt validation against empty blocker messages and unknown receipt fields.
+
+- Files: crates/app/src/protocol.rs
+- Verification: rustfmt --check crates/app/src/protocol.rs passed; git diff --check -- crates/app/src/protocol.rs WORKLOG.md passed. Cargo tests were not run because root owns that lane.
+- Risks / next: Root should run protocol tests after host recovery fields and acknowledgement RPC are integrated.
+
+## 2026-10-18T03:55:06+00:00 — pointer_review_luna
+
+Added diff-bound per-file Git index stage/unstage execution with native index CAS, bounded durable receipts, restart recovery and explicit acknowledgement.
+
+- Files: crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs
+- Verification: rustfmt --edition 2024 on owned files passed; git diff --check on owned files passed. Cargo was not run per integration-lane constraint.
+- Risks / next: Root must wire WorkspaceGitIndexAcknowledge routing and mirror the snapshot operation/unavailable fields; then run targeted session-host tests and integration verification. Review unknown-operation behavior on native Git fixtures.
+
+## 2026-10-18T03:57:00+00:00 — /root/appearance_colors_luna
+
+Extended the private catalog fixture with UI-driven file-scoped Git Stage/Unstage transitions and exact normalized index restoration checks.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; scripts/test_isolated_ime_x11.py passed (34 tests, including strict helper C compilation); git diff --check passed. No native/Cargo run.
+- Risks / next: Root should run the private catalog fixture and visually inspect the four captured Git diff overlays; their ready state is bounded by a normal 700 ms paint settle, not independently accessibility-gated.
+
+## 2026-10-18T04:00:39+00:00 — pointer_review_luna
+
+Hardened per-file Git index staging receipts, locking, bounded subprocess input/output, and mode/path edge cases
+
+- Files: crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs
+- Verification: rustfmt --edition 2024 on the two owned Rust files; git diff --check on tracked owned changes; no Cargo tests run per integration boundary
+- Risks / next: Root to run host and workspace validation after RPC/app integration; specifically check workspace_git_index tests for stdin tempfile process handling and Git mode fixtures.
+
+## 2026-10-18T04:12:32+00:00 — /root/hypr_pointer_luna
+
+Updated the private pointer fixture to verify zero-motion modifier pickup visually and stationary release no-op, and verify five-pixel drag preview Escape cancellation without layout, PTY, or process changes
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (34 tests passed, including strict C helper compilation); git diff --check on owned fixture files
+- Risks / next: Root should integrate with its app pointer changes and run the private pointer fixture if desired; this worker did not launch the native fixture.
+
+## 2026-10-18T04:14:32+00:00 — /root
+
+Match modifier pane grabs to Hyprland zero-threshold behavior; retain hover focus and require an actual pane under the drop cursor
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md
+- Verification: 263 app tests,20 layout tests, strict app Clippy, debug/release builds, version and diff checks passed. Luna ran34 private harness tests including strict C compilation. Root private release pointer fixture /tmp/pigade-hypr-pointer-20261018-01 passes immediate pickup/no-motion release,5px cancel, hover/header/input, focus-mode reveal, Move/Undo and existing transfer/file/paste cases; captures visually inspected. No live-desktop automation/config changes.
+- Risks / next: Commit only pointer changes, preserving pending Git-index and unrelated research/stress/GPUI work. Actual Hyprland/Wayland pointer and broad MVP acceptance remain open.
