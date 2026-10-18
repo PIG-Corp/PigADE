@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Linux Stop now signals the exact owned original PTY process group with nonblocking HUP/grace/KILL, retains child identity through EOF, and reports scope/failures separately from storage. Detached/new groups remain outside that scope.
+
 - Frozen terminal history now supports horizontal column navigation with Alt+Left/Right/Home/End and footer controls. Copy/handoff preserve visible physical spans; wide edge glyphs and old-host capability fallback are handled explicitly.
 
 - OSC 8 links from the visible live/history frame now have a frozen list and destination review. Explicit confirmation opens only validated HTTP/HTTPS URLs; cancel, copy, unsupported schemes and frame changes cannot trigger automatic external navigation.

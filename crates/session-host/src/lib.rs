@@ -13,6 +13,7 @@ mod opencode_resume;
 mod panel_directory;
 mod panel_launch;
 mod prepared;
+mod process_group_stop;
 mod projects;
 mod resume_probe;
 mod template_run;
@@ -391,6 +392,10 @@ pub struct View {
     pub recovery_path: String,
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
+    #[serde(default)]
+    pub stop_scope: Option<String>,
     pub frame: Frame,
     #[serde(default)]
     pub history: Option<history::Summary>,
@@ -675,6 +680,7 @@ enum Control {
     Stop,
 }
 struct ActorConfig {
+    process_identity: ProcessIdentity,
     geometry: Geometry,
     root: PathBuf,
     control: mpsc::Receiver<Control>,
@@ -1110,6 +1116,8 @@ fn restore_model_through(
         recovery_path,
         pid: None,
         storage_error,
+        stop_error: None,
+        stop_scope: None,
         frame: terminal.frame(),
         history: history.as_ref().map(|h| h.summary()),
         recovery_journal_bytes_read: reader.bytes_read(),
@@ -2241,8 +2249,9 @@ impl Host {
         gate.set_read_timeout(Some(Duration::from_secs(5)))?;
         let hello: String = receive(&mut gate)?;
         ensure!(hello == nonce.to_string(), "wrong launch nonce");
+        let process_identity = identity(child_pid)?;
         self.metadata
-            .register_helper(spec.operation, identity(child_pid)?)?;
+            .register_helper(spec.operation, process_identity.clone())?;
         self.metadata.permit_exec(spec.operation)?;
         send(&mut gate, &nonce.to_string())?;
         drop(gate);
@@ -2256,6 +2265,8 @@ impl Host {
             recovery_path: "live".into(),
             pid: Some(child_pid),
             storage_error: None,
+            stop_error: None,
+            stop_scope: Some("pty_process_group_v1".into()),
             frame: Terminal::new(spec.geometry, false).frame(),
             history: Some(history.summary()),
             recovery_journal_bytes_read: 0,
@@ -2313,6 +2324,7 @@ impl Host {
                 journal,
                 actor_view,
                 ActorConfig {
+                    process_identity,
                     geometry: spec.geometry,
                     root: actor_root,
                     control: control_rx,
@@ -2734,6 +2746,7 @@ fn actor(
     config: ActorConfig,
 ) {
     let probe = &config.probe;
+    let mut group_stop = process_group_stop::GroupStop::new(config.process_identity.clone());
     let mut terminal = Terminal::new(config.geometry, true);
     let history = &config.history;
     terminal.set_history_observer(Some(history.clone()));
@@ -2748,8 +2761,9 @@ fn actor(
     loop {
         probe.enter(metrics::ActorStage::Waiting, None);
         if let Ok(Control::Stop) = config.control.try_recv() {
-            let _ = child.kill();
+            record_stop_result(group_stop.request(Instant::now()), &view, &config.changes);
         }
+        record_stop_result(group_stop.service(Instant::now()), &view, &config.changes);
         if let Err(error) = checkpoints.complete(false) {
             probe.enter(metrics::ActorStage::Degraded, None);
             let mut current = view.lock().expect("view lock");
@@ -2758,7 +2772,13 @@ fn actor(
             drop(current);
             notify_actor_change(&config.changes, "checkpoint completion failure");
             loop {
-                wait_degraded(&config.control, &mut *child);
+                wait_degraded(
+                    &config.control,
+                    &mut *child,
+                    &mut group_stop,
+                    &view,
+                    &config.changes,
+                );
             }
         }
         if metrics.checkpoints != checkpoints.completed {
@@ -2790,7 +2810,13 @@ fn actor(
                     notify_actor_change(&config.changes, "query response failure");
                     loop {
                         std::hint::black_box((&query_responses, &rx, &master));
-                        wait_degraded(&config.control, &mut *child);
+                        wait_degraded(
+                            &config.control,
+                            &mut *child,
+                            &mut group_stop,
+                            &view,
+                            &config.changes,
+                        );
                     }
                 }
             }
@@ -2798,11 +2824,18 @@ fn actor(
         let mut action = if let Some(action) = deferred.take() {
             action
         } else {
-            let received = if terminal.sync_timeout_pending() {
-                rx.recv_timeout(Duration::from_millis(10))
-            } else if !query_responses.is_empty() {
-                rx.recv_timeout(QUERY_RESPONSE_RETRY)
-            } else if let Some(timeout) = checkpoints.receive_timeout() {
+            let timeout = [
+                terminal
+                    .sync_timeout_pending()
+                    .then_some(Duration::from_millis(10)),
+                (!query_responses.is_empty()).then_some(QUERY_RESPONSE_RETRY),
+                checkpoints.receive_timeout(),
+                group_stop.remaining(Instant::now()),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let received = if let Some(timeout) = timeout {
                 rx.recv_timeout(timeout)
             } else {
                 rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
@@ -2810,6 +2843,14 @@ fn actor(
             match received {
                 Ok(a) => a,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if group_stop
+                        .remaining(Instant::now())
+                        .is_some_and(|remaining| remaining.is_zero())
+                    {
+                        // Service the one-shot escalation at the loop head.
+                        // It is a process control timer, never an ANSI/replay event.
+                        continue;
+                    }
                     if terminal.sync_timeout_due() {
                         Action::SyncTimeout
                     } else {
@@ -2838,7 +2879,13 @@ fn actor(
                             drop(current);
                             notify_actor_change(&config.changes, "idle checkpoint failure");
                             loop {
-                                wait_degraded(&config.control, &mut *child);
+                                wait_degraded(
+                                    &config.control,
+                                    &mut *child,
+                                    &mut group_stop,
+                                    &view,
+                                    &config.changes,
+                                );
                             }
                         }
                         continue;
@@ -2866,10 +2913,16 @@ fn actor(
         let result = (|| -> Result<bool> {
             // Closing all slave descriptors is not proof the process exited.
             // Keep priority Stop serviceable instead of blocking in child.wait().
-            if matches!(&action, Action::Eof) && child.try_wait()?.is_none() {
-                deferred = Some(Action::Eof);
-                thread::sleep(Duration::from_millis(2));
-                return Ok(true);
+            if matches!(&action, Action::Eof) {
+                // Until the group signal has finished, retain the direct child
+                // unreaped even if it has exited and closed the slave. Its PID
+                // pins the original group identity through both signals.
+                if group_stop.blocks_reap() || child.try_wait()?.is_none() {
+                    deferred = Some(Action::Eof);
+                    thread::sleep(Duration::from_millis(2));
+                    return Ok(true);
+                }
+                group_stop.disarm();
             }
             let (kind, payload, resize) = match action {
                 Action::Wake => unreachable!("wake is not a terminal event"),
@@ -2993,7 +3046,13 @@ fn actor(
                 notify_actor_change(&config.changes, "terminal actor degraded");
                 loop {
                     std::hint::black_box((&pending_action, &rx, &master));
-                    wait_degraded(&config.control, &mut *child);
+                    wait_degraded(
+                        &config.control,
+                        &mut *child,
+                        &mut group_stop,
+                        &view,
+                        &config.changes,
+                    );
                 }
             }
         }
@@ -3027,9 +3086,40 @@ mod change_notification_tests {
     }
 }
 
-fn wait_degraded(control: &mpsc::Receiver<Control>, child: &mut dyn portable_pty::Child) {
-    if let Ok(Control::Stop) = control.recv_timeout(Duration::from_millis(100)) {
-        let _ = child.kill();
+fn record_stop_result(result: Result<()>, view: &Mutex<View>, changes: &changes::ChangeHub) {
+    if let Err(error) = result {
+        let mut message = format!("{error:#}");
+        let mut end = message.len().min(1024);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+        let mut current = view.lock().expect("view lock");
+        if current.stop_error.as_deref() != Some(&message) {
+            current.stop_error = Some(message);
+            drop(current);
+            notify_actor_change(changes, "PTY process group stop failure");
+        }
+    }
+}
+
+fn wait_degraded(
+    control: &mpsc::Receiver<Control>,
+    child: &mut dyn portable_pty::Child,
+    stop: &mut process_group_stop::GroupStop,
+    view: &Mutex<View>,
+    changes: &changes::ChangeHub,
+) {
+    let timeout = stop
+        .remaining(Instant::now())
+        .unwrap_or(Duration::from_millis(100))
+        .min(Duration::from_millis(100));
+    if let Ok(Control::Stop) = control.recv_timeout(timeout) {
+        record_stop_result(stop.request(Instant::now()), view, changes);
+    }
+    record_stop_result(stop.service(Instant::now()), view, changes);
+    if !stop.blocks_reap() && child.try_wait().is_ok_and(|status| status.is_some()) {
+        stop.disarm();
     }
 }
 
@@ -3724,6 +3814,8 @@ mod actor_diagnostic_tests {
             recovery_path: "live".into(),
             pid: Some(1),
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Terminal::new(geometry, false).frame(),
             history: None,
             recovery_journal_bytes_read: 0,

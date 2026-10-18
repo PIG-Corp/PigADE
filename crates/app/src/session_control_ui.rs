@@ -189,17 +189,39 @@ impl ProductUi {
                             .text_size(px(11.))
                             .text_color(colors.muted)
                             .whitespace_normal()
-                            .child("Дочерние процессы CLI могут продолжить работу."),
+                            .child(crate::session_control::scope_message(
+                                sheet.target.stop_scope.as_deref(),
+                            )),
                     )
-                    .children(self.notice.clone().map(|notice| {
+                    .children(sheet.error.as_ref().map(|error| {
                         div()
-                            .id("stop-dialog-notice")
-                            .role(Role::Status)
+                            .id("stop-dialog-error")
+                            .role(Role::Alert)
                             .text_size(px(11.))
                             .text_color(colors.accent)
                             .whitespace_normal()
-                            .child(notice)
+                            .child(
+                                error
+                                    .chars()
+                                    .filter(|ch| !ch.is_control())
+                                    .take(1024)
+                                    .collect::<String>(),
+                            )
                     }))
+                    .children(
+                        self.notice
+                            .clone()
+                            .filter(|_| sheet.phase != crate::session_control::Phase::Complete)
+                            .map(|notice| {
+                                div()
+                                    .id("stop-dialog-notice")
+                                    .role(Role::Status)
+                                    .text_size(px(11.))
+                                    .text_color(colors.accent)
+                                    .whitespace_normal()
+                                    .child(notice)
+                            }),
+                    )
                     .child(controls),
             )
             .into_any_element()

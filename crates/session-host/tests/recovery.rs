@@ -259,6 +259,7 @@ fn conditional_poll_keeps_idle_cells_private_and_reports_exit_and_reopen() -> Re
         state: exited.state,
         pid: exited.pid,
         storage_error: exited.storage_error,
+        stop_error: exited.stop_error,
     }];
     host.kill_host()?;
     host.start()?;

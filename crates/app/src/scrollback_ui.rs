@@ -596,6 +596,8 @@ mod tests {
             recovery_path: "checkpoint_tail".into(),
             pid: Some(42),
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: protocol::Frame {
                 geometry: protocol::Geometry { rows: 2, cols: 2 },
                 cells: vec![cell.clone(); 4],

@@ -597,6 +597,8 @@ pub(super) struct SessionSummary {
     pub(super) title: String,
     pub(super) state: String,
     pub(super) pid: Option<u32>,
+    pub(super) stop_scope: Option<String>,
+    pub(super) stop_error: Option<String>,
 }
 
 fn commit_draft_fits(
@@ -626,6 +628,8 @@ impl From<protocol::View> for SessionSummary {
             title: view.frame.title,
             state: view.state,
             pid: view.pid,
+            stop_scope: view.stop_scope,
+            stop_error: view.stop_error,
         }
     }
 }
@@ -6732,8 +6736,10 @@ mod context_edit_tests {
                     session: Uuid::from_u128(1),
                     generation: Uuid::from_u128(2),
                     title: "Review".into(),
+                    stop_scope: None,
                 },
                 phase: Phase::Draft,
+                error: None,
             }),
             dialog: Some(dialog),
             ..Default::default()
@@ -6765,6 +6771,8 @@ mod context_edit_tests {
             title: "History".into(),
             state: "history".into(),
             pid: None,
+            stop_scope: None,
+            stop_error: None,
         };
         let live = SessionSummary {
             session: session.to_string(),
@@ -6772,6 +6780,8 @@ mod context_edit_tests {
             title: "Review".into(),
             state: "running".into(),
             pid: Some(42),
+            stop_scope: None,
+            stop_error: None,
         };
         let mut ui = ProductUi {
             dialog: Some(Dialog::new(DialogKind::Sessions)),

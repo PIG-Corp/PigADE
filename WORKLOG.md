@@ -5381,3 +5381,35 @@ Integrate horizontal frozen history spans, legacy capability gates, wide-edge di
 - Files: crates/app/src/scrollback_ui.rs, crates/app/src/main.rs, crates/app/src/scrollback.rs, crates/app/src/selection.rs, crates/app/src/handoff_commands.rs, crates/storage/src/catalog.rs, crates/session-host/tests/history_view.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0018-in-pane-cell-history.md
 - Verification: 454 app tests;6 focused host history,3 terminal grid,32 catalog and2 real-host PTY IPC tests pass. Strict workspace/app Clippy, root/app format, aligned0.0.1-dev, diff check and release root bins/examples/app pass.39 existing harness tests incl strict C compile pass. Private final X11 history07 passes both-axis navigation, exact frozen far-right URI copy, no history input, one xyz after return, unchanged semantic model/journal/layout/process/cwd after explicit resize baselines. Root inspected +8/end/home/wide captures. Earlier app failures were invalid resize/wide-cell fixtures, repaired. Native01 wrong DTO field,02 wrong link selection,03-06 volatile idle-checkpoint/probe equality failures remain failed evidence; root added a comparator regression retaining semantic/event/output checks. Reporting-only pan capture/dimension fields follow07; binary/actions unchanged.
 - Risks / next: Commit coherent feature preserving unrelated stress/research/unused GPUI dirt and stash0. Cold reflow/scroll persistence and full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open; broad product goal stays active.
+
+## 2026-10-18T13:46:11+00:00 — stop_tree_lookup_luna
+
+Add a data-only Unix PTY process-group stop controller with one-shot SIGHUP and grace-deadline SIGKILL
+
+- Files: crates/session-host/src/process_group_stop.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; Cargo and tests not run per assigned boundary
+- Risks / next: Root owns lib.rs integration and actor lifecycle wiring: install frozen ProcessIdentity, defer reaping during grace, service at deadline, and disarm immediately after reap; no live process was signaled.
+
+## 2026-10-18T13:47:02+00:00 — stop_group_ipc_luna
+
+Add real-host PTY process-group Stop regressions for HUP-ignoring descendants, natural leader exit, journal reopen, and unrelated-session serviceability.
+
+- Files: crates/session-host/tests/process_group_stop.rs
+- Verification: rustfmt --edition 2024 --check passed; git diff --no-index --check reported no whitespace errors; Cargo tests intentionally not run (lead owns Cargo/native verification).
+- Risks / next: Lead should run the targeted integration test alongside the Stop implementation; natural-exit case deliberately requires original leader identity to remain observable through Stop.
+
+## 2026-10-18T13:51:52+00:00 — stop_group_ipc_luna
+
+Harden PTY Stop integration regressions with pidfd-pinned exact-task cleanup, zombie-safe identity checks, stop-scope assertions, and HUP/PTY-EOF escalation coverage.
+
+- Files: crates/session-host/tests/process_group_stop.rs
+- Verification: rustfmt --edition 2024 --check passed; git diff --check passed; Cargo tests not run (lead owns test lane).
+- Risks / next: Lead should run process_group_stop integration tests against the current Stop actor implementation; no test execution evidence claimed.
+
+## 2026-10-18T14:06:09+00:00 — /root
+
+Integrate owned PTY process-group Stop with nonblocking HUP/grace/KILL, unreaped PID protection and explicit UI scope/failures
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/process_group_stop.rs, crates/session-host/src/poll.rs, crates/session-host/src/checkpoint.rs, crates/session-host/tests/process_group_stop.rs, crates/session-host/tests/context_launch.rs, crates/session-host/tests/recovery.rs, crates/app/src/session_control.rs, crates/app/src/session_control_ui.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/scrollback_ui.rs, crates/app/src/selection.rs, crates/app/src/terminal_insert.rs, crates/app/src/terminal_links.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0023-owned-pty-process-group-stop.md
+- Verification: 457 app tests;230 full host lib tests before final policy guard plus4 final helper tests;3 final real-host PTY stop tests;1 slow-input stop/backpressure;26 context/query/recovery integrations pass. Strict root/app Clippy, root/package fmt,0.0.1-dev alignment, diff checks and release root bins/examples/app pass. Final private native catalog03 passes confirmation/cancel/complete, hidden Stop and existing Git/index/commit/hooks/tab-close/reattach flows; final review/complete captures visually inspected. App7d515aa7..., host3ebf34b8.... Initial ActorConfig/PollChanges fixture compile errors fixed. Root corrected identity NotFound handling, disarmed success, inherited SIGCHLD auto-reaping/unknown-handler assumptions and late-error downgrade of Complete; no first-party warning waived. Native01/02 pass earlier exact builds;03 verifies final binaries.
+- Risks / next: Commit coherent block preserving unrelated stress/research/unused GPUI dirt and stash0. One original process group only: escaped/different job-control groups and host death during grace are not full-tree guarantees. No cgroup/cross-platform/MVP completion claim; full recovery/platform/performance/a11y/soak gates and broad goal remain active.

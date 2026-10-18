@@ -392,6 +392,8 @@ mod tests {
             recovery_path: String::new(),
             pid: None,
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Frame {
                 geometry: Geometry { rows: 1, cols },
                 cells,

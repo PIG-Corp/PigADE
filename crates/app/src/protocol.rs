@@ -123,6 +123,10 @@ pub struct View {
     pub recovery_path: String,
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
+    #[serde(default)]
+    pub stop_scope: Option<String>,
     pub frame: Frame,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -133,6 +137,8 @@ pub struct Known {
     pub state: String,
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
 }
 impl View {
     pub fn known(&self) -> Known {
@@ -143,6 +149,7 @@ impl View {
             state: self.state.clone(),
             pid: self.pid,
             storage_error: self.storage_error.clone(),
+            stop_error: self.stop_error.clone(),
         }
     }
 }
@@ -3315,6 +3322,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn stop_failure_without_output_replaces_the_replica_without_marking_storage_degraded() {
+        let mut cached = vec![fixture()];
+        let mut recovery = None;
+        let mut next = cached[0].clone();
+        next.stop_error = Some("group identity refused".into());
+        next.stop_scope = Some("pty_process_group_v1".into());
+        assert!(
+            merge_poll(
+                &mut cached,
+                &mut recovery,
+                Poll {
+                    activity: None,
+                    activity_error: None,
+                    selected: vec![next.known()],
+                    views: vec![next.clone()],
+                    recovery: None
+                }
+            )
+            .unwrap()
+            .views
+        );
+        assert_eq!(cached[0], next);
+        assert!(cached[0].storage_error.is_none());
+        assert_eq!(cached[0].state, "running");
+    }
     #[test]
     fn lifecycle_changes_without_output_replace_the_replica() {
         let mut cached = vec![fixture()];

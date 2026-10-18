@@ -1887,6 +1887,7 @@ fn panel_generation_selection_uses_ordinal_head_and_persists_history_pin() -> Re
                 state: "running".into(),
                 pid: Some(u32::MAX),
                 storage_error: None,
+                stop_error: None,
             }],
         },
     )?;

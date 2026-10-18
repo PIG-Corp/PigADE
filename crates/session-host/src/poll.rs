@@ -29,6 +29,8 @@ pub struct Known {
     pub state: String,
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
 }
 
 /// One logical panel to poll. A generation pins the panel to an exact view;
@@ -48,6 +50,8 @@ pub struct SessionInfo {
     pub state: String,
     pub pid: Option<u32>,
     pub storage_error: Option<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
     pub geometry: Geometry,
     pub title: String,
 }
@@ -158,6 +162,7 @@ impl SessionInfo {
             state: self.state.clone(),
             pid: self.pid,
             storage_error: self.storage_error.clone(),
+            stop_error: self.stop_error.clone(),
         }
     }
 
@@ -168,6 +173,7 @@ impl SessionInfo {
             && self.state == known.state
             && self.pid == known.pid
             && self.storage_error == known.storage_error
+            && self.stop_error == known.stop_error
     }
 }
 
@@ -276,6 +282,7 @@ pub fn poll_panels<'a>(
             state: current.state.clone(),
             pid: current.pid,
             storage_error: current.storage_error.clone(),
+            stop_error: current.stop_error.clone(),
             geometry: current.frame.geometry,
             title: current.frame.title.clone(),
         };
@@ -320,6 +327,13 @@ fn validate_known(known: &[Known]) -> Result<std::collections::HashMap<(Uuid, Uu
                 .as_ref()
                 .is_none_or(|error| error.len() <= MAX_KNOWN_ERROR_BYTES),
             "known storage error is too large"
+        );
+        ensure!(
+            watermark
+                .stop_error
+                .as_ref()
+                .is_none_or(|error| error.len() <= MAX_KNOWN_ERROR_BYTES),
+            "known stop error is too large"
         );
         ensure!(
             known_by_session_generation
@@ -390,6 +404,7 @@ fn poll_selected<'a>(
             state: current.state.clone(),
             pid: current.pid,
             storage_error: current.storage_error.clone(),
+            stop_error: current.stop_error.clone(),
             geometry: current.frame.geometry,
             title: current.frame.title.clone(),
         };
@@ -426,6 +441,8 @@ mod tests {
             recovery_path: "live".into(),
             pid: Some(1234),
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Terminal::new(Geometry::new(8, 40).unwrap(), false).frame(),
             history: None,
             recovery_journal_bytes_read: 0,
@@ -443,6 +460,7 @@ mod tests {
             state: view.state.clone(),
             pid: view.pid,
             storage_error: view.storage_error.clone(),
+            stop_error: view.stop_error.clone(),
         }
     }
 
@@ -610,6 +628,7 @@ mod tests {
             Box::new(|view: &mut View| view.state = "degraded".into()),
             Box::new(|view: &mut View| view.pid = None),
             Box::new(|view: &mut View| view.storage_error = Some("disk error".into())),
+            Box::new(|view: &mut View| view.stop_error = Some("group identity refused".into())),
             Box::new(|view: &mut View| view.generation = Uuid::from_u128(21)),
         ] {
             let current = view(Uuid::from_u128(10), Uuid::from_u128(20));

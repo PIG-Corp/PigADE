@@ -155,6 +155,8 @@ mod tests {
             recovery_path: "live".into(),
             pid: Some(7),
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Frame {
                 geometry: Geometry { rows: 1, cols: 1 },
                 cells: vec![Cell {

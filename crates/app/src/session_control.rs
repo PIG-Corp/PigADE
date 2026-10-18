@@ -15,6 +15,7 @@ pub(crate) struct Target {
     pub session: Uuid,
     pub generation: Uuid,
     pub title: String,
+    pub stop_scope: Option<String>,
 }
 
 impl Target {
@@ -56,6 +57,7 @@ pub(crate) struct StopSheet {
     pub dialog: Uuid,
     pub target: Target,
     pub phase: Phase,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +76,7 @@ pub(crate) struct Pending {
 struct Operation {
     target: Target,
     phase: Phase,
+    error: Option<String>,
     request: Option<Pending>,
     due: Instant,
 }
@@ -109,13 +112,20 @@ impl StopControl {
             .request
             .take()
     }
-    fn observe(&mut self, session: &str, generation: &str, state: &str) -> Option<(Target, Phase)> {
+    fn observe(
+        &mut self,
+        session: &str,
+        generation: &str,
+        state: &str,
+        stop_error: Option<&str>,
+    ) -> Option<(Target, Phase)> {
         let operation = self
             .operations
             .iter_mut()
             .find(|operation| operation.target.matches(session, generation))?;
         let phase = match state {
             "exited" => Phase::Complete,
+            _ if stop_error.is_some() && operation.phase != Phase::Complete => Phase::Unavailable,
             "history" | "historical" | "history_unavailable" | "degraded"
                 if operation.phase != Phase::Complete =>
             {
@@ -123,11 +133,29 @@ impl StopControl {
             }
             _ => return None,
         };
-        if operation.phase == phase {
+        let error = stop_error
+            .filter(|_| phase != Phase::Complete)
+            .map(|message| {
+                message
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(1024)
+                    .collect::<String>()
+            });
+        if operation.phase == phase && operation.error == error {
             return None;
         }
+        operation.error = error;
         operation.phase = phase;
         Some((operation.target.clone(), phase))
+    }
+}
+
+pub(crate) fn scope_message(scope: Option<&str>) -> &'static str {
+    if scope == Some("pty_process_group_v1") {
+        "Область остановки — группа процессов этого терминала. Процессы в других группах или сессиях могут продолжить работу."
+    } else {
+        "Область остановки host не подтверждена. Дочерние процессы CLI могут продолжить работу."
     }
 }
 
@@ -155,6 +183,7 @@ impl CanvasApp {
                     session,
                     generation,
                     title: self.product.pane_title(view).chars().take(160).collect(),
+                    stop_scope: view.stop_scope.clone(),
                 };
                 let stoppable = can_stop(&view.state, view.pid);
                 self.open_stop(target, stoppable, cx);
@@ -181,6 +210,7 @@ impl CanvasApp {
                         session,
                         generation,
                         title,
+                        stop_scope: summary.stop_scope.clone(),
                     },
                     stoppable,
                     cx,
@@ -212,11 +242,55 @@ impl CanvasApp {
             cx.notify();
             return;
         }
+        let error = self
+            .stop_control
+            .find(&target)
+            .and_then(|operation| operation.error.clone())
+            .or_else(|| {
+                self.state
+                    .views
+                    .iter()
+                    .find(|view| target.matches(&view.session, &view.generation))
+                    .and_then(|view| view.stop_error.clone())
+            })
+            .or_else(|| {
+                self.product
+                    .sessions
+                    .iter()
+                    .find(|view| target.matches(&view.session, &view.generation))
+                    .and_then(|view| view.stop_error.clone())
+            });
+        // Reopened UI may already know a failed host stop without a local
+        // request. Remember only its observation so Inspect can read it; never
+        // synthesize or resend a Stop from restored metadata.
+        if let Some(error) = &error
+            && self.stop_control.find(&target).is_none()
+        {
+            if self.stop_control.operations.len() >= 32 {
+                self.product.notice = Some(
+                    "Ожидается подтверждение 32 остановок. Проверьте состояние сессий.".into(),
+                );
+                cx.notify();
+                return;
+            }
+            self.stop_control.operations.push(Operation {
+                target: target.clone(),
+                phase: Phase::Unavailable,
+                error: Some(error.clone()),
+                request: None,
+                due: Instant::now(),
+            });
+        }
         let dialog = Dialog::new(DialogKind::StopSession);
         self.product.stop_sheet = Some(StopSheet {
             dialog: dialog.id,
             target,
-            phase: phase.unwrap_or(Phase::Draft),
+            phase: phase.unwrap_or(if error.is_some() {
+                Phase::Unavailable
+            } else {
+                Phase::Draft
+            }),
+            error,
         });
         self.product.dialog = Some(dialog);
         self.product.notice = None;
@@ -258,6 +332,7 @@ impl CanvasApp {
             self.stop_control.operations.push(Operation {
                 target: sheet.target.clone(),
                 phase: Phase::Sending,
+                error: None,
                 request: Some(pending),
                 due: Instant::now() + Duration::from_secs(1),
             });
@@ -266,6 +341,10 @@ impl CanvasApp {
     }
 
     fn present_stop_phase(&mut self, target: &Target, phase: Phase, cx: &mut Context<Self>) {
+        let error = self
+            .stop_control
+            .find(target)
+            .and_then(|operation| operation.error.clone());
         if let Some(sheet) = &mut self.product.stop_sheet
             && sheet.target.session == target.session
             && sheet.target.generation == target.generation
@@ -277,6 +356,7 @@ impl CanvasApp {
                 dialog.active_field = 0;
             }
             sheet.phase = phase;
+            sheet.error = error;
         }
         if phase == Phase::Complete {
             for summary in &mut self.product.sessions {
@@ -313,10 +393,12 @@ impl CanvasApp {
             operation.due = Instant::now()
                 + Duration::from_secs(if pending.kind == Kind::Stop { 1 } else { 5 });
         }
-        if let Some((target, phase)) =
-            self.stop_control
-                .observe(&view.session, &view.generation, &view.state)
-        {
+        if let Some((target, phase)) = self.stop_control.observe(
+            &view.session,
+            &view.generation,
+            &view.state,
+            view.stop_error.as_deref(),
+        ) {
             self.present_stop_phase(&target, phase, cx);
         } else if let Some(operation) = self.stop_control.find(&pending.target) {
             self.present_stop_phase(&pending.target, operation.phase, cx);
@@ -361,8 +443,12 @@ impl CanvasApp {
             .views
             .iter()
             .filter_map(|view| {
-                self.stop_control
-                    .observe(&view.session, &view.generation, &view.state)
+                self.stop_control.observe(
+                    &view.session,
+                    &view.generation,
+                    &view.state,
+                    view.stop_error.as_deref(),
+                )
             })
             .collect();
         for (target, phase) in observed {
@@ -417,6 +503,7 @@ mod tests {
             session: Uuid::from_u128(1),
             generation: Uuid::from_u128(generation),
             title: "Review".into(),
+            stop_scope: None,
         }
     }
     fn control() -> StopControl {
@@ -424,6 +511,7 @@ mod tests {
             operations: vec![Operation {
                 target: target(2),
                 phase: Phase::Unknown,
+                error: None,
                 request: Some(Pending {
                     id: Uuid::from_u128(3),
                     target: target(2),
@@ -441,7 +529,8 @@ mod tests {
                 .observe(
                     &Uuid::from_u128(1).to_string(),
                     &Uuid::from_u128(4).to_string(),
-                    "exited"
+                    "exited",
+                    None
                 )
                 .is_none()
         );
@@ -451,6 +540,7 @@ mod tests {
                 &Uuid::from_u128(1).to_string(),
                 &Uuid::from_u128(2).to_string(),
                 "exited",
+                None,
             )
             .unwrap();
         assert_eq!(update.1, Phase::Complete);
@@ -463,6 +553,7 @@ mod tests {
                 &Uuid::from_u128(1).to_string(),
                 &Uuid::from_u128(2).to_string(),
                 "history",
+                None,
             )
             .unwrap();
         assert_eq!(update.1, Phase::Unavailable);
@@ -472,9 +563,58 @@ mod tests {
                 &Uuid::from_u128(1).to_string(),
                 &Uuid::from_u128(2).to_string(),
                 "degraded",
+                None,
             )
             .unwrap();
         assert_eq!(update.1, Phase::Unavailable);
+    }
+    #[test]
+    fn stop_failure_preserves_terminal_liveness_and_never_confirms_another_generation() {
+        let mut control = control();
+        let session = Uuid::from_u128(1).to_string();
+        let generation = Uuid::from_u128(2).to_string();
+        assert!(
+            control
+                .observe(
+                    &session,
+                    &Uuid::from_u128(4).to_string(),
+                    "running",
+                    Some("refused")
+                )
+                .is_none()
+        );
+        let update = control
+            .observe(&session, &generation, "running", Some("identity changed"))
+            .unwrap();
+        assert_eq!(update.1, Phase::Unavailable);
+        assert_eq!(
+            control.operations[0].error.as_deref(),
+            Some("identity changed")
+        );
+        assert!(
+            control
+                .observe(&session, &generation, "running", Some("identity changed"))
+                .is_none()
+        );
+        assert_eq!(
+            control
+                .observe(&session, &generation, "exited", None)
+                .unwrap()
+                .1,
+            Phase::Complete
+        );
+        assert!(
+            control
+                .observe(&session, &generation, "running", Some("late error"))
+                .is_none()
+        );
+        assert_eq!(control.operations[0].phase, Phase::Complete);
+    }
+    #[test]
+    fn only_the_advertised_group_contract_changes_confirmation_scope() {
+        assert!(scope_message(Some("pty_process_group_v1")).contains("группа процессов"));
+        assert_eq!(scope_message(None), scope_message(Some("future_unknown")));
+        assert!(scope_message(None).contains("не подтверждена"));
     }
     #[test]
     fn only_the_matching_receipt_is_consumed_once() {

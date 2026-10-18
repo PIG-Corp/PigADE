@@ -935,6 +935,8 @@ mod tests {
             recovery_path: "live".into(),
             pid: None,
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Terminal::new(geometry, false).frame(),
             history: Some(history.summary()),
             recovery_journal_bytes_read: 0,
@@ -953,6 +955,8 @@ mod tests {
         let actor_probe = probe.clone();
         let actor_writer = writer.clone();
         let actor_root = root.path().to_owned();
+        let process_identity =
+            crate::identity(child.process_id().context("fixture child PID missing")?)?;
         let actor_thread = std::thread::spawn(move || {
             actor(
                 action_rx,
@@ -962,6 +966,7 @@ mod tests {
                 journal,
                 actor_view,
                 ActorConfig {
+                    process_identity,
                     geometry,
                     root: actor_root,
                     control: control_rx,

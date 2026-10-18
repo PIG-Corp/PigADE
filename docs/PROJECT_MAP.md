@@ -4,6 +4,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 
 | Location | Responsibility |
 |---|---|
+| crates/session-host/src/process_group_stop.rs; lib.rs actor; app/src/session_control.rs, session_control_ui.rs | Generation-owned original PTY group Stop, nonblocking grace, unreaped PID pin, permanent disarm and explicit scope/errors; ADR0023 |
 | crates/terminal/src/history_grid.rs; session-host/src/history_view.rs; app/src/scrollback.rs, scrollback_ui.rs | Frozen typed normal-history rows and bounded horizontal spans; history_pan_schema capability, exact offset correlation, shared worker/leases, display-only wide-edge masking and input isolation |
 | Cargo.toml/Cargo.lock | Host/storage/terminal/layout workspace; locked dependencies; canonical first-party version |
 | crates/terminal | Sole ANSI/core adapter, validated geometry, ordered timers, cell DTOs and full checkpoint envelope |

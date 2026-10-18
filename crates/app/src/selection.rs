@@ -300,6 +300,8 @@ mod tests {
             recovery_path: String::new(),
             pid: Some(42),
             storage_error: None,
+            stop_error: None,
+            stop_scope: None,
             frame: Frame {
                 geometry: Geometry {
                     rows: rows.len() as u16,
