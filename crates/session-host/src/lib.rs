@@ -1954,7 +1954,7 @@ impl Host {
         let history = history::History::live(&self.root, journal.header())?;
         let handshake = launch_gate::LaunchGate::bind(&self.endpoint_root)?;
         let pair = native_pty_system().openpty(pty_size(spec.geometry))?;
-        let mut builder = CommandBuilder::new(std::env::current_exe()?);
+        let mut builder = CommandBuilder::new(session_host_executable()?);
         builder.arg("__helper");
         builder.arg(&handshake.path);
         builder.arg(nonce.to_string());
@@ -2084,6 +2084,20 @@ impl Host {
         Ok(vec![snapshot_view(
             self.sessions.last().expect("new session"),
         )])
+    }
+}
+
+/// Resolve the helper image through the running host process. On Linux this
+/// remains executable if the installed path is replaced or unlinked while the
+/// host is alive (for example, during a release build/install).
+fn session_host_executable() -> Result<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(PathBuf::from(format!("/proc/{}/exe", std::process::id())))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(std::env::current_exe()?)
     }
 }
 fn pty_size(g: Geometry) -> PtySize {

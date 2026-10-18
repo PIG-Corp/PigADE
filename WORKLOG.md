@@ -4693,3 +4693,35 @@ Integrate and register latest-release PigADE launcher in the user application me
 - Files: scripts/install-desktop.py, scripts/run-desktop.sh, crates/app/assets/desktop/org.pigade.app.svg, README.md
 - Verification: Installed user-local org.pigade.app.desktop/icon and stable pigade symlink. Root caught quoted TryExec hiding entry (GIO constructor NULL), removed shell quotes from TryExec and duplicate main category, reinstalled. GIO now resolves PigADE and should_show=True, correct Exec. Actual Omarchy AppLibrary uses DesktopEntries.applications and watches valuesChanged. No app launch or desktop/host restart; wrapper resolves current release path on each invocation.
 - Risks / next: Run final syntax/desktop validation and commit launcher separately. Handoff product work is still pending integration; broad goal active. Running older UI/hosts untouched.
+
+## 2026-10-18T08:37:14+00:00 — ctrl_enter_review_luna
+
+Correct handoff fixture oracle to compare full effective Codex context and stable source identity/frame
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 -v (37 passed); py_compile passed; strict compile_helper passed; git diff --check passed
+- Risks / next: Root to run private setup fixture; Codex -c oracle now compares full preview.context.text while separately asserting the exact agent_instructions block
+
+## 2026-10-18T08:39:38+00:00 — /root
+
+Integrate explicit visible-context handoff with frozen drafts and existing durable launch
+
+- Files: crates/app/src/handoff.rs, crates/app/src/handoff_commands.rs, crates/app/src/handoff_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/dirty_documents.rs, README.md, SPEC.md, DESIGN.md
+- Verification: Integrated formatter/UI/dispatch, request/dialog-bound receipts, two-step launch, source selection/history capture and history shortcut. Root fixed UI Stateful ids, formatter test budgets/emoji assertions, gpui test macro glob import, Unicode history selection routing; added real-metadata context validation plus stale fields/provider/tab/cache/dirty-close tests. App374 tests passed before final history-selection adjustment; strictClippy passed before final small UI/capture edits. Final fmt/tests/Clippy/release build running sequentially; private setup handoff run pending. No user desktop/host changes.
+- Risks / next: Run final private setup against final release; inspect handoff captures, fix actual failures, update concise map/handoff and commit. No full conversation export or automatic message submit; OpenCode manual copy only. Preserve unrelated dirt/stash0; broad goal active.
+
+## 2026-10-18T08:42:11+00:00 — host_self_exec_luna
+
+Keep session helper self-exec stable across host binary replacement or unlink on Linux
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/self_exec_after_unlink.rs
+- Verification: cargo test -p pigade-session-host --test self_exec_after_unlink: 1 passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check on owned files passed
+- Risks / next: Root owns final release build and app integration; Linux /proc procfs availability remains required for helper spawning.
+
+## 2026-10-18T08:45:30+00:00 — /root
+
+Fix confirmed deleted host helper image and repair existing live hosts without restart
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/self_exec_after_unlink.rs, scripts/legacy-host-helper.sh, docs/AGENT_HANDOFF.md
+- Verification: User screenshot definitively identifies stale current_exe pathname ending deleted, superseding prior unresolved shortcut hypothesis. Luna targeted real IPC unlink+dedup test and hostClippy pass; root release host builds0. Root private copy of actual legacy /proc/2429685/exe verifies unlink + parent-image shim + actual shell output/exit + one execution on repeated operation while parent alive. Installed target/release deleted-name symlink only after matching user-owned live host images2429685 and2540063; wrapper preserves helper PID/nonce handshake and rejects unrelated parents/actions. Shell syntax passes. Final Linux cfg-targeted test running.
+- Risks / next: Finish final targeted test and commit hotfix. Current user UI Unknown is not silently cleared/retried; fresh UI may be opened without closing existing drafts. New native handoff setup verification running separately. Preserve unrelated dirt/stash0 and broad goal.
