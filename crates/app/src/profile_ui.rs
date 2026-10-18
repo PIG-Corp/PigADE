@@ -10,10 +10,10 @@ fn profile_provider_label(provider: &str) -> &str {
     }
 }
 
-fn profile_note(text: impl Into<String>) -> Div {
+fn profile_note(muted: u32, text: impl Into<String>) -> Div {
     div()
         .text_size(px(11.))
-        .text_color(rgb(chrome::MUTED))
+        .text_color(rgb(muted))
         .whitespace_normal()
         .child(text.into())
 }
@@ -48,7 +48,7 @@ impl ProductUi {
         mut content: Div,
         cx: &mut Context<CanvasApp>,
     ) -> Div {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         match dialog.kind {
             DialogKind::AgentProfiles => {
                 let Some(profiles) = self
@@ -66,7 +66,7 @@ impl ProductUi {
                     );
                 };
 
-                content = content.child(profile_note(
+                content = content.child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                     "Профили хранят параметры будущих запусков. Уже работающие CLI сохраняют свои настройки.",
                 ));
                 let mut rows = div()
@@ -160,8 +160,14 @@ impl ProductUi {
                                             .truncate()
                                             .child(profile.name.clone()),
                                     )
-                                    .child(profile_note(format!("{provider} · {provider_state}")))
-                                    .child(profile_note(detail)),
+                                    .child(profile_note(
+                                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                                        format!("{provider} · {provider_state}"),
+                                    ))
+                                    .child(profile_note(
+                                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                                        detail,
+                                    )),
                             )
                             .child(self.icon_control(
                                 &format!("agent-profile-launch-{id}"),
@@ -186,13 +192,16 @@ impl ProductUi {
                             )),
                     );
                 }
-                content.child(rows).child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(
+                content.child(rows).child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                     "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Delete — удалить · Ctrl+R — обновить",
                 ))
             }
             DialogKind::AgentProfile => {
                 let Some(editor) = &self.profile_editor else {
-                    return content.child(profile_note("Редактор профиля недоступен."));
+                    return content.child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Редактор профиля недоступен.",
+                    ));
                 };
                 let mut providers = div().flex().flex_wrap().gap_1();
                 for provider in ["claude", "codex", "opencode"] {
@@ -227,12 +236,17 @@ impl ProductUi {
                 };
                 content = content
                     .child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
                         "Роль задаёт инструкции агенту, а не его технические права.",
                     ))
                     .child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
                         "Профиль не хранит модель, авторизацию, рабочую папку или разрешения CLI.",
                     ))
-                    .child(profile_note(readiness))
+                    .child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        readiness,
+                    ))
                     .child(providers)
                     .child(self.action_control(
                         "agent-profile-context-delivery".into(),
@@ -253,11 +267,11 @@ impl ProductUi {
                         cx,
                     ));
                 if editor.settings.provider == "opencode" && editor.settings.deliver_context {
-                    content = content.child(profile_note(
+                    content = content.child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                         "Для OpenCode передача контекста недоступна. Профиль можно сохранить; запуск будет отдельно проверен.",
                     ));
                 }
-                content.child(profile_note(
+                content.child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                     "Ctrl+1/2/3 — CLI · Ctrl+M — контекст · Ctrl+Enter — сохранить. Роль не ограничивает права CLI. Проверка версии и снимка контекста выполняется перед запуском.",
                 ))
             }
@@ -265,12 +279,15 @@ impl ProductUi {
                 if let Some(profile) = &self.profile_delete {
                     content
                         .child(div().text_size(px(13.)).child(profile.name.clone()))
-                        .child(profile_note(format!(
+                        .child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted, format!(
                             "Будет удалена только сохранённая настройка {}. Уже подготовленные снимки запуска и работающие CLI сохранятся.",
                             profile_provider_label(&profile.settings.provider)
                         )))
                 } else {
-                    content.child(profile_note("Профиль больше недоступен."))
+                    content.child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Профиль больше недоступен.",
+                    ))
                 }
             }
             _ => content,

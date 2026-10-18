@@ -18,7 +18,67 @@ pub mod palette {
     pub const STATUS_AMBER: u32 = 0xDAB579;
 }
 
-pub use palette::*;
+/// Semantic chrome colors shared by the app shell and product surfaces.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Colors {
+    pub base: u32,
+    pub sidebar: u32,
+    pub raised: u32,
+    pub hover: u32,
+    pub selected: u32,
+    pub border: u32,
+    pub text: u32,
+    pub muted: u32,
+    pub accent: u32,
+    pub on_accent: u32,
+    pub status_green: u32,
+    pub status_amber: u32,
+    pub canvas_track: u32,
+    pub scroll_thumb: u32,
+}
+
+impl Colors {
+    pub const fn for_theme(theme: crate::appearance::Theme) -> Self {
+        match theme {
+            crate::appearance::Theme::Dark => Self {
+                base: palette::BASE,
+                sidebar: palette::SIDEBAR,
+                raised: palette::RAISED,
+                hover: palette::HOVER,
+                selected: palette::SELECTED,
+                border: palette::BORDER,
+                text: palette::TEXT,
+                muted: palette::MUTED,
+                accent: palette::ACCENT,
+                on_accent: 0x202022,
+                status_green: palette::STATUS_GREEN,
+                status_amber: palette::STATUS_AMBER,
+                canvas_track: 0x1D2025,
+                scroll_thumb: 0x7B8596,
+            },
+            crate::appearance::Theme::Light => Self {
+                base: 0xF4F4F6,
+                sidebar: 0xECECEF,
+                raised: 0xFFFFFF,
+                hover: 0xE3E3E8,
+                selected: 0xE6DEF6,
+                border: 0x898994,
+                text: 0x202025,
+                muted: 0x5B5B67,
+                accent: 0x7050AD,
+                on_accent: 0xFFFFFF,
+                status_green: 0x247447,
+                status_amber: 0x835000,
+                canvas_track: 0xDEDEE4,
+                scroll_thumb: 0x747480,
+            },
+        }
+    }
+}
+
+pub const fn colors(theme: crate::appearance::Theme) -> Colors {
+    Colors::for_theme(theme)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Icon {
@@ -128,5 +188,55 @@ impl AssetSource for Assets {
             .iter()
             .map(|icon| SharedString::from(icon.path()))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(color: u32) -> f64 {
+        fn channel(value: u32) -> f64 {
+            let value = value as f64 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * channel((color >> 16) & 0xff)
+            + 0.7152 * channel((color >> 8) & 0xff)
+            + 0.0722 * channel(color & 0xff)
+    }
+
+    fn contrast(first: u32, second: u32) -> f64 {
+        let (lighter, darker) = {
+            let first = luminance(first);
+            let second = luminance(second);
+            if first > second {
+                (first, second)
+            } else {
+                (second, first)
+            }
+        };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn theme_text_and_focus_tokens_meet_contrast_targets() {
+        for theme in [
+            crate::appearance::Theme::Dark,
+            crate::appearance::Theme::Light,
+        ] {
+            let colors = Colors::for_theme(theme);
+            for background in [colors.base, colors.sidebar, colors.raised] {
+                assert!(contrast(colors.text, background) >= 4.5);
+                assert!(contrast(colors.muted, background) >= 4.5);
+                assert!(contrast(colors.accent, background) >= 3.0);
+            }
+            assert!(contrast(colors.on_accent, colors.accent) >= 4.5);
+            assert!(contrast(colors.status_green, colors.base) >= 3.0);
+            assert!(contrast(colors.status_amber, colors.base) >= 3.0);
+        }
     }
 }

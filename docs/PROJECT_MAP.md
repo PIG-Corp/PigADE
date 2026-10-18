@@ -53,9 +53,10 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/adapters.rs | Bounded version detection, versioned Claude/Codex startup arguments and exact-ID manual Codex0.162.1/OpenCode1.19.3 resume argv; unknown versions remain generic |
 | crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |
 | crates/session-host/tests/project_setup.rs | Real IPC create/reopen, existing-target preservation and bounded provider-version fixture |
-| crates/app/src/chrome.rs, assets/icons | Shared neutral/lavender chrome palette and embedded original16-icon SVG family; terminal ANSI palette is separate |
+| crates/app/src/chrome.rs, assets/icons | Shared dark/light chrome tokens and embedded original16-icon SVG family; terminal ANSI palette is separate |
+| crates/app/src/appearance.rs, appearance_commands.rs, appearance_ui.rs | Local revision-checked theme/reduced-motion preferences and native Appearance settings dialog; desktop settings and terminal palette are independent |
 | docs/design | Imagegen workspace/welcome reference images and exact prompts; design artifacts, not test screenshots |
-| crates/app/src/product.rs | Always-visible open/create project controls, task/worktree sheet, detected CLI chooser, compact toolbar/pane menu, context review and editor |
+| crates/app/src/product.rs | Appearance/header actions, always-visible open/create project controls, task/worktree sheet, detected CLI chooser, compact toolbar/pane menu, context review and editor |
 | crates/app/src/setup_flow.rs | Exact-request project → first shared workspace/tab setup; stale replies do not advance setup or start a CLI |
 | crates/app/src/text_edit.rs | Unicode grapheme/UTF-16 editing, grouped composition, bounded100-entry/2MiB undo, plain-string wire serialization |
 | crates/app/src/edit_field.rs | Native GPUI wrapped text fields, cached shaping, caret/selection/IME geometry, horizontal and vertical reveal |

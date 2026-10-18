@@ -111,7 +111,7 @@ fn git_entry_row(
 
 impl ProductUi {
     pub(super) fn git_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let Some(sheet) = &self.git_sheet else {
             return div()
                 .id("workspace-git-unavailable")

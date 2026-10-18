@@ -941,11 +941,167 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     time.sleep(0.3)
     require(catalog_layout()[1] == disabled_layout and same_live_generations(generations),
             'Disabled modifier still intercepted Ctrl+Q or changed live sessions')
+
+    appearance_path = Path('/home/pigade/.config/pigade/appearance.json')
+    require(not appearance_path.exists(),
+            'private appearance preference existed before the first committed change')
+    controls_bytes = config_path.read_bytes()
+    before_appearance_catalog = host_request({'command': 'catalog'})['catalog']
+    layouts_before_appearance = {
+        item['id']: (item.get('layout_json'), item.get('active_pane'), item.get('revision'))
+        for item in before_appearance_catalog.get('tabs', [])
+    }
+
+    def appearance_document():
+        try:
+            metadata = appearance_path.lstat()
+        except FileNotFoundError:
+            return None
+        require(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode) and
+                metadata.st_size <= 4096 and stat.S_IMODE(metadata.st_mode) == 0o600,
+                'appearance preference is not a bounded private regular file')
+        raw = appearance_path.read_bytes()
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                require(key not in value, 'appearance preference repeats a JSON key')
+                value[key] = item
+            return value
+        try:
+            value = json.loads(raw, object_pairs_hook=unique_object)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise RuntimeError('appearance preference is not strict JSON') from error
+        require(isinstance(value, dict) and set(value) == {
+                    'version', 'revision', 'theme', 'reduced_motion'} and
+                type(value.get('version')) is int and value['version'] == 1 and
+                type(value.get('revision')) is int and value['revision'] >= 1 and
+                value.get('theme') in ('light', 'dark') and
+                type(value.get('reduced_motion')) is bool,
+                'appearance preference schema or value is invalid')
+        return value
+
+    def appearance_snapshot():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'appearance fixture terminal snapshot exceeds bounds')
+        result = {}
+        for view in views:
+            session, generation = view.get('session'), view.get('generation')
+            frame, sequence = view.get('frame'), view.get('sequence')
+            require(isinstance(session, str) and isinstance(generation, str) and
+                    type(view.get('pid')) is int and view['pid'] > 0 and
+                    isinstance(frame, dict) and type(sequence) is int and sequence >= 0 and
+                    (session, generation) not in result,
+                    'appearance fixture terminal snapshot has an invalid frame or identity')
+            result[(session, generation)] = (view['pid'], view.get('state'), sequence, frame)
+        return result
+
+    def screenshot_pixel(name, x=430, y=150):
+        path = Path('/artifacts') / name
+        raw = path.read_bytes()
+        match = re.match(rb'P6\n([0-9]+) ([0-9]+)\n255\n', raw)
+        require(match is not None and len(raw) <= MAX_CAPTURE_BYTES,
+                'appearance screenshot is not a bounded PPM image')
+        width, height = int(match.group(1)), int(match.group(2))
+        pixels = raw[match.end():]
+        require(width == SCREEN[0] and height == SCREEN[1] and
+                len(pixels) == width * height * 3 and 0 <= x < width and 0 <= y < height,
+                'appearance screenshot geometry or pixel data is invalid')
+        offset = (y * width + x) * 3
+        return tuple(pixels[offset:offset + 3])
+
+    generations_before_appearance = fixture_generations()
+    processes_before_appearance = process_identities()
+    terminal_before_appearance = appearance_snapshot()
+    require(set(terminal_before_appearance) == set(generations_before_appearance),
+            'appearance fixture did not snapshot every live generation')
+    journals_before_appearance = fixture_journal_hashes(
+        [generation for _, generation in generations_before_appearance])
+    selection_before_appearance = before_appearance_catalog.get('selection')
+    layout_document_before_appearance = before_appearance_catalog.get('layout')
+
+    def appearance_invariants(message):
+        current_catalog = host_request({'command': 'catalog'})['catalog']
+        current_layouts = {
+            item['id']: (item.get('layout_json'), item.get('active_pane'), item.get('revision'))
+            for item in current_catalog.get('tabs', [])
+        }
+        require(fixture_generations() == generations_before_appearance and
+                process_identities() == processes_before_appearance and
+                appearance_snapshot() == terminal_before_appearance and
+                fixture_journal_hashes([generation for _, generation in generations_before_appearance]) ==
+                journals_before_appearance and
+                current_catalog.get('selection') == selection_before_appearance and
+                current_catalog.get('layout') == layout_document_before_appearance and
+                current_layouts == layouts_before_appearance and
+                config_path.read_bytes() == controls_bytes,
+                message)
+
+    def wait_appearance(revision, theme, reduced_motion):
+        expected = {'version': 1, 'revision': revision, 'theme': theme,
+                    'reduced_motion': reduced_motion}
+        return wait_until(lambda: value if (value := appearance_document()) == expected else None,
+                          time.monotonic() + 8)
+
+    step('appearance-open')
+    appearance_invariants('opening Appearance changed terminal state, controls preference, selection, or layout')
+    require(appearance_document() is None,
+            'opening Appearance wrote preferences before a theme or motion choice')
+    step('appearance-light')
+    light_preference = wait_appearance(1, 'light', False)
+    appearance_invariants('saving Light changed a terminal, controls preference, selection, or layout')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/appearance-light.ppm')
+    light_pixel = screenshot_pixel('appearance-light.ppm')
+    require(all(abs(channel - expected) <= 2
+                for channel, expected in zip(light_pixel, (255, 255, 255))),
+            f'Light modal surface pixel at (430,150) was {light_pixel}, expected #FFFFFF')
+
+    step('appearance-motion')
+    motion_preference = wait_appearance(2, 'light', True)
+    appearance_invariants('saving reduced motion changed a terminal, controls preference, selection, or layout')
+    step('appearance-reload')
+    time.sleep(0.4)
+    require(appearance_document() == motion_preference,
+            'Ctrl+R changed the committed appearance preference during reload')
+    appearance_invariants('reloading Appearance changed a terminal, controls preference, selection, or layout')
+    step('appearance-close')
+    appearance_invariants('closing Appearance changed a terminal, controls preference, selection, or layout')
+
+    step('appearance-open')
+    time.sleep(0.3)
+    require(appearance_document() == motion_preference,
+            'reopening Appearance did not preserve saved Light/reduced-motion settings')
+    appearance_invariants('reopening Appearance changed terminal state, controls preference, selection, or layout')
+    step('appearance-dark')
+    dark_preference = wait_appearance(3, 'dark', True)
+    appearance_invariants('saving Dark changed a terminal, controls preference, selection, or layout')
+    time.sleep(0.25)
+    helper_call(config, 'capture', '/artifacts/appearance-dark.ppm')
+    dark_pixel = screenshot_pixel('appearance-dark.ppm')
+    require(all(abs(channel - expected) <= 2
+                for channel, expected in zip(dark_pixel, (45, 45, 49))),
+            f'Dark modal surface pixel at (430,150) was {dark_pixel}, expected #2D2D31')
+    step('appearance-close')
+    appearance_invariants('closing Appearance changed a terminal, controls preference, selection, or layout')
+
     report['controls'].update({'modifier_alt_persisted_before_use': True,
                                'alt_focus_mode_restored_exact_layout': True,
                                'modifier_control_persisted': True,
                                'modifier_disabled_persisted': True,
-                               'disabled_mode_ctrl_q_passthrough': True})
+                               'disabled_mode_ctrl_q_passthrough': True,
+                               'appearance_light_saved_revision_1': light_preference,
+                               'appearance_reduced_motion_saved_revision_2': motion_preference,
+                               'appearance_dark_saved_revision_3_kept_motion': dark_preference,
+                               'appearance_reopen_preserved_light_and_motion': True,
+                               'appearance_changes_preserved_all_terminal_frames_sequences_journals': True,
+                               'appearance_changes_preserved_disabled_modifier_config': True,
+                               'appearance_modal_surface_pixel': {'position': [430, 150],
+                                                                 'light_rgb': light_pixel,
+                                                                 'dark_rgb': dark_pixel},
+                               'appearance_restart_recovery_tested': False,
+                               'appearance_captures': ['appearance-light.ppm',
+                                                       'appearance-dark.ppm']})
     report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
     save()
 
@@ -1067,6 +1223,24 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
             'pointer fixture did not reach exactly four real shell panes')
     require(live_unchanged(generations, expected_processes),
             'a pointer fixture terminal was not live before hover tests')
+
+    # Press modifier+LMB on a pane and release at the same coordinates. A
+    # no-motion gesture may change focus, but it must not commit a placement or
+    # add an undo step. Compare the full root wire so split weights are covered.
+    placement_before = original_root
+    history_before = json.loads(catalog_layout()[0]['layout']['json'])
+    history_lengths_before = (len(history_before.get('undo', [])),
+                              len(history_before.get('redo', [])))
+    step('pointer-no-motion-release')
+    time.sleep(0.35)
+    no_motion_catalog, no_motion_layout = catalog_layout()
+    no_motion_history = json.loads(no_motion_catalog['layout']['json'])
+    require(no_motion_layout.get('root') == placement_before and
+            no_motion_layout.get('focus_mode') == before.get('focus_mode') and
+            (len(no_motion_history.get('undo', [])), len(no_motion_history.get('redo', []))) ==
+            history_lengths_before and
+            live_unchanged(generations, expected_processes),
+            'modifier+LMB release without pointer travel changed pane placement, weights, undo history, or processes')
 
     step('pointer-hover-left')
     time.sleep(0.2)
@@ -1214,6 +1388,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'hover_left_right_left_followed_without_click': True,
         'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
+        'modifier_button_release_without_pointer_travel_preserved_root_weights_and_history_lengths': True,
         'held_drag_preview_did_not_commit_or_resize_ptys': True,
         'escape_cancel_restored_exact_root': True,
         'selection_ime_dialog_and_inactive_focus_suppressed': True,
@@ -4311,7 +4486,8 @@ def outer_run(args) -> dict:
                   'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
-                  'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm']
+                  'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm',
+                  'appearance-light.ppm', 'appearance-dark.ppm']
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
@@ -4359,8 +4535,8 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
-                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then persist Light/reduced-motion/Dark Appearance settings without terminal effects',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, held cancel preview, Dwindle drop and layout undo',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

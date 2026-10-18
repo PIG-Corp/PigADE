@@ -134,8 +134,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "controls-resize-commit") && strcmp(a.stage, "controls-close") &&
         strcmp(a.stage, "controls-open") && strcmp(a.stage, "controls-select-alt") &&
         strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled") &&
+        strcmp(a.stage, "appearance-open") && strcmp(a.stage, "appearance-light") &&
+        strcmp(a.stage, "appearance-motion") && strcmp(a.stage, "appearance-dark") &&
+        strcmp(a.stage, "appearance-reload") && strcmp(a.stage, "appearance-close") &&
         strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
+        strcmp(a.stage, "pointer-no-motion-release") &&
         strcmp(a.stage, "pointer-hover-source") &&
         strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
@@ -562,6 +566,19 @@ static void pointer_drag_begin(Display *dpy, Window app) {
         fail("pointer drag button press failed");
     /* The detached target spans x755..1280; stay clearly in its right half. */
     pointer_position(dpy, app, 1100, 250);
+    XSync(dpy, False);
+}
+
+static void pointer_no_motion_begin(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("pointer no-motion probe requires the fixed private 1280x800 app");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+        fail("pointer no-motion modifier press failed");
+    pointer_position(dpy, app, 350, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+        fail("pointer no-motion button press failed");
     XSync(dpy, False);
 }
 
@@ -1163,12 +1180,35 @@ int main(int argc, char **argv) {
             key(dpy, XK_1);
         } else if (!strcmp(a.stage, "controls-select-disabled")) {
             key(dpy, XK_5);
+        } else if (!strcmp(a.stage, "appearance-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_a, XK_p, XK_p, XK_e, XK_a,
+                                     XK_r, XK_a, XK_n, XK_c, XK_e };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "appearance-light")) {
+            key(dpy, XK_2);
+        } else if (!strcmp(a.stage, "appearance-motion")) {
+            key(dpy, XK_r);
+        } else if (!strcmp(a.stage, "appearance-dark")) {
+            key(dpy, XK_1);
+        } else if (!strcmp(a.stage, "appearance-reload")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "appearance-close")) {
+            key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "pointer-hover-left")) {
             pointer_hover(dpy, app_window, 485, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hover-right")) {
             pointer_hover(dpy, app_window, 1015, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hover-input")) {
             pointer_hover(dpy, app_window, 485, 250, 1);
+        } else if (!strcmp(a.stage, "pointer-no-motion-release")) {
+            pointer_no_motion_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 200000000 };
+            nanosleep(&settle, NULL);
+            pointer_drag_release(dpy, 0);
         } else if (!strcmp(a.stage, "pointer-hover-source")) {
             pointer_hover(dpy, app_window, 350, 250, 0);
         } else if (!strcmp(a.stage, "pointer-keyboard-away")) {
@@ -1235,6 +1275,13 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "controls-select-alt") ? "1" :
                             !strcmp(a.stage, "controls-select-control") ? "1" :
                             !strcmp(a.stage, "controls-select-disabled") ? "1" :
+                            !strcmp(a.stage, "appearance-open") ? "15" :
+                            !strcmp(a.stage, "appearance-light") ? "1" :
+                            !strcmp(a.stage, "appearance-motion") ? "1" :
+                            !strcmp(a.stage, "appearance-dark") ? "1" :
+                            !strcmp(a.stage, "appearance-reload") ? "2" :
+                            !strcmp(a.stage, "appearance-close") ? "1" :
+                            !strcmp(a.stage, "pointer-no-motion-release") ? "0" :
                             !strcmp(a.stage, "pointer-hover-input") ? "11" :
                             !strcmp(a.stage, "pointer-ime-input") ? "5" :
                             !strcmp(a.stage, "pointer-undo") ? "2" :

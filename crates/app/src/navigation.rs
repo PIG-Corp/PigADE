@@ -35,7 +35,8 @@ pub(crate) fn search_score(query: &str, label: &str) -> u8 {
 pub(crate) fn local_palette_command(action: &A) -> bool {
     matches!(
         action,
-        A::OpenCloseTab
+        A::OpenAppearance
+            | A::OpenCloseTab
             | A::OpenPrompts
             | A::OpenAgentProfiles
             | A::OpenControls

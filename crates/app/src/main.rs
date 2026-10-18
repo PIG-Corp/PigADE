@@ -1,4 +1,6 @@
 //! PigADE native application. The session host owns ANSI parsing and CLI lifetime.
+mod appearance;
+mod appearance_commands;
 mod block_glyph;
 mod catalog_flow;
 mod cell_style;
@@ -942,6 +944,7 @@ struct PaneDrag {
     position: Point<Pixels>,
     start: Point<Pixels>,
     moved: bool,
+    travelled: bool,
     drop: Option<(pigade_layout::Command, pigade_layout::Rect)>,
 }
 
@@ -1558,7 +1561,7 @@ impl CanvasApp {
             }
         })
         .detach();
-        let product = match controls::load() {
+        let mut product = match controls::load() {
             Ok(command_modifier) => product::ProductUi {
                 command_modifier,
                 ..Default::default()
@@ -1569,6 +1572,17 @@ impl CanvasApp {
                 ..Default::default()
             },
         };
+        match appearance::load() {
+            Ok(config) => product.appearance = config,
+            Err(error) => {
+                product.appearance_error =
+                    Some(format!("Не удалось загрузить внешний вид: {error}"))
+            }
+        }
+        product.motion_forced = std::env::args()
+            .skip(2)
+            .any(|arg| arg == "--reduced-motion");
+        cx.set_reduce_motion(product.appearance.reduced_motion || product.motion_forced);
         Self {
             product,
             editor_layouts: Default::default(),
@@ -2807,6 +2821,7 @@ impl CanvasApp {
             position,
             start: position,
             moved: immediate,
+            travelled: false,
             drop: None,
         });
         self.update_pane_drag_at(position, cx);
@@ -2832,8 +2847,13 @@ impl CanvasApp {
             return;
         };
         drag.position = position;
-        drag.moved |= f32::from(position.x - drag.start.x).abs() > 6.
-            || f32::from(position.y - drag.start.y).abs() > 6.;
+        drag.travelled |= pointer_layout::travelled(
+            f64::from(f32::from(drag.start.x)),
+            f64::from(f32::from(drag.start.y)),
+            f64::from(f32::from(position.x)),
+            f64::from(f32::from(position.y)),
+        );
+        drag.moved |= drag.travelled;
         drag.drop = None;
         if drag.moved {
             // Detachment is stable for the whole gesture; pointer motion only
@@ -3171,6 +3191,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::CloseDialog
+                | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
                 | A::OpenWorkspaceGit
@@ -3207,6 +3228,9 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenAppearance | A::SetTheme(_) | A::ToggleReducedMotion | A::ReloadAppearance => {
+                self.appearance_action(action, cx)
+            }
             A::OpenCloseTab | A::CloseManagedTab | A::ConfirmCloseTab | A::InspectCloseTab => {
                 self.tab_close_action(action, cx)
             }
@@ -3984,6 +4008,10 @@ impl CanvasApp {
                     .map(|field| field.text().to_owned())
                     .collect::<Vec<_>>();
                 let field = |index| fields.get(index).map(String::as_str).unwrap_or("");
+                if kind == DialogKind::Appearance {
+                    self.product.dialog = None;
+                    return;
+                }
                 if kind == DialogKind::CloseTab {
                     self.tab_close_action(A::ConfirmCloseTab, cx);
                     return;
@@ -4004,7 +4032,8 @@ impl CanvasApp {
                     return;
                 }
                 match kind {
-                    DialogKind::CloseTab
+                    DialogKind::Appearance
+                    | DialogKind::CloseTab
                     | DialogKind::Prompts
                     | DialogKind::Prompt
                     | DialogKind::DeletePrompt
@@ -5053,7 +5082,7 @@ impl CanvasApp {
             && let Some(drag) = self.pane_drag.take()
         {
             self.layout_preview = None;
-            if let Some((command, _)) = drag.drop.filter(|_| drag.moved) {
+            if let Some((command, _)) = drag.drop.filter(|_| drag.travelled) {
                 self.layout_command(command, cx);
             } else {
                 self.persist_focus(cx);
@@ -5676,6 +5705,34 @@ impl CanvasApp {
                     .is_some_and(|dialog| dialog.active_field == 1)
         }) {
             self.history_key(event, window, cx);
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::Appearance)
+        {
+            let action = match k.key.as_str() {
+                "1" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
+                    Some(product::ProductAction::SetTheme(appearance::Theme::Dark))
+                }
+                "2" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
+                    Some(product::ProductAction::SetTheme(appearance::Theme::Light))
+                }
+                "r" if k.modifiers.control || k.modifiers.platform => {
+                    Some(product::ProductAction::ReloadAppearance)
+                }
+                "r" if !k.modifiers.alt => Some(product::ProductAction::ToggleReducedMotion),
+                "escape" | "enter" => Some(product::ProductAction::CloseDialog),
+                _ => None,
+            };
+            if !event.is_held
+                && let Some(action) = action
+            {
+                self.product_action(action, window, cx);
+            }
+            cx.stop_propagation();
             return;
         }
         if (k.modifiers.control || k.modifiers.platform)
@@ -6433,8 +6490,8 @@ fn pixel_bounds_intersect(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
     a.left() < b.right() && a.right() > b.left() && a.top() < b.bottom() && a.bottom() > b.top()
 }
 
-fn paint_canvas_scrollbar(bar: viewport::Scrollbar, window: &mut Window) {
-    window.paint_quad(fill(layout_bounds(bar.track), rgb(0x1d2025)));
+fn paint_canvas_scrollbar(bar: viewport::Scrollbar, colors: chrome::Colors, window: &mut Window) {
+    window.paint_quad(fill(layout_bounds(bar.track), rgb(colors.canvas_track)));
     let mut thumb = bar.thumb;
     match bar.axis {
         pigade_layout::Axis::Horizontal => {
@@ -6446,7 +6503,7 @@ fn paint_canvas_scrollbar(bar: viewport::Scrollbar, window: &mut Window) {
             thumb.width = 6.;
         }
     }
-    window.paint_quad(fill(layout_bounds(thumb), rgb(0x7b8596)));
+    window.paint_quad(fill(layout_bounds(thumb), rgb(colors.scroll_thumb)));
 }
 fn valid_scale(scale: f32) -> f32 {
     if scale.is_finite() && scale > 0. {
@@ -6832,6 +6889,7 @@ impl Render for CanvasApp {
             .then(|| self.product.empty_state(cx))
             .flatten();
         let entity = cx.entity();
+        let colors = chrome::colors(self.product.appearance.theme);
         let painter = entity.clone();
         let trace = self.trace.clone();
         let paint_revision = self.state.revision;
@@ -6882,11 +6940,19 @@ impl Render for CanvasApp {
                 )
             }
         });
-        let status = match self.pane_drag.as_ref().and_then(|drag| drag.drop.as_ref()) {
-            Some((pigade_layout::Command::Swap { .. }, _)) => {
-                "Отпустите для обмена панелей · Escape — отменить".to_owned()
+        let invalid_drop = self
+            .pane_drag
+            .as_ref()
+            .is_some_and(|drag| drag.moved && drag.travelled && drag.drop.is_none());
+        let status = match self.pane_drag.as_ref().filter(|drag| drag.moved) {
+            Some(drag) if !drag.travelled => {
+                "Перетащите панель в нужное место · Escape — отменить".to_owned()
             }
-            Some(_) => "Отпустите для перемещения панели · Escape — отменить".to_owned(),
+            Some(drag) if drag.drop.is_some() => {
+                "Отпустите для перемещения панели · Escape — отменить".to_owned()
+            }
+            Some(_) => "Здесь нельзя разместить панель · Отпустите для отмены · Escape — отменить"
+                .to_owned(),
             None => status,
         };
         let status = match self.layout_mode {
@@ -6925,8 +6991,8 @@ impl Render for CanvasApp {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(chrome::BASE))
-            .text_color(rgb(chrome::TEXT))
+            .bg(rgb(colors.base))
+            .text_color(rgb(colors.text))
             .font_family("Inter")
             .text_size(px(13.))
             .track_focus(&self.focus)
@@ -6946,9 +7012,9 @@ impl Render for CanvasApp {
                                     .flex_shrink_0()
                                     .flex()
                                     .items_center()
-                                    .bg(rgb(chrome::BASE))
+                                    .bg(rgb(colors.base))
                                     .border_b_1()
-                                    .border_color(rgb(chrome::BORDER))
+                                    .border_color(rgb(colors.border))
                                     .child(tabbar)
                                     .child(toolbar),
                             )
@@ -7030,7 +7096,7 @@ impl Render for CanvasApp {
                                                         {
                                                             window.paint_quad(fill(
                                                                 layout_bounds(rect),
-                                                                rgba(0xb9a5ef44),
+                                                                rgb(colors.accent).opacity(0.267),
                                                             ));
                                                         }
                                                         if !pixel_bounds_intersect(
@@ -7059,6 +7125,17 @@ impl Render for CanvasApp {
                                                                     && focus.is_focused(window)
                                                                     && window.is_window_active(),
                                                                 cursor_visible,
+                                                                colors: if Some(index)
+                                                                    == dragged_index
+                                                                    && invalid_drop
+                                                                {
+                                                                    chrome::Colors {
+                                                                        accent: colors.status_amber,
+                                                                        ..colors
+                                                                    }
+                                                                } else {
+                                                                    colors
+                                                                },
                                                             },
                                                             selection.as_ref(),
                                                             &font,
@@ -7083,7 +7160,7 @@ impl Render for CanvasApp {
                                                     {
                                                         window.paint_quad(fill(
                                                             layout_bounds(rect),
-                                                            rgba(0xb9a5ef44),
+                                                            rgb(colors.accent).opacity(0.267),
                                                         ));
                                                     }
                                                 },
@@ -7092,7 +7169,7 @@ impl Render for CanvasApp {
                                                 Some(ContentMask { bounds }),
                                                 |window| {
                                                     for bar in bars {
-                                                        paint_canvas_scrollbar(bar, window);
+                                                        paint_canvas_scrollbar(bar, colors, window);
                                                     }
                                                 },
                                             );
@@ -7118,7 +7195,7 @@ impl Render for CanvasApp {
                                         .px(px(12.))
                                         .flex()
                                         .items_center()
-                                        .text_color(rgb(0xffd18a))
+                                        .text_color(rgb(colors.status_amber))
                                         .child(warning),
                                 );
                             }
@@ -7136,10 +7213,10 @@ impl Render for CanvasApp {
                                 .px(px(12.))
                                 .flex()
                                 .items_center()
-                                .text_color(rgb(chrome::MUTED))
+                                .text_color(rgb(colors.muted))
                                 .text_size(px(10.))
                                 .border_t_1()
-                                .border_color(rgb(chrome::BORDER))
+                                .border_color(rgb(colors.border))
                                 .child(div().flex_1().min_w_0().truncate().child(status));
                             if self.canvas_close_requested {
                                 status_row = status_row.child(
@@ -7395,6 +7472,7 @@ struct PanelState<'a> {
     attached: bool,
     focused: bool,
     cursor_visible: bool,
+    colors: chrome::Colors,
 }
 
 fn pane_header_bounds(pane: PaneGeometry) -> Bounds<Pixels> {
@@ -7443,6 +7521,7 @@ fn paint_panel(
         attached,
         focused,
         cursor_visible,
+        colors,
     }: PanelState<'_>,
     selection: Option<&selection::CellSelection>,
     font: &Font,
@@ -7452,9 +7531,9 @@ fn paint_panel(
     let bounds = pane.bounds;
     let cell = pane.cell;
     let border = if selected {
-        chrome::ACCENT
+        colors.accent
     } else {
-        chrome::BORDER
+        colors.border
     };
     window.paint_quad(quad(
         bounds,
@@ -7468,9 +7547,9 @@ fn paint_panel(
     window.paint_quad(quad(
         header,
         px(12.),
-        rgb(chrome::RAISED),
+        rgb(colors.raised),
         px(1.),
-        rgb(chrome::BORDER),
+        rgb(colors.border),
         BorderStyle::Solid,
     ));
     let status = view
@@ -7502,13 +7581,13 @@ fn paint_panel(
         px(3.),
         rgb(
             if attached && view.is_some_and(|view| view.state == "running") {
-                chrome::STATUS_GREEN
+                colors.status_green
             } else {
-                chrome::STATUS_AMBER
+                colors.status_amber
             },
         ),
         px(0.),
-        rgb(chrome::BORDER),
+        rgb(colors.border),
         BorderStyle::Solid,
     ));
     window.with_content_mask(
@@ -7526,7 +7605,7 @@ fn paint_panel(
                 &[TextRun {
                     len: title.len(),
                     font,
-                    color: rgb(chrome::TEXT).into(),
+                    color: rgb(colors.text).into(),
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -7553,7 +7632,7 @@ fn paint_panel(
             format!("icons/{name}.svg").into(),
             None,
             TransformationMatrix::default(),
-            rgb(chrome::MUTED).into(),
+            rgb(colors.muted).into(),
             cx,
         );
     }

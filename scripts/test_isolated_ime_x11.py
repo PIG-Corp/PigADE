@@ -335,13 +335,43 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertEqual(plan['fixture'], 'controls')
         self.assertIn('four-shell', plan['input']['controls'])
         self.assertIn('Alt+F', plan['input']['controls'])
+        self.assertIn('Appearance settings', plan['input']['controls'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('controls-focus-toggle', 'controls-focus-right', 'controls-alt-focus-toggle', 'controls-move',
                       'controls-resize-cancel', 'controls-resize-commit', 'controls-close',
                       'controls-open', 'controls-select-alt', 'controls-select-control',
-                      'controls-select-disabled'):
+                      'controls-select-disabled', 'appearance-open', 'appearance-light',
+                      'appearance-motion', 'appearance-dark', 'appearance-reload',
+                      'appearance-close'):
             self.assertIn(f'"{stage}"', source)
+        harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        appearance_flow = harness.split("appearance_path = Path('/home/pigade/.config/pigade/appearance.json')", 1)[1].split(
+            "report['controls'].update", 1)[0]
+        self.assertIn("'version', 'revision', 'theme', 'reduced_motion'", appearance_flow)
+        self.assertIn("wait_appearance(1, 'light', False)", appearance_flow)
+        self.assertIn("wait_appearance(2, 'light', True)", appearance_flow)
+        self.assertIn("wait_appearance(3, 'dark', True)", appearance_flow)
+        self.assertIn("config_path.read_bytes() == controls_bytes", appearance_flow)
+        self.assertIn('appearance_snapshot() == terminal_before_appearance', appearance_flow)
+        self.assertIn('journals_before_appearance', appearance_flow)
+        self.assertIn("appearance_restart_recovery_tested': False", harness)
+        self.assertIn("appearance-light.ppm", harness)
+        self.assertIn("appearance-dark.ppm", harness)
+        self.assertIn("def screenshot_pixel(name, x=430, y=150)", harness)
+        self.assertIn("zip(light_pixel, (255, 255, 255))", harness)
+        self.assertIn("zip(dark_pixel, (45, 45, 49))", harness)
+        self.assertIn("'appearance_modal_surface_pixel': {'position': [430, 150]", harness)
+        for action in ('appearance-light', 'appearance-motion', 'appearance-reload',
+                       'appearance-close', 'appearance-open', 'appearance-dark'):
+            self.assertIn(f"step('{action}')", appearance_flow)
+        self.assertLess(appearance_flow.index("wait_appearance(1, 'light', False)"),
+                        appearance_flow.index("wait_appearance(2, 'light', True)"))
+        self.assertLess(appearance_flow.index("wait_appearance(2, 'light', True)"),
+                        appearance_flow.index("step('appearance-reload')"))
+        first_open = appearance_flow.index("step('appearance-open')")
+        second_open = appearance_flow.index("step('appearance-open')", first_open + 1)
+        self.assertLess(second_open, appearance_flow.index("wait_appearance(3, 'dark', True)"))
         self.assertIn('int start_x = button == 1 ? 485 : 720;', source)
         self.assertIn('int end_x = button == 1 ? 1015 : 660;', source)
         self.assertNotIn('--coordinates', source)
@@ -355,14 +385,30 @@ class IsolatedImePlanTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['fixture'], 'pointer')
         self.assertIn('last-hover unsent text', plan['input']['pointer'])
+        self.assertIn('no-motion Ctrl+LMB release preserves placement/history', plan['input']['pointer'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
+                      'pointer-no-motion-release',
                       'pointer-hover-source', 'pointer-keyboard-away', 'pointer-move-right-near',
                       'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
+        no_motion_stage = source.split(
+            '} else if (!strcmp(a.stage, "pointer-no-motion-release")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-hover-source")) {', 1)[0]
+        self.assertIn('pointer_no_motion_begin(dpy, app_window)', no_motion_stage)
+        self.assertIn('pointer_drag_release(dpy, 0)', no_motion_stage)
+        self.assertNotIn('pointer_position', no_motion_stage)
+        no_motion_begin = source.split('static void pointer_no_motion_begin', 1)[1].split(
+            'static void pointer_drag_release', 1)[0]
+        press_end = no_motion_begin.index('XTestFakeButtonEvent(dpy, 1, True')
+        self.assertNotIn('pointer_position', no_motion_begin[press_end:])
+        fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        self.assertIn("step('pointer-no-motion-release')", fixture)
+        self.assertIn("no_motion_layout.get('root') == placement_before", fixture)
+        self.assertIn('history_lengths_before', fixture)
         self.assertIn('strcmp(response, "CANCEL\\n")', source)
         self.assertIn('XK_p, XK_i, XK_g, XK_a, XK_d, XK_e', source)
         self.assertIn('pointer_position(dpy, app, 350, 250)', source)

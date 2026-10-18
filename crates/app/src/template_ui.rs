@@ -12,10 +12,10 @@ fn provider_label(provider: &str) -> &str {
     }
 }
 
-fn row_note(text: impl Into<String>) -> Div {
+fn row_note(muted: u32, text: impl Into<String>) -> Div {
     div()
         .text_size(px(11.))
-        .text_color(rgb(chrome::MUTED))
+        .text_color(rgb(muted))
         .whitespace_normal()
         .child(text.into())
 }
@@ -132,9 +132,12 @@ impl ProductUi {
         mut content: Div,
         cx: &mut Context<CanvasApp>,
     ) -> Div {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         if dialog.kind == DialogKind::NewTab && self.recipe_supported() {
-            content = content.child(row_note("Или начните с состава агентов:"));
+            content = content.child(row_note(
+                chrome::Colors::for_theme(self.appearance.theme).muted,
+                "Или начните с состава агентов:",
+            ));
             for (index, preset) in Preset::ALL.into_iter().enumerate() {
                 content = content.child(self.action_control(
                     format!("new-tab-preset-{index}"),
@@ -157,13 +160,14 @@ impl ProductUi {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .w(px(86.))
-                            .h(px(52.))
-                            .flex()
-                            .children(editor.geometry.root.as_ref().map(template_thumbnail)),
-                    )
+                    .child(div().w(px(86.)).h(px(52.)).flex().children(
+                        editor.geometry.root.as_ref().map(|node| {
+                            template_thumbnail(
+                                node,
+                                chrome::Colors::for_theme(self.appearance.theme),
+                            )
+                        }),
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -176,15 +180,16 @@ impl ProductUi {
                                     .text_size(px(13.))
                                     .child(editor.name.clone()),
                             )
-                            .child(row_note(format!(
-                                "{} новых процессов",
-                                editor.launches.len()
-                            ))),
+                            .child(row_note(
+                                chrome::Colors::for_theme(self.appearance.theme).muted,
+                                format!("{} новых процессов", editor.launches.len()),
+                            )),
                     ),
             );
-            content=content.child(row_note("Каждый агент запускается как новая сессия. Память, авторизация и conversation ID в шаблон не копируются."));
+            content=content.child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, "Каждый агент запускается как новая сессия. Память, авторизация и conversation ID в шаблон не копируются."));
             if editor.origin == Origin::Saved {
                 content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
                     "Это настройки будущих сессий. Открытые CLI сохранят свои параметры.",
                 ));
             }
@@ -217,11 +222,15 @@ impl ProductUi {
                             },
                             cx,
                         ))
-                        .child(row_note(detail)),
+                        .child(row_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            detail,
+                        )),
                 );
             }
             if dialog.kind == DialogKind::Recipe {
                 content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
                     "↑ ↓ — панель · Enter — настроить · Ctrl+Enter — сохранить",
                 ));
                 if editor.origin == Origin::Saved
@@ -253,20 +262,22 @@ impl ProductUi {
                         })
                         .map(|workspace| workspace.cwd.display().to_string())
                         .unwrap_or_else(|| "Воркспейс не выбран".into());
-                content =
-                    content
-                        .child(row_note(format!("Папка: {cwd}")))
-                        .child(self.action_control(
-                            "new-template-edit".into(),
-                            "Изменить состав агентов…".into(),
-                            ProductAction::EditRecipe,
-                            ControlStyle {
-                                role: Role::Button,
-                                selected: false,
-                                compact: true,
-                            },
-                            cx,
-                        ));
+                content = content
+                    .child(row_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        format!("Папка: {cwd}"),
+                    ))
+                    .child(self.action_control(
+                        "new-template-edit".into(),
+                        "Изменить состав агентов…".into(),
+                        ProductAction::EditRecipe,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    ));
             }
         }
         if dialog.kind == DialogKind::RecipeSlot
@@ -305,7 +316,7 @@ impl ProductUi {
             }
             content=content.child(providers).child(roles)
                 .child(self.action_control("recipe-deliver-context".into(),format!("{} Контекст через адаптер CLI",if config.deliver_context {"✓"} else {"○"}),ProductAction::ToggleTemplateContext,ControlStyle{role:Role::Button,selected:config.deliver_context,compact:false},cx))
-                .child(row_note("Роль — инструкции, а не ограничение прав. Доставка зависит от подтверждённой версии CLI. Память в этот запуск не включается."));
+                .child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, "Роль — инструкции, а не ограничение прав. Доставка зависит от подтверждённой версии CLI. Память в этот запуск не включается."));
         }
         if dialog.kind == DialogKind::TemplateRun
             && let Some(run) = &self.template_run
@@ -342,13 +353,16 @@ impl ProductUi {
                     .iter()
                     .find(|workspace| workspace.id == run.workspace_id)
             }) {
-                content = content.child(row_note(format!(
-                    "Воркспейс: {}",
-                    workspace_name(workspace)
-                )));
+                content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    format!("Воркспейс: {}", workspace_name(workspace)),
+                ));
             }
             if let Some(cwd) = run.slots.first().and_then(|slot| slot.preview.cwd.as_ref()) {
-                content = content.child(row_note(format!("Папка: {}", cwd.display())));
+                content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    format!("Папка: {}", cwd.display()),
+                ));
             }
             for (index, slot) in run.slots.iter().enumerate() {
                 content = content.child(
@@ -365,30 +379,37 @@ impl ProductUi {
                             provider_label(&slot.preview.provider),
                             phase_label(&slot.phase)
                         )))
-                        .child(row_note(if !slot.preview.can_launch {
-                            slot.preview
-                                .unavailable_reason
-                                .as_deref()
-                                .unwrap_or("Запуск недоступен")
-                        } else if !slot.placed
-                            && matches!(
-                                slot.phase.as_str(),
-                                "not_requested" | "delivered_unconfirmed"
-                            )
-                        {
-                            "Процесс уже запускался; требуется восстановить его размещение"
-                        } else if slot.preview.deliver_context {
-                            "Сохранённая ревизия контекста · доступна для просмотра"
-                        } else {
-                            "Без передачи контекста"
-                        })),
+                        .child(row_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            if !slot.preview.can_launch {
+                                slot.preview
+                                    .unavailable_reason
+                                    .as_deref()
+                                    .unwrap_or("Запуск недоступен")
+                            } else if !slot.placed
+                                && matches!(
+                                    slot.phase.as_str(),
+                                    "not_requested" | "delivered_unconfirmed"
+                                )
+                            {
+                                "Процесс уже запускался; требуется восстановить его размещение"
+                            } else if slot.preview.deliver_context {
+                                "Сохранённая ревизия контекста · доступна для просмотра"
+                            } else {
+                                "Без передачи контекста"
+                            },
+                        )),
                 );
             }
             if let Some(error) = &run.error {
-                content = content.child(row_note(error));
+                content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    error,
+                ));
             }
             if self.run_busy {
                 content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
                     "Подтверждаем состояние. Запрос запуска автоматически не повторяется.",
                 ));
             }
@@ -405,7 +426,7 @@ impl ProductUi {
                     cx,
                 ));
             }
-            content=content.child(row_note("Закрытие приостанавливает добавление остальных агентов. Уже запущенные CLI продолжают работу."));
+            content=content.child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, "Закрытие приостанавливает добавление остальных агентов. Уже запущенные CLI продолжают работу."));
         }
         if dialog.kind == DialogKind::TemplateRunContext
             && let Some(slot) = self
@@ -413,13 +434,13 @@ impl ProductUi {
                 .as_ref()
                 .and_then(|run| run.slots.get(self.run_context_slot))
         {
-            content=content.child(row_note(format!("{} · CLI {} · {}",provider_label(&slot.preview.provider),slot.preview.cli_version,slot.preview.delivery_method)))
-                .child(row_note(format!("Ревизия {} · {}",slot.preview.context.id,if slot.preview.deliver_context {"Передача запрошена; применение моделью не подтверждено"} else {"Контекст не передаётся"})))
-                .child(effective_context_blocks(&slot.preview.context,"template-run-context-blocks","Контекст нового запуска",280.,self.catalog.as_ref()))
-                .child(row_note("Пользовательские конфиги и credentials не изменяются. Нативные запросы разрешений остаются в CLI."));
+            content=content.child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, format!("{} · CLI {} · {}",provider_label(&slot.preview.provider),slot.preview.cli_version,slot.preview.delivery_method)))
+                .child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, format!("Ревизия {} · {}",slot.preview.context.id,if slot.preview.deliver_context {"Передача запрошена; применение моделью не подтверждено"} else {"Контекст не передаётся"})))
+                .child(effective_context_blocks(&slot.preview.context,"template-run-context-blocks","Контекст нового запуска",280.,self.catalog.as_ref(),self.colors()))
+                .child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, "Пользовательские конфиги и credentials не изменяются. Нативные запросы разрешений остаются в CLI."));
         }
         if dialog.kind == DialogKind::TemplateRuns {
-            content=content.child(row_note("Ничего не возобновляется автоматически. Откройте запись, чтобы проверить сохранённое состояние."));
+            content=content.child(row_note(chrome::Colors::for_theme(self.appearance.theme).muted, "Ничего не возобновляется автоматически. Откройте запись, чтобы проверить сохранённое состояние."));
             for (index, (label, action)) in self.recipe_menu_entries().into_iter().enumerate() {
                 content = content.child(self.action_control(
                     format!("template-run-history-{index}"),
@@ -438,7 +459,10 @@ impl ProductUi {
                 .as_ref()
                 .is_some_and(|page| page.entries.is_empty())
             {
-                content = content.child(row_note("Незавершённых вкладок нет."));
+                content = content.child(row_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    "Незавершённых вкладок нет.",
+                ));
             }
         }
         content

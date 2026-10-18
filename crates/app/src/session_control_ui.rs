@@ -3,7 +3,7 @@ use super::*;
 
 impl ProductUi {
     pub(super) fn stop_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let Some(sheet) = &self.stop_sheet else {
             return div()
                 .id("stop-dialog-unavailable")

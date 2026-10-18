@@ -3281,3 +3281,75 @@ Integrate confirmed tab closing with atomic selection/history rebasing, active-r
 - Files: crates/app/src/tab_close.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/layout/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, crates/session-host/src/catalog.rs, crates/session-host/src/lib.rs, crates/session-host/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Workspace340/app210/harness32 tests passed; strict locked workspace/app Clippy, first-party fmt/version/diff checks and release app/host builds passed. Native /tmp/pigade-close-tab-release-20261018-03 passes refresh/review/cancel/confirm, adjacent fallback, all placement snapshots free of closed tab and same five generation/PID/state/frame/journal snapshots; existing running session attached by layout IPC without launch. Review/fallback captures inspected. Root fixed fixture required batch arrays and exclusive-capture filename reuse (native01/02 stopped before close), local palette busy handling, closed viewport cache cleanup and test-only macro/status spelling. Read-only Luna review found no concrete production bug.
 - Risks / next: Full MVP/BridgeMind runtime, Wayland/platform/accessibility/reboot/soak gates remain open. Last attachment uses existing IPC, not a new native Sessions traversal. No active-desktop input/config; preserve unrelated dirt and stash0. Goal remains active; prior goal turn was progress.
+
+## 2026-10-18T01:21:23+00:00 — /root/appearance_prefs_luna
+
+Add revisioned, atomic appearance preference persistence with strict validation and focused concurrency tests
+
+- Files: crates/app/src/appearance.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/appearance.rs; git diff --check -- crates/app/src/appearance.rs passed. App compile/tests deferred to root after main.rs integration per task boundary.
+- Risks / next: Root integrates appearance module into app UI and runs app bootstrap checks; no Cargo manifests or shared UI files changed.
+
+## 2026-10-18T01:22:17+00:00 — /root/appearance_prefs_luna
+
+Correct File::try_lock error matching, remove unused Config accessors, and fsync newly created ancestor directory entries
+
+- Files: crates/app/src/appearance.rs, WORKLOG.md
+- Verification: Installed rustc 1.98.1 probe confirmed TryLockError has no kind() method; official std::fs::File docs confirm TryLockError::WouldBlock and Error(Error). rustfmt --edition 2024 and git diff --check passed. App Cargo not run per root integration boundary.
+- Risks / next: Root should compile and test the integrated app module; lock contention now matches the standard enum directly.
+
+## 2026-10-18T01:22:44+00:00 — /root/appearance_colors_luna
+
+Added theme-aware chrome tokens and propagated them through product overlays with contrast checks
+
+- Files: crates/app/src/chrome.rs, crates/app/src/product.rs, crates/app/src/profile_ui.rs, crates/app/src/prompt_ui.rs, crates/app/src/template_ui.rs, crates/app/src/git_status_ui.rs, crates/app/src/session_control_ui.rs
+- Verification: rustfmt --edition 2024 on owned files: passed; git diff --check on owned files: passed; app build not run because ProductUi.appearance integration is pending from lead
+- Risks / next: Lead adds ProductUi.appearance and wires root painter; then run targeted app test/build to validate integration
+
+## 2026-10-18T01:22:55+00:00 — /root/appearance_colors_luna
+
+Completed theme color forwarding for shared layout and context helpers
+
+- Files: crates/app/src/product.rs
+- Verification: rustfmt --edition 2024 on all owned files: passed; git diff --check on all owned files: passed; app build intentionally left to lead integration lane
+- Risks / next: Lead owns ProductUi.appearance integration and app validation
+
+## 2026-10-18T01:24:47+00:00 — /root/close_tab_layout_luna
+
+Extend the private controls fixture to validate persisted Appearance theme and reduced-motion settings without terminal effects
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); python3 scripts/isolated-ime-x11.py --compile-helper /tmp/pigade-appearance-input-helper (passed); git diff --check on owned files (passed); no native app run or app Cargo
+- Risks / next: Root owns app build and private native controls fixture; app restart recovery is explicitly untested.
+
+## 2026-10-18T01:26:24+00:00 — /root/appearance_colors_luna
+
+Documented local Appearance settings and current dark/light chrome palettes
+
+- Files: README.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md
+- Verification: git diff --check on owned documentation: passed; no Cargo commands run per task scope
+- Risks / next: Lead owns any broader spec or handoff updates and integration verification
+
+## 2026-10-18T01:26:57+00:00 — /root/close_tab_layout_luna
+
+Add pointer coverage for modifier click release without movement
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; isolated helper compiled to /tmp/pigade-pointer-no-motion-helper; git diff --check passed
+- Risks / next: Root owns the private native pointer fixture run and app integration.
+
+## 2026-10-18T01:29:56+00:00 — /root/close_tab_layout_luna
+
+Sample Appearance theme on unobscured modal surface
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; git diff --check passed
+- Risks / next: Root reruns the controls native fixture with corrected modal pixel coordinates.
+
+## 2026-10-18T01:30:56+00:00 — /root
+
+Integrate durable local Appearance settings and verify Hyprland-style hover/relative-grab controls; prevent placement from modifier clicks without travel and expose invalid drops
+
+- Files: crates/app/src/appearance.rs, crates/app/src/appearance_commands.rs, crates/app/src/appearance_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/chrome.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/pointer_layout.rs, crates/app/src/profile_ui.rs, crates/app/src/prompt_ui.rs, crates/app/src/template_ui.rs, crates/app/src/git_status_ui.rs, crates/app/src/session_control_ui.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: Final bootstrap test --locked:216 pass; strict all-target app Clippy, first-party fmt, version alignment and locked release build pass. Current harness32 pass. Private native pointer /tmp/pigade-pointer-appearance-20261018-01 and controls /tmp/pigade-appearance-controls-20261018-02 pass with unchanged generation/PIDs; pointer/appearance captures inspected. Initial app integration errors fixed (stateful role, unused items, Hsla conversion); native controls01 failed on sampling scrim-covered header, corrected fixture to unoccluded modal surface.
+- Risks / next: No active-desktop input/config changes. Native Wayland/platform/AT, actual UI-process Appearance restart and full MVP gates remain open; preserve unrelated research/stress/patch dirt and existing stash.

@@ -2,6 +2,10 @@
 
 ## 0.0.1-dev — in development
 
+- Pointer: modifier-click without travel no longer changes placement or undo; invalid drops show explicit text and an amber outline. Hover focus and relative-grab Dwindle insertion remain available without clicking the destination.
+
+- Added local Appearance settings for dark/light chrome and reduced motion, available from the header and command palette. Revision-checked preferences live under the user's config directory; terminal ANSI colors remain an independent dark profile.
+
 - Confirmed tab closing atomically rebases placement history and selects an adjacent tab while retaining live sessions and journals. Conflicts/unknown outcomes require explicit inspection; active configured launches block tab deletion.
 
 - Revisioned prompt library with CAS editing, idempotent deletion, frozen draft insertion and explicit clipboard copy. No terminal input or automatic task submission; schema12 migration keeps a durable backup.

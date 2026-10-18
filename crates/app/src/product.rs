@@ -4,7 +4,7 @@
 use crate::edit_field::FieldLayout;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, IntoElement, ParentElement, Role,
-    Stateful, StatefulInteractiveElement, Styled, div,
+    Stateful, StatefulInteractiveElement, Styled, Toggled, div,
     prelude::{FluentBuilder, InteractiveElement},
     px, rgb,
 };
@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
+#[path = "appearance_ui.rs"]
+mod appearance_ui;
 #[path = "git_status_ui.rs"]
 mod git_status_ui;
 #[path = "navigation_ui.rs"]
@@ -32,6 +34,10 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenAppearance,
+    SetTheme(crate::appearance::Theme),
+    ToggleReducedMotion,
+    ReloadAppearance,
     OpenCloseTab,
     CloseManagedTab,
     ConfirmCloseTab,
@@ -151,6 +157,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    Appearance,
     CloseTab,
     Prompts,
     Prompt,
@@ -195,6 +202,7 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::Appearance => "Внешний вид",
             Self::CloseTab => "Закрыть вкладку?",
             Self::Prompts => "Библиотека промптов",
             Self::Prompt => "Сохранённый промпт",
@@ -239,6 +247,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Appearance => &[],
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
@@ -282,6 +291,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::Appearance => "Готово",
             Self::CloseTab => "Закрыть вкладку",
             Self::Prompts => "Готово",
             Self::Prompt => "Сохранить промпт",
@@ -348,6 +358,10 @@ pub(super) struct ProductUi {
     pub(super) palette_scroll: gpui::ScrollHandle,
     pub(super) palette_loading: bool,
     pub(super) palette_error: Option<String>,
+    pub(super) appearance: crate::appearance::Config,
+    pub(super) appearance_pending: Option<Uuid>,
+    pub(super) appearance_error: Option<String>,
+    pub(super) motion_forced: bool,
     pub(super) command_modifier: crate::controls::Modifier,
     pub(super) controls_saving: bool,
     pub(super) compact: bool,
@@ -422,6 +436,7 @@ struct ProductColors {
     text: Hsla,
     muted: Hsla,
     accent: Hsla,
+    status_amber: Hsla,
 }
 
 #[derive(Clone, Copy)]
@@ -432,17 +447,19 @@ struct ControlStyle {
 }
 
 impl ProductColors {
-    fn dark() -> Self {
+    fn for_theme(theme: crate::appearance::Theme) -> Self {
+        let colors = chrome::Colors::for_theme(theme);
         Self {
-            base: rgb(chrome::BASE).into(),
-            sidebar: rgb(chrome::SIDEBAR).into(),
-            raised: rgb(chrome::RAISED).into(),
-            hover: rgb(chrome::HOVER).into(),
-            selected: rgb(chrome::SELECTED).into(),
-            border: rgb(chrome::BORDER).into(),
-            text: rgb(chrome::TEXT).into(),
-            muted: rgb(chrome::MUTED).into(),
-            accent: rgb(chrome::ACCENT).into(),
+            base: rgb(colors.base).into(),
+            sidebar: rgb(colors.sidebar).into(),
+            raised: rgb(colors.raised).into(),
+            hover: rgb(colors.hover).into(),
+            selected: rgb(colors.selected).into(),
+            border: rgb(colors.border).into(),
+            text: rgb(colors.text).into(),
+            muted: rgb(colors.muted).into(),
+            accent: rgb(colors.accent).into(),
+            status_amber: rgb(colors.status_amber).into(),
         }
     }
 }
@@ -512,6 +529,10 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
+        (
+            "Внешний вид · appearance · тема",
+            ProductAction::OpenAppearance,
+        ),
         (
             "Клавиша управления панелями / горячие клавиши",
             ProductAction::OpenControls,
@@ -665,25 +686,25 @@ fn context_lines(value: &str) -> Div {
     )
 }
 
-fn template_thumbnail(node: &pigade_layout::TemplateNode) -> Div {
-    fn draw(node: &pigade_layout::TemplateNode, depth: usize) -> Div {
+fn template_thumbnail(node: &pigade_layout::TemplateNode, colors: chrome::Colors) -> Div {
+    fn draw(node: &pigade_layout::TemplateNode, depth: usize, colors: chrome::Colors) -> Div {
         let tile = div().flex_1().min_w_0().min_h_0().rounded(px(3.));
         match node {
             pigade_layout::TemplateNode::Pane => tile
-                .bg(rgb(chrome::ACCENT).opacity(0.36))
+                .bg(rgb(colors.accent).opacity(0.36))
                 .border_1()
-                .border_color(rgb(chrome::ACCENT).opacity(0.45)),
+                .border_color(rgb(colors.accent).opacity(0.45)),
             // A thumbnail has a fixed pixel area. Collapse complex branches
             // rather than allocating a widget for every possible model node.
             pigade_layout::TemplateNode::Split { children, .. }
                 if depth >= 3 || children.len() > 4 =>
             {
-                tile.bg(rgb(chrome::ACCENT).opacity(0.24))
+                tile.bg(rgb(colors.accent).opacity(0.24))
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_size(px(10.))
-                    .text_color(rgb(chrome::ACCENT))
+                    .text_color(rgb(colors.accent))
                     .child("…")
             }
             pigade_layout::TemplateNode::Split {
@@ -695,13 +716,13 @@ fn template_thumbnail(node: &pigade_layout::TemplateNode) -> Div {
                 .gap(px(3.))
                 .when(*axis == pigade_layout::Axis::Vertical, |row| row.flex_col())
                 .children(children.iter().zip(weights).map(|(child, weight)| {
-                    draw(child, depth + 1)
+                    draw(child, depth + 1, colors)
                         .flex_basis(px(0.))
                         .flex_grow(*weight as f32)
                 })),
         }
     }
-    draw(node, 0)
+    draw(node, 0, colors)
 }
 
 fn effective_context_blocks(
@@ -710,8 +731,8 @@ fn effective_context_blocks(
     accessible_name: &str,
     max_height: f32,
     catalog: Option<&Catalog>,
+    colors: ProductColors,
 ) -> Stateful<Div> {
-    let colors = ProductColors::dark();
     let mut blocks = div()
         .id(id.to_owned())
         .role(Role::List)
@@ -819,6 +840,10 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
 }
 
 impl ProductUi {
+    fn colors(&self) -> ProductColors {
+        ProductColors::for_theme(self.appearance.theme)
+    }
+
     pub(super) fn replace_sessions(&mut self, sessions: Vec<SessionSummary>) {
         let picker = self
             .dialog
@@ -1177,7 +1202,7 @@ impl ProductUi {
     }
 
     pub(super) fn header(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let location = self
             .catalog
             .as_ref()
@@ -1219,7 +1244,11 @@ impl ProductUi {
                 ProductAction::ToggleSidebar,
                 cx,
             ))
-            .child(chrome::icon("logo-p", 20., chrome::ACCENT))
+            .child(chrome::icon(
+                "logo-p",
+                20.,
+                chrome::Colors::for_theme(self.appearance.theme).accent,
+            ))
             .child(
                 div()
                     .id("app-brand")
@@ -1254,6 +1283,13 @@ impl ProductUi {
                 ProductAction::OpenPalette,
                 cx,
             ))
+            .child(self.icon_control(
+                "header-appearance",
+                "Внешний вид",
+                "layers",
+                ProductAction::OpenAppearance,
+                cx,
+            ))
             .child(self.action_control_with_accessible_name(
                 "command-modifier".into(),
                 format!("{} ▾", self.command_modifier.label()),
@@ -1275,7 +1311,7 @@ impl ProductUi {
         active_pane: Option<Uuid>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let compact = self.sidebar_compact;
         let mut tree = div()
             .id("product-project-tree")
@@ -1402,9 +1438,10 @@ impl ProductUi {
                                         })
                                         .hover(|style| style.bg(colors.hover))
                                         .child(div().size(px(5.)).rounded_full().bg(rgb(if live {
-                                            chrome::STATUS_GREEN
+                                            chrome::Colors::for_theme(self.appearance.theme)
+                                                .status_green
                                         } else {
-                                            chrome::MUTED
+                                            chrome::Colors::for_theme(self.appearance.theme).muted
                                         })))
                                         .child(
                                             div()
@@ -1437,7 +1474,11 @@ impl ProductUi {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child(chrome::icon("folder", 20., chrome::MUTED))
+                        .child(chrome::icon(
+                            "folder",
+                            20.,
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                        ))
                         .child(
                             div()
                                 .text_color(colors.muted)
@@ -1600,7 +1641,7 @@ impl ProductUi {
     }
 
     pub(super) fn tabbar(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut tabs = div()
             .id("product-tabbar")
             .accessibility_id("product-tabbar")
@@ -1636,7 +1677,7 @@ impl ProductUi {
     }
 
     pub(super) fn toolbar(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut bar = div()
             .id("product-toolbar")
             .role(Role::Toolbar)
@@ -1713,7 +1754,7 @@ impl ProductUi {
         action: ProductAction,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         div()
             .id(id.to_owned())
             .role(Role::Button)
@@ -1726,7 +1767,11 @@ impl ProductUi {
             .rounded(px(5.))
             .text_color(colors.muted)
             .hover(|style| style.bg(colors.hover).text_color(colors.text))
-            .child(chrome::icon(icon, 15., chrome::MUTED))
+            .child(chrome::icon(
+                icon,
+                15.,
+                chrome::Colors::for_theme(self.appearance.theme).muted,
+            ))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.product_action(action.clone(), window, cx);
                 cx.stop_propagation();
@@ -1745,7 +1790,7 @@ impl ProductUi {
 
     pub(super) fn empty_state(&self, cx: &mut Context<CanvasApp>) -> Option<AnyElement> {
         let catalog = self.catalog.as_ref()?;
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let welcome = catalog.projects.is_empty();
         if welcome {
             return Some(self.first_run(cx));
@@ -1925,7 +1970,7 @@ impl ProductUi {
         secondary: Option<(ProductAction, &'static str)>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut card = div()
             .id("product-empty-state-card")
             .role(Role::Group)
@@ -1993,7 +2038,7 @@ impl ProductUi {
     }
 
     fn first_run(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut actions = div().w_full().flex().gap_3().mt(px(28.));
         if self.compact {
             actions = actions.flex_col();
@@ -2031,11 +2076,11 @@ impl ProductUi {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .child(
-                        div()
-                            .mb(px(20.))
-                            .child(chrome::icon("logo-p", 42., chrome::ACCENT)),
-                    )
+                    .child(div().mb(px(20.)).child(chrome::icon(
+                        "logo-p",
+                        42.,
+                        chrome::Colors::for_theme(self.appearance.theme).accent,
+                    )))
                     .child(
                         div()
                             .id("welcome-title")
@@ -2097,7 +2142,7 @@ impl ProductUi {
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
         let (label, detail) = copy;
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         div()
             .id(id.to_owned())
             .role(Role::Button)
@@ -2131,7 +2176,11 @@ impl ProductUi {
             .child(chrome::icon(
                 icon,
                 22.,
-                if primary { chrome::BASE } else { chrome::MUTED },
+                if primary {
+                    chrome::Colors::for_theme(self.appearance.theme).on_accent
+                } else {
+                    chrome::Colors::for_theme(self.appearance.theme).muted
+                },
             ))
             .child(
                 div()
@@ -2165,7 +2214,7 @@ impl ProductUi {
         label: &str,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         if provider == "shell" {
             return self.action_control(
                 format!("launch-{provider}"),
@@ -2240,7 +2289,7 @@ impl ProductUi {
     }
 
     fn tab_control(&self, tab: &Tab, selected: bool, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let id = tab.id;
         div()
             .id(format!("tab-{id}"))
@@ -2309,14 +2358,17 @@ impl ProductUi {
         style: ControlStyle,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let primary = matches!(
             id.as_str(),
             "product-dialog-submit" | "launch-review-confirm" | "resume-review-confirm"
         ) || matches!(&action, ProductAction::OpenLauncher)
             || matches!(&action, ProductAction::AddProject) && style.selected;
+        let toggle = style.role == Role::CheckBox || matches!(&action, ProductAction::SetTheme(_));
         let foreground = if primary {
-            colors.base
+            Hsla::from(rgb(
+                chrome::Colors::for_theme(self.appearance.theme).on_accent
+            ))
         } else if style.selected {
             colors.text
         } else {
@@ -2346,7 +2398,14 @@ impl ProductUi {
             .id(id)
             .role(style.role)
             .aria_label(accessible_name)
-            .aria_selected(style.selected)
+            .when(toggle, |row| {
+                row.aria_toggled(if style.selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            })
+            .when(!toggle, |row| row.aria_selected(style.selected))
             .h(px(if style.compact { 28. } else { ROW_HEIGHT }))
             .px(px(if style.compact { 9. } else { 10. }))
             .flex()
@@ -2372,7 +2431,11 @@ impl ProductUi {
                 chrome::icon(
                     name,
                     14.,
-                    if primary { chrome::BASE } else { chrome::MUTED },
+                    if primary {
+                        chrome::Colors::for_theme(self.appearance.theme).on_accent
+                    } else {
+                        chrome::Colors::for_theme(self.appearance.theme).muted
+                    },
                 )
             }))
             .child(label)
@@ -2380,7 +2443,7 @@ impl ProductUi {
     }
 
     fn controls_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut choices = div().flex().flex_wrap().gap_2().my(px(16.));
         for (index, modifier) in crate::controls::Modifier::ALL.into_iter().enumerate() {
             choices = choices.child(self.action_control(
@@ -2442,7 +2505,7 @@ impl ProductUi {
         layouts: &BTreeMap<usize, FieldLayout>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         if dialog.kind == DialogKind::LaunchReview {
             return self.launch_review_overlay(dialog, layouts, cx);
         }
@@ -2553,30 +2616,32 @@ impl ProductUi {
         if dialog.kind == DialogKind::SaveLayout
             && let Some(draft) = &self.template_draft
         {
-            fields = fields.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .w(px(96.))
-                            .h(px(56.))
-                            .flex()
-                            .children(draft.root.as_ref().map(template_thumbnail)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(12.))
-                            .text_color(colors.muted)
-                            .whitespace_normal()
-                            .child(format!(
-                                "{} панелей · направления и пропорции разделений",
-                                draft.pane_count()
-                            )),
-                    ),
-            );
+            fields =
+                fields.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().w(px(96.)).h(px(56.)).flex().children(
+                            draft.root.as_ref().map(|node| {
+                                template_thumbnail(
+                                    node,
+                                    chrome::Colors::for_theme(self.appearance.theme),
+                                )
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(12.))
+                                .text_color(colors.muted)
+                                .whitespace_normal()
+                                .child(format!(
+                                    "{} панелей · направления и пропорции разделений",
+                                    draft.pane_count()
+                                )),
+                        ),
+                );
         }
         if dialog.kind == DialogKind::DeleteLayout
             && let Some(template) = &self.template_target
@@ -2710,6 +2775,9 @@ impl ProductUi {
                 },
                 cx,
             ));
+        }
+        if dialog.kind == DialogKind::Appearance {
+            fields = self.appearance_fields(fields, cx);
         }
         fields = self.template_dialog_fields(dialog, fields, cx);
         fields = self.profile_dialog_fields(dialog, fields, cx);
@@ -3149,7 +3217,7 @@ impl ProductUi {
         mut content: Div,
         cx: &mut Context<CanvasApp>,
     ) -> Div {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let Some(templates) = self
             .catalog
             .as_ref()
@@ -3222,11 +3290,14 @@ impl ProductUi {
                                 colors.base
                             })
                             .hover(|style| style.bg(colors.hover))
-                            .child(
-                                div().w(px(86.)).h(px(52.)).flex().children(
-                                    template.geometry.root.as_ref().map(template_thumbnail),
-                                ),
-                            )
+                            .child(div().w(px(86.)).h(px(52.)).flex().children(
+                                template.geometry.root.as_ref().map(|node| {
+                                    template_thumbnail(
+                                        node,
+                                        chrome::Colors::for_theme(self.appearance.theme),
+                                    )
+                                }),
+                            ))
                             .child(
                                 div()
                                     .flex_1()
@@ -3314,7 +3385,7 @@ impl ProductUi {
     }
 
     fn launcher_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut choices = div()
             .id("agent-launcher-choices")
             .mt(px(16.))
@@ -3426,7 +3497,7 @@ impl ProductUi {
     }
 
     fn resume_review_overlay(&self, _dialog: &Dialog, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let preview = self.launch_preview.as_ref();
         let can_confirm = preview
             .is_some_and(|preview| preview.can_launch && preview.resume.is_some())
@@ -3486,6 +3557,7 @@ impl ProductUi {
                     "Замороженные блоки контекста продолжения",
                     250.,
                     self.catalog.as_ref(),
+                    self.colors(),
                 );
             } else {
                 details = details.child("Предпросмотр продолжения недоступен.");
@@ -3497,7 +3569,7 @@ impl ProductUi {
                         .id("resume-review-unavailable-reason")
                         .role(Role::Status)
                         .text_size(px(12.))
-                        .text_color(colors.accent)
+                        .text_color(colors.status_amber)
                         .child(reason.clone()),
                 );
             }
@@ -3507,7 +3579,7 @@ impl ProductUi {
                         .id(format!("resume-review-warning-{index}"))
                         .role(Role::Status)
                         .text_size(px(11.))
-                        .text_color(colors.muted)
+                        .text_color(colors.status_amber)
                         .child(warning.clone()),
                 );
             }
@@ -3517,7 +3589,7 @@ impl ProductUi {
                         .id("resume-review-unavailable")
                         .role(Role::Status)
                         .text_size(px(12.))
-                        .text_color(colors.accent)
+                        .text_color(colors.status_amber)
                         .child("Продолжение сейчас недоступно."),
                 );
             }
@@ -3625,7 +3697,7 @@ impl ProductUi {
         layouts: &BTreeMap<usize, FieldLayout>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let preview = self.launch_preview.as_ref();
         let role_override = dialog.fields.first().map(EditBuffer::text).unwrap_or("");
         let agent_instructions = dialog.fields.get(1).map(EditBuffer::text).unwrap_or("");
@@ -3777,6 +3849,7 @@ impl ProductUi {
                 "Блоки эффективного контекста",
                 240.,
                 self.catalog.as_ref(),
+                self.colors(),
             );
 
             let memory_label = if dialog
@@ -3830,7 +3903,7 @@ impl ProductUi {
                     .id("launch-review-unconfirmed")
                     .role(Role::Status)
                     .text_size(px(12.))
-                    .text_color(colors.accent)
+                    .text_color(colors.status_amber)
                     .child("Предпросмотр не подтверждает, что CLI применил контекст."),
             );
             if preview.capabilities.context_receipt {
@@ -3850,7 +3923,7 @@ impl ProductUi {
                         .id(format!("launch-review-warning-{index}"))
                         .role(Role::Status)
                         .text_size(px(11.))
-                        .text_color(colors.muted)
+                        .text_color(colors.status_amber)
                         .child(warning.clone()),
                 );
             }
@@ -4218,7 +4291,7 @@ impl ProductUi {
     }
 
     fn session_context_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut content = div().flex().flex_col().gap_2();
         if let Some(preview) = &self.launch_preview {
             if let Some(profile) = &preview.profile {
@@ -4257,6 +4330,7 @@ impl ProductUi {
                     "Сохранённые блоки контекста сессии",
                     420.,
                     self.catalog.as_ref(),
+                    self.colors(),
                 ));
         } else {
             content = content.child(
@@ -4329,7 +4403,7 @@ impl ProductUi {
     }
 
     fn transfer_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let current_tab = self.catalog.as_ref().and_then(selected_tab);
         let source_label = self
             .catalog
@@ -4472,7 +4546,7 @@ impl ProductUi {
     }
 
     fn sessions_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut menu_index = 0;
         let mut entries = div()
             .id("unplaced-session-list")
@@ -4696,7 +4770,7 @@ impl ProductUi {
         layouts: &BTreeMap<usize, FieldLayout>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let Some(history) = &self.history_sheet else {
             return div()
                 .id("history-sheet-missing")
@@ -4997,7 +5071,7 @@ impl ProductUi {
         layouts: &BTreeMap<usize, FieldLayout>,
         cx: &mut Context<CanvasApp>,
     ) -> AnyElement {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         let mut card = div()
             .id("product-command-palette")
             .role(Role::Dialog)

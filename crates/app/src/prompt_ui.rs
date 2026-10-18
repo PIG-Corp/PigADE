@@ -1,10 +1,10 @@
 //! Rendering for the reusable prompt library and editor.
 use super::*;
 
-fn prompt_note(text: impl Into<String>) -> Div {
+fn prompt_note(muted: u32, text: impl Into<String>) -> Div {
     div()
         .text_size(px(11.))
-        .text_color(rgb(chrome::MUTED))
+        .text_color(rgb(muted))
         .whitespace_normal()
         .child(text.into())
 }
@@ -52,7 +52,7 @@ impl ProductUi {
         mut content: Div,
         cx: &mut Context<CanvasApp>,
     ) -> Div {
-        let colors = ProductColors::dark();
+        let colors = self.colors();
         match dialog.kind {
             DialogKind::Prompts => {
                 let Some(prompts) = self
@@ -70,16 +70,19 @@ impl ProductUi {
                     );
                 };
 
-                content = content.child(prompt_note(self.prompt_origin.as_ref().map_or_else(
-                    || "Выберите текст для копирования.".into(),
-                    |origin| {
-                        format!(
-                            "Вставка в «{}» · {}",
-                            origin.kind.title(),
-                            origin.kind.fields()[origin.active_field]
-                        )
-                    },
-                )));
+                content = content.child(prompt_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    self.prompt_origin.as_ref().map_or_else(
+                        || "Выберите текст для копирования.".into(),
+                        |origin| {
+                            format!(
+                                "Вставка в «{}» · {}",
+                                origin.kind.title(),
+                                origin.kind.fields()[origin.active_field]
+                            )
+                        },
+                    ),
+                ));
                 let mut rows = div()
                     .id("prompts-rows")
                     .role(Role::List)
@@ -153,7 +156,10 @@ impl ProductUi {
                                             .truncate()
                                             .child(prompt.title.clone()),
                                     )
-                                    .child(prompt_note(format!("Ревизия {}", prompt.revision)))
+                                    .child(prompt_note(
+                                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                                        format!("Ревизия {}", prompt.revision),
+                                    ))
                                     .child(
                                         div()
                                             .text_size(px(11.))
@@ -219,24 +225,32 @@ impl ProductUi {
                         },
                         cx,
                     ))
-                    .child(prompt_note(
+                    .child(prompt_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                         "↑ ↓ — выбрать · Enter — использовать · Ctrl+E — изменить · Delete — удалить · Ctrl+R — обновить",
                     ))
             }
             DialogKind::Prompt => {
                 let Some(editor) = &self.prompt_editor else {
-                    return content.child(prompt_note("Редактор промпта недоступен."));
+                    return content.child(prompt_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Редактор промпта недоступен.",
+                    ));
                 };
-                content = content.child(prompt_note(if editor.saved.is_some() {
-                    "Изменение сохранённого промпта."
-                } else {
-                    "Новый промпт."
-                }));
+                content = content.child(prompt_note(
+                    chrome::Colors::for_theme(self.appearance.theme).muted,
+                    if editor.saved.is_some() {
+                        "Изменение сохранённого промпта."
+                    } else {
+                        "Новый промпт."
+                    },
+                ));
                 if let Some(saved) = &editor.saved {
-                    content =
-                        content.child(prompt_note(format!("Текущая ревизия: {}", saved.revision)));
+                    content = content.child(prompt_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        format!("Текущая ревизия: {}", saved.revision),
+                    ));
                 }
-                content.child(prompt_note(
+                content.child(prompt_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                     "Промпт хранится в библиотеке и используется только по вашему действию. Сохранение не отправляет задачу в терминал.",
                 ))
             }
@@ -244,12 +258,18 @@ impl ProductUi {
                 if let Some(prompt) = &self.prompt_delete {
                     content
                         .child(div().text_size(px(13.)).child(prompt.title.clone()))
-                        .child(prompt_note(format!(
-                            "Будет удалена только запись библиотеки, ревизия {}.",
-                            prompt.revision
-                        )))
+                        .child(prompt_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            format!(
+                                "Будет удалена только запись библиотеки, ревизия {}.",
+                                prompt.revision
+                            ),
+                        ))
                 } else {
-                    content.child(prompt_note("Промпт больше недоступен."))
+                    content.child(prompt_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Промпт больше недоступен.",
+                    ))
                 }
             }
             _ => content,

@@ -5,6 +5,12 @@ use std::collections::BTreeMap;
 use pigade_layout::{Command, Direction, LayoutModel, LayoutState, PaneRect, Rect, TabLayout};
 use uuid::Uuid;
 
+/// A modifier grab can float immediately, but a click is never a placement edit.
+pub(crate) fn travelled(grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
+    [grab_x, grab_y, x, y].into_iter().all(f64::is_finite)
+        && ((x - grab_x).abs() > 6.0 || (y - grab_y).abs() > 6.0)
+}
+
 /// Map the original grab point onto the temporary, smaller dragged pane.
 /// Grabbing a header or an edge must not jump the pane's center to the cursor.
 pub(crate) fn floating_rect(
@@ -178,7 +184,7 @@ mod tests {
     use pigade_layout::{Axis, Command, Direction, Node, PaneRect, Rect, SplitId, TabLayout};
     use uuid::Uuid;
 
-    use super::{FocusIntent, FocusQueue, detached_layout, drop_command, floating_rect};
+    use super::{FocusIntent, FocusQueue, detached_layout, drop_command, floating_rect, travelled};
 
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)
@@ -195,6 +201,16 @@ mod tests {
             focused: Some(id(1)),
             focus_mode,
         }
+    }
+
+    #[test]
+    fn a_grab_click_or_jitter_does_not_authorize_placement() {
+        assert!(!travelled(300., 200., 300., 200.));
+        assert!(!travelled(300., 200., 306., 194.));
+        assert!(travelled(300., 200., 307., 200.));
+        assert!(travelled(300., 200., 300., 193.));
+        assert!(!travelled(f64::NAN, 200., 307., 200.));
+        assert!(!travelled(300., 200., f64::INFINITY, 200.));
     }
 
     #[test]
