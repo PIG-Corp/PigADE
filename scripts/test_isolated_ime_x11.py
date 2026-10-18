@@ -1002,6 +1002,33 @@ class IsolatedImePlanTests(unittest.TestCase):
             second_open,
             index_flow.index("helper_call(config, 'catalog-git-index-apply')", second_open),
         )
+        batch_flow = source.split('# The same review dialog also exposes frozen Stage All / Unstage All', 1)[1].split(
+            "# The fixture commands suppress hooks", 1)[0]
+        for stage in ('catalog-git-batch-stage', 'catalog-git-batch-unstage',
+                      'catalog-git-batch-confirm', 'catalog-git-batch-enter',
+                      'catalog-git-batch-back'):
+            self.assertIn(f"helper_call(config, '{stage}')", batch_flow)
+        self.assertLess(batch_flow.index("helper_call(config, 'catalog-git-batch-enter')"),
+                        batch_flow.index("helper_call(config, 'catalog-git-batch-back')"))
+        self.assertIn('require_batch_cancelled_index(batch_index_before', batch_flow)
+        self.assertIn("private_git(['ls-files', '-z'])", batch_flow)
+        self.assertIn("batch_staged_paths == expected_batch_index_paths", batch_flow)
+        self.assertIn("private_git(['add', '--', 'staged-only.txt'])", batch_flow)
+        self.assertIn("batch-all.txt", batch_flow)
+        batch_helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        for stage in ('catalog-git-batch-stage', 'catalog-git-batch-unstage',
+                      'catalog-git-batch-confirm', 'catalog-git-batch-enter',
+                      'catalog-git-batch-back'):
+            self.assertIn(f'"{stage}"', batch_helper)
+        self.assertIn('control_shift_key(dpy, XK_s)', batch_helper)
+        self.assertIn('control_shift_key(dpy, XK_BackSpace)', batch_helper)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_Return)', batch_helper)
+        self.assertIn('modified_key(dpy, XK_Alt_L, XK_Left)', batch_helper)
+        for artifact in ('catalog-git-batch-stage-review.ppm',
+                         'catalog-git-batch-stage-result.ppm',
+                         'catalog-git-batch-unstage-review.ppm',
+                         'catalog-git-batch-unstage-result.ppm'):
+            self.assertIn(artifact, source)
         self.assertIn("'refresh_invoked_by_fixed_keyboard_stage': 'catalog-git-refresh'", source)
         self.assertIn("'command': 'workspace_git_snapshot'", source)
         self.assertIn("untracked_name = 'untracked space\\nline.txt'", source)

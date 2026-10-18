@@ -535,6 +535,8 @@ mod tests {
             workspace_git_watch: watch,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_git_index_batch_plan: None,
+            workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
         }
@@ -575,6 +577,9 @@ mod tests {
             truncated: false,
             index_operation: None,
             index_operation_unavailable_reason: None,
+            index_batch_schema: None,
+            index_batch_operation: None,
+            index_batch_unavailable_reason: None,
             commit_schema: None,
             commit_operation: None,
             commit_unavailable_reason: None,

@@ -62,6 +62,9 @@ impl CanvasApp {
         if self.git_flow.request_pending() {
             pending.push("Ответ на отправленную операцию Git");
         }
+        if self.product.git_batch.request_pending() || self.product.git_batch.unresolved() {
+            pending.push("Исход пакетной операции Git");
+        }
         pending.extend(self.git_flow.unresolved_resources());
         if self.mouse_delivery.has_pending_receipts()
             || self

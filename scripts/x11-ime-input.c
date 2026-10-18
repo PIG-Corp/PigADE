@@ -153,6 +153,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-git-diff-first") &&
         strcmp(a.stage, "catalog-git-diff-second") &&
         strcmp(a.stage, "catalog-git-index-apply") &&
+        strcmp(a.stage, "catalog-git-batch-stage") &&
+        strcmp(a.stage, "catalog-git-batch-unstage") &&
+        strcmp(a.stage, "catalog-git-batch-confirm") &&
+        strcmp(a.stage, "catalog-git-batch-back") &&
+        strcmp(a.stage, "catalog-git-batch-enter") &&
         strcmp(a.stage, "catalog-git-commit-open") &&
         strcmp(a.stage, "catalog-git-commit-message") &&
         strcmp(a.stage, "catalog-git-commit-confirm") &&
@@ -1688,6 +1693,16 @@ int main(int argc, char **argv) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-git-index-apply")) {
             modified_key(dpy, XK_Control_L, XK_s);
+        } else if (!strcmp(a.stage, "catalog-git-batch-stage")) {
+            control_shift_key(dpy, XK_s);
+        } else if (!strcmp(a.stage, "catalog-git-batch-unstage")) {
+            control_shift_key(dpy, XK_BackSpace);
+        } else if (!strcmp(a.stage, "catalog-git-batch-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-batch-back")) {
+            modified_key(dpy, XK_Alt_L, XK_Left);
+        } else if (!strcmp(a.stage, "catalog-git-batch-enter")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-git-commit-open") ||
                    !strcmp(a.stage, "catalog-git-commit-confirm")) {
             modified_key(dpy, XK_Control_L, XK_Return);
@@ -2318,6 +2333,11 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-git-diff-first") ? "1" :
                             !strcmp(a.stage, "catalog-git-diff-second") ? "2" :
                             !strcmp(a.stage, "catalog-git-index-apply") ? "2" :
+                            !strcmp(a.stage, "catalog-git-batch-stage") ? "2" :
+                            !strcmp(a.stage, "catalog-git-batch-unstage") ? "2" :
+                            !strcmp(a.stage, "catalog-git-batch-confirm") ? "2" :
+                            !strcmp(a.stage, "catalog-git-batch-back") ? "2" :
+                            !strcmp(a.stage, "catalog-git-batch-enter") ? "1" :
                             !strcmp(a.stage, "catalog-git-commit-open") ? "2" :
                             !strcmp(a.stage, "catalog-git-commit-message") ? "23" :
                             !strcmp(a.stage, "catalog-git-commit-confirm") ? "2" :

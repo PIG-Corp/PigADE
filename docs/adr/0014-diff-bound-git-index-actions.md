@@ -33,3 +33,40 @@ index rename and before the final result. `tests/project_setup.rs` covers real
 IPC, host restart, duplicate tickets and a failing clean filter invoked once.
 The existing private catalog UI fixture exercises four Stage/Unstage actions.
 These tests do not claim power-loss durability or complete Git/MVP acceptance.
+
+
+## Whole-status batch extension, 0.0.1-dev
+
+Stage All and Unstage All use a separate expiring ticket for a complete frozen
+status, repository/workspace identity, HEAD, index identity/bytes and all changed
+regular working-file bytes/modes. Only explicit reviewed literal paths enter a
+private candidate index. One native index.lock CAS publishes the whole candidate;
+no worktree file is overwritten. Native clean/EOL filters remain explicit effects.
+Changes to any frozen input, including a newly appearing untracked path, reject
+the whole batch. The UI review is required; ordinary Enter never applies it.
+
+Bounds:128 complete status entries,256 literal paths,256KiB per regular changed
+file,8MiB aggregate working bytes and index,2 outstanding workspace previews for
+10minutes,4096 separate durable batch receipts of at most2MiB each. A replacement
+preview invalidates the unused ticket for the same workspace without locking
+index writes. Per-file64KiB receipt bounds remain unchanged. Sparse/split indexes,
+symlinks, submodules, conflicts and unsafe/control-character paths are refused.
+Receipts are recorded before
+filters/index changes; unknown outcomes survive restart and mutually block
+per-file, batch and commit writes. Inspection never retries; acknowledgement
+never relabels Unknown as Applied. Missing/corrupt receipts stay unavailable.
+Original receipt revisions remain inspectable after workspace rename.
+
+The additive index_batch_schema=1 capability does not require migration or
+restarting a live legacy host. This extends the earlier per-file scope; discard,
+remote writes and receipt maintenance remain separate work.
+
+Batch evidence:60 focused Git-module tests (including11 batch tests),13
+real-host project tests including batch IPC/restart/stale/Unknown handling,
+434 app tests and37 harness tests pass. Private release catalog04 at
+`/tmp/pigade-git-batch-20261018-04` passes both batch UI flows, exact staged
+bytes/path sets, Enter/cancel, worktree/process/layout preservation, followed
+by native commit/hooks and tab close/reattach. Review/result captures were
+visually inspected. This is private software X11 verification; power-loss,
+native Wayland, reboot, performance, soak and full accessibility gates remain
+open.

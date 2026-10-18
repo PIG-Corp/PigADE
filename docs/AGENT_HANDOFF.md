@@ -573,3 +573,34 @@ Fresh verification:372 workspace tests passed serially; final targeted31 Git mod
 Latest user priority: Hyprland-style pointer focus and modifier dragging. This supersedes the earlier gap-cancellation policy: Dwindle can select a nearest tiled node across a gutter. PigADE now prefers a directly hit pane, then distance to a valid tiled rectangle with UUID ties, only inside canvas; dropping outside canvas cancels. Source remains focused while grabbed, relative grip and immediate modifier pickup are retained. Hover entry before activation is remembered independently of a stationary keyboard focus; motion is observed before GPUI hitbox filtering so inactive entry/closing overlays cannot silently swallow it. Dialog/IME/selection/gesture guards remain. No system configuration or active-desktop input is changed. Fresh verification:272 app tests,34 harness tests (strict C helper compile), strict app Clippy, version/diff checks and app debug/release builds pass. Private release `/tmp/pigade-hover-gap-20261018-04` passes the full pointer flow including inactive motion -> activation without another move, body/header hover/input routing, gutter insertion/undo, focus-mode cancel and existing tab/file/clipboard cases; header and gutter captures inspected. Earlier01–03/debug attempts are failed evidence, not passes. Debug3 isolated repeated inactive notifications erasing pending hover; HoverFocus now resets only on actual inactive transition, with a regression test. Fixture activation probe runs before IME and allows bounded normal event settling; XSync alone does not drain GPUI callbacks. Actual Hyprland/Wayland pointer runtime certification remains open.
 
 Deferred Git commit work is incomplete and must not be presented as supported. App edits were saved as `/tmp/pigade-deferred-git-commit-ui-20261018.patch` and reverse-applied to keep the application buildable during pointer work; they will conflict with subsequent main.rs edits and need manual integration. The untracked `workspace_git_commit_hooks.rs` helper has not been registered or compiled. Its WORKLOG entry states its limited rustfmt-only check. Existing Git Stage/Unstage remains the shipped slice; preserve other research/stress/GPUI dirt and stash0.
+
+
+Batch Git index actions (0.0.1-dev): `workspace_git_index_batch.rs` extends
+ADR0014 with whole-status frozen Stage All/Unstage All, private candidate and
+one native index replacement, separate durable receipts and mutual uncertain
+outcome gates with per-file writes and commits. App `git_batch.rs` retains
+outcomes beyond dialogs; `git_batch_ui.rs` is a child of `product`, sharing its
+controls/colors. The existing Git worker routes batch request IDs before the
+old Flow; no independent worker/terminal parser/dependency was added. In Git,
+Ctrl+Shift+S reviews Stage All; Ctrl+Shift+Backspace reviews Unstage All;
+Ctrl+Enter applies once, ordinary Enter is ignored, Alt+Left returns to a fresh
+Git list, Ctrl+Shift+B opens the retained result. Explicit inspection/ack uses
+Ctrl+R/Ctrl+Shift+R. Same-workspace replacement previews invalidate old unused
+tickets without locking writes. Receipt discovery preserves the original
+revision after workspace rename. Legacy hosts without index_batch_schema=1
+remain running and disable batch controls. See ADR0014/README for limits.
+
+Verification in this block:434 app tests,60 focused host Git tests,13 real-host
+project/IPC tests,37 existing harness tests; strict host/app Clippy, formatting,
+versions and release builds pass. Private native release04 passes the complete catalog fixture at
+`/tmp/pigade-git-batch-20261018-04`, including Stage/Unstage review, ordinary
+Enter/cancel, exact index/worktree and unchanged processes/layout, then native
+commit/hooks and tab close/reattach. Root inspected review/result captures.
+Do not count01–03 as passing complete runs.01–02 did not open Unstage review
+through the originally selected U chord (cause not proven);03 verifies both
+batch actions through Ctrl+Shift+Backspace but its later commit step missed a
+required explicit snapshot refresh after private Git reseeding. The fixture
+now refreshes that deliberately frozen list.04 passes with that repair.
+No active desktop input, monitor/theme changes, live user host or CLI restarts.
+Preserve unrelated research/stress/GPUI dirt and stash0. Full MVP/reboot/Wayland/
+soak/performance/accessibility gates remain open.

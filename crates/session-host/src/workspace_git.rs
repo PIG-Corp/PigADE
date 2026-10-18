@@ -34,6 +34,7 @@ mod index;
 pub use commit::{
     GitCommitEntry, GitCommitPhase, WorkspaceGitCommitPlan, WorkspaceGitCommitResult,
 };
+pub use index::{WorkspaceGitIndexBatchPlan, WorkspaceGitIndexBatchResult};
 
 pub(crate) fn run_commit_helper(operation: &Path) -> Result<()> {
     commit::run_helper(operation)
@@ -81,6 +82,12 @@ pub struct WorkspaceGitSnapshot {
     pub index_operation: Option<WorkspaceGitIndexResult>,
     #[serde(default)]
     pub index_operation_unavailable_reason: Option<String>,
+    #[serde(default)]
+    pub index_batch_schema: Option<u32>,
+    #[serde(default)]
+    pub index_batch_operation: Option<WorkspaceGitIndexBatchResult>,
+    #[serde(default)]
+    pub index_batch_unavailable_reason: Option<String>,
     #[serde(default)]
     pub commit_schema: Option<u32>,
     #[serde(default)]
@@ -196,6 +203,18 @@ enum Task {
         ticket: Uuid,
         reply: mpsc::SyncSender<crate::Response>,
     },
+    BatchPrepare {
+        target: Target,
+        action: GitIndexAction,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
+    Batch {
+        target: Target,
+        ticket: Uuid,
+        inspect: bool,
+        acknowledge: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
     CommitPrepare {
         target: Target,
         reply: mpsc::SyncSender<crate::Response>,
@@ -256,6 +275,10 @@ impl Reader {
                                     match index.pending_for_target(&target) {
                                         Ok(operation) => snapshot.index_operation = operation,
                                         Err(error) => snapshot.index_operation_unavailable_reason = Some(bounded_notice(format!("Git index operation status unavailable: {error:#}"))),
+                                    }
+                                    match index.pending_batch_for_target(&target) {
+                                        Ok(operation)=>snapshot.index_batch_operation=operation,
+                                        Err(error)=>snapshot.index_batch_unavailable_reason=Some(bounded_notice(format!("Batch index status unavailable: {error:#}"))),
                                     }
                                     if let Err(error) = commit.availability(&target) {
                                         snapshot.commit_unavailable_reason = Some(bounded_notice(format!("Git commit unavailable: {error:#}")));
@@ -321,8 +344,25 @@ impl Reader {
                             response.workspace_git_index = Some(result);
                             let _ = reply.try_send(response);
                         }
+                        Task::BatchPrepare {target,action,reply} => {
+                            let result=commit.pending_for_target(&target).and_then(|pending| {
+                                ensure!(pending.is_none() && !commit.is_running(),"Inspect the pending Git commit before preparing a batch");
+                                index.prepare_batch(target,action)
+                            });
+                            let mut response=response(None,None);
+                            match result {Ok(plan)=>response.workspace_git_index_batch_plan=Some(plan),Err(error)=>response.error=Some(bounded_notice(format!("Git batch preview unavailable: {error:#}")))}
+                            let _=reply.try_send(response);
+                        }
+                        Task::Batch {target,ticket,inspect,acknowledge,reply} => {
+                            let allowed=inspect || commit.pending_for_target(&target).is_ok_and(|pending|pending.is_none()) && !commit.is_running();
+                            let mut response=response(None,None);
+                            if allowed {response.workspace_git_index_batch=Some(index.request_batch(target,ticket,inspect,acknowledge));}
+                            else {response.error=Some("Inspect the pending Git commit before changing the index".into());}
+                            let _=reply.try_send(response);
+                            if !inspect {worker_busy.store(commit.is_running(),Ordering::Release);}
+                        }
                         Task::CommitPrepare { target, reply } => {
-                            let result = index.pending_for_target(&target).and_then(|pending| {
+                            let result = index.pending_write_for_target(&target).and_then(|pending| {
                                 ensure!(pending.is_none(), "A Git index operation has an unknown outcome; inspect and acknowledge it first");
                                 commit.prepare(&target)
                             });
@@ -337,7 +377,7 @@ impl Reader {
                             let result = if acknowledge { commit.acknowledge(&target, ticket) }
                             else if inspect { commit.request(&target, ticket, message, true) }
                             else {
-                                match index.pending_for_target(&target) {
+                                match index.pending_write_for_target(&target) {
                                     Ok(None) => commit.request(&target, ticket, message, false),
                                     Ok(Some(_)) => commit::unavailable_result(&target, ticket, "A Git index operation has an unknown outcome; inspect and acknowledge it first"),
                                     Err(error) => commit::unavailable_result(&target, ticket, bounded_notice(format!("Git index operation status unavailable: {error:#}"))),
@@ -428,6 +468,66 @@ impl Reader {
         }
     }
 
+    pub(crate) fn submit_batch_prepare(
+        &self,
+        target: Target,
+        action: GitIndexAction,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        if let Err(
+            mpsc::TrySendError::Full(Task::BatchPrepare { reply, .. })
+            | mpsc::TrySendError::Disconnected(Task::BatchPrepare { reply, .. }),
+        ) = self.sender.try_send(Task::BatchPrepare {
+            target,
+            action,
+            reply,
+        }) {
+            let _ = reply.try_send(response(
+                None,
+                Some("Git batch preview queue is full or unavailable".into()),
+            ));
+        }
+    }
+    pub(crate) fn submit_batch(
+        &self,
+        target: Target,
+        ticket: Uuid,
+        inspect: bool,
+        acknowledge: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        if !inspect
+            && self
+                .index_busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            let _ = reply.try_send(response(
+                None,
+                Some("another Git write is in progress".into()),
+            ));
+            return;
+        }
+        if let Err(error) = self.sender.try_send(Task::Batch {
+            target,
+            ticket,
+            inspect,
+            acknowledge,
+            reply,
+        }) {
+            if !inspect {
+                self.index_busy.store(false, Ordering::Release);
+            }
+            if let mpsc::TrySendError::Full(Task::Batch { reply, .. })
+            | mpsc::TrySendError::Disconnected(Task::Batch { reply, .. }) = error
+            {
+                let _ = reply.try_send(response(
+                    None,
+                    Some("Git batch queue is full or unavailable".into()),
+                ));
+            }
+        }
+    }
     pub(crate) fn submit_index(
         &self,
         target: Target,
@@ -671,6 +771,9 @@ fn snapshot(target: Target) -> Result<WorkspaceGitSnapshot> {
         truncated: truncated || parsed.truncated,
         index_operation: None,
         index_operation_unavailable_reason: None,
+        index_batch_schema: Some(1),
+        index_batch_operation: None,
+        index_batch_unavailable_reason: None,
         commit_schema: Some(1),
         commit_operation: None,
         commit_unavailable_reason: None,
@@ -1731,6 +1834,8 @@ pub(crate) fn response(
         workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
+        workspace_git_index_batch_plan: None,
+        workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
         host_status: None,

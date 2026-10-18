@@ -1,7 +1,7 @@
 //! Real-host coverage for project creation and bounded provider detection.
 use anyhow::{Context, Result, bail, ensure};
 use pigade_session_host::{
-    Command, GitDiffSide, GitIndexPhase, PROTOCOL, Request, Response, receive, send,
+    Command, GitDiffSide, GitIndexAction, GitIndexPhase, PROTOCOL, Request, Response, receive, send,
 };
 use std::{
     fs,
@@ -1041,6 +1041,240 @@ fn index_actions_bind_preview_and_survive_host_restart_without_repeating_filters
     ensure!(
         exchange(&host.socket(), Command::List)?.views.is_empty(),
         "index operation launched a terminal"
+    );
+    Ok(())
+}
+
+#[test]
+fn batch_index_actions_bind_whole_status_and_survive_host_restart() -> Result<()> {
+    let mut host = HostFixture::new()?;
+    let parent = host.state().join("batch-parent");
+    fs::create_dir(&parent)?;
+    let project = exchange(
+        &host.socket(),
+        Command::CreateProject {
+            parent,
+            name: "BatchRepo".into(),
+        },
+    )?
+    .catalog
+    .context("project catalog missing")?
+    .projects
+    .into_iter()
+    .next()
+    .context("project missing")?;
+    let catalog = exchange(
+        &host.socket(),
+        Command::CreateWorkspace {
+            project: project.id,
+            task: "batch index workflow".into(),
+            worktree: false,
+        },
+    )?
+    .catalog
+    .context("workspace catalog missing")?;
+    let workspace = catalog
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.project_id == project.id)
+        .context("workspace missing")?
+        .clone();
+    let files = [
+        ("batch-a.txt", b"batch a contents\n".as_slice()),
+        ("batch-b.txt", b"batch b contents\n".as_slice()),
+    ];
+    for (path, bytes) in files {
+        fs::write(workspace.cwd.join(path), bytes)?;
+    }
+    let index = workspace.cwd.join(".git/index");
+    let private_git = |args: &[&str]| -> Result<Vec<u8>> {
+        let output = ProcessCommand::new("/usr/bin/git")
+            .arg("--no-optional-locks")
+            .arg("-C")
+            .arg(&workspace.cwd)
+            .args(args)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "private Git fixture failed: {:?}",
+            args
+        );
+        Ok(output.stdout)
+    };
+    let prepare = |host: &HostFixture, action| -> Result<_> {
+        exchange(
+            &host.socket(),
+            Command::WorkspaceGitIndexBatchPrepare {
+                workspace: workspace.id,
+                expected_revision: workspace.revision,
+                action,
+            },
+        )?
+        .workspace_git_index_batch_plan
+        .context("batch plan missing")
+    };
+    let request = |host: &HostFixture, ticket, inspect| -> Result<_> {
+        exchange(
+            &host.socket(),
+            Command::WorkspaceGitIndexBatch {
+                workspace: workspace.id,
+                expected_revision: workspace.revision,
+                ticket,
+                inspect,
+            },
+        )?
+        .workspace_git_index_batch
+        .context("batch receipt missing")
+    };
+    let path_set = |mut paths: Vec<String>| {
+        paths.sort();
+        paths
+    };
+    let expected_paths = path_set(files.iter().map(|(path, _)| (*path).to_owned()).collect());
+
+    // A whole-status lease must reject even a newly added path, and leave the
+    // unborn index untouched when its status snapshot no longer matches.
+    let stale = prepare(&host, GitIndexAction::Stage)?;
+    fs::write(workspace.cwd.join("batch-late.txt"), b"late change\n")?;
+    let stale_result = request(&host, stale.ticket, false)?;
+    ensure!(
+        stale_result.phase == GitIndexPhase::Rejected,
+        "stale whole-status lease was accepted: {stale_result:?}"
+    );
+    ensure!(!index.exists(), "stale batch changed the index");
+
+    fs::remove_file(workspace.cwd.join("batch-late.txt"))?;
+    let stage = prepare(&host, GitIndexAction::Stage)?;
+    ensure!(
+        path_set(stage.paths.clone()) == expected_paths,
+        "Stage All selected unexpected files: {:?}",
+        stage.paths
+    );
+    let worktree_before = files
+        .iter()
+        .map(|(path, _)| fs::read(workspace.cwd.join(path)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let staged = request(&host, stage.ticket, false)?;
+    ensure!(
+        staged.phase == GitIndexPhase::Applied,
+        "Stage All failed: {staged:?}"
+    );
+    ensure!(
+        path_set(staged.paths.clone()) == expected_paths,
+        "Stage All receipt named unexpected files"
+    );
+    ensure!(
+        files
+            .iter()
+            .map(|(path, _)| path.as_bytes())
+            .collect::<Vec<_>>()
+            == private_git(&["ls-files", "-z"])?
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .collect::<Vec<_>>(),
+        "Stage All changed paths outside the two requested files"
+    );
+    for ((path, expected), actual) in files.iter().zip(worktree_before.iter()) {
+        ensure!(
+            actual.as_slice() == *expected,
+            "Stage All altered worktree file {path}"
+        );
+        ensure!(
+            private_git(&["show", &format!(":0:{path}")])? == *expected,
+            "Stage All staged incorrect bytes for {path}"
+        );
+    }
+    let staged_index = fs::read(&index)?;
+    ensure!(
+        request(&host, stage.ticket, false)? == staged,
+        "same-ticket Stage All changed receipt"
+    );
+    ensure!(
+        fs::read(&index)? == staged_index,
+        "same-ticket Stage All rewrote the index"
+    );
+    host.restart()?;
+    ensure!(
+        request(&host, stage.ticket, true)? == staged,
+        "restart inspection lost Stage All receipt"
+    );
+    ensure!(
+        fs::read(&index)? == staged_index,
+        "restart inspection changed the index"
+    );
+
+    fs::write(workspace.cwd.join("batch-a.txt"), b"modified after stage\n")?;
+    let changed_worktree = fs::read(workspace.cwd.join("batch-a.txt"))?;
+    let unstage = prepare(&host, GitIndexAction::Unstage)?;
+    ensure!(
+        path_set(unstage.paths.clone()) == expected_paths,
+        "Unstage All selected unexpected files"
+    );
+    let unstaged = request(&host, unstage.ticket, false)?;
+    ensure!(
+        unstaged.phase == GitIndexPhase::Applied,
+        "Unstage All failed: {unstaged:?}"
+    );
+    ensure!(
+        path_set(unstaged.paths.clone()) == expected_paths,
+        "Unstage All receipt named unexpected files"
+    );
+    ensure!(
+        private_git(&["ls-files", "--stage", "-z"])?.is_empty(),
+        "Unstage All left staged paths"
+    );
+    ensure!(
+        fs::read(workspace.cwd.join("batch-a.txt"))? == changed_worktree,
+        "Unstage All changed modified worktree bytes"
+    );
+    ensure!(
+        fs::read(workspace.cwd.join("batch-b.txt"))? == files[1].1,
+        "Unstage All changed worktree bytes"
+    );
+
+    // A lock collision makes the attempted batch outcome Unknown; acknowledge
+    // it through the public IPC command and prove that it does not write data.
+    let unknown_plan = prepare(&host, GitIndexAction::Stage)?;
+    let lock = workspace.cwd.join(".git/index.lock");
+    fs::write(&lock, b"held by another writer\n")?;
+    let unknown = request(&host, unknown_plan.ticket, false)?;
+    fs::remove_file(&lock)?;
+    ensure!(
+        unknown.phase == GitIndexPhase::Unknown,
+        "index lock collision did not retain Unknown: {unknown:?}"
+    );
+    host.restart()?;
+    ensure!(
+        request(&host, unknown_plan.ticket, true)? == unknown,
+        "restart inspection lost Unknown batch receipt"
+    );
+    let before_ack_index = fs::read(&index).ok();
+    let before_ack_a = fs::read(workspace.cwd.join("batch-a.txt"))?;
+    let before_ack_b = fs::read(workspace.cwd.join("batch-b.txt"))?;
+    let acknowledged = exchange(
+        &host.socket(),
+        Command::WorkspaceGitIndexBatchAcknowledge {
+            workspace: workspace.id,
+            expected_revision: workspace.revision,
+            ticket: unknown_plan.ticket,
+        },
+    )?
+    .workspace_git_index_batch
+    .context("acknowledged batch receipt missing")?;
+    ensure!(
+        acknowledged.phase == GitIndexPhase::Unknown && acknowledged.acknowledged,
+        "acknowledgement invented an applied outcome: {acknowledged:?}"
+    );
+    ensure!(
+        fs::read(&index).ok() == before_ack_index,
+        "batch acknowledgement changed index bytes"
+    );
+    ensure!(fs::read(workspace.cwd.join("batch-a.txt"))? == before_ack_a);
+    ensure!(fs::read(workspace.cwd.join("batch-b.txt"))? == before_ack_b);
+    ensure!(exchange(&host.socket(), Command::Catalog)?.catalog == Some(catalog));
+    ensure!(
+        exchange(&host.socket(), Command::List)?.views.is_empty(),
+        "batch index operation restarted a CLI"
     );
     Ok(())
 }

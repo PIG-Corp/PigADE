@@ -12,6 +12,10 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "workspace_git_index_batch.rs"]
+mod batch;
+pub use batch::{WorkspaceGitIndexBatchPlan, WorkspaceGitIndexBatchResult};
+
 use super::{
     COMMAND_DEADLINE, GitDiffSide, GitIndexAction, GitIndexPhase, GitIndexTicket,
     MAX_DIFF_PATH_BYTES, OUTPUT_LIMIT, Parsed, Target, WorkspaceGitEntry, WorkspaceGitIndexResult,
@@ -96,13 +100,15 @@ struct ReceiptPayload {
 pub(super) struct Engine {
     root: PathBuf,
     leases: HashMap<Uuid, Lease>,
+    batch: batch::BatchEngine,
 }
 
 impl Engine {
     pub(super) fn new(root: PathBuf) -> Self {
         Self {
-            root,
+            root: root.clone(),
             leases: HashMap::new(),
+            batch: batch::BatchEngine::new(root.clone()),
         }
     }
 
@@ -115,6 +121,11 @@ impl Engine {
         side: GitDiffSide,
         contents: (&[u8], &[u8]),
     ) -> (Option<GitIndexTicket>, Option<String>) {
+        match self.batch.pending_for_target(target) {
+            Ok(Some(_)) => return (None, Some("A previous batch index operation has an unknown outcome; inspect and acknowledge it before starting another".into())),
+            Err(error) => return (None, Some(format!("Index action unavailable because batch receipts could not be checked: {error:#}"))),
+            Ok(None) => (),
+        }
         match self.pending_for_target(target) {
             Ok(Some(_)) => return (None, Some("A previous index operation has an unknown outcome; inspect and acknowledge it before starting another".into())),
             Err(error) => return (None, Some(format!("Index action unavailable because operation receipts could not be checked: {error:#}"))),
@@ -246,6 +257,25 @@ impl Engine {
         ticket: Uuid,
         inspect: bool,
     ) -> WorkspaceGitIndexResult {
+        if !inspect {
+            match self.batch.pending_for_target(&target) {
+                Ok(Some(_)) => {
+                    return unavailable_for(
+                        &target,
+                        ticket,
+                        "a batch index operation is unresolved; inspect and acknowledge it before another write",
+                    );
+                }
+                Err(error) => {
+                    return unavailable_for(
+                        &target,
+                        ticket,
+                        &format!("batch operation receipts could not be checked: {error:#}"),
+                    );
+                }
+                Ok(None) => (),
+            }
+        }
         let receipt_path = self.receipt_path(ticket);
         if let Ok(path) = &receipt_path
             && let Ok(receipt) = read_receipt(path)
@@ -479,6 +509,62 @@ impl Engine {
             }
         }
         Ok(newest.map(|(_, result)| result))
+    }
+
+    pub(super) fn prepare_batch(
+        &mut self,
+        target: Target,
+        action: GitIndexAction,
+    ) -> Result<WorkspaceGitIndexBatchPlan> {
+        ensure!(
+            self.pending_for_target(&target)?.is_none(),
+            "an unresolved per-file index operation blocks batch preparation"
+        );
+        ensure!(
+            self.batch.pending_for_target(&target)?.is_none(),
+            "an unresolved batch index operation blocks batch preparation"
+        );
+        self.batch.prepare(target, action)
+    }
+
+    pub(super) fn request_batch(
+        &mut self,
+        target: Target,
+        ticket: Uuid,
+        inspect: bool,
+        acknowledge: bool,
+    ) -> WorkspaceGitIndexBatchResult {
+        if !inspect && !acknowledge {
+            match self.pending_for_target(&target) {
+                Ok(Some(_)) => return self.batch.request(&self.root, target, ticket, true, false),
+                Err(error) => {
+                    return batch::unavailable_result(
+                        &target,
+                        ticket,
+                        format!("per-file operation receipts could not be checked: {error:#}"),
+                    );
+                }
+                Ok(None) => (),
+            }
+        }
+        self.batch
+            .request(&self.root, target, ticket, inspect, acknowledge)
+    }
+
+    pub(super) fn pending_batch_for_target(
+        &self,
+        target: &Target,
+    ) -> Result<Option<WorkspaceGitIndexBatchResult>> {
+        self.batch.pending_for_target(target)
+    }
+
+    pub(super) fn pending_write_for_target(&self, target: &Target) -> Result<Option<()>> {
+        if self.pending_for_target(target)?.is_some()
+            || self.batch.pending_for_target(target)?.is_some()
+        {
+            return Ok(Some(()));
+        }
+        Ok(None)
     }
 
     pub(super) fn acknowledge(&mut self, target: &Target, ticket: Uuid) -> WorkspaceGitIndexResult {

@@ -3917,6 +3917,127 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     require_git_fixture_invariants(
         'per-file Git index actions changed process states, pane aliases, selection, or layout')
 
+    # The same review dialog also exposes frozen Stage All / Unstage All
+    # actions. Enter and Back are deliberately exercised before each confirm
+    # so preparation and cancellation prove that the index remains untouched.
+    batch_untracked = git_repo / 'batch-all.txt'
+    batch_untracked_bytes = b'batch all fixture content\n'
+    require(not batch_untracked.exists(), 'private batch Git path already exists')
+    batch_untracked.write_bytes(batch_untracked_bytes)
+    batch_worktree = {
+        'tracked.txt': tracked_bytes,
+        'staged-only.txt': staged_only_bytes,
+        'batch-all.txt': batch_untracked_bytes,
+    }
+    batch_index_before = private_git(['ls-files', '--stage', '-z'])
+    batch_cached_before = private_git(['diff', '--cached', '--raw', '-z'])
+    expected_batch_index_paths = {'staged-only.txt', 'tracked.txt', 'batch-all.txt'}
+
+    def require_batch_worktree_unchanged():
+        require(all((git_repo / path).read_bytes() == contents
+                    for path, contents in batch_worktree.items()),
+                'batch Git dialog changed worktree bytes')
+
+    def require_batch_cancelled_index(expected_index, expected_cached, explanation):
+        require(private_git(['ls-files', '--stage', '-z']) == expected_index and
+                private_git(['diff', '--cached', '--raw', '-z']) == expected_cached,
+                explanation)
+        require_batch_worktree_unchanged()
+        require_git_fixture_invariants(explanation + ': process/layout invariants changed')
+
+    report['stage'] = 'catalog-git-batch-stage-review'
+    save()
+    helper_call(config, 'catalog-git-batch-stage')
+    capture_git_diff('catalog-git-batch-stage-review.ppm')
+    require_batch_cancelled_index(batch_index_before, batch_cached_before,
+                                  'preparing Stage All changed the index')
+    helper_call(config, 'catalog-git-batch-enter')
+    require_batch_cancelled_index(batch_index_before, batch_cached_before,
+                                  'ordinary Enter applied the Stage All preview')
+    helper_call(config, 'catalog-git-batch-back')
+    time.sleep(.7)  # settle the app's asynchronous Git-list refresh before the next fixed action
+    require_batch_cancelled_index(batch_index_before, batch_cached_before,
+                                  'cancelling Stage All changed the index')
+
+    helper_call(config, 'catalog-git-batch-stage')
+    helper_call(config, 'catalog-git-batch-confirm')
+    batch_staged = wait_git_entries(
+        lambda entries: entries.get('tracked.txt', {}).get('index_status') == 'M' and
+        entries.get('tracked.txt', {}).get('worktree_status') == '.' and
+        entries.get('staged-only.txt', {}).get('index_status') == 'A' and
+        entries.get('batch-all.txt', {}).get('index_status') == 'A' and
+        entries.get('batch-all.txt', {}).get('worktree_status') == '.',
+        'Stage All did not stage every changed path in the frozen workspace status')
+    batch_staged_index = private_git(['ls-files', '--stage', '-z'])
+    batch_staged_cached = private_git(['diff', '--cached', '--raw', '-z'])
+    batch_staged_paths = {item.decode('utf-8') for item in
+                          private_git(['ls-files', '-z']).split(b'\0') if item}
+    require(batch_staged_paths == expected_batch_index_paths and
+            private_git(['show', ':0:tracked.txt']) == tracked_bytes and
+            private_git(['show', ':0:staged-only.txt']) == staged_only_bytes and
+            private_git(['show', ':0:batch-all.txt']) == batch_untracked_bytes and
+            batch_staged.get('batch-all.txt', {}).get('untracked') is False,
+            'Stage All changed the wrong index paths or staged incorrect bytes')
+    require_batch_worktree_unchanged()
+    require_git_fixture_invariants(
+        'confirming Stage All changed process states, pane aliases, selection, or layout')
+    capture_git_diff('catalog-git-batch-stage-result.ppm')
+    helper_call(config, 'catalog-git-batch-back')
+    time.sleep(.7)  # settle the app's asynchronous Git-list refresh before the next fixed action
+    require_git_fixture_invariants(
+        'returning from the Stage All result changed process states, pane aliases, selection, or layout')
+
+    report['stage'] = 'catalog-git-batch-unstage-review'
+    save()
+    helper_call(config, 'catalog-git-batch-unstage')
+    capture_git_diff('catalog-git-batch-unstage-review.ppm')
+    require_batch_cancelled_index(batch_staged_index, batch_staged_cached,
+                                  'preparing Unstage All changed the index')
+    helper_call(config, 'catalog-git-batch-enter')
+    require_batch_cancelled_index(batch_staged_index, batch_staged_cached,
+                                  'ordinary Enter applied the Unstage All preview')
+    helper_call(config, 'catalog-git-batch-back')
+    time.sleep(.7)  # settle the app's asynchronous Git-list refresh before the next fixed action
+    require_batch_cancelled_index(batch_staged_index, batch_staged_cached,
+                                  'cancelling Unstage All changed the index')
+
+    helper_call(config, 'catalog-git-batch-unstage')
+    helper_call(config, 'catalog-git-batch-confirm')
+    batch_unstaged = wait_git_entries(
+        lambda entries: entries.get('tracked.txt', {}).get('index_status') == '.' and
+        entries.get('tracked.txt', {}).get('worktree_status') == 'M' and
+        entries.get('staged-only.txt', {}).get('untracked') is True and
+        entries.get('batch-all.txt', {}).get('untracked') is True,
+        'Unstage All did not clear the staged paths back to HEAD')
+    require(private_git(['ls-files', '-z']).split(b'\0') == [b'tracked.txt', b''] and
+            private_git(['diff', '--cached', '--raw', '-z']) == b'' and
+            batch_unstaged.get('tracked.txt', {}).get('index_status') == '.',
+            'Unstage All did not restore the HEAD index exactly')
+    require_batch_worktree_unchanged()
+    require_git_fixture_invariants(
+        'confirming Unstage All changed process states, pane aliases, selection, or layout')
+    capture_git_diff('catalog-git-batch-unstage-result.ppm')
+    helper_call(config, 'catalog-git-batch-back')
+    time.sleep(.7)  # settle the app's asynchronous Git-list refresh before the next fixed action
+    require_git_fixture_invariants(
+        'returning from the Unstage All result changed process states, pane aliases, selection, or layout')
+
+    batch_untracked.unlink()
+    private_git(['add', '--', 'staged-only.txt'])
+    require(private_git(['ls-files', '--stage', '-z']) == index_baseline and
+            private_git(['diff', '--cached', '--raw', '-z']) == cached_baseline and
+            private_git(['rev-parse', 'HEAD']).strip() == head_baseline and
+            (git_repo / 'tracked.txt').read_bytes() == tracked_bytes and
+            (git_repo / 'staged-only.txt').read_bytes() == staged_only_bytes,
+            'private Git reseed did not restore the exact pre-batch commit baseline')
+    require_git_fixture_invariants(
+        'batch Git actions changed process states, pane aliases, selection, or layout')
+
+    # Private reseeding is an external Git change. The open list intentionally
+    # retains its reviewed snapshot until the user requests a fresh one.
+    helper_call(config, 'catalog-git-refresh')
+    time.sleep(.7)
+
     # The fixture commands suppress hooks; the UI commit intentionally runs
     # the configured private hooks through the host's native hook wrappers.
     hook_dir = git_common_dir / 'fixture-hooks'
@@ -4264,7 +4385,10 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                   'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
                      'catalog-git-refreshed.ppm', 'catalog-git-index-staged-review.ppm',
                      'catalog-git-worktree-review.ppm', 'catalog-git-index-tracked-review.ppm',
-                     'catalog-git-untracked-review.ppm', 'catalog-git-commit-review.ppm',
+                     'catalog-git-untracked-review.ppm',
+                     'catalog-git-batch-stage-review.ppm', 'catalog-git-batch-stage-result.ppm',
+                     'catalog-git-batch-unstage-review.ppm', 'catalog-git-batch-unstage-result.ppm',
+                     'catalog-git-commit-review.ppm',
                      'catalog-git-commit-complete.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
                      'catalog-close-tab-fallback.ppm'],
     }
@@ -7794,6 +7918,8 @@ def outer_run(args) -> dict:
                   'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm',
                   'catalog-git-index-staged-review.ppm', 'catalog-git-worktree-review.ppm',
                   'catalog-git-index-tracked-review.ppm', 'catalog-git-untracked-review.ppm',
+                  'catalog-git-batch-stage-review.ppm', 'catalog-git-batch-stage-result.ppm',
+                  'catalog-git-batch-unstage-review.ppm', 'catalog-git-batch-unstage-result.ppm',
                   'catalog-git-commit-review.ppm', 'catalog-git-commit-complete.ppm',
                   'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm', 'catalog-close-tab-fallback.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
@@ -7832,7 +7958,7 @@ def plan(args) -> dict:
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, then review/cancel/confirm whole-status Stage All and Unstage All through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure and run four shell slots; then copy a saved literal custom CLI profile into a recipe slot, prove picker cancellation preserves its dirty draft, freeze the command across source-profile mutation/deletion, preview without launching, and explicitly confirm one custom plus three shell slots',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',

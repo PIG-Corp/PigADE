@@ -31,6 +31,11 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
+    pub(crate) fn submit(&self, command: Value) -> Result<(), String> {
+        self.sender
+            .try_send(command)
+            .map_err(|_| "Очередь Git занята; запрос не отправлен".into())
+    }
     pub(crate) fn new(socket: PathBuf, wake: WakeSignal) -> Self {
         let (sender, requests) = mpsc::sync_channel::<Value>(1);
         let (results, receiver) = mpsc::sync_channel(1);
@@ -57,7 +62,7 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    fn selected(catalog: &Catalog) -> Option<Self> {
+    pub(crate) fn selected(catalog: &Catalog) -> Option<Self> {
         let workspace = catalog.workspaces.iter().find(|workspace| {
             Some(workspace.id) == catalog.selection.workspace_id
                 && workspace.status == WorkspaceStatus::Ready
@@ -71,7 +76,7 @@ impl Target {
         })
     }
 
-    fn current(&self, catalog: Option<&Catalog>) -> bool {
+    pub(crate) fn current(&self, catalog: Option<&Catalog>) -> bool {
         catalog.and_then(Self::selected).is_some_and(|current| {
             current.workspace == self.workspace
                 && current.revision == self.revision
@@ -80,7 +85,7 @@ impl Target {
         })
     }
 
-    fn same_scope(&self, other: &Self) -> bool {
+    pub(crate) fn same_scope(&self, other: &Self) -> bool {
         self.workspace == other.workspace && self.project == other.project && self.cwd == other.cwd
     }
 
@@ -236,6 +241,24 @@ impl IndexOperation {
 }
 
 impl GitSheet {
+    pub(crate) fn can_prepare_batch(&self, action: protocol::GitIndexAction) -> bool {
+        !self.loading
+            && self.error.is_none()
+            && self.diff.is_none()
+            && self.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.index_batch_schema == Some(1)
+                    && !snapshot.truncated
+                    && snapshot.index_batch_unavailable_reason.is_none()
+                    && snapshot.entries.iter().any(|entry| match action {
+                        protocol::GitIndexAction::Stage => {
+                            entry.untracked || !matches!(entry.worktree_status, '.' | ' ')
+                        }
+                        protocol::GitIndexAction::Unstage => {
+                            !entry.untracked && !matches!(entry.index_status, '.' | ' ')
+                        }
+                    })
+            })
+    }
     pub(crate) fn can_prepare_commit(&self) -> bool {
         !self.loading
             && self.error.is_none()
@@ -360,6 +383,14 @@ impl GitSheet {
             }
             if self.can_prepare_commit() {
                 actions.push(A::GitPrepareCommit);
+            }
+            for action in [
+                protocol::GitIndexAction::Stage,
+                protocol::GitIndexAction::Unstage,
+            ] {
+                if self.can_prepare_batch(action) {
+                    actions.push(A::GitPrepareBatch(action));
+                }
             }
             actions.push(A::CloseDialog);
         }
@@ -887,6 +918,18 @@ impl CanvasApp {
     }
 
     pub(crate) fn workspace_git_action(&mut self, action: ProductAction, cx: &mut Context<Self>) {
+        if self.product.git_batch.unresolved()
+            && matches!(
+                action,
+                ProductAction::GitApplyIndex
+                    | ProductAction::GitPrepareCommit
+                    | ProductAction::GitStartCommit
+            )
+        {
+            self.product.notice = Some("Сначала проверьте исход пакетной операции Git".into());
+            cx.notify();
+            return;
+        }
         match action {
             ProductAction::OpenWorkspaceGit => {
                 let Some(target) = self.product.catalog.as_ref().and_then(Target::selected) else {
@@ -1362,6 +1405,16 @@ impl CanvasApp {
             Ok(reply) => reply.ui_request,
             Err(error) => error.ui_request,
         };
+        if self.product.git_batch.matches_request(request) {
+            self.receive_git_batch(reply, cx);
+            return;
+        }
+        if let Ok(reply) = &reply
+            && let Some(snapshot) = &reply.workspace_git_snapshot
+            && let Some(target) = self.product.catalog.as_ref().and_then(Target::selected)
+        {
+            self.product.git_batch.observe_snapshot(&target, snapshot);
+        }
         if !self
             .git_flow
             .pending
@@ -1796,6 +1849,9 @@ mod tests {
             truncated: false,
             index_operation: None,
             index_operation_unavailable_reason: None,
+            index_batch_schema: None,
+            index_batch_operation: None,
+            index_batch_unavailable_reason: None,
             commit_schema: None,
             commit_operation: None,
             commit_unavailable_reason: None,

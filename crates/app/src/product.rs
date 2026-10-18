@@ -20,6 +20,8 @@ mod activity_ui;
 mod appearance_ui;
 #[path = "custom_launch_ui.rs"]
 mod custom_launch_ui;
+#[path = "git_batch_ui.rs"]
+mod git_batch_ui;
 #[path = "git_status_ui.rs"]
 mod git_status_ui;
 #[path = "handoff_ui.rs"]
@@ -106,6 +108,12 @@ pub(super) enum ProductAction {
     GitApplyIndex,
     GitInspectIndex,
     GitDismissIndexOutcome,
+    GitPrepareBatch(protocol::GitIndexAction),
+    GitConfirmBatch,
+    GitInspectBatch,
+    GitAcknowledgeBatch,
+    GitShowBatchOutcome,
+    GitBatchPage(bool),
     GitPrepareCommit,
     GitRefreshCommitPlan,
     GitStartCommit,
@@ -233,6 +241,7 @@ pub(super) enum DialogKind {
     DeleteAgentProfile,
     WorkspaceGit,
     WorkspaceGitCommit,
+    WorkspaceGitBatch,
     Controls,
     AddProject,
     CreateProject,
@@ -288,6 +297,7 @@ impl DialogKind {
             Self::DeleteAgentProfile => "Удалить профиль?",
             Self::WorkspaceGit => "Git воркспейса",
             Self::WorkspaceGitCommit => "Проверка коммита Git",
+            Self::WorkspaceGitBatch => "Пакетное изменение индекса",
             Self::Controls => "Клавиша управления панелями",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
@@ -346,7 +356,7 @@ impl DialogKind {
                 "Модель · пусто — настройки CLI",
                 "Reasoning effort · пусто — настройки CLI",
             ],
-            Self::WorkspaceGit => &[],
+            Self::WorkspaceGit | Self::WorkspaceGitBatch => &[],
             Self::WorkspaceGitCommit => &["Сообщение коммита"],
             Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
@@ -405,7 +415,7 @@ impl DialogKind {
             Self::AgentProfile => "Сохранить профиль",
             Self::ProfilePreparing => "Отмена",
             Self::DeleteAgentProfile => "Удалить профиль",
-            Self::WorkspaceGit => "Закрыть",
+            Self::WorkspaceGit | Self::WorkspaceGitBatch => "Закрыть",
             Self::WorkspaceGitCommit => "Создать коммит",
             Self::Controls => "Готово",
             Self::AddProject => "Добавить проект",
@@ -526,6 +536,7 @@ pub(super) struct ProductUi {
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
     pub(super) git_watch_view: Option<crate::git_watch::View>,
+    pub(super) git_batch: crate::git_batch::Model,
     pub(super) git_sheet: Option<crate::workspace_git::GitSheet>,
     pub(super) git_commit_plan: Option<protocol::WorkspaceGitCommitPlan>,
     pub(super) git_commit_plan_error: Option<String>,
@@ -3129,6 +3140,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::WorkspaceGitBatch {
+            return self.git_batch_overlay(cx);
         }
         if dialog.kind == DialogKind::WorkspaceGit {
             return self.git_overlay(cx);

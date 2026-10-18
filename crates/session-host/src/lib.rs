@@ -61,7 +61,8 @@ pub use template_run::{
 pub use workspace_git::{
     GitCommitEntry, GitCommitPhase, GitDiffSide, GitIndexAction, GitIndexPhase, GitIndexTicket,
     WorkspaceGitCommitPlan, WorkspaceGitCommitResult, WorkspaceGitDiff, WorkspaceGitEntry,
-    WorkspaceGitIndexResult, WorkspaceGitSnapshot, WorkspaceGitWatch,
+    WorkspaceGitIndexBatchPlan, WorkspaceGitIndexBatchResult, WorkspaceGitIndexResult,
+    WorkspaceGitSnapshot, WorkspaceGitWatch,
 };
 #[doc(hidden)]
 pub fn run_git_commit_helper(operation: &std::path::Path) -> Result<()> {
@@ -274,6 +275,22 @@ pub enum Command {
         path: String,
         side: GitDiffSide,
     },
+    WorkspaceGitIndexBatchPrepare {
+        workspace: Uuid,
+        expected_revision: u64,
+        action: GitIndexAction,
+    },
+    WorkspaceGitIndexBatch {
+        workspace: Uuid,
+        expected_revision: u64,
+        ticket: Uuid,
+        inspect: bool,
+    },
+    WorkspaceGitIndexBatchAcknowledge {
+        workspace: Uuid,
+        expected_revision: u64,
+        ticket: Uuid,
+    },
     WorkspaceGitIndex {
         workspace: Uuid,
         expected_revision: u64,
@@ -429,6 +446,10 @@ pub struct Response {
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_index: Option<WorkspaceGitIndexResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_git_index_batch_plan: Option<WorkspaceGitIndexBatchPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_git_index_batch: Option<WorkspaceGitIndexBatchResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -802,6 +823,8 @@ fn provider_response(
         workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
+        workspace_git_index_batch_plan: None,
+        workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
         host_status: None,
@@ -837,6 +860,8 @@ fn maintenance_response(status: maintenance::Status, error: Option<String>) -> R
         workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
+        workspace_git_index_batch_plan: None,
+        workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
         host_status: Some(status),
@@ -1181,6 +1206,8 @@ impl Host {
                 workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
+                workspace_git_index_batch_plan: None,
+                workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
                 host_status: None,
@@ -1237,6 +1264,8 @@ impl Host {
                 workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
+                workspace_git_index_batch_plan: None,
+                workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
                 host_status: None,
@@ -1272,6 +1301,8 @@ impl Host {
                 workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
+                workspace_git_index_batch_plan: None,
+                workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
                 host_status: None,
@@ -1317,6 +1348,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1353,6 +1386,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1397,6 +1432,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1432,6 +1469,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1471,6 +1510,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1666,6 +1707,8 @@ impl Host {
                     workspace_git_watch: None,
                     workspace_git_diff: None,
                     workspace_git_index: None,
+                    workspace_git_index_batch_plan: None,
+                    workspace_git_index_batch: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
                     host_status: None,
@@ -1700,6 +1743,8 @@ impl Host {
             workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_git_index_batch_plan: None,
+            workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
             host_status: None,
@@ -1739,6 +1784,8 @@ impl Host {
             workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_git_index_batch_plan: None,
+            workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
             host_status: None,
@@ -1778,6 +1825,8 @@ impl Host {
             workspace_git_watch: None,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_git_index_batch_plan: None,
+            workspace_git_index_batch: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
             host_status: None,
@@ -3209,6 +3258,66 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
             }
             continue;
         }
+        if let Command::WorkspaceGitIndexBatchPrepare {
+            workspace,
+            expected_revision,
+            action,
+        } = &job.request.command
+        {
+            match host
+                .metadata
+                .catalog()
+                .and_then(|catalog| workspace_git::target(&catalog, *workspace, *expected_revision))
+            {
+                Ok(target) => workspace_git_reader.submit_batch_prepare(target, *action, job.reply),
+                Err(error) => {
+                    let _ = job.reply.try_send(workspace_git::response(
+                        None,
+                        Some(format!("Git batch preview unavailable: {error:#}")),
+                    ));
+                }
+            }
+            continue;
+        }
+        let batch_command = match &job.request.command {
+            Command::WorkspaceGitIndexBatch {
+                workspace,
+                expected_revision,
+                ticket,
+                inspect,
+            } => Some((*workspace, *expected_revision, *ticket, *inspect, false)),
+            Command::WorkspaceGitIndexBatchAcknowledge {
+                workspace,
+                expected_revision,
+                ticket,
+            } => Some((*workspace, *expected_revision, *ticket, true, true)),
+            _ => None,
+        };
+        if let Some((workspace, revision, ticket, inspect, acknowledge)) = batch_command {
+            let target = host.metadata.catalog().and_then(|catalog| {
+                if inspect {
+                    workspace_git::receipt_target(&catalog, workspace, revision)
+                } else {
+                    workspace_git::target(&catalog, workspace, revision)
+                }
+            });
+            match target {
+                Ok(target) => workspace_git_reader.submit_batch(
+                    target,
+                    ticket,
+                    inspect,
+                    acknowledge,
+                    job.reply,
+                ),
+                Err(error) => {
+                    let _ = job.reply.try_send(workspace_git::response(
+                        None,
+                        Some(format!("Git batch action unavailable: {error:#}")),
+                    ));
+                }
+            }
+            continue;
+        }
         let index_command = match &job.request.command {
             Command::WorkspaceGitIndex {
                 workspace,
@@ -3367,6 +3476,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 workspace_git_watch: None,
                 workspace_git_diff: None,
                 workspace_git_index: None,
+                workspace_git_index_batch_plan: None,
+                workspace_git_index_batch: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
                 host_status: None,

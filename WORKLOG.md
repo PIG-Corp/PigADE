@@ -5165,3 +5165,91 @@ Ship explicit asynchronous recovery for interrupted workspaces with safe managem
 - Files: crates/session-host/src/workspace_recovery.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/catalog_flow.rs, crates/app/src/activity_ui.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_drop.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 418 app tests,7 backend recovery tests,1 actual-host held-Git single-flight/idle-block/reopen test and37 harness tests pass. Strict workspace/app Clippy, formatting/version/diff, fixed C helper compile and release app/host binaries/examples builds pass. Final private pointer /tmp/pigade-workspace-recovery-20261018-04 passes missing-folder Failed then existing-worktree Ready via native management, preserves tabs/layout/selection/process/generations/all cwd/context/PTY geometry/dirty file and original pointer/IME/transfer/paste checks. Root inspected final Ready and run03 Failed/Ready captures. Corrected unused-mut, renamed-tab admission bug, fixture framing and sidebar non-Ready selection bug before final passes; archived Open loop removed and notices shortened. Independent Luna review before async refactor plus root integration review completed. Separately at explicit user desktop request, observed Hyprsunset4000K/gamma100/no shader and disabled runtime night filter at6500K; later status remains enabled=false. No config/theme/monitor changes or active-desktop input automation; cause of4000K unknown.
 - Risks / next: Commit coherent block, preserve unrelated stress/research/unused GPUI patch dirt and stash0. Primary project checkout must exist; no lost-file/worktree/process reconstruction, old-host auto-restart, full Wayland/GPU/a11y/performance/reboot/soak/MVP certification. Broad product goal remains active.
+
+## 2026-10-18T11:55:08+00:00 — /root/git_batch_model_luna
+
+Add Stage All and Unstage All app model with strict batch Git wire DTOs
+
+- Files: crates/app/src/git_batch.rs, crates/app/src/protocol.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/git_batch.rs crates/app/src/protocol.rs (pass); git diff --check on tracked protocol.rs (pass); no-index whitespace check on new git_batch.rs emitted no issues (exit 1 because new file differs); Cargo not run per parent lane
+- Risks / next: Root to declare and wire model, populate snapshot literals, and run app Cargo tests/integration after backend DTO lands
+
+## 2026-10-18T11:56:38+00:00 — git_batch_backend_luna
+
+Add bounded batch Stage All and Unstage All with frozen status, safe private-index replacement, durable receipts, and real-Git fault coverage
+
+- Files: crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git_index_batch.rs
+- Verification: rustfmt --edition 2024 (passed); git diff --check (passed); Cargo tests intentionally not run per assigned task constraint
+- Risks / next: Root to run focused session-host tests and integrate workspace_git reader/RPC DTO reexports; review compile feedback and correct as needed
+
+## 2026-10-18T11:57:02+00:00 — git_batch_backend_luna
+
+Refine batch path capture, copy handling, cross-action receipt gates, and 256-path/2 MiB receipt bounds
+
+- Files: crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git_index_batch.rs
+- Verification: rustfmt --edition 2024 (passed); git diff --check (passed); Cargo tests intentionally not run per assigned task constraint
+- Risks / next: Root to run focused backend tests and complete DTO/RPC integration; address any compile or runtime feedback
+
+## 2026-10-18T11:57:28+00:00 — /root/git_batch_model_luna
+
+Release unavailable batch outcome only after trusted explicit acknowledgement
+
+- Files: crates/app/src/git_batch.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/git_batch.rs crates/app/src/protocol.rs (pass); git diff whitespace checks pass; Cargo not run per parent lane
+- Risks / next: Root to run app checks after wiring and review unavailable receipt acknowledgement behavior against backend
+
+## 2026-10-18T12:01:47+00:00 — /root/git_batch_ipc_luna
+
+Added real-host IPC coverage for whole-status Git batch stage, unstage, restart inspection, stale rejection, and unknown receipt acknowledgement.
+
+- Files: crates/session-host/tests/project_setup.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/project_setup.rs; git diff --check passed. Cargo checks intentionally left to root agent.
+- Risks / next: Root agent owns Cargo verification; no implementation gap identified.
+
+## 2026-10-18T12:03:50+00:00 — git_batch_backend_luna
+
+Harden batch receipt integrity and durability confirmation; test corrupt Applied receipts never repeat writes
+
+- Files: crates/session-host/src/workspace_git_index_batch.rs
+- Verification: rustfmt --edition 2024 (passed); git diff --check (passed); Cargo tests not run in this follow-up lane
+- Risks / next: Root to rerun focused session-host batch tests after receipt validation changes
+
+## 2026-10-18T12:04:17+00:00 — git_batch_backend_luna
+
+Confirm Applied batch receipts before reporting, fail closed on malformed bindings, and replace prior same-workspace previews
+
+- Files: crates/session-host/src/workspace_git_index_batch.rs
+- Verification: rustfmt --edition 2024 (passed); git diff --check (passed); Cargo tests not run in this follow-up lane
+- Risks / next: Root to run focused session-host tests for durability, corrupt receipts, and preview replacement
+
+## 2026-10-18T12:04:21+00:00 — /root/git_batch_ipc_luna
+
+Extended the isolated catalog Git fixture with fixed-key batch Stage All / Unstage All review, confirmation, cancellation, exact index/worktree checks, and baseline restoration.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m unittest discover -s scripts -p test_isolated_ime_x11.py passed (37 tests); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; git diff --check passed. No native/Cargo run per task boundary.
+- Risks / next: Root owns private Xvfb fixture and release build verification; batch UI interaction remains unexecuted here.
+
+## 2026-10-18T12:04:45+00:00 — /root/git_batch_model_luna
+
+Align batch path validation with action-specific rename semantics and restore older durable receipt revisions
+
+- Files: crates/app/src/git_batch.rs, crates/app/src/protocol.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/git_batch.rs crates/app/src/protocol.rs (pass); git diff --check protocol.rs and direct new-file whitespace check (pass); Cargo not run per parent lane
+- Risks / next: Root to run app checks; added Stage-after-index-rename path regression and older-revision restore/future-receipt rejection tests
+
+## 2026-10-18T12:06:29+00:00 — /root/git_batch_ipc_luna
+
+Fixed batch cancel-state assertions to compare each operation against its matching cached-index baseline.
+
+- Files: scripts/isolated-ime-x11.py
+- Verification: 37 isolated-ime harness unit tests passed; py_compile and git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns release and private fixture verification.
+
+## 2026-10-18T12:17:16+00:00 — /root
+
+Integrate durable reviewed Stage All and Unstage All with host RPC, shared worker, keyboard/mouse review and restart-safe receipts; verify real Git and private release UI
+
+- Files: README.md, crates/app/README.md, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/close_ui.rs, crates/app/src/workspace_git.rs, crates/app/src/git_batch.rs, crates/app/src/git_batch_ui.rs, crates/app/src/git_status_ui.rs, crates/app/src/git_watch.rs, crates/app/src/protocol.rs, crates/session-host/src/lib.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git_index_batch.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0014-diff-bound-git-index-actions.md
+- Verification: 434 app tests;60 focused host Git tests;13 real-host project tests;37 harness tests; strict workspace/app Clippy, formats/version/diff and host/app release builds pass. Private native catalog04 complete pass; root inspected batch review/result and commit captures.01-02 failed original U shortcut (cause unproven);03 passed batches but later commit fixture lacked refresh after private reseeding;04 repairs explicit refresh. Final unstage chord Ctrl+Shift+Backspace passes. No active-desktop input or live user host/CLI restart.
+- Risks / next: Broader goal remains active; full MVP/Wayland/reboot/soak/performance/accessibility gates open. Git discard/remotes and receipt maintenance absent. Preserve unrelated dirt and stash0.

@@ -499,6 +499,47 @@ impl ProductUi {
             )
         });
 
+        let mut batch_buttons = Vec::new();
+        for (action, id, label) in [
+            (
+                protocol::GitIndexAction::Stage,
+                "git-stage-all",
+                "Подготовить всё…",
+            ),
+            (
+                protocol::GitIndexAction::Unstage,
+                "git-unstage-all",
+                "Снять всё…",
+            ),
+        ] {
+            if sheet.can_prepare_batch(action) && !self.git_batch.unresolved() {
+                let action = ProductAction::GitPrepareBatch(action);
+                batch_buttons.push(self.action_control(
+                    id.into(),
+                    label.into(),
+                    action.clone(),
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: sheet.focused_action() == Some(action),
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
+        }
+        if self.git_batch.operation.is_some() {
+            batch_buttons.push(self.action_control(
+                "git-batch-outcome".into(),
+                "Пакет: результат".into(),
+                ProductAction::GitShowBatchOutcome,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
         let mut body = div()
             .id("workspace-git-entry-list")
             .role(Role::List)
@@ -622,6 +663,24 @@ impl ProductUi {
                     .whitespace_normal()
                     .child(format!(
                         "Изменение индекса недоступно: {}",
+                        safe_path(reason, 400)
+                    )),
+            );
+        }
+        if let Some(reason) = sheet
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.index_batch_unavailable_reason.as_deref())
+        {
+            body = body.child(
+                div()
+                    .id("workspace-git-batch-unavailable")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(format!(
+                        "Пакетные действия недоступны: {}",
                         safe_path(reason, 400)
                     )),
             );
@@ -791,6 +850,18 @@ impl ProductUi {
             );
         }
 
+        if let Some(notice) = &self.notice {
+            body = body.child(
+                div()
+                    .id("workspace-git-notice")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.status_amber)
+                    .whitespace_normal()
+                    .child(safe_path(notice, 600)),
+            );
+        }
+
         let snapshot_meta = sheet
             .snapshot
             .as_ref()
@@ -867,11 +938,13 @@ impl ProductUi {
                         div()
                             .id("workspace-git-actions")
                             .flex()
+                            .flex_wrap()
                             .justify_end()
                             .gap_2()
                             .mt(px(10.))
                             .child(refresh)
                             .children(commit)
+                            .children(batch_buttons)
                             .child(close),
                     ),
             )
@@ -1478,6 +1551,9 @@ mod tests {
             truncated: false,
             index_operation: None,
             index_operation_unavailable_reason: None,
+            index_batch_schema: None,
+            index_batch_operation: None,
+            index_batch_unavailable_reason: None,
             commit_schema: None,
             commit_operation: None,
             commit_unavailable_reason: None,

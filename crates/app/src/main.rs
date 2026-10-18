@@ -16,6 +16,7 @@ mod custom_cli;
 mod dirty_documents;
 mod edit_field;
 mod font;
+mod git_batch;
 mod git_watch;
 mod handoff;
 mod handoff_commands;
@@ -3834,6 +3835,12 @@ impl CanvasApp {
                 | A::GitRefreshDiff
                 | A::GitCopyDiff
                 | A::GitDiffPage(_)
+                | A::GitPrepareBatch(_)
+                | A::GitConfirmBatch
+                | A::GitInspectBatch
+                | A::GitAcknowledgeBatch
+                | A::GitShowBatchOutcome
+                | A::GitBatchPage(_)
                 | A::GitApplyIndex
                 | A::GitInspectIndex
                 | A::GitDismissIndexOutcome
@@ -3994,6 +4001,12 @@ impl CanvasApp {
             | A::SetProfileProvider(_)
             | A::ToggleProfileContext
             | A::SaveLaunchAsProfile => self.profile_action(action, cx),
+            A::GitPrepareBatch(_)
+            | A::GitConfirmBatch
+            | A::GitInspectBatch
+            | A::GitAcknowledgeBatch
+            | A::GitShowBatchOutcome
+            | A::GitBatchPage(_) => self.git_batch_action(action, cx),
             A::OpenWorkspaceGit
             | A::RefreshWorkspaceGit
             | A::GitSelect(_)
@@ -5226,6 +5239,7 @@ impl CanvasApp {
                     DialogKind::WorkspaceGit => {
                         self.workspace_git_action(A::RefreshWorkspaceGit, cx)
                     }
+                    DialogKind::WorkspaceGitBatch => self.git_batch_action(A::GitConfirmBatch, cx),
                     DialogKind::WorkspaceGitCommit => {
                         self.workspace_git_action(A::GitStartCommit, cx)
                     }
@@ -7215,6 +7229,38 @@ impl CanvasApp {
             .product
             .dialog
             .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceGitBatch)
+        {
+            use product::ProductAction as A;
+            let control = k.modifiers.control || k.modifiers.platform;
+            let action = match k.key.as_str() {
+                "escape" if !event.is_held => Some(A::CloseDialog),
+                "enter" if control && !k.modifiers.alt && !k.modifiers.shift && !event.is_held => {
+                    Some(A::GitConfirmBatch)
+                }
+                "r" if control && !k.modifiers.alt && !event.is_held => {
+                    Some(if k.modifiers.shift {
+                        A::GitAcknowledgeBatch
+                    } else {
+                        A::GitInspectBatch
+                    })
+                }
+                "pageup" | "pagedown" if !event.is_held => {
+                    Some(A::GitBatchPage(k.key == "pagedown"))
+                }
+                "left" if k.modifiers.alt && !event.is_held => Some(A::OpenWorkspaceGit),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
             .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceGit)
         {
             use product::ProductAction as A;
@@ -7256,6 +7302,15 @@ impl CanvasApp {
                     }
                 }
                 "c" if control && diff && !event.is_held => Some(A::GitCopyDiff),
+                "s" if control && k.modifiers.shift && !diff && !event.is_held => {
+                    Some(A::GitPrepareBatch(protocol::GitIndexAction::Stage))
+                }
+                "backspace" if control && k.modifiers.shift && !diff && !event.is_held => {
+                    Some(A::GitPrepareBatch(protocol::GitIndexAction::Unstage))
+                }
+                "b" if control && k.modifiers.shift && !event.is_held => {
+                    Some(A::GitShowBatchOutcome)
+                }
                 "s" if control && diff && !event.is_held => Some(A::GitApplyIndex),
                 "enter" if !control && !k.modifiers.alt && !event.is_held => {
                     let sheet = self.product.git_sheet.as_ref();

@@ -223,6 +223,10 @@ struct Response {
     workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
     #[serde(default)]
     workspace_git_commit: Option<WorkspaceGitCommitResult>,
+    #[serde(default)]
+    workspace_git_index_batch_plan: Option<WorkspaceGitIndexBatchPlan>,
+    #[serde(default)]
+    workspace_git_index_batch: Option<WorkspaceGitIndexBatchResult>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -282,6 +286,12 @@ pub struct WorkspaceGitSnapshot {
     pub commit_operation: Option<WorkspaceGitCommitResult>,
     #[serde(default)]
     pub commit_unavailable_reason: Option<String>,
+    #[serde(default)]
+    pub index_batch_schema: Option<u32>,
+    #[serde(default)]
+    pub index_batch_operation: Option<WorkspaceGitIndexBatchResult>,
+    #[serde(default)]
+    pub index_batch_unavailable_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -315,6 +325,23 @@ impl WorkspaceGitSnapshot {
                 .commit_unavailable_reason
                 .as_ref()
                 .is_some_and(|reason| reason.len() > 1024)
+            || self.index_batch_schema.is_some_and(|schema| schema != 1)
+            || self
+                .index_batch_unavailable_reason
+                .as_ref()
+                .is_some_and(|reason| reason.len() > 1024)
+            || self
+                .index_batch_operation
+                .as_ref()
+                .is_some_and(|operation| {
+                    operation.validate().is_err()
+                        || operation.workspace_id != self.workspace_id
+                        || operation.workspace_revision == 0
+                        || operation.workspace_revision > self.workspace_revision
+                        || operation.project_id != self.project_id
+                        || operation.cwd != self.cwd
+                })
+            || (self.index_batch_operation.is_some() && self.index_batch_schema != Some(1))
             || self.commit_operation.as_ref().is_some_and(|operation| {
                 operation.validate().is_err()
                     || operation.workspace_id != self.workspace_id
@@ -490,6 +517,148 @@ pub enum GitIndexPhase {
     Unavailable,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGitIndexBatchPlan {
+    pub ticket: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub action: GitIndexAction,
+    pub paths: Vec<String>,
+    pub entries: Vec<WorkspaceGitEntry>,
+    pub file_bytes: u64,
+    pub expires_unix_ms: u64,
+}
+
+impl WorkspaceGitIndexBatchPlan {
+    fn validate(
+        &self,
+        target: Option<(uuid::Uuid, u64)>,
+        action: Option<GitIndexAction>,
+    ) -> Result<(), String> {
+        let affected = git_batch_affected_paths(&self.entries, self.action);
+        if self.ticket.is_nil()
+            || target != Some((self.workspace_id, self.workspace_revision))
+            || action.is_some_and(|expected| expected != self.action)
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || self.cwd.as_os_str().len() > 4096
+            || self.paths.is_empty()
+            || self.paths.len() > 256
+            || self.entries.is_empty()
+            || self.entries.len() > 128
+            || self.file_bytes > 8 * 1024 * 1024
+            || self.paths.iter().any(|path| !valid_git_batch_path(path))
+            || self
+                .paths
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.paths.len()
+            || affected.len() != self.paths.len()
+            || self
+                .paths
+                .iter()
+                .any(|path| !affected.contains(&path.as_str()))
+            || self.entries.iter().any(|entry| {
+                !valid_git_batch_path(&entry.path)
+                    || entry
+                        .original_path
+                        .as_ref()
+                        .is_some_and(|path| !valid_git_batch_path(path))
+                    || !".MADRCUT?!".contains(entry.index_status)
+                    || !".MADRCUT?!".contains(entry.worktree_status)
+                    || match self.action {
+                        GitIndexAction::Stage => !entry.untracked && entry.worktree_status == '.',
+                        GitIndexAction::Unstage => entry.untracked || entry.index_status == '.',
+                    }
+                    || entry.unmerged
+                    || entry.index_status == 'S'
+                    || entry.worktree_status == 'S'
+            })
+        {
+            return Err("План пакетного изменения индекса Git некорректен".into());
+        }
+        Ok(())
+    }
+}
+
+fn git_batch_affected_paths(
+    entries: &[WorkspaceGitEntry],
+    action: GitIndexAction,
+) -> std::collections::HashSet<&str> {
+    let mut affected = std::collections::HashSet::new();
+    for entry in entries {
+        affected.insert(entry.path.as_str());
+        let include_original = match action {
+            GitIndexAction::Stage => entry.worktree_status == 'R',
+            GitIndexAction::Unstage => matches!(entry.index_status, 'R' | 'C'),
+        };
+        if include_original && let Some(original) = &entry.original_path {
+            affected.insert(original.as_str());
+        }
+    }
+    affected
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGitIndexBatchResult {
+    pub ticket: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub action: GitIndexAction,
+    pub paths: Vec<String>,
+    pub phase: GitIndexPhase,
+    pub acknowledged: bool,
+    pub message: Option<String>,
+}
+
+impl WorkspaceGitIndexBatchResult {
+    fn validate(&self) -> Result<(), String> {
+        let unique = self.paths.iter().collect::<std::collections::HashSet<_>>();
+        if self.ticket.is_nil()
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || self.cwd.as_os_str().len() > 4096
+            || self.paths.len() > 256
+            || (self.phase != GitIndexPhase::Unavailable && self.paths.is_empty())
+            || unique.len() != self.paths.len()
+            || self.paths.iter().any(|path| !valid_git_batch_path(path))
+            || self
+                .message
+                .as_ref()
+                .is_some_and(|message| message.len() > 1024)
+        {
+            return Err("Квитанция пакетного изменения индекса Git некорректна".into());
+        }
+        Ok(())
+    }
+}
+
+fn valid_git_batch_path(path: &str) -> bool {
+    if path.is_empty()
+        || path.len() > 32768
+        || path.starts_with('-')
+        || path.starts_with('/')
+        || path.chars().any(char::is_control)
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return false;
+    }
+    std::path::Path::new(path)
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct GitIndexTicket {
     pub id: uuid::Uuid,
@@ -562,6 +731,69 @@ fn workspace_git_index_target(command: &Value) -> Result<Option<WorkspaceGitInde
         workspace_revision,
         ticket,
         acknowledge,
+    }))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WorkspaceGitIndexBatchTarget {
+    workspace_id: uuid::Uuid,
+    workspace_revision: u64,
+    ticket: Option<uuid::Uuid>,
+    action: Option<GitIndexAction>,
+}
+
+fn workspace_git_index_batch_target(
+    command: &Value,
+) -> Result<Option<WorkspaceGitIndexBatchTarget>, String> {
+    let command_name = command.get("command").and_then(Value::as_str);
+    let prepare = command_name == Some("workspace_git_index_batch_prepare");
+    let request = command_name == Some("workspace_git_index_batch");
+    let acknowledge = command_name == Some("workspace_git_index_batch_acknowledge");
+    if !(prepare || request || acknowledge) {
+        return Ok(None);
+    }
+    let workspace_id = command
+        .get("workspace")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .ok_or_else(|| "Некорректный пакетный запрос индекса Git".to_owned())?;
+    if workspace_id.is_nil() {
+        return Err("Некорректный пакетный запрос индекса Git".into());
+    }
+    let workspace_revision = command
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+        .filter(|revision| *revision < i64::MAX as u64)
+        .ok_or_else(|| "Некорректный пакетный запрос индекса Git".to_owned())?;
+    let ticket = if prepare {
+        None
+    } else {
+        Some(
+            command
+                .get("ticket")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<uuid::Uuid>().ok())
+                .filter(|ticket| !ticket.is_nil())
+                .ok_or_else(|| "Некорректный пакетный запрос индекса Git".to_owned())?,
+        )
+    };
+    let action = if prepare {
+        Some(match command.get("action").and_then(Value::as_str) {
+            Some("stage") => GitIndexAction::Stage,
+            Some("unstage") => GitIndexAction::Unstage,
+            _ => return Err("Некорректное действие пакетного изменения Git".into()),
+        })
+    } else {
+        None
+    };
+    if request && command.get("inspect").and_then(Value::as_bool).is_none() {
+        return Err("Некорректный пакетный запрос индекса Git".into());
+    }
+    Ok(Some(WorkspaceGitIndexBatchTarget {
+        workspace_id,
+        workspace_revision,
+        ticket,
+        action,
     }))
 }
 
@@ -991,6 +1223,8 @@ pub struct ProductReply {
     pub workspace_git_index: Option<WorkspaceGitIndexResult>,
     pub workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
     pub workspace_git_commit: Option<WorkspaceGitCommitResult>,
+    pub workspace_git_index_batch_plan: Option<WorkspaceGitIndexBatchPlan>,
+    pub workspace_git_index_batch: Option<WorkspaceGitIndexBatchResult>,
 }
 
 pub struct ProductError {
@@ -1040,6 +1274,18 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             message,
             rejected_before_launch: false,
         })?;
+    let git_index_batch_target =
+        workspace_git_index_batch_target(&command).map_err(|message| ProductError {
+            ui_request: None,
+            providers_request: false,
+            message,
+            rejected_before_launch: false,
+        })?;
+    let git_index_batch_prepare_request = command_name == Some("workspace_git_index_batch_prepare");
+    let git_index_batch_result_request = matches!(
+        command_name,
+        Some("workspace_git_index_batch" | "workspace_git_index_batch_acknowledge")
+    );
     let git_commit_request = matches!(
         command_name,
         Some(
@@ -1270,6 +1516,52 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
                 rejected_before_launch: false,
             })?;
     }
+    if git_index_batch_prepare_request || response.workspace_git_index_batch_plan.is_some() {
+        response
+            .workspace_git_index_batch_plan
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул план пакетного изменения Git".to_owned())
+            .and_then(|plan| {
+                plan.validate(
+                    git_index_batch_target
+                        .map(|target| (target.workspace_id, target.workspace_revision)),
+                    git_index_batch_target.and_then(|target| target.action),
+                )
+            })
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
+    if git_index_batch_result_request || response.workspace_git_index_batch.is_some() {
+        response
+            .workspace_git_index_batch
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул квитанцию пакетного изменения Git".to_owned())
+            .and_then(|result| {
+                result.validate()?;
+                let Some(target) = git_index_batch_target else {
+                    return Err("Квитанция пакетного изменения Git не соответствует запросу".into());
+                };
+                if target.ticket != Some(result.ticket)
+                    || target.workspace_id != result.workspace_id
+                    || target.workspace_revision != result.workspace_revision
+                    || target.action.is_some_and(|action| action != result.action)
+                        && result.phase != GitIndexPhase::Unavailable
+                {
+                    return Err("Квитанция пакетного изменения Git не соответствует запросу".into());
+                }
+                Ok(())
+            })
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
     let process_view = if let Some((session, generation)) = process_target {
         if response.views.len() != 1
             || session.is_none()
@@ -1316,6 +1608,8 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         workspace_git_index: response.workspace_git_index,
         workspace_git_commit_plan: response.workspace_git_commit_plan,
         workspace_git_commit: response.workspace_git_commit,
+        workspace_git_index_batch_plan: response.workspace_git_index_batch_plan,
+        workspace_git_index_batch: response.workspace_git_index_batch,
     })
 }
 
@@ -2314,6 +2608,8 @@ mod tests {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            workspace_git_index_batch_plan: None,
+            workspace_git_index_batch: None,
             generations: None,
             generation_selection: None,
             history_view: None,
@@ -2925,9 +3221,157 @@ mod workspace_git_commit_tests {
         })).unwrap();
         assert_eq!(snapshot.commit_schema, None);
         assert_eq!(snapshot.commit_operation, None);
+        assert_eq!(snapshot.index_batch_schema, None);
+        assert_eq!(snapshot.index_batch_operation, None);
         let reply: Response =
             serde_json::from_value(json!({"protocol":2,"views":[],"error":null})).unwrap();
         assert!(reply.workspace_git_commit_plan.is_none());
         assert!(reply.workspace_git_commit.is_none());
+        assert!(reply.workspace_git_index_batch_plan.is_none());
+        assert!(reply.workspace_git_index_batch.is_none());
+    }
+}
+
+#[cfg(test)]
+mod workspace_git_index_batch_wire_tests {
+    use super::*;
+
+    fn target() -> (uuid::Uuid, u64) {
+        (uuid::Uuid::from_u128(801), 4)
+    }
+
+    fn plan() -> WorkspaceGitIndexBatchPlan {
+        WorkspaceGitIndexBatchPlan {
+            ticket: uuid::Uuid::from_u128(802),
+            workspace_id: target().0,
+            workspace_revision: target().1,
+            project_id: uuid::Uuid::from_u128(803),
+            cwd: "/worktree".into(),
+            action: GitIndexAction::Stage,
+            paths: vec!["src/a.rs".into(), "src/old.rs".into()],
+            entries: vec![WorkspaceGitEntry {
+                path: "src/a.rs".into(),
+                original_path: Some("src/old.rs".into()),
+                index_status: '.',
+                worktree_status: 'R',
+                untracked: false,
+                unmerged: false,
+            }],
+            file_bytes: 128,
+            expires_unix_ms: 10_000,
+        }
+    }
+
+    #[test]
+    fn batch_plan_checks_scope_action_paths_and_byte_bounds_without_rewriting_them() {
+        let mut value = plan();
+        assert!(
+            value
+                .validate(Some(target()), Some(GitIndexAction::Stage))
+                .is_ok()
+        );
+        assert_eq!(value.paths, ["src/a.rs", "src/old.rs"]);
+        assert!(
+            value
+                .validate(
+                    Some((target().0, target().1 + 1)),
+                    Some(GitIndexAction::Stage)
+                )
+                .is_err()
+        );
+        assert!(
+            value
+                .validate(Some(target()), Some(GitIndexAction::Unstage))
+                .is_err()
+        );
+        for invalid in [
+            "",
+            "-option",
+            "/absolute",
+            "a/../b",
+            "a/./b",
+            "a//b",
+            "bad\nname",
+        ] {
+            let mut invalid_plan = value.clone();
+            invalid_plan.paths[0] = invalid.into();
+            assert!(
+                invalid_plan
+                    .validate(Some(target()), Some(GitIndexAction::Stage))
+                    .is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        value.file_bytes = 8 * 1024 * 1024 + 1;
+        assert!(
+            value
+                .validate(Some(target()), Some(GitIndexAction::Stage))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stage_after_renamed_destination_edit_does_not_include_index_old_path() {
+        let mut value = plan();
+        value.paths = vec!["src/new.rs".into()];
+        value.entries[0].path = "src/new.rs".into();
+        value.entries[0].original_path = Some("src/old.rs".into());
+        value.entries[0].index_status = 'R';
+        value.entries[0].worktree_status = 'M';
+        assert!(
+            value
+                .validate(Some(target()), Some(GitIndexAction::Stage))
+                .is_ok()
+        );
+
+        value.action = GitIndexAction::Unstage;
+        value.paths.push("src/old.rs".into());
+        assert!(
+            value
+                .validate(Some(target()), Some(GitIndexAction::Unstage))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn batch_wire_command_requires_ticket_and_boolean_inspection_mode() {
+        let workspace = target().0;
+        let valid = json!({
+            "command":"workspace_git_index_batch",
+            "workspace":workspace,
+            "expected_revision":target().1,
+            "ticket":uuid::Uuid::from_u128(804),
+            "inspect":true,
+        });
+        let parsed = workspace_git_index_batch_target(&valid).unwrap().unwrap();
+        assert_eq!(parsed.ticket, Some(uuid::Uuid::from_u128(804)));
+        assert!(parsed.action.is_none());
+        let invalid = json!({
+            "command":"workspace_git_index_batch",
+            "workspace":workspace,
+            "expected_revision":target().1,
+            "ticket":uuid::Uuid::from_u128(804),
+            "inspect":"true",
+        });
+        assert!(workspace_git_index_batch_target(&invalid).is_err());
+    }
+
+    #[test]
+    fn unavailable_batch_receipt_may_have_no_paths_but_other_phases_may_not() {
+        let mut receipt = WorkspaceGitIndexBatchResult {
+            ticket: uuid::Uuid::from_u128(805),
+            workspace_id: target().0,
+            workspace_revision: target().1,
+            project_id: uuid::Uuid::from_u128(806),
+            cwd: "/worktree".into(),
+            action: GitIndexAction::Stage,
+            paths: Vec::new(),
+            phase: GitIndexPhase::Unavailable,
+            acknowledged: false,
+            message: Some("missing durable receipt".into()),
+        };
+        assert!(receipt.validate().is_ok());
+        receipt.phase = GitIndexPhase::Applied;
+        assert!(receipt.validate().is_err());
     }
 }

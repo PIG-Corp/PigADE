@@ -124,6 +124,8 @@ pub(crate) fn response(
         workspace_git_watch: None,
         workspace_git_diff: None,
         workspace_git_index: None,
+        workspace_git_index_batch_plan: None,
+        workspace_git_index_batch: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
         host_status: None,
