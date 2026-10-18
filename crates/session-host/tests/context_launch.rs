@@ -343,6 +343,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         Command::PrepareLaunch {
             request: PrepareRequest {
                 engine: Default::default(),
+                custom_command: None,
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -385,6 +386,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         Command::PrepareLaunch {
             request: PrepareRequest {
                 engine: Default::default(),
+                custom_command: None,
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -462,6 +464,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         Command::PrepareLaunch {
             request: PrepareRequest {
                 engine: Default::default(),
+                custom_command: None,
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -641,6 +644,235 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
 }
 
 #[test]
+fn custom_cli_prepare_never_probes_and_starts_exact_reviewed_argv() -> Result<()> {
+    let mut host = TestHost::new()?;
+    let root = host.root().canonicalize()?;
+    let project = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let tab = Uuid::new_v4();
+    success(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: CatalogBatch {
+                projects: vec![CatalogWrite {
+                    value: Project {
+                        id: project,
+                        canonical_path: root.clone(),
+                        git_common_dir: root.clone(),
+                        name: "custom CLI fixture".into(),
+                        roots: vec![],
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                workspaces: vec![CatalogWrite {
+                    value: Workspace {
+                        id: workspace,
+                        project_id: project,
+                        task: "custom task".into(),
+                        cwd: root.clone(),
+                        mode: WorkspaceMode::SharedCheckout,
+                        status: WorkspaceStatus::Ready,
+                        error: None,
+                        context_revision: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                tabs: vec![CatalogWrite {
+                    value: Tab {
+                        id: tab,
+                        workspace_id: workspace,
+                        name: "custom".into(),
+                        layout_json: serde_json::to_string(&TabLayout::default())?,
+                        active_pane: None,
+                        revision: 0,
+                    },
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            }
+            .into(),
+        },
+    )?;
+    let exe = host.bin.path().join("custom-cli");
+    let capture = host.bin.path().join("custom-argv.json");
+    fs::write(
+        &exe,
+        "#!/usr/bin/python3\nimport json,os,sys\nargv=sys.argv[1:]\nopen(argv[0],'w').write(json.dumps({'argv':argv,'cwd':os.getcwd()}))\nprint('CUSTOM_DONE')\n",
+    )?;
+    fs::set_permissions(&exe, fs::Permissions::from_mode(0o755))?;
+    let args = vec![
+        capture.to_string_lossy().into_owned(),
+        "two words".into(),
+        "line\nargument".into(),
+        "".into(),
+    ];
+    let valid_request = PrepareRequest {
+        tab,
+        provider: "custom".into(),
+        side: Direction::Right,
+        target: None,
+        role_override: "metadata only".into(),
+        agent_instructions: "not delivered".into(),
+        include_memory: false,
+        memory_selection: None,
+        deliver_context: false,
+        engine: Default::default(),
+        custom_command: Some(pigade_storage::CustomCommand {
+            executable: exe.to_string_lossy().into_owned(),
+            args: args.clone(),
+        }),
+    };
+    for (label, mut invalid) in [
+        ("context", valid_request.clone()),
+        ("memory", valid_request.clone()),
+        ("engine", valid_request.clone()),
+        ("builtin command", valid_request.clone()),
+    ] {
+        match label {
+            "context" => invalid.deliver_context = true,
+            "memory" => invalid.include_memory = true,
+            "engine" => invalid.engine.model = Some("unexpected-model".into()),
+            "builtin command" => invalid.provider = "codex".into(),
+            _ => unreachable!(),
+        }
+        ensure!(
+            exchange(&host.socket(), Command::PrepareLaunch { request: invalid })?
+                .error
+                .is_some(),
+            "invalid custom launch combination {label} was accepted"
+        );
+        ensure!(success(&host.socket(), Command::List)?.views.is_empty() && !capture.exists());
+    }
+    let prepared = success(
+        &host.socket(),
+        Command::PrepareLaunch {
+            request: valid_request,
+        },
+    )?;
+    let preview = prepared.launch_preview.context("custom preview missing")?;
+    ensure!(
+        prepared.views.is_empty() && !capture.exists(),
+        "custom prepare executed the command"
+    );
+    let capabilities = serde_json::to_value(&preview.capabilities)?;
+    ensure!(
+        preview.provider == "custom"
+            && preview.cli_version == "custom"
+            && capabilities
+                .as_object()
+                .is_some_and(|values| values.values().all(|value| value == false))
+            && preview
+                .custom_command
+                .as_ref()
+                .context("frozen custom command missing")?
+                .args
+                == args
+    );
+    // A prepared plan is durable input to StartPrepared. Mutations that try
+    // to change argv, enable generic capabilities, inject environment, or
+    // claim transport support must be rejected before the attempt is admitted.
+    let database = rusqlite::Connection::open(host.directory.path().join("metadata.sqlite"))?;
+    database.busy_timeout(Duration::from_secs(3))?;
+    let original_payload: String = database.query_row(
+        "SELECT payload FROM prepared_launches WHERE id=?1",
+        [preview.plan_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let mut mutations = Vec::new();
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["preview"]["custom_command"]["args"][1] = "mutated-after-review".into();
+    mutations.push(("argv", changed));
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["preview"]["capabilities"]["startup_context"] = true.into();
+    mutations.push(("capability", changed));
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["launch"]["env"]["CUSTOM_INJECTION"] = "unexpected".into();
+    mutations.push(("environment", changed));
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["preview"]["deliver_context"] = true.into();
+    mutations.push(("context", changed));
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["preview"]["include_memory"] = true.into();
+    mutations.push(("memory", changed));
+    for (label, changed) in mutations {
+        database.execute(
+            "UPDATE prepared_launches SET payload=?2 WHERE id=?1",
+            rusqlite::params![
+                preview.plan_id.to_string(),
+                serde_json::to_string(&changed)?
+            ],
+        )?;
+        ensure!(
+            exchange(
+                &host.socket(),
+                Command::StartPrepared {
+                    plan_id: preview.plan_id
+                }
+            )?
+            .error
+            .is_some(),
+            "mutated custom {label} payload was accepted"
+        );
+        ensure!(success(&host.socket(), Command::List)?.views.is_empty() && !capture.exists());
+        let phase: String = database.query_row(
+            "SELECT phase FROM prepared_launches WHERE id=?1",
+            [preview.plan_id.to_string()],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            phase == "prepared",
+            "rejected {label} mutation consumed start admission"
+        );
+    }
+    database.execute(
+        "UPDATE prepared_launches SET payload=?2 WHERE id=?1",
+        rusqlite::params![preview.plan_id.to_string(), original_payload],
+    )?;
+    drop(database);
+    let start = success(
+        &host.socket(),
+        Command::StartPrepared {
+            plan_id: preview.plan_id,
+        },
+    )?;
+    let _ = start;
+    host.active = Some((preview.session, preview.generation));
+    let deadline = Instant::now() + STARTUP_LIMIT;
+    while !capture.exists() {
+        ensure!(Instant::now() < deadline, "custom CLI did not execute");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&capture)?)?;
+    ensure!(
+        recorded["argv"]
+            .as_array()
+            .context("argv missing")?
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>()
+            == args.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    ensure!(
+        recorded["cwd"] == root.to_string_lossy().as_ref(),
+        "custom CLI cwd differs from reviewed workspace"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::StartPrepared {
+                plan_id: preview.plan_id
+            }
+        )?
+        .error
+        .is_some(),
+        "custom attempt relaunched"
+    );
+    Ok(())
+}
+
+#[test]
 fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_binding() -> Result<()>
 {
     let mut host = TestHost::new()?;
@@ -713,6 +945,7 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
         Command::PrepareLaunch {
             request: PrepareRequest {
                 engine: Default::default(),
+                custom_command: None,
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -1313,6 +1546,7 @@ fn opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery() ->
         Command::PrepareLaunch {
             request: PrepareRequest {
                 engine: Default::default(),
+                custom_command: None,
                 tab,
                 provider: "opencode".into(),
                 side: Direction::Right,
@@ -1751,6 +1985,7 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
                             role: original_role.into(),
                             instructions: original_instructions.into(),
                             deliver_context: true,
+                            custom_command: None,
                         },
                         revision: 0,
                     },
@@ -1889,6 +2124,7 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
             role: "changed role".into(),
             instructions: "PROFILE_CHANGED_INSTRUCTIONS".into(),
             deliver_context: false,
+            custom_command: None,
         },
         revision: 1,
     };

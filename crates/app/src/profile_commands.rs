@@ -79,25 +79,7 @@ impl CanvasApp {
 
     fn profile_editor_open(&mut self, editor: profile_flow::ProfileEditor, name: String) {
         let mut dialog = Dialog::new(DialogKind::AgentProfile);
-        dialog.fields = vec![
-            name.into(),
-            editor.settings.role.clone().into(),
-            editor.settings.instructions.clone().into(),
-            editor
-                .settings
-                .engine
-                .model
-                .clone()
-                .unwrap_or_default()
-                .into(),
-            editor
-                .settings
-                .engine
-                .reasoning_effort
-                .clone()
-                .unwrap_or_default()
-                .into(),
-        ];
+        dialog.fields = editor.initial_fields(name);
         dialog.fields[0].select_all();
         self.product.profile_editor = Some(editor);
         self.product.dialog = Some(dialog);
@@ -183,6 +165,23 @@ impl CanvasApp {
                     "Новый агент".into(),
                 );
             }
+            A::NewCustomProfile => {
+                let custom_supported = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.custom_cli_schema == Some(1));
+                if !custom_supported {
+                    self.product.notice = Some(
+                        "Текущий session host не поддерживает пользовательские CLI-профили".into(),
+                    );
+                    return;
+                }
+                self.profile_editor_open(
+                    profile_flow::ProfileEditor::new(template_flow::default_settings("custom")),
+                    "Новый профиль CLI".into(),
+                );
+            }
             A::SaveLaunchAsProfile => {
                 if let Some(preview) = &self.product.launch_preview
                     && matches!(preview.provider.as_str(), "claude" | "codex" | "opencode")
@@ -212,6 +211,7 @@ impl CanvasApp {
                                 return;
                             }
                         },
+                        custom_command: None,
                     };
                     let mut editor = profile_flow::ProfileEditor::new(settings);
                     editor.origin = Some(dialog.clone());
@@ -240,6 +240,19 @@ impl CanvasApp {
                         self.product.dialog = Some(Dialog::new(DialogKind::DeleteAgentProfile));
                     }
                     _ => {
+                        if profile.settings.provider == "custom"
+                            && !self
+                                .product
+                                .catalog
+                                .as_ref()
+                                .is_some_and(|catalog| catalog.custom_cli_schema == Some(1))
+                        {
+                            self.product.notice = Some(
+                                "Текущий session host не поддерживает пользовательские CLI-профили"
+                                    .into(),
+                            );
+                            return;
+                        }
                         if self.product_launch_unknown {
                             self.product.notice = Some(
                                 "Сначала сверьте предыдущий неизвестный запуск через «Сессии»"
@@ -271,14 +284,22 @@ impl CanvasApp {
                 }
             }
             A::SetProfileProvider(provider) => {
-                if matches!(provider.as_str(), "codex" | "claude" | "opencode")
-                    && let Some(editor) = &mut self.product.profile_editor
+                let custom_supported = self
+                    .product
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.custom_cli_schema == Some(1));
+                if (provider != "custom" || custom_supported)
+                    && let (Some(editor), Some(dialog)) =
+                        (&mut self.product.profile_editor, &mut self.product.dialog)
                 {
-                    editor.settings.provider = provider;
+                    editor.switch_provider(&provider, dialog);
                 }
             }
             A::ToggleProfileContext => {
-                if let Some(editor) = &mut self.product.profile_editor {
+                if let Some(editor) = &mut self.product.profile_editor
+                    && editor.settings.provider != "custom"
+                {
                     editor.settings.deliver_context = !editor.settings.deliver_context;
                 }
             }
@@ -311,6 +332,18 @@ impl CanvasApp {
                     return true;
                 }
                 if let Some(editor) = &self.product.profile_editor {
+                    if editor.settings.provider == "custom"
+                        && !self
+                            .product
+                            .catalog
+                            .as_ref()
+                            .is_some_and(|catalog| catalog.custom_cli_schema == Some(1))
+                    {
+                        self.product.notice = Some(
+                            "Этот session host не поддерживает сохранение пользовательских CLI-профилей".into(),
+                        );
+                        return true;
+                    }
                     match editor.write(fields) {
                         Ok(write) => self.edit_catalog(
                             pigade_storage::CatalogBatch {

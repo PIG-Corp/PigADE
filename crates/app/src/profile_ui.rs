@@ -7,6 +7,7 @@ fn profile_provider_label(provider: &str) -> &str {
         "codex" => "Codex",
         "claude" => "Claude Code",
         "opencode" => "OpenCode",
+        "custom" => "Пользовательский CLI",
         other => other,
     }
 }
@@ -160,7 +161,13 @@ impl ProductUi {
                                         .unwrap_or_else(|| "CLI недоступен".into())
                                 }
                             })
-                            .unwrap_or_else(|| "Нет сведений о доступности CLI".into()),
+                            .unwrap_or_else(|| {
+                                if profile.settings.provider == "custom" {
+                                    "Команда будет проверена при подготовке запуска".into()
+                                } else {
+                                    "Нет сведений о доступности CLI".into()
+                                }
+                            }),
                     };
                     let detail = if profile.settings.deliver_context {
                         "Контекст запрошен · совместимость проверяется при запуске"
@@ -316,7 +323,25 @@ impl ProductUi {
                             )),
                     );
                 }
-                content.child(rows).child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
+                content = content.child(rows);
+                if self
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.custom_cli_schema == Some(1))
+                {
+                    content = content.child(self.action_control(
+                        "agent-profile-custom-new".into(),
+                        "Добавить пользовательский CLI…".into(),
+                        ProductAction::NewCustomProfile,
+                        ControlStyle {
+                            role: Role::Button,
+                            selected: false,
+                            compact: true,
+                        },
+                        cx,
+                    ));
+                }
+                content.child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
                     "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Delete — удалить · Ctrl+P — закрепить · Alt+↑/↓ — переместить · Ctrl+R — обновить",
                 ))
             }
@@ -343,7 +368,16 @@ impl ProductUi {
                     );
                 }
                 let mut providers = div().flex().flex_wrap().gap_1();
-                for provider in ["claude", "codex", "opencode"] {
+                let custom_supported = self
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.custom_cli_schema == Some(1));
+                let provider_choices: &[&str] = if custom_supported {
+                    &["claude", "codex", "opencode", "custom"]
+                } else {
+                    &["claude", "codex", "opencode"]
+                };
+                for &provider in provider_choices {
                     providers = providers.child(self.action_control(
                         format!("agent-profile-provider-{provider}"),
                         profile_provider_label(provider).into(),
@@ -356,23 +390,45 @@ impl ProductUi {
                         cx,
                     ));
                 }
-                let readiness = match self.providers.as_ref() {
-                    None => "Проверка доступности CLI ещё не завершена".to_owned(),
-                    Some(providers) => providers
-                        .iter()
-                        .find(|info| info.provider == editor.settings.provider)
-                        .map(|info| {
-                            if info.available {
-                                "Выбранный CLI доступен".to_owned()
-                            } else {
-                                info.reason
-                                    .as_deref()
-                                    .map(|reason| format!("Выбранный CLI недоступен · {reason}"))
-                                    .unwrap_or_else(|| "Выбранный CLI недоступен".into())
-                            }
-                        })
-                        .unwrap_or_else(|| "Нет сведений о доступности выбранного CLI".into()),
+                let readiness = if editor.settings.provider == "custom" {
+                    "Команда запускается только после отдельной подготовки профиля".to_owned()
+                } else {
+                    match self.providers.as_ref() {
+                        None => "Проверка доступности CLI ещё не завершена".to_owned(),
+                        Some(providers) => providers
+                            .iter()
+                            .find(|info| info.provider == editor.settings.provider)
+                            .map(|info| {
+                                if info.available {
+                                    "Выбранный CLI доступен".to_owned()
+                                } else {
+                                    info.reason
+                                        .as_deref()
+                                        .map(|reason| {
+                                            format!("Выбранный CLI недоступен · {reason}")
+                                        })
+                                        .unwrap_or_else(|| "Выбранный CLI недоступен".into())
+                                }
+                            })
+                            .unwrap_or_else(|| "Нет сведений о доступности выбранного CLI".into()),
+                    }
                 };
+                if editor.settings.provider == "custom" {
+                    return content
+                        .child(profile_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            "Пользовательский CLI запускается с указанным абсолютным путём. Аргументы передаются отдельно, без shell-интерпретации; двойные кавычки используют JSON-экранирование.",
+                        ))
+                        .child(profile_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            readiness,
+                        ))
+                        .child(providers)
+                        .child(profile_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            "Ctrl+4 — пользовательский CLI · Ctrl+Enter — сохранить. Контекст и параметры встроенных CLI не передаются.",
+                        ));
+                }
                 content = content
                     .child(profile_note(
                         chrome::Colors::for_theme(self.appearance.theme).muted,

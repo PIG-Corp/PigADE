@@ -145,7 +145,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     env::split_paths(&path).find_map(|directory| resolve_executable(&directory.join(name)))
 }
 
-fn resolve_executable(path: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_executable(path: &Path) -> Option<PathBuf> {
     let canonical = path.canonicalize().ok()?;
     let metadata = canonical.metadata().ok()?;
     (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(canonical)

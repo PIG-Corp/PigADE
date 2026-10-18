@@ -58,6 +58,27 @@ fn profile_changed(product: &ProductUi, dialog: &Dialog) -> bool {
     let Some(editor) = product.profile_editor.as_ref() else {
         return meaningful(dialog);
     };
+    if editor.settings.provider == "custom"
+        || editor
+            .saved
+            .as_ref()
+            .is_some_and(|saved| saved.settings.provider == "custom")
+    {
+        let Some(saved) = &editor.saved else {
+            return meaningful(dialog);
+        };
+        if editor.settings != saved.settings {
+            return true;
+        }
+        let baseline = crate::profile_flow::ProfileEditor::saved(saved.clone())
+            .initial_fields(saved.name.clone());
+        return dialog.fields.len() != baseline.len()
+            || dialog
+                .fields
+                .iter()
+                .zip(&baseline)
+                .any(|(current, initial)| current.text() != initial.text());
+    }
     let name_changed = editor.saved.as_ref().map_or_else(
         || !field(dialog, 0).trim().is_empty(),
         |saved| field(dialog, 0) != saved.name,
@@ -523,5 +544,51 @@ mod tests {
         product.dialog = Some(Dialog::new(DialogKind::Palette));
         product.dialog.as_mut().unwrap().fields[0] = "deploy".into();
         assert!(collect(&product, &git, None, None).is_empty());
+    }
+
+    #[test]
+    fn custom_profile_draft_protects_literal_and_invalid_arguments_without_exposing_them() {
+        let mut settings = crate::template_flow::default_settings("custom");
+        settings.custom_command = Some(pigade_storage::CustomCommand {
+            executable: "/usr/bin/program".into(),
+            args: vec!["literal \\ value".into()],
+        });
+        let saved = pigade_storage::AgentProfile {
+            id: Uuid::from_u128(99),
+            name: "Custom".into(),
+            settings,
+            revision: 1,
+        };
+        let editor = crate::profile_flow::ProfileEditor::saved(saved.clone());
+        let mut dialog = Dialog::new(DialogKind::AgentProfile);
+        dialog.fields = editor.initial_fields(saved.name);
+        let mut product = ProductUi {
+            dialog: Some(dialog),
+            profile_editor: Some(editor),
+            ..Default::default()
+        };
+        let git = GitFlow::default();
+        assert!(collect(&product, &git, None, None).is_empty());
+        product.dialog.as_mut().unwrap().fields[2] = "'private unfinished".into();
+        let notices = collect(&product, &git, None, None);
+        assert_eq!(notices.len(), 1);
+        assert!(!notices[0].label.contains("private"));
+        assert!(
+            product
+                .profile_editor
+                .as_ref()
+                .unwrap()
+                .write(
+                    &product
+                        .dialog
+                        .as_ref()
+                        .unwrap()
+                        .fields
+                        .iter()
+                        .map(|field| field.text().to_owned())
+                        .collect::<Vec<_>>()
+                )
+                .is_err()
+        );
     }
 }

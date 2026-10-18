@@ -173,7 +173,7 @@ pub(crate) fn prepare(host: &mut Host, request: TemplateRunRequest) -> Result<Te
         ensure!(
             matches!(
                 settings.provider.as_str(),
-                "shell" | "claude" | "codex" | "opencode"
+                "shell" | "claude" | "codex" | "opencode" | "custom"
             ),
             "unsupported provider"
         );
@@ -191,6 +191,7 @@ pub(crate) fn prepare(host: &mut Host, request: TemplateRunRequest) -> Result<Te
                 memory_selection: None,
                 deliver_context: settings.deliver_context,
                 engine: settings.engine,
+                custom_command: settings.custom_command,
             },
         ))?;
         ensure!(

@@ -1,0 +1,17 @@
+# ADR0019 — exact custom CLI profiles through the ordinary launch protocol
+
+Status: accepted for0.0.1-dev; Linux implementation, broader release gates remain open.
+
+The four built-in provider choices cannot represent an arbitrary installed CLI. BridgeMind's engine/profile separation and SPEC4.1 require reusable launch settings without claiming that every executable has a provider adapter.
+
+Add a `custom` provider with a typed `CustomCommand`: absolute UTF-8 executable up to4096 bytes without control characters, at most64 arguments and16KiB decoded argument bytes, no NUL. Profiles and optional template launch settings retain this payload; absent fields preserve existing built-ins. `custom_cli_schema=1` advertises the new capability without a SQL migration. Old hosts do not accept custom UI actions and are never restarted automatically.
+
+A custom executable is never invoked for discovery or `--version`; arbitrary tools may perform work for those arguments. Preparation resolves its canonical file, captures the existing binary identity and freezes exact argv/cwd/profile revision in the ordinary durable prepared plan. Even a binary named `codex` remains generic. Context delivery, memory, engine settings, conversation IDs and native resume are disabled. There is no implicit shell, injected prompt, inferred adapter or provider credential copy. Explicitly selecting a shell executable with its own arguments retains that program's normal behavior.
+
+Start revalidates preview/custom command against executable, argv, empty environment additions, disabled capabilities and ordinary destination/identity constraints before consuming admission. The existing durable attempt/generation locks and Unknown handling remain authoritative; neither an error nor lost reply retries execution. Editing or deleting a saved profile does not mutate its frozen plan.
+
+The profile editor has three fields: name, program, arguments. Unquoted whitespace separates arguments; single quotes retain literal text and backslashes; double-quoted segments use existing serde_json string decoding. Backslash outside quotes quotes the following character. There are no variable, glob, command or tilde expansions. The formatter uses JSON strings so all valid argv, including empty arguments, CR/CRLF, backslashes and Unicode, survive the normal text editor's newline normalization. Source text is bounded to128KiB; decoded payload remains16KiB/64 arguments. Invalid text stays in its draft. Switching between generic and built-in profiles retains separate exact edit buffers.
+
+A compact readonly review displays canonical program/cwd and separately numbered arguments with visible quoting/escapes. Opening it creates no process. Ordinary Enter does nothing; Ctrl+Enter or the explicit launch button confirms; Escape cancels. Context/model/memory fields are absent from this review. Unsaved custom editor contents participate in ordinary window-close protection without leaking argument text into notices.
+
+Verification covers storage validation and reopen, argument/editor round trips, draft switching, real PTY argv/cwd, no probe during prepare, invalid prepare combinations, corrupted durable plan rejection before admission and one-shot start. The existing isolated setup fixture extends the actual native project/launcher flow with save/review/cancel/confirm and literal arguments. This is generic program support, not certification of additional provider protocols, custom template editing, platform-wide input, performance, accessibility or the full MVP.

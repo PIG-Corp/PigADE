@@ -10,6 +10,7 @@ mod close_ui;
 mod command_worker;
 mod controls;
 mod cursor;
+mod custom_cli;
 mod dirty_documents;
 mod edit_field;
 mod font;
@@ -1139,6 +1140,7 @@ mod focus_placement_tests {
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
             history_grid_schema: Some(1),
+            custom_cli_schema: Some(1),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1501,7 +1503,7 @@ impl CanvasApp {
                                         if direct_request { this.pending_direct_launch = None; }
                                         this.product.launch_phase = reply.launch_phase;
                                         if reply.launch_confirmed {
-                                            if this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview) {
+                                            if this.product.dialog.as_ref().is_some_and(|dialog| matches!(dialog.kind, product::DialogKind::LaunchReview | product::DialogKind::CustomLaunchReview)) {
                                                 this.product.dialog = None;
                                             }
                                             this.product.notice = Some(if preview.resume.is_some() {
@@ -1510,8 +1512,8 @@ impl CanvasApp {
                                                 "CLI запущен с контекстом. Применение моделью не подтверждено."
                                             } else { "CLI запущен без передачи контекста." }.into());
                                         } else if (this.product.launch_phase.is_some() && this.pending_context_inspection)
-                                            || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::LaunchReview))) {
-                                            let kind = if this.product.launch_phase.is_some() { if this.pending_conversation_inspection { product::DialogKind::Conversation } else { product::DialogKind::SessionContext } } else if preview.resume.is_some() { product::DialogKind::ResumeReview } else {product::DialogKind::LaunchReview};
+                                            || (this.product.launch_phase.is_none() && (this.pending_launch_review || this.product.dialog.as_ref().is_some_and(|dialog| matches!(dialog.kind, product::DialogKind::LaunchReview | product::DialogKind::CustomLaunchReview)))) {
+                                            let kind = if this.product.launch_phase.is_some() { if this.pending_conversation_inspection { product::DialogKind::Conversation } else { product::DialogKind::SessionContext } } else if preview.resume.is_some() { product::DialogKind::ResumeReview } else if preview.provider == "custom" { product::DialogKind::CustomLaunchReview } else {product::DialogKind::LaunchReview};
                                             let mut dialog = this.product.dialog.as_ref().filter(|dialog| dialog.kind == kind).cloned().unwrap_or_else(|| product::Dialog::new(kind));
                                             if kind == product::DialogKind::LaunchReview && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.role_override.clone().into(),preview.agent_instructions.clone().into(),preview.memory.as_ref().map(|memory| memory_choice::format_sections(&memory.selected)).unwrap_or_default().into(),preview.engine.model.clone().unwrap_or_default().into(),preview.engine.reasoning_effort.clone().unwrap_or_default().into()]; }
                                             if kind == product::DialogKind::Conversation && this.product.dialog.as_ref().is_none_or(|existing| existing.kind != kind) { dialog.fields = vec![preview.conversation.as_ref().map(|binding| binding.conversation_id.clone()).unwrap_or_default().into()]; }
@@ -3691,6 +3693,7 @@ impl CanvasApp {
             A::OpenAgentProfiles
             | A::ReloadAgentProfiles
             | A::NewAgentProfile
+            | A::NewCustomProfile
             | A::EditAgentProfile(_)
             | A::LaunchAgentProfile(_)
             | A::DeleteAgentProfile(_)
@@ -4813,9 +4816,9 @@ impl CanvasApp {
                             self.choose_palette(action, window, cx);
                         }
                     }
-                    DialogKind::LaunchReview | DialogKind::ResumeReview => {
-                        self.confirm_prepared_launch(cx)
-                    }
+                    DialogKind::LaunchReview
+                    | DialogKind::CustomLaunchReview
+                    | DialogKind::ResumeReview => self.confirm_prepared_launch(cx),
                     DialogKind::History => self.history_search(None, cx),
                     DialogKind::Launcher | DialogKind::Controls => self.product.dialog = None,
                     DialogKind::SessionContext
@@ -4914,14 +4917,26 @@ impl CanvasApp {
         let Some(dialog) = self.product.dialog.as_ref().filter(|dialog| {
             matches!(
                 dialog.kind,
-                product::DialogKind::LaunchReview | product::DialogKind::ResumeReview
+                product::DialogKind::LaunchReview
+                    | product::DialogKind::CustomLaunchReview
+                    | product::DialogKind::ResumeReview
             )
         }) else {
             return;
         };
+        let custom = preview.provider == "custom";
+        if custom != (dialog.kind == product::DialogKind::CustomLaunchReview)
+            || (custom && !self.product.custom_launch_ready())
+        {
+            self.product.notice =
+                Some("Параметры CLI не подтверждены. Подготовьте запуск заново из профиля.".into());
+            cx.notify();
+            return;
+        }
         if !preview.can_launch
             || self.product.launch_phase.is_some()
-            || (preview.resume.is_none()
+            || (!custom
+                && preview.resume.is_none()
                 && (dialog.fields.first().map(text_edit::EditBuffer::text)
                     != Some(preview.role_override.as_str())
                     || dialog.fields.get(1).map(text_edit::EditBuffer::text)
@@ -6953,6 +6968,7 @@ impl CanvasApp {
                 "3" => Some(product::ProductAction::SetProfileProvider(
                     "opencode".into(),
                 )),
+                "4" => Some(product::ProductAction::SetProfileProvider("custom".into())),
                 "m" => Some(product::ProductAction::ToggleProfileContext),
                 _ => None,
             };
@@ -6961,6 +6977,26 @@ impl CanvasApp {
                 cx.stop_propagation();
                 return;
             }
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::CustomLaunchReview)
+        {
+            if !event.is_held
+                && self.text_input.preedit.is_empty()
+                && !k.modifiers.alt
+                && !k.modifiers.shift
+            {
+                if k.key == "escape" {
+                    self.product_action(product::ProductAction::CloseDialog, window, cx);
+                } else if k.key == "enter" && (k.modifiers.control || k.modifiers.platform) {
+                    self.product_action(product::ProductAction::SubmitDialog, window, cx);
+                }
+            }
+            cx.stop_propagation();
+            return;
         }
         if self.product.dialog.is_some() {
             if self.product.dialog.as_ref().is_some_and(|dialog| {

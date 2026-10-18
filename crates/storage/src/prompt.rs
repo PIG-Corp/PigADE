@@ -423,6 +423,7 @@ mod tests {
             engine_options_schema: None,
             pane_tab_drop_schema: Some(1),
             history_grid_schema: Some(1),
+            custom_cli_schema: Some(1),
         })?;
         value.as_object_mut().unwrap().remove("prompts");
         value

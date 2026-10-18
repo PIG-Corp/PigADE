@@ -904,6 +904,8 @@ pub struct LaunchPreview {
     pub profile: Option<ProfileSource>,
     #[serde(default)]
     pub engine: pigade_storage::EngineOptions,
+    #[serde(default)]
+    pub custom_command: Option<pigade_storage::CustomCommand>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

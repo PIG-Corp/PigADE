@@ -533,6 +533,55 @@ def fixture_journal_hashes(generations):
     return result
 
 
+def fixture_journal_prefixes(generations, limit=64 * 1024):
+    """Capture a bounded immutable prefix so later PTY resize records may append."""
+    prefixes = {}
+    state = Path('/artifacts/state')
+    for generation in generations:
+        path = state / (generation + '.journal')
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as error:
+            raise RuntimeError('fixture journal prefix cannot be opened safely') from error
+        try:
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
+                    0 < info.st_size <= 64 * 1024 * 1024,
+                    'fixture journal prefix source is not a bounded owned regular file')
+            prefix = os.read(fd, min(info.st_size, limit))
+            require(len(prefix) == min(info.st_size, limit),
+                    'fixture journal prefix read was incomplete')
+            prefixes[generation] = prefix
+        finally:
+            os.close(fd)
+    return prefixes
+
+
+def fixture_journal_prefixes_preserved(prefixes):
+    state = Path('/artifacts/state')
+    for generation, expected in prefixes.items():
+        path = state / (generation + '.journal')
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            return False
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                    info.st_size < len(expected) or info.st_size > 64 * 1024 * 1024):
+                return False
+            current = os.read(fd, len(expected))
+            if not journal_prefix_matches(expected, current):
+                return False
+        finally:
+            os.close(fd)
+    return True
+
+
+def journal_prefix_matches(original: bytes, current: bytes) -> bool:
+    return bool(original) and current.startswith(original)
+
+
 def run_generations_fixture(config, report, env, save):
     report['stage'] = 'generation-history-selection'
     save()
@@ -4018,6 +4067,8 @@ def run_setup_fixture(config, report, control, app, env, save):
             'direct agent received context/prompt arguments or launched more than once')
     time.sleep(.6)
     helper_call(config, 'capture', '/artifacts/agent-direct.ppm')
+    run_custom_cli_profile_fixture(config, report, app, save, session, focused, tab['id'],
+                                   direct_agent['session'], direct_agent['generation'])
     report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
         'tab': tab['name'], 'shell_session': session, 'shell_generation': generation,
         'no_automatic_cli': True, 'one_shell_generation': True,
@@ -4025,8 +4076,180 @@ def run_setup_fixture(config, report, control, app, env, save):
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                      'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
                      'four-panels.ppm', 'four-panels-compact.ppm']}
+    report['setup']['captures'].extend([
+        'custom-profile-editor.ppm', 'custom-launch-review.ppm',
+        'custom-launch-review-enter.ppm', 'custom-launch-cancelled.ppm',
+        'custom-launch-confirmed.ppm'])
+    report['custom_cli'] = {'profile': 'LiteralFixture', 'provider': 'custom',
+        'arguments': ['--label', 'two words', '$(literal);'],
+        'review_is_readonly': True, 'escape_cancels_without_execution': True,
+        'ordinary_enter_does_not_launch': True, 'ctrl_enter_launches_once': True,
+        'no_shell_or_context_transport': True,
+        'existing_journal_prefix_preserved': True}
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
     save()
+
+
+def run_custom_cli_profile_fixture(config, report, app, save, shell_session, live_input_session, tab_id,
+                                   codex_session, codex_generation):
+    """Save, review, cancel, and explicitly run one literal custom CLI profile."""
+    command = {'executable': '/artifacts/tools/custom-cli',
+               'args': ['--label', 'two words', '$(literal);']}
+    catalog_now = lambda: host_request({'command': 'catalog'})['catalog']
+    def identities():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'custom CLI process snapshot exceeds its bound')
+        return sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                      for view in views)
+    def profile_by_name(catalog):
+        profiles = catalog.get('agent_profiles')
+        require(isinstance(profiles, list) and len(profiles) <= 128,
+                'custom CLI profile catalog is invalid or oversized')
+        matches = [profile for profile in profiles if profile.get('name') == 'LiteralFixture']
+        require(len(matches) <= 1, 'custom CLI profile name is duplicated')
+        return matches[0] if matches else None
+
+    catalog_before = catalog_now()
+    require(catalog_before.get('custom_cli_schema') == 1 and
+            catalog_before.get('agent_profiles') == [] and
+            catalog_before.get('selection', {}).get('tab_id') == tab_id,
+            'custom CLI fixture requires an empty profile library and the selected setup tab')
+    original_generations = fixture_generations()
+    original_identities = identities()
+    original_journals = fixture_journal_hashes([generation for _, generation in original_generations])
+    original_journal_prefixes = fixture_journal_prefixes(
+        [generation for _, generation in original_generations])
+    original_models = {}
+    for original_session, _ in original_generations:
+        original_models.update({(original_session, generation): view
+                                for generation, view in fixture_session_models(original_session).items()})
+    original_model_identity = {key: (view.get('pid'), view.get('state'))
+                               for key, view in original_models.items()}
+    original_layout = next(tab for tab in catalog_before['tabs'] if tab['id'] == tab_id)['layout_json']
+    original_panes = set(pane_ids(json.loads(original_layout).get('root')))
+    executable = Path('/artifacts/tools/custom-cli')
+    require(executable.is_file() and not executable.is_symlink() and
+            stat.S_IMODE(executable.stat().st_mode) == 0o700,
+            'fixed custom CLI fixture executable is unavailable or not private')
+    log = Path('/artifacts/custom-cli-runs.jsonl')
+    require(not log.exists(), 'custom CLI execution log unexpectedly exists before the UI flow')
+
+    report['stage'] = 'custom-cli-profile-create'
+    save()
+    helper_call(config, 'custom-open')
+    helper_call(config, 'custom-fields', timeout=15)
+    helper_call(config, 'capture', '/artifacts/custom-profile-editor.ppm')
+    require(not log.exists(), 'custom executable ran while editing its profile')
+    helper_call(config, 'custom-save')
+    saved_catalog = wait_until(lambda: (value if profile_by_name(value := catalog_now()) else None),
+                               time.monotonic() + 8)
+    profile = profile_by_name(saved_catalog)
+    expected_settings = {'provider': 'custom', 'role': '', 'instructions': '',
+                         'deliver_context': False,
+                         'engine': {'model': None, 'reasoning_effort': None},
+                         'custom_command': command}
+    require(profile is not None and profile.get('revision') == 1 and
+            profile.get('settings') == expected_settings and
+            saved_catalog.get('custom_cli_schema') == 1,
+            'custom profile did not persist its exact literal argument vector and disabled capabilities')
+    require(fixture_generations() == original_generations and identities() == original_identities and
+            fixture_journal_hashes([generation for _, generation in original_generations]) == original_journals and
+            not log.exists(),
+            'saving custom profile launched a process or changed existing sessions/journals')
+
+    plans_before = prepared_launches_read_only()
+    helper_call(config, 'custom-select')
+    plans = wait_until(lambda: (items if len(items := prepared_launches_read_only()) > len(plans_before)
+                                else None), time.monotonic() + 10)
+    candidates = [(plan_id, item) for plan_id, item in plans.items()
+                  if plan_id not in plans_before and
+                  item.get('payload', {}).get('preview', {}).get('profile', {}).get('id') == profile['id']]
+    require(len(candidates) == 1, 'custom profile did not create exactly one frozen review plan')
+    plan_id, stored = candidates[0]
+    payload = stored['payload']
+    preview = payload.get('preview', {})
+    launch = payload.get('launch', {})
+    require(stored.get('phase') == 'prepared' and preview.get('provider') == 'custom' and
+            preview.get('profile') == {'id': profile['id'], 'name': 'LiteralFixture', 'revision': 1} and
+            preview.get('custom_command') == command and launch.get('executable') == command['executable'] and
+            launch.get('args') == command['args'] and launch.get('cwd') == '/home/pigade/demo' and
+            launch.get('env', {}) == {} and not preview.get('deliver_context') and
+            not preview.get('include_memory') and not preview.get('resume') and
+            all(value is False for value in preview.get('capabilities', {}).values()),
+            'custom launch plan does not preserve the exact reviewed command or disabled transports')
+    require(fixture_generations() == original_generations and identities() == original_identities and
+            fixture_journal_hashes([generation for _, generation in original_generations]) == original_journals and
+            not log.exists(),
+            'preparing custom CLI review executed it or changed existing processes/journals')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/custom-launch-review.ppm')
+    helper_call(config, 'custom-review-enter')
+    require(fixture_generations() == original_generations and identities() == original_identities and
+            not log.exists(), 'ordinary Enter launched or mutated the custom CLI review')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/custom-launch-review-enter.ppm')
+    helper_call(config, 'custom-review-cancel')
+    require(fixture_generations() == original_generations and identities() == original_identities and
+            not log.exists(), 'Escape from custom CLI review executed the command')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/custom-launch-cancelled.ppm')
+
+    helper_call(config, 'custom-reopen-profiles')
+    helper_call(config, 'custom-select')
+    second_plans = wait_until(lambda: (items if len(items := prepared_launches_read_only()) > len(plans)
+                                       else None), time.monotonic() + 10)
+    second_candidates = [(key, value) for key, value in second_plans.items()
+                         if key not in plans and
+                         value.get('payload', {}).get('preview', {}).get('profile', {}).get('id') == profile['id']]
+    require(len(second_candidates) == 1, 'custom profile could not be prepared again after review cancellation')
+    second_id, second = second_candidates[0]
+    second_payload = second.get('payload', {})
+    second_preview = second_payload.get('preview', {})
+    second_launch = second_payload.get('launch', {})
+    require(second.get('phase') == 'prepared' and second_preview.get('custom_command') == command and
+            second_launch.get('args') == command['args'] and not log.exists() and
+            fixture_generations() == original_generations and identities() == original_identities and
+            fixture_journal_hashes([generation for _, generation in original_generations]) == original_journals,
+            'reopening custom CLI review changed the saved command or launched before confirmation')
+    helper_call(config, 'custom-confirm')
+    session, generation = second_preview['session'], second_preview['generation']
+    launched = wait_until(lambda: (view if (view := fixture_session_models(session).get(generation)) and
+                                    view.get('state') == 'exited' and
+                                    'CUSTOM_CLI_MARKER' in view_text(view) else None),
+                          time.monotonic() + 12)
+    require(fixture_generations() == sorted(original_generations + [(session, generation)]) and
+            log.is_file() and log.stat().st_size <= 4096,
+            'Ctrl+Enter did not create one completed custom PTY generation')
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    require(records == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'custom CLI did not execute exactly once with the reviewed argv and workspace cwd')
+    final_models = {}
+    for original_session, _ in original_generations:
+        final_models.update({(original_session, generation): view
+                             for generation, view in fixture_session_models(original_session).items()})
+    require({key: (view.get('pid'), view.get('state')) for key, view in final_models.items()} ==
+            original_model_identity and shell_session in {key[0] for key in final_models} and
+            live_input_session in {key[0] for key in final_models} and
+            codex_session in {key[0] for key in final_models} and
+            'pigadegridlive' in view_text(final_models[(live_input_session,
+                next(g for s, g in original_generations if s == live_input_session))]) and
+            'OLD_RESUME_FRAME' in view_text(final_models[(codex_session, codex_generation)]) and
+            fixture_journal_prefixes_preserved(original_journal_prefixes),
+            'custom CLI launch changed an existing PTY process/state, retained fixture output, or journal')
+    final_catalog = catalog_now()
+    final_tab = next(tab for tab in final_catalog['tabs'] if tab['id'] == tab_id)
+    final_panes = set(pane_ids(json.loads(final_tab['layout_json']).get('root')))
+    require(final_catalog.get('selection', {}).get('tab_id') == tab_id and
+            original_panes <= final_panes and session in final_panes,
+            'custom CLI launch changed selected tab or removed an existing pane')
+    final_plans = prepared_launches_read_only()
+    require(final_plans.get(plan_id, {}).get('payload') == payload and
+            final_plans.get(second_id, {}).get('payload') == second_payload and
+            final_plans.get(second_id, {}).get('phase') == 'not_requested',
+            'custom launch receipts lost their frozen plan payloads')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/custom-launch-confirmed.ppm')
 def run_context_fixture(config, report, env, save, app, host):
     report['stage'] = 'workspace-context-editor'
     save()
@@ -5843,6 +6066,29 @@ def inside_run() -> int:
                 "print('NEW_RESUME_FRAME' if sys.argv[1:2] == ['resume'] else 'OLD_RESUME_FRAME')\n")
             fake_codex.chmod(0o700)
             host_path = '/artifacts/bin:/usr/bin'
+        if config.get('fixture') == 'setup':
+            custom_tools = Path('/artifacts/tools')
+            custom_tools.mkdir(mode=0o700, exist_ok=True)
+            tools_info = custom_tools.lstat()
+            require(stat.S_ISDIR(tools_info.st_mode) and tools_info.st_uid == os.getuid() and
+                    stat.S_IMODE(tools_info.st_mode) == 0o700,
+                    'existing custom tools directory is not a private owned directory')
+            custom_exe = custom_tools / 'custom-cli'
+            try:
+                custom_fd = os.open(custom_exe, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                    os.O_NOFOLLOW | os.O_CLOEXEC, 0o700)
+            except FileExistsError as error:
+                raise RuntimeError('fixed custom CLI wrapper already exists') from error
+            os.fchmod(custom_fd, 0o700)
+            with os.fdopen(custom_fd, 'w', encoding='utf-8') as wrapper:
+                wrapper.write("#!/usr/bin/python3\nimport json, os, sys\n"
+                "record={'argv':sys.argv[1:],'cwd':os.getcwd()}\n"
+                "fd=os.open('/artifacts/custom-cli-runs.jsonl', os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_NOFOLLOW, 0o600)\n"
+                "try: os.write(fd, (json.dumps(record, separators=(',',':'))+'\\n').encode())\n"
+                "finally: os.close(fd)\n"
+                "print('CUSTOM_CLI_MARKER')\n")
+                wrapper.flush()
+                os.fsync(wrapper.fileno())
         host = start_process(['/pigade/host', 'serve', '/artifacts/state'], env={
             'PATH': host_path, 'HOME': str(home), 'XDG_RUNTIME_DIR': str(runtime),
             'TMPDIR': '/tmp', 'LC_ALL': 'C.utf8'})
@@ -6158,7 +6404,7 @@ def plan(args) -> dict:
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
-                  'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
+                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once in the selected workspace',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
@@ -6206,7 +6452,7 @@ def parse_args(argv=None):
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
     parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer', 'catalog', 'recipes'], default='pinyin',
-                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pane pointer and cross-tab transfer fixture')
+                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup/custom CLI, OpenCode, panel controls, or pane pointer and cross-tab transfer fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

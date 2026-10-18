@@ -44,6 +44,8 @@ pub(crate) struct ProfileEditor {
     pub saved: Option<AgentProfile>,
     pub settings: LaunchSettings,
     pub origin: Option<crate::product::Dialog>,
+    builtin_draft: Option<Vec<crate::text_edit::EditBuffer>>,
+    custom_draft: Option<Vec<crate::text_edit::EditBuffer>>,
 }
 
 impl ProfileEditor {
@@ -53,6 +55,8 @@ impl ProfileEditor {
             saved: None,
             settings,
             origin: None,
+            builtin_draft: None,
+            custom_draft: None,
         }
     }
     pub fn saved(profile: AgentProfile) -> Self {
@@ -61,21 +65,121 @@ impl ProfileEditor {
             settings: profile.settings.clone(),
             saved: Some(profile),
             origin: None,
+            builtin_draft: None,
+            custom_draft: None,
         }
     }
+
+    pub(crate) fn field_labels(&self) -> &'static [&'static str] {
+        if self.settings.provider == "custom" {
+            &[
+                "Название",
+                "Исполняемый файл (абсолютный путь)",
+                "Аргументы",
+            ]
+        } else {
+            &["Название", "Роль", "Инструкции", "Модель", "Усилие"]
+        }
+    }
+
+    pub(crate) fn initial_fields(&self, name: String) -> Vec<crate::text_edit::EditBuffer> {
+        if self.settings.provider == "custom" {
+            let command = self.settings.custom_command.as_ref();
+            vec![
+                name,
+                command.map_or_else(String::new, |value| value.executable.clone()),
+                command.map_or_else(String::new, |value| {
+                    crate::custom_cli::format_arguments(&value.args)
+                }),
+            ]
+            .into_iter()
+            .map(crate::text_edit::EditBuffer::new)
+            .collect()
+        } else {
+            vec![
+                name,
+                self.settings.role.clone(),
+                self.settings.instructions.clone(),
+                self.settings.engine.model.clone().unwrap_or_default(),
+                self.settings
+                    .engine
+                    .reasoning_effort
+                    .clone()
+                    .unwrap_or_default(),
+            ]
+            .into_iter()
+            .map(crate::text_edit::EditBuffer::new)
+            .collect()
+        }
+    }
+
+    /// Save the exact editor buffers before changing provider and restore the
+    /// other provider's draft, including invalid argument text.
+    pub(crate) fn switch_provider(
+        &mut self,
+        provider: &str,
+        dialog: &mut crate::product::Dialog,
+    ) -> bool {
+        let custom = provider == "custom";
+        if !custom && !matches!(provider, "codex" | "claude" | "opencode") {
+            return false;
+        }
+        if self.settings.provider == provider {
+            return true;
+        }
+        let current = std::mem::take(&mut dialog.fields);
+        let current_name = current
+            .first()
+            .map(|field| field.text().to_owned())
+            .unwrap_or_default();
+        if self.settings.provider == "custom" {
+            self.custom_draft = Some(current);
+        } else {
+            self.builtin_draft = Some(current);
+        }
+        self.settings.provider = provider.to_owned();
+        let restored = if custom {
+            self.custom_draft.take()
+        } else {
+            self.builtin_draft.take()
+        };
+        dialog.fields = restored.unwrap_or_else(|| self.initial_fields(current_name));
+        // Reused buffers can have the same revision but different field meanings.
+        // A new form scope invalidates shaped text and in-flight editor callbacks.
+        dialog.id = Uuid::new_v4();
+        dialog.active_field = dialog
+            .active_field
+            .min(dialog.fields.len().saturating_sub(1));
+        true
+    }
+
     pub fn write(&self, fields: &[String]) -> Result<CatalogWrite<AgentProfile>, String> {
         let name = fields.first().map_or("", String::as_str).trim();
         if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
             return Err("Введите название без переносов строк, до256 байт UTF-8".into());
         }
         let mut settings = self.settings.clone();
-        settings.role = fields.get(1).cloned().unwrap_or_default();
-        settings.instructions = fields.get(2).cloned().unwrap_or_default();
-        settings.engine = pigade_storage::EngineOptions::from_fields(
-            fields.get(3).map_or("", String::as_str),
-            fields.get(4).map_or("", String::as_str),
-        )
-        .map_err(|error| error.to_string())?;
+        if settings.provider == "custom" {
+            let command = pigade_storage::CustomCommand {
+                executable: fields.get(1).cloned().unwrap_or_default(),
+                args: crate::custom_cli::parse_arguments(fields.get(2).map_or("", String::as_str))?,
+            };
+            command.validate().map_err(|error| error.to_string())?;
+            settings.role.clear();
+            settings.instructions.clear();
+            settings.engine = pigade_storage::EngineOptions::default();
+            settings.deliver_context = false;
+            settings.custom_command = Some(command);
+        } else {
+            settings.custom_command = None;
+            settings.role = fields.get(1).cloned().unwrap_or_default();
+            settings.instructions = fields.get(2).cloned().unwrap_or_default();
+            settings.engine = pigade_storage::EngineOptions::from_fields(
+                fields.get(3).map_or("", String::as_str),
+                fields.get(4).map_or("", String::as_str),
+            )
+            .map_err(|error| error.to_string())?;
+        }
         pigade_storage::validate_agent_profile_settings(&settings)
             .map_err(|error| error.to_string())?;
         Ok(CatalogWrite {
@@ -229,5 +333,114 @@ mod tests {
         ];
 
         assert!(editor.write(&fields).is_err());
+    }
+
+    #[test]
+    fn custom_profile_writes_exact_literal_arguments_and_clears_builtin_fields() {
+        let mut settings = crate::template_flow::default_settings("custom");
+        settings.role = "discard me".into();
+        settings.instructions = "discard me too".into();
+        settings.deliver_context = true;
+        settings.engine.model = Some("unsupported".into());
+        let editor = ProfileEditor::new(settings);
+        let write = editor
+            .write(&[
+                "My CLI".into(),
+                "/usr/bin/tool".into(),
+                "--label 'two words' $(literal)".into(),
+            ])
+            .unwrap();
+        assert_eq!(write.value.settings.provider, "custom");
+        assert_eq!(
+            write.value.settings.custom_command,
+            Some(pigade_storage::CustomCommand {
+                executable: "/usr/bin/tool".into(),
+                args: vec!["--label".into(), "two words".into(), "$(literal)".into()],
+            })
+        );
+        assert!(write.value.settings.role.is_empty());
+        assert!(write.value.settings.instructions.is_empty());
+        assert!(!write.value.settings.deliver_context);
+        assert!(write.value.settings.engine.is_empty());
+    }
+
+    #[test]
+    fn custom_profile_rejects_relative_executable_and_unmatched_argument_quote() {
+        let editor = ProfileEditor::new(crate::template_flow::default_settings("custom"));
+        assert!(
+            editor
+                .write(&["Tool".into(), "bin/tool".into(), "ok".into()])
+                .is_err()
+        );
+        assert!(
+            editor
+                .write(&["Tool".into(), "/usr/bin/tool".into(), "'unfinished".into()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reopening_and_saving_custom_profile_preserves_carriage_returns_and_backslashes() {
+        let mut settings = crate::template_flow::default_settings("custom");
+        let command = pigade_storage::CustomCommand {
+            executable: "/usr/bin/tool".into(),
+            args: vec![
+                "before\rafter".into(),
+                "line\r\nend".into(),
+                "slash\\".into(),
+            ],
+        };
+        settings.custom_command = Some(command.clone());
+        let editor = ProfileEditor::saved(pigade_storage::AgentProfile {
+            id: Uuid::new_v4(),
+            name: "Stored CLI".into(),
+            settings,
+            revision: 4,
+        });
+        let fields = editor.initial_fields("Stored CLI".into());
+        let write = editor
+            .write(
+                &fields
+                    .iter()
+                    .map(|field| field.text().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(write.value.settings.custom_command, Some(command));
+        assert_eq!(write.expected_revision, Some(4));
+    }
+
+    #[test]
+    fn provider_switch_keeps_exact_custom_and_builtin_buffers_including_invalid_args() {
+        let editor_settings = crate::template_flow::default_settings("codex");
+        let mut editor = ProfileEditor::new(editor_settings);
+        let mut dialog = crate::product::Dialog::new(crate::product::DialogKind::AgentProfile);
+        dialog.fields = editor.initial_fields("Draft".into());
+        dialog.fields[1] = "builtin role".into();
+        let previous_scope = dialog.id;
+        assert!(editor.switch_provider("custom", &mut dialog));
+        assert_ne!(dialog.id, previous_scope);
+        assert_eq!(dialog.fields.len(), 3);
+        assert_eq!(dialog.fields[0].text(), "Draft");
+        dialog.fields[1] = "relative/tool".into();
+        dialog.fields[2] = "'unfinished".into();
+        assert!(editor.switch_provider("claude", &mut dialog));
+        assert_eq!(dialog.fields.len(), 5);
+        assert_eq!(dialog.fields[1].text(), "builtin role");
+        dialog.fields[2] = "builtin instructions".into();
+        assert!(editor.switch_provider("custom", &mut dialog));
+        assert_eq!(dialog.fields[1].text(), "relative/tool");
+        assert_eq!(dialog.fields[2].text(), "'unfinished");
+        assert!(
+            editor
+                .write(
+                    &dialog
+                        .fields
+                        .iter()
+                        .map(|field| field.text().to_owned())
+                        .collect::<Vec<_>>()
+                )
+                .is_err()
+        );
     }
 }

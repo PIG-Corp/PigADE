@@ -16,6 +16,8 @@ use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
 #[path = "appearance_ui.rs"]
 mod appearance_ui;
+#[path = "custom_launch_ui.rs"]
+mod custom_launch_ui;
 #[path = "git_status_ui.rs"]
 mod git_status_ui;
 #[path = "navigation_ui.rs"]
@@ -56,6 +58,7 @@ pub(super) enum ProductAction {
     OpenAgentProfiles,
     ReloadAgentProfiles,
     NewAgentProfile,
+    NewCustomProfile,
     EditAgentProfile(Uuid),
     LaunchAgentProfile(Uuid),
     DeleteAgentProfile(Uuid),
@@ -212,6 +215,7 @@ pub(super) enum DialogKind {
     Context,
     ProjectContext,
     LaunchReview,
+    CustomLaunchReview,
     ResumeReview,
     SessionContext,
     Conversation,
@@ -259,6 +263,7 @@ impl DialogKind {
             Self::Context => "Контекст воркспейса",
             Self::ProjectContext => "Контекст проекта",
             Self::LaunchReview => "Проверка запуска",
+            Self::CustomLaunchReview => "Запустить CLI",
             Self::ResumeReview => "Продолжить диалог CLI",
             Self::SessionContext => "Контекст выбранной сессии",
             Self::Conversation => "Диалог CLI",
@@ -273,7 +278,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
-            Self::Appearance | Self::TerminalInsert => &[],
+            Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
@@ -360,6 +365,7 @@ impl DialogKind {
             Self::Context => "Сохранить ревизию",
             Self::ProjectContext => "Сохранить ревизию",
             Self::LaunchReview => "Подтвердить и запустить",
+            Self::CustomLaunchReview => "Запустить · Ctrl+Enter",
             Self::ResumeReview => "Продолжить диалог",
             Self::SessionContext => "Закрыть",
             Self::Conversation => "Сохранить привязку",
@@ -706,6 +712,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Профили агентов · profiles",
             ProductAction::OpenAgentProfiles,
+        ),
+        (
+            "Другой CLI · custom cli · новый профиль команды",
+            ProductAction::NewCustomProfile,
         ),
         ("Сохранить текущую раскладку", ProductAction::SaveLayout),
         (
@@ -1292,7 +1302,19 @@ impl ProductUi {
     pub(super) fn active_multiline(&self) -> bool {
         self.dialog
             .as_ref()
-            .is_some_and(|dialog| dialog_field_multiline(dialog.kind, dialog.active_field))
+            .is_some_and(|dialog| self.field_multiline(dialog.kind, dialog.active_field))
+    }
+
+    fn field_multiline(&self, kind: DialogKind, index: usize) -> bool {
+        if kind == DialogKind::AgentProfile
+            && self
+                .profile_editor
+                .as_ref()
+                .is_some_and(|editor| editor.settings.provider == "custom")
+        {
+            return index == 2;
+        }
+        dialog_field_multiline(kind, index)
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
@@ -2804,6 +2826,9 @@ impl ProductUi {
         if dialog.kind == DialogKind::LaunchReview {
             return self.launch_review_overlay(dialog, layouts, cx);
         }
+        if dialog.kind == DialogKind::CustomLaunchReview {
+            return self.custom_launch_overlay(cx);
+        }
         if dialog.kind == DialogKind::Controls {
             return self.controls_overlay(cx);
         }
@@ -3112,12 +3137,20 @@ impl ProductUi {
                 }
             }
         }
-        for (index, label) in dialog.kind.fields().iter().enumerate() {
+        let labels = if dialog.kind == DialogKind::AgentProfile {
+            self.profile_editor
+                .as_ref()
+                .map(|editor| editor.field_labels())
+                .unwrap_or(dialog.kind.fields())
+        } else {
+            dialog.kind.fields()
+        };
+        for (index, label) in labels.iter().enumerate() {
             if !can_bind {
                 break;
             }
             let active = index == dialog.active_field;
-            let multiline = dialog_field_multiline(dialog.kind, index);
+            let multiline = self.field_multiline(dialog.kind, index);
             let buffer = &dialog.fields[index];
             let field = div()
                 .id(format!("product-dialog-field-{index}"))
@@ -3837,6 +3870,24 @@ impl ProductUi {
             },
             cx,
         ));
+        if self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.custom_cli_schema)
+            == Some(1)
+        {
+            choices = choices.child(self.action_control(
+                "launcher-custom-cli".into(),
+                "Другой CLI…".into(),
+                ProductAction::NewCustomProfile,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: false,
+                },
+                cx,
+            ));
+        }
         let availability = if self.providers.is_none() {
             self.provider_error
                 .as_deref()

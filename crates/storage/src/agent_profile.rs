@@ -30,7 +30,10 @@ pub struct AgentProfileDelete {
 /// bounded by the same limits as template launch settings.
 pub fn validate_agent_profile_settings(settings: &LaunchSettings) -> Result<()> {
     ensure!(
-        matches!(settings.provider.as_str(), "claude" | "codex" | "opencode"),
+        matches!(
+            settings.provider.as_str(),
+            "claude" | "codex" | "opencode" | "custom"
+        ),
         "unsupported agent profile provider"
     );
     settings.validate()

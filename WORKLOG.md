@@ -4229,3 +4229,115 @@ Complete independent terminal palette feature and final native visual verificati
 - Files: crates/app/src/product.rs, docs/AGENT_HANDOFF.md, docs/adr/0018-in-pane-cell-history.md, WORKLOG.md
 - Verification: Final323 app tests, strict app Clippy, first-party app fmt, debug/release builds, version and diff checks pass;35 harness tests and strict C compile passed in Luna lane. Native controls02 exits0: independent Light, follow-app both directions, explicit Dark, exact background pixels, no-op saves and unchanged post-font terminal models/journals/geometry/PIDs/layout. Inspected final settings and light canvas. Native history01 exits0 with exact colors/readonly input/live-return proofs before footer-only change; earlier controls01 passed too. Original compile/lint/cache-format issues recorded above and repaired.
 - Risks / next: Commit this product block; no full native Wayland/GPU/a11y/MVP claim. Preserve unrelated research/stress/GPUI dirt and stash0; broader BridgeMind-priority goal stays active.
+
+## 2026-10-18T06:51:47+00:00 — git_commit_engine_luna
+
+Added validated custom executable and argument-vector settings to reusable profiles/templates and a no-probe generic prepare/start path. Custom launches freeze canonical executable identity and exact argv, keep all provider capabilities disabled, and reject context, memory, or engine transport. Added storage bounds/profile persistence tests and a real-host PTY test proving prepare is side-effect free and launch uses the reviewed argv and workspace cwd.
+
+- Files: crates/storage/src/custom_command.rs, crates/storage/src/lib.rs, crates/storage/src/catalog.rs, crates/storage/src/agent_profile.rs, crates/storage/src/agent_profile_roster.rs, crates/storage/src/prompt.rs, crates/session-host/src/adapters.rs, crates/session-host/src/panel_launch.rs, crates/session-host/src/prepared.rs, crates/session-host/src/template_run.rs, crates/session-host/src/workspace_git.rs, crates/session-host/tests/context_launch.rs, crates/session-host/tests/project_setup.rs, crates/session-host/tests/template_run.rs
+- Verification: cargo check -p pigade-session-host -p pigade-storage; cargo test -p pigade-storage --lib custom_command_settings_are_exact_bounded_and_provider_exclusive; cargo test -p pigade-session-host --test context_launch (6 passed); cargo test -p pigade-session-host --no-run.
+- Risks / next: Root must propagate custom_cli_schema and optional custom_command fields through app-owned Catalog/PrepareRequest/LaunchPreview initializers and UI profile/template surfaces, then run full workspace integration.
+
+## 2026-10-18T06:51:54+00:00 — git_commit_engine_luna
+
+Validation follow-up: full pigade-storage library suite passed after adding custom profile reopen coverage.
+
+- Files: crates/storage/src/catalog.rs
+- Verification: cargo test -p pigade-storage --lib (89 passed, 0 failed).
+- Risks / next: Root owns app integration and full workspace verification.
+
+## 2026-10-18T06:52:28+00:00 — git_commit_ui_luna
+
+Added custom CLI profile editing, explicit schema-gated create/provider switching, separate preserved builtin/custom editor buffers, bounded literal argument parsing/formatting, and custom-only save validation. The custom mouse action stays outside indexed profile navigation so existing first-profile selection remains stable.
+
+- Files: crates/app/src/custom_cli.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 on the four owned Rust files passed; git diff --check passed; Cargo/app tests not run (root owns app Cargo lane)
+- Risks / next: Root should add custom_command: None to template_flow::default_settings, then compile and run parser/profile unit tests and verify custom review integration; App/host feature unavailable on older catalog schema remains gated.
+
+## 2026-10-18T06:53:19+00:00 — git_commit_research_luna
+
+Extended the existing private setup fixture with a saved custom CLI profile, frozen no-context launch review, Enter/Escape non-execution checks, and one exact confirmed argv run. Added a private fixed executable/log artifact and bounded XTEST key stages.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (36 passed); strict C syntax check with -Wall -Wextra -Werror
+- Risks / next: Root owns native/Cargo execution and should inspect custom-profile editor/review captures before accepting the UI flow.
+
+## 2026-10-18T06:53:41+00:00 — git_commit_ui_luna
+
+Corrected custom argument parsing so backslash is literal inside single quotes, increased the formatted-source bound to cover the maximum valid decoded argv, and retained the profile name when seeding a first draft for another provider. Added exhaustive ASCII/Unicode and maximum-size formatter round-trip tests.
+
+- Files: crates/app/src/custom_cli.rs, crates/app/src/profile_flow.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 on changed files passed; git diff --check passed; Cargo tests not run (root app lane)
+- Risks / next: Root should run custom parser/profile app tests; no compile evidence in this lane.
+
+## 2026-10-18T06:56:37+00:00 — git_commit_engine_luna
+
+Extended the custom CLI host regression with invalid prepare combinations and durable-plan tampering cases. Mutated argv, capability flags, environment, context delivery, and memory inclusion are each rejected before attempt admission; the test confirms phase remains prepared, no generation/process appears, then restores the exact payload and completes the valid launch.
+
+- Files: crates/session-host/tests/context_launch.rs
+- Verification: cargo test -p pigade-session-host --test context_launch custom_cli_prepare_never_probes_and_starts_exact_reviewed_argv -- --nocapture (passed).
+- Risks / next: No further work in this test-only slice.
+
+## 2026-10-18T06:58:25+00:00 — git_commit_ui_luna
+
+Changed custom argv quoting to JSON-escaped segments so EditBuffer CR/LF normalization cannot corrupt saved arguments. The parser now decodes double-quoted JSON strings, rejects malformed escapes and decoded NUL, while retaining literal single quotes and shell-free semantics. Added EditBuffer and saved-profile CR/backslash round-trip regressions; collapsed the provider-switch guard.
+
+- Files: crates/app/src/custom_cli.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_ui.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 passed on owned app files; git diff --check passed; Cargo tests not run (root app lane)
+- Risks / next: Root should rerun app tests/clippy against the parser and custom profile round-trip regressions.
+
+## 2026-10-18T06:58:39+00:00 — git_commit_ui_luna
+
+Adjusted the maximum-size formatter regression to use control characters, the JSON worst-case expansion, rather than apostrophes which JSON leaves unescaped.
+
+- Files: crates/app/src/custom_cli.rs, WORKLOG.md
+- Verification: rustfmt and git diff --check passed; Cargo tests remain root-owned
+- Risks / next: Root should run custom CLI app tests/clippy.
+
+## 2026-10-18T07:01:50+00:00 — git_commit_research_luna
+
+Fixed setup fixture startup to reuse only an existing owner-owned mode-0700 tools directory; rejects symlink/non-directory/wrong-owner or permission state, and creates the fixed wrapper exclusively with O_EXCL|O_NOFOLLOW before writing and fsyncing it.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (36 passed); strict C syntax check with -Wall -Wextra -Werror
+- Risks / next: Retry the native setup fixture from the root lane; no native run was performed here.
+
+## 2026-10-18T07:03:16+00:00 — /root
+
+Integrate generic CLI profiles with compact readonly launch review, exact argument editing and capability-gated durable start
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/custom_launch_ui.rs, crates/app/src/dirty_documents.rs, crates/app/src/profile_flow.rs, crates/app/src/template_flow.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_git.rs, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/adr/0019-custom-cli-profiles.md
+- Verification: Full locked workspace suite passes; after additional durable-plan rejection cases, targeted real custom CLI PTY test passes in engine Luna lane.335 app tests, strict workspace/app Clippy, formats/version/diff checks and workspace release/app debug+release builds pass. Added custom dirty-draft protection and form-scope reset so reused buffer revisions cannot show stale shaped text. Initial GPUI scope/id compile errors repaired; first private setup run failed before UI on duplicate owned tools directory, fixture corrected by Luna. Native setup rerun pending fixture prefix-preservation correction.
+- Risks / next: Run final existing private setup flow and inspect compact custom editor/review/PTY result; preserve unrelated research/stress/GPUI dirt and stash0. No actual new provider adapter, custom-template editor, native Wayland/GPU/full MVP claim.
+
+## 2026-10-18T07:03:25+00:00 — git_commit_research_luna
+
+Adjusted the custom CLI fixture's post-launch journal invariant: full journal hashes remain required before launch, while after placement it verifies bounded original byte prefixes remain intact so legitimate resize records can append. The report now records that prefix-preservation check.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); strict C syntax check with -Wall -Wextra -Werror
+- Risks / next: Root owns the next native setup fixture run.
+
+## 2026-10-18T07:07:32+00:00 — /root
+
+Revalidate requested hover focus and Hyprland-style modifier dragging on the current release without changing already-correct behavior
+
+- Files: docs/AGENT_HANDOFF.md
+- Verification: 20 pointer_layout tests passed. Existing isolated X11 pointer fixture /tmp/pigade-hover-current-20261018-01 passed all hover/header/inactive-entry, exact input routing, immediate pickup/stationary release, Dwindle/gutter/undo and cross-tab checks. Inspected header-hover, held-pickup and gutter-drop captures. Luna readonly review found no concrete source defect.
+- Risks / next: Record current evidence in handoff; actual Wayland/Hyprland parity remains unverified. No active desktop automation or user config/process changes.
+
+## 2026-10-18T07:08:06+00:00 — git_commit_research_luna
+
+Fixed the setup fixture custom-fields helper timeout and corrected the preserved live-input assertion to use the frozen focused pane created by the split flow. Retained process/state checks cover every original generation; existing shell and Codex panes remain required, and journal prefix preservation remains enforced.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); strict C syntax check passed; private X11 setup fixture passed at /tmp/pigade-custom-cli-20261018-04/run.json
+- Risks / next: Root owns capture inspection and final documentation/commit.
+
+## 2026-10-18T07:08:31+00:00 — /root
+
+Finalize verified custom CLI profile integration and preserve current pointer-request evidence
+
+- Files: docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: Final native setup04 passes no-probe, exact argv/cwd, readonly review, Enter-ignore, Escape-cancel and once-only Ctrl+Enter launch; old processes/states and bounded journal prefixes preserved. Root inspected editor/review/confirmed captures. Native02 timeout and03 wrong-pane marker assertion were harness issues corrected by Luna; final37 harness tests/C syntax pass in that lane. Existing335 app/full workspace tests, strict Clippy, formats and debug/release build evidence remains valid; no product changes since those checks. Current20 pointer tests and full private pointer scenario pass. Version0.0.1-dev and diff checks pass.
+- Risks / next: Commit coherent custom profiles plus handoff. Broader MVP/Wayland/GPU/a11y/reboot/soak gates remain open. Preserve unrelated dirt and stash0; no user-host restart or active desktop input.

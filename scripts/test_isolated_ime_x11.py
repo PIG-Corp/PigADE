@@ -145,6 +145,56 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('XTestFakeButtonEvent(dpy, 4, True, CurrentTime)', helper)
         self.assertIn('pointer_position(dpy, app, 640, 400)', helper)
 
+    def test_setup_fixture_reviews_and_runs_exact_custom_cli_argv_only_after_confirmation(self):
+        output = io.StringIO()
+        with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
+                mock.patch.object(IME.subprocess, 'run', side_effect=AssertionError('spawned')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(IME.main(['--fixture', 'setup']), 0)
+        plan = json.loads(output.getvalue())
+        self.assertIn('read-only launch review', plan['input']['setup'])
+        self.assertIn('Ctrl+Enter runs the exact argv once', plan['input']['setup'])
+
+        harness = SCRIPT.read_text()
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        stages = ('custom-open', 'custom-fields', 'custom-save', 'custom-select',
+                  'custom-review-enter', 'custom-review-cancel', 'custom-reopen-profiles',
+                  'custom-confirm')
+        for stage in stages:
+            self.assertIn(f'"{stage}"', helper)
+            self.assertIn(f"helper_call(config, '{stage}'", harness)
+        self.assertIn("helper_call(config, 'custom-fields', timeout=15)", harness)
+        custom_flow = harness.split('def run_custom_cli_profile_fixture(', 1)[1].split(
+            '\ndef run_context_fixture(', 1)[0]
+        self.assertIn("'args': ['--label', 'two words', '$(literal);']", custom_flow)
+        self.assertIn("not log.exists()", custom_flow)
+        self.assertIn("records == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}]", custom_flow)
+        self.assertIn("'CUSTOM_CLI_MARKER' in view_text(view)", custom_flow)
+        self.assertLess(custom_flow.index("helper_call(config, 'custom-review-enter')"),
+                        custom_flow.index("helper_call(config, 'custom-review-cancel')"))
+        self.assertLess(custom_flow.index("helper_call(config, 'custom-review-cancel')"),
+                        custom_flow.index("helper_call(config, 'custom-confirm')"))
+        self.assertIn("all(value is False for value in preview.get('capabilities', {}).values())",
+                      custom_flow)
+        self.assertIn('custom_ascii(dpy, "--label \\\"two words\\\" \'$(literal);\'")', helper)
+        self.assertIn("custom_tools.mkdir(mode=0o700, exist_ok=True)", harness)
+        self.assertIn("tools_info = custom_tools.lstat()", harness)
+        self.assertIn("os.O_EXCL |", harness)
+        self.assertIn("os.O_NOFOLLOW | os.O_CLOEXEC, 0o700", harness)
+        self.assertIn('original_journal_prefixes = fixture_journal_prefixes(', custom_flow)
+        self.assertIn('fixture_journal_prefixes_preserved(original_journal_prefixes)', custom_flow)
+        self.assertIn("'existing_journal_prefix_preserved': True", harness)
+        self.assertIn('config, report, app, save, session, focused, tab', harness)
+        self.assertIn('live_input_session in {key[0] for key in final_models}', custom_flow)
+        self.assertIn("view_text(final_models[(live_input_session,", custom_flow)
+
+    def test_journal_prefix_contract_allows_append_but_rejects_rewrite(self):
+        self.assertTrue(IME.journal_prefix_matches(b'old journal bytes',
+                                                   b'old journal bytes + resize record'))
+        self.assertFalse(IME.journal_prefix_matches(b'old journal bytes',
+                                                    b'new journal bytes'))
+        self.assertFalse(IME.journal_prefix_matches(b'', b'new journal bytes'))
+
     def test_private_host_rejection_reports_bounded_escaped_protocol_error(self):
         reader, writer = socket.socketpair()
         try:

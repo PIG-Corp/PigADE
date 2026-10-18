@@ -18,6 +18,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/agent_profile_roster.rs | Schema14 independent roster CAS for profile order/pins; exact current membership, migration backup, atomic create/delete maintenance and no launch/placement side effects |
 | crates/app/src/profile_roster.rs | Pure pinned-first projection, partition moves, validated mutation payload and stable selected-profile identity; absent capability preserves old-host order |
 | crates/app/src/profile_flow.rs, profile_commands.rs, profile_ui.rs | Native profile editor/library with optional model/effort, exact dialog/request receipts, retained post-save edits, explicit review and unchanged live sessions |
+| crates/storage/src/custom_command.rs; session-host/src/prepared.rs | Bounded exact executable/argv settings, canonical identity freeze and generic one-shot launch with no probe/context/resume; additive custom_cli_schema capability |
+| crates/app/src/custom_cli.rs, custom_launch_ui.rs | Bounded shell-free argument lexer/formatter and readonly custom-command confirmation; reusable profile drafts keep literal argv across edits |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run routes and exact-generation asynchronous Stop |

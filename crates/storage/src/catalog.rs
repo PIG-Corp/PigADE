@@ -214,6 +214,8 @@ pub struct LaunchSettings {
     pub deliver_context: bool,
     #[serde(default)]
     pub engine: EngineOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_command: Option<crate::CustomCommand>,
 }
 
 impl LaunchSettings {
@@ -224,7 +226,7 @@ impl LaunchSettings {
         ensure!(
             matches!(
                 self.provider.as_str(),
-                "shell" | "claude" | "codex" | "opencode"
+                "shell" | "claude" | "codex" | "opencode" | "custom"
             ),
             "unsupported template launch provider"
         );
@@ -232,6 +234,26 @@ impl LaunchSettings {
             ensure!(
                 self.engine.is_empty(),
                 "shell launch settings cannot contain engine options"
+            );
+        }
+        if self.provider == "custom" {
+            let command = self
+                .custom_command
+                .as_ref()
+                .context("custom provider requires a command")?;
+            command.validate()?;
+            ensure!(
+                !self.deliver_context,
+                "custom commands cannot receive context"
+            );
+            ensure!(
+                self.engine.is_empty(),
+                "custom commands cannot contain engine options"
+            );
+        } else {
+            ensure!(
+                self.custom_command.is_none(),
+                "builtin providers cannot carry a custom command"
             );
         }
         ensure!(
@@ -363,6 +385,9 @@ pub struct Catalog {
     /// Host-owned, immutable colored scrollback pages. No database migration.
     #[serde(default)]
     pub history_grid_schema: Option<u16>,
+    /// Generic custom CLI prepare/start support.
+    #[serde(default)]
+    pub custom_cli_schema: Option<u16>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabClose {
@@ -1416,6 +1441,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         engine_options_schema: Some(1),
         pane_tab_drop_schema: Some(1),
         history_grid_schema: Some(1),
+        custom_cli_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1448,6 +1474,7 @@ mod tests {
                 instructions: "Review the change".into(),
                 deliver_context: false,
                 engine: EngineOptions::default(),
+                custom_command: None,
             },
             revision,
         }
@@ -2122,6 +2149,7 @@ mod tests {
             instructions: String::new(),
             deliver_context: false,
             engine: EngineOptions::default(),
+            custom_command: None,
         })?;
         legacy.as_object_mut().unwrap().remove("engine");
         let decoded: LaunchSettings = serde_json::from_value(legacy)?;
@@ -2137,12 +2165,111 @@ mod tests {
             role: String::new(),
             instructions: String::new(),
             deliver_context: false,
+            custom_command: None,
             engine: EngineOptions {
                 model: Some("model".into()),
                 reasoning_effort: None,
             },
         };
         assert!(shell.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_command_settings_are_exact_bounded_and_provider_exclusive() -> Result<()> {
+        let command = crate::CustomCommand {
+            executable: "/usr/local/bin/custom cli".into(),
+            args: vec!["two words".into(), "line\nargument".into(), String::new()],
+        };
+        command.validate()?;
+        let settings = LaunchSettings {
+            provider: "custom".into(),
+            role: "metadata role".into(),
+            instructions: "metadata instructions".into(),
+            deliver_context: false,
+            engine: EngineOptions::default(),
+            custom_command: Some(command.clone()),
+        };
+        settings.validate()?;
+        crate::validate_agent_profile_settings(&settings)?;
+        let directory = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("custom-profile.sqlite"))?;
+        let id = Uuid::new_v4();
+        let saved = store.apply_catalog(CatalogBatch {
+            agent_profiles: vec![CatalogWrite {
+                value: AgentProfile {
+                    id,
+                    name: "Custom CLI".into(),
+                    settings: settings.clone(),
+                    revision: 0,
+                },
+                expected_revision: None,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(saved.agent_profiles.unwrap()[0].settings, settings);
+        drop(store);
+        let store = MetadataStore::open(directory.path().join("custom-profile.sqlite"))?;
+        assert_eq!(store.catalog()?.agent_profiles.unwrap()[0].id, id);
+        assert!(
+            LaunchSettings {
+                deliver_context: true,
+                ..settings.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LaunchSettings {
+                engine: EngineOptions {
+                    model: Some("m".into()),
+                    reasoning_effort: None
+                },
+                ..settings.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LaunchSettings {
+                provider: "codex".into(),
+                ..settings.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LaunchSettings {
+                custom_command: None,
+                ..settings
+            }
+            .validate()
+            .is_err()
+        );
+        for invalid in [
+            crate::CustomCommand {
+                executable: "relative".into(),
+                args: vec![],
+            },
+            crate::CustomCommand {
+                executable: "/bin/a\nb".into(),
+                args: vec![],
+            },
+            crate::CustomCommand {
+                executable: "/bin/custom".into(),
+                args: vec!["bad\0arg".into()],
+            },
+            crate::CustomCommand {
+                executable: "/bin/custom".into(),
+                args: vec!["x".into(); 65],
+            },
+            crate::CustomCommand {
+                executable: "/bin/custom".into(),
+                args: vec!["x".repeat(16 * 1024 + 1)],
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
         Ok(())
     }
 
@@ -2156,6 +2283,7 @@ mod tests {
             role: "reviewer".into(),
             instructions: "Review the implementation".into(),
             deliver_context: true,
+            custom_command: None,
             engine: EngineOptions {
                 model: Some("gpt-5.5-codex".into()),
                 reasoning_effort: Some("high".into()),
@@ -2241,6 +2369,7 @@ mod tests {
                 instructions: String::new(),
                 deliver_context: false,
                 engine: EngineOptions::default(),
+                custom_command: None,
             },
             LaunchSettings {
                 provider: "shell".into(),
@@ -2248,6 +2377,7 @@ mod tests {
                 instructions: String::new(),
                 deliver_context: false,
                 engine: EngineOptions::default(),
+                custom_command: None,
             },
             LaunchSettings {
                 provider: "claude".into(),
@@ -2255,6 +2385,7 @@ mod tests {
                 instructions: "x".repeat(64 * 1024 + 1),
                 deliver_context: false,
                 engine: EngineOptions::default(),
+                custom_command: None,
             },
             LaunchSettings {
                 provider: "opencode".into(),
@@ -2262,6 +2393,7 @@ mod tests {
                 instructions: String::new(),
                 deliver_context: false,
                 engine: EngineOptions::default(),
+                custom_command: None,
             },
         ] {
             assert!(invalid.validate().is_err());
@@ -2293,6 +2425,7 @@ mod tests {
                             instructions: String::new(),
                             deliver_context: false,
                             engine: EngineOptions::default(),
+                            custom_command: None,
                         };
                         2
                     ]),

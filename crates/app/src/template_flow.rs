@@ -85,6 +85,7 @@ pub(crate) fn default_settings(provider: &str) -> LaunchSettings {
         instructions: String::new(),
         deliver_context: false,
         engine: Default::default(),
+        custom_command: None,
     }
 }
 

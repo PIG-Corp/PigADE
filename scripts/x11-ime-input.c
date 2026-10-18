@@ -168,6 +168,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
         strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
+        strcmp(a.stage, "custom-open") && strcmp(a.stage, "custom-fields") &&
+        strcmp(a.stage, "custom-save") && strcmp(a.stage, "custom-select") &&
+        strcmp(a.stage, "custom-reopen-profiles") &&
+        strcmp(a.stage, "custom-review-enter") && strcmp(a.stage, "custom-review-cancel") &&
+        strcmp(a.stage, "custom-confirm") &&
         strcmp(a.stage, "setup-compact") && strcmp(a.stage, "setup-wide") &&
         strcmp(a.stage, "setup-split-right") && strcmp(a.stage, "setup-split-down") &&
         strcmp(a.stage, "setup-close") && strcmp(a.stage, "setup-focus-left") &&
@@ -437,6 +442,32 @@ static void modified_key(Display *dpy, KeySym modifier, KeySym sym) {
     if (!XTestFakeKeyEvent(dpy, code, False, CurrentTime))
         fail("private modifier release failed");
     XSync(dpy, False);
+}
+
+static void custom_ascii(Display *dpy, const char *text) {
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+        KeySym sym = NoSymbol;
+        int shifted = 0;
+        if (*p >= 'a' && *p <= 'z') sym = (KeySym)*p;
+        else if (*p >= 'A' && *p <= 'Z') { sym = (KeySym)(*p - 'A' + 'a'); shifted = 1; }
+        else if (*p >= '0' && *p <= '9') sym = (KeySym)*p;
+        else switch (*p) {
+            case ' ': sym = XK_space; break;
+            case '-': sym = XK_minus; break;
+            case '_': sym = XK_minus; shifted = 1; break;
+            case '/': sym = XK_slash; break;
+            case '.': sym = XK_period; break;
+            case '"': sym = XK_apostrophe; shifted = 1; break;
+            case '\'': sym = XK_apostrophe; break;
+            case '$': sym = XK_4; shifted = 1; break;
+            case '(': sym = XK_9; shifted = 1; break;
+            case ')': sym = XK_0; shifted = 1; break;
+            case ';': sym = XK_semicolon; break;
+            default: fail("fixed custom-profile ASCII contains an unsupported character");
+        }
+        if (shifted) modified_key(dpy, XK_Shift_L, sym);
+        else key(dpy, sym);
+    }
 }
 
 static void context_open_sequence(Display *dpy) {
@@ -1701,6 +1732,42 @@ int main(int argc, char **argv) {
             setup_click(dpy, app_window, 1108, 57);
         } else if (!strcmp(a.stage, "setup-codex")) {
             setup_click(dpy, app_window, 490, 177);
+        } else if (!strcmp(a.stage, "custom-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_c, XK_u, XK_s, XK_t, XK_o, XK_m, XK_space,
+                XK_c, XK_l, XK_i };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "custom-fields")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            custom_ascii(dpy, "LiteralFixture");
+            key(dpy, XK_Tab);
+            custom_ascii(dpy, "/artifacts/tools/custom-cli");
+            key(dpy, XK_Tab);
+            custom_ascii(dpy, "--label \"two words\" '$(literal);'");
+        } else if (!strcmp(a.stage, "custom-save")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "custom-select")) {
+            key(dpy, XK_Down);
+            key(dpy, XK_Return);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&settle, NULL);
+        } else if (!strcmp(a.stage, "custom-reopen-profiles")) {
+            setup_prefix(dpy, XK_p, 0);
+            const KeySym query[] = { XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_s };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&settle, NULL);
+            key(dpy, XK_Return);
+            nanosleep(&settle, NULL);
+        } else if (!strcmp(a.stage, "custom-review-enter")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "custom-review-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "custom-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "setup-compact")) {
             XResizeWindow(dpy, app_window, 675, 734); XSync(dpy,False);
         } else if (!strcmp(a.stage, "setup-wide")) {

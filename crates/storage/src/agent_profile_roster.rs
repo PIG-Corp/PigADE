@@ -210,6 +210,7 @@ mod tests {
                             instructions: String::new(),
                             deliver_context: false,
                             engine: Default::default(),
+                            custom_command: None,
                         },
                     },
                     expected_revision: None,

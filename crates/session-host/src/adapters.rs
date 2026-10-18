@@ -142,6 +142,16 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
     }
 }
 
+/// Generic custom executables have no verified adapter or transport. In
+/// particular, this deliberately does not inspect the binary's version.
+pub(crate) fn custom_info(executable: &Path) -> AdapterInfo {
+    generic_info(
+        "custom",
+        "custom".to_owned(),
+        &format!("Custom executable: {}", executable.display()),
+    )
+}
+
 fn supported_transport(provider: &str, version: &str) -> Option<(&'static str, &'static str)> {
     match (provider, version) {
         ("claude", "2.1.259") => Some((

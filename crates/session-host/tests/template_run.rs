@@ -226,6 +226,7 @@ fn run_freezes_slots_then_advances_once_and_commits_template_with_undo() -> Resu
             role: String::new(),
             instructions: String::new(),
             deliver_context: false,
+            custom_command: None,
         })
         .collect::<Vec<_>>();
     let added = exchange(
@@ -668,6 +669,7 @@ fn pane_directory_rename_search_and_cross_workspace_activation_are_durable() -> 
     let launch = |tab, role: &str| Command::PrepareLaunch {
         request: pigade_session_host::PrepareRequest {
             engine: Default::default(),
+            custom_command: None,
             tab,
             provider: "codex".into(),
             side: pigade_layout::Direction::Right,

@@ -26,6 +26,8 @@ pub struct PrepareRequest {
     pub deliver_context: bool,
     #[serde(default)]
     pub engine: pigade_storage::EngineOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_command: Option<pigade_storage::CustomCommand>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +65,8 @@ pub struct LaunchPreview {
     pub profile: Option<ProfileSource>,
     #[serde(default)]
     pub engine: pigade_storage::EngineOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_command: Option<pigade_storage::CustomCommand>,
 }
 
 /// Immutable provenance; later library edits do not alter this launch.
@@ -160,6 +164,7 @@ pub(crate) fn prepare_profile(
             memory_selection: None,
             deliver_context: saved.settings.deliver_context,
             engine: saved.settings.engine.clone(),
+            custom_command: saved.settings.custom_command.clone(),
         };
         let mut plan = build_plan(host, &catalog, request)?;
         plan.preview.profile = Some(ProfileSource {
@@ -197,9 +202,54 @@ pub(crate) fn build_plan(
         workspace.status == WorkspaceStatus::Ready && workspace.cwd.is_dir(),
         "workspace is not ready"
     );
-    let executable = panel_launch::resolve_provider(&request.provider)?;
+    if request.provider == "custom" {
+        ensure!(
+            !request.deliver_context,
+            "custom commands cannot receive context"
+        );
+        ensure!(
+            !request.include_memory && request.memory_selection.is_none(),
+            "custom commands cannot include memory"
+        );
+        ensure!(
+            request.engine.is_empty(),
+            "custom commands cannot contain engine options"
+        );
+        request
+            .custom_command
+            .as_ref()
+            .context("custom provider requires a command")?
+            .validate()?;
+    } else {
+        ensure!(
+            request.custom_command.is_none(),
+            "builtin providers cannot carry a custom command"
+        );
+    }
+    let executable = if request.provider == "custom" {
+        let requested = Path::new(&request.custom_command.as_ref().unwrap().executable);
+        panel_launch::resolve_executable(requested)
+            .context("custom executable is unavailable or not executable")?
+    } else {
+        panel_launch::resolve_provider(&request.provider)?
+    };
     let identity = binary_identity(&executable)?;
-    let info = adapters::inspect(&request.provider, &executable)?;
+    let canonical_custom_command = if request.provider == "custom" {
+        Some(pigade_storage::CustomCommand {
+            executable: executable
+                .to_str()
+                .context("custom executable path is not UTF-8")?
+                .to_owned(),
+            args: request.custom_command.as_ref().unwrap().args.clone(),
+        })
+    } else {
+        None
+    };
+    let info = if request.provider == "custom" {
+        adapters::custom_info(&executable)
+    } else {
+        adapters::inspect(&request.provider, &executable)?
+    };
     ensure!(
         identity == binary_identity(&executable)?,
         "CLI changed during inspection; review again"
@@ -227,10 +277,22 @@ pub(crate) fn build_plan(
     let model =
         LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(&catalog.layout.json)?)?;
     model.preview(placement.clone())?;
-    let engine_args = adapters::engine_arguments(&info, &request.engine);
+    let is_custom = request.provider == "custom";
+    let engine_args = if is_custom {
+        Ok(Vec::new())
+    } else {
+        adapters::engine_arguments(&info, &request.engine)
+    };
     let mut unavailable_reason = engine_args.as_ref().err().map(ToString::to_string);
-    let mut arguments = (engine_args.unwrap_or_default(), Default::default());
-    let needs_transport = request.deliver_context && !context.text.is_empty();
+    let mut arguments = if is_custom {
+        (
+            request.custom_command.as_ref().unwrap().args.clone(),
+            Default::default(),
+        )
+    } else {
+        (engine_args.unwrap_or_default(), Default::default())
+    };
+    let needs_transport = !is_custom && request.deliver_context && !context.text.is_empty();
     if needs_transport {
         if info.capabilities.startup_context {
             match adapters::context_arguments(&info, &context.text) {
@@ -250,6 +312,9 @@ pub(crate) fn build_plan(
     } else {
         Vec::new()
     };
+    if let Some(command) = &canonical_custom_command {
+        warnings.push(format!("Custom command uses {} with {} explicit arguments; no provider-specific capabilities or context transport are enabled.", command.executable, command.args.len()));
+    }
     if needs_transport && request.provider == "codex" && unavailable_reason.is_none() {
         warnings.push("Для этого запуска значение developer_instructions задаётся сохранённым снимком. Пользовательские файлы конфигурации не меняются.".into());
     }
@@ -287,6 +352,7 @@ pub(crate) fn build_plan(
         resume: None,
         profile: None,
         engine: request.engine,
+        custom_command: canonical_custom_command,
     };
     Ok(StoredPlan {
         requested_revision: preview.context.id,
@@ -829,6 +895,35 @@ fn validate_plan(plan: &StoredPlan) -> Result<()> {
         "saved placement differs from reviewed destination"
     );
     plan.preview.engine.validate()?;
+    if plan.preview.provider == "custom" {
+        let command = plan
+            .preview
+            .custom_command
+            .as_ref()
+            .context("custom launch command is missing")?;
+        command.validate()?;
+        ensure!(
+            Path::new(&command.executable) == plan.launch.executable
+                && plan.preview.executable.as_ref() == Some(&plan.launch.executable)
+                && command.args == plan.launch.args
+                && plan.launch.env.is_empty()
+                && !plan.preview.deliver_context
+                && !plan.preview.include_memory
+                && plan.preview.engine.is_empty()
+                && plan.preview.cli_version == "custom"
+                && plan.preview.adapter_version == 1
+                && plan.preview.delivery_method == "none"
+                && plan.preview.resume.is_none()
+                && plan.preview.capabilities
+                    == adapters::custom_info(&plan.launch.executable).capabilities,
+            "saved custom command differs from its reviewed launch"
+        );
+    } else {
+        ensure!(
+            plan.preview.custom_command.is_none(),
+            "builtin launch contains a custom command"
+        );
+    }
     let info = adapters::AdapterInfo {
         provider: plan.preview.provider.clone(),
         cli_version: plan.preview.cli_version.clone(),
@@ -855,6 +950,13 @@ fn validate_plan(plan: &StoredPlan) -> Result<()> {
             (plan.preview.deliver_context && !plan.preview.context.text.is_empty())
                 .then_some(plan.preview.context.text.as_str()),
         )?
+    } else if plan.preview.provider == "custom" {
+        let command = plan
+            .preview
+            .custom_command
+            .as_ref()
+            .context("custom launch command is missing")?;
+        (command.args.clone(), Default::default())
     } else {
         if !plan.preview.can_launch {
             return Ok(());

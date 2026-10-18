@@ -1738,6 +1738,7 @@ mod tests {
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
             history_grid_schema: Some(1),
+            custom_cli_schema: Some(1),
         };
         let target = Target::selected(&catalog).unwrap();
         let dialog = Uuid::new_v4();

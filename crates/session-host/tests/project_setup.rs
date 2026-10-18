@@ -128,6 +128,7 @@ fn profile_roster_edits_are_atomic_metadata_and_survive_host_restart() -> Result
                                 instructions: "Inspect changes".into(),
                                 deliver_context: false,
                                 engine: Default::default(),
+                                custom_command: None,
                             },
                         },
                         expected_revision: None,
