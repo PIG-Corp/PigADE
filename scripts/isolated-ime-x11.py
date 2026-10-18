@@ -1533,6 +1533,171 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     # Capture settling is not an input-to-present measurement.
     time.sleep(1.25)
     helper_call(config, 'capture', '/artifacts/catalog-hidden-stop-complete.ppm')
+    helper_call(config, 'catalog-stop-cancel')
+
+    git_catalog, git_layout = catalog_layout()
+    git_selection = git_catalog.get('selection')
+    workspace_id = git_selection.get('workspace_id') if isinstance(git_selection, dict) else None
+    git_workspace = next((item for item in git_catalog.get('workspaces', [])
+                          if item.get('id') == workspace_id), None)
+    git_project = next((item for item in git_catalog.get('projects', [])
+                        if git_workspace and item.get('id') == git_workspace.get('project_id')), None)
+    require(git_workspace is not None and git_project is not None and
+            git_workspace.get('status') == 'ready' and
+            git_workspace.get('mode') == 'shared_checkout' and
+            git_workspace.get('cwd') == git_project.get('canonical_path') and
+            git_layout.get('root') == stop_tree,
+            'Git fixture has no selected ready shared-checkout workspace')
+    git_repo = Path(git_workspace['cwd']).resolve(strict=True)
+    private_home = Path('/home/pigade').resolve(strict=True)
+    expected_git_repo = (private_home / 'demo').resolve(strict=True)
+    require(mount_filesystem_type('/home') == 'tmpfs' and
+            private_home == Path('/home/pigade') and git_repo == expected_git_repo and
+            git_repo.parent == private_home and git_repo.is_dir(),
+            'Git fixture workspace is outside the exact private HOME tmpfs project path')
+    git_common_dir = Path(git_project['git_common_dir']).resolve(strict=True)
+    require(git_common_dir == (git_repo / '.git').resolve(strict=True),
+            'Git fixture project common directory does not match its private workspace')
+    git_env = {
+        'PATH': '/usr/bin:/bin', 'HOME': '/artifacts/git-fixture-home',
+        'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
+        'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+        'GIT_OPTIONAL_LOCKS': '0',
+    }
+    Path(git_env['HOME']).mkdir(mode=0o700)
+
+    def private_git(arguments):
+        result = subprocess.run(
+            ['/usr/bin/git', '-c', 'user.name=PigADE fixture',
+             '-c', 'user.email=fixture@localhost', '-c', 'commit.gpgsign=false',
+             '-c', 'core.hooksPath=/dev/null', '-C', str(git_repo), *arguments],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=False, timeout=5, check=False, env=git_env)
+        require(len(result.stdout) <= 8192 and len(result.stderr) <= 8192,
+                'private Git seed command exceeded its output bound')
+        require(result.returncode == 0,
+                'private Git seed command failed: ' + result.stderr[:512].decode('utf-8', 'replace'))
+        return result.stdout
+
+    top_level = private_git(['rev-parse', '--show-toplevel']).decode('utf-8').strip()
+    common_dir = private_git(['rev-parse', '--git-common-dir']).decode('utf-8').strip()
+    common_path = Path(common_dir)
+    if not common_path.is_absolute():
+        common_path = git_repo / common_path
+    branch = private_git(['branch', '--show-current']).decode('utf-8').strip()
+    initial_status = private_git(['status', '--porcelain=v2', '-z', '--untracked-files=all'])
+    common_path = Path(common_dir)
+    if not common_path.is_absolute():
+        common_path = git_repo / common_path
+    require(Path(top_level).resolve(strict=True) == git_repo and
+            common_path.resolve(strict=True) == git_common_dir and branch == 'main' and
+            not any(row and not row.startswith(b'# ') for row in initial_status.split(b'\0')) and
+            sorted(item.name for item in git_repo.iterdir()) == ['.git'],
+            'private workspace Git repository was not an empty initialized main-branch repo')
+    (git_repo / 'tracked.txt').write_text('base revision\n', encoding='utf-8')
+    private_git(['add', '--', 'tracked.txt'])
+    private_git(['commit', '--quiet', '--no-gpg-sign', '-m', 'private fixture base'])
+    (git_repo / 'staged-only.txt').write_text('staged fixture content\n', encoding='utf-8')
+    private_git(['add', '--', 'staged-only.txt'])
+    (git_repo / 'tracked.txt').write_text('unstaged fixture edit\n', encoding='utf-8')
+    untracked_name = 'untracked space\nline.txt'
+    untracked_file = git_repo / untracked_name
+    untracked_file.write_text('untracked fixture content\n', encoding='utf-8')
+
+    git_process_state = process_state_snapshot()
+    git_generation_ids = fixture_generations()
+    git_tree = json.loads(json.dumps(git_layout.get('root')))
+    git_pane_labels = sorted((item['session'], item['name'], item['revision'])
+                             for item in pane_labels(git_catalog))
+
+    def require_git_fixture_invariants(message):
+        current_catalog, current_layout = catalog_layout()
+        current_labels = sorted((item['session'], item['name'], item['revision'])
+                                for item in pane_labels(current_catalog))
+        require(process_state_snapshot() == git_process_state and
+                fixture_generations() == git_generation_ids and
+                current_catalog.get('selection') == git_selection and
+                current_layout.get('root') == git_tree and
+                current_labels == git_pane_labels,
+                message)
+
+    def request_git_snapshot():
+        response = host_request({'command': 'workspace_git_snapshot',
+                                 'workspace': workspace_id,
+                                 'expected_revision': git_workspace['revision']}, timeout=10)
+        snapshot = response.get('workspace_git_snapshot')
+        require(isinstance(snapshot, dict), 'host omitted the bounded workspace Git snapshot')
+        entries = snapshot.get('entries')
+        require(snapshot.get('workspace_id') == workspace_id and
+                snapshot.get('workspace_revision') == git_workspace['revision'] and
+                snapshot.get('project_id') == git_project['id'] and
+                Path(snapshot.get('cwd', '')).resolve(strict=True) == git_repo and
+                snapshot.get('branch') == 'main' and isinstance(snapshot.get('head'), str) and
+                snapshot.get('head') and
+                re.fullmatch(r'[0-9a-f]{40,64}', snapshot['head']) is not None and
+                snapshot.get('detached') is False and snapshot.get('truncated') is False and
+                isinstance(entries, list) and len(entries) <= 128 and all(
+                    isinstance(entry, dict) and isinstance(entry.get('path'), str) and
+                    len(entry['path'].encode('utf-8')) <= 4096 and
+                    entry.get('index_status') in '.MADRCUT?!' and
+                    entry.get('worktree_status') in '.MADRCUT?!' and
+                    type(entry.get('untracked')) is bool and
+                    type(entry.get('unmerged')) is bool for entry in entries),
+                'workspace Git snapshot identity or branch metadata is invalid')
+        return snapshot
+
+    report['stage'] = 'catalog-git-open'
+    save()
+    helper_call(config, 'catalog-git-open')
+    helper_call(config, 'catalog-git-query')
+    time.sleep(.25)
+    git_before_refresh = request_git_snapshot()
+    git_entries = {entry.get('path'): entry for entry in git_before_refresh.get('entries', [])
+                   if isinstance(entry, dict)}
+    staged_entry = git_entries.get('staged-only.txt', {})
+    modified_entry = git_entries.get('tracked.txt', {})
+    untracked_entry = git_entries.get(untracked_name, {})
+    require(staged_entry.get('index_status') == 'A' and
+            staged_entry.get('worktree_status') == '.' and
+            staged_entry.get('untracked') is False and
+            modified_entry.get('index_status') == '.' and
+            modified_entry.get('worktree_status') == 'M' and
+            modified_entry.get('untracked') is False and
+            untracked_entry.get('index_status') == '?' and
+            untracked_entry.get('worktree_status') == '?' and
+            untracked_entry.get('untracked') is True and
+            all(entry.get('unmerged') is False for entry in git_entries.values()) and
+            len(git_entries) == 3,
+            'workspace Git snapshot did not distinguish staged, unstaged, and newline untracked paths')
+    require_git_fixture_invariants(
+        'opening the workspace Git dialog changed process states, pane aliases, selection, or layout')
+    helper_call(config, 'capture', '/artifacts/catalog-git-snapshot.ppm')
+
+    report['stage'] = 'catalog-git-refresh'
+    save()
+    untracked_file.unlink()
+    helper_call(config, 'catalog-git-refresh')
+    time.sleep(.25)
+    git_after_refresh = request_git_snapshot()
+    refreshed_entries = {entry.get('path'): entry for entry in git_after_refresh.get('entries', [])
+                         if isinstance(entry, dict)}
+    require(git_after_refresh.get('head') == git_before_refresh.get('head') and
+            'staged-only.txt' in refreshed_entries and 'tracked.txt' in refreshed_entries and
+            untracked_name not in refreshed_entries and len(refreshed_entries) == 2 and
+            refreshed_entries['staged-only.txt'].get('index_status') == 'A' and
+            refreshed_entries['tracked.txt'].get('worktree_status') == 'M' and
+            all(entry.get('unmerged') is False for entry in refreshed_entries.values()),
+            'workspace Git refresh did not reflect removal of the private untracked path')
+    require_git_fixture_invariants(
+        'refreshing workspace Git changed process states, pane aliases, selection, or layout')
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/catalog-git-refreshed.ppm')
+
+    report['stage'] = 'catalog-git-close'
+    save()
+    helper_call(config, 'catalog-git-close')
+    require_git_fixture_invariants(
+        'closing the workspace Git dialog changed process states, pane aliases, selection, or layout')
 
     report['catalog'] = {
         'saved_geometry_schema': template['geometry']['schema'],
@@ -1550,13 +1715,35 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'hidden_sessions_stop_confirmation_preserved_bootstrap_until_confirm': True,
         'hidden_sessions_stop_exited_only_unplaced_bootstrap': True,
         'other_four_process_states_and_pane_tree_preserved_after_hidden_stop': True,
+        'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
+        'workspace_git_refresh_reflects_private_file_removal': True,
+        'workspace_git_ui_preserved_all_five_generation_states_aliases_selection_and_tree': True,
+        'workspace_git': {
+            'workspace_revision': git_workspace['revision'],
+            'branch': git_before_refresh['branch'],
+            'head': git_before_refresh['head'],
+            'before_refresh': [
+                {'path': entry['path'], 'index_status': entry['index_status'],
+                 'worktree_status': entry['worktree_status'], 'untracked': entry['untracked'],
+                 'unmerged': entry['unmerged']}
+                for entry in sorted(git_before_refresh['entries'], key=lambda item: item['path'])],
+            'after_refresh': [
+                {'path': entry['path'], 'index_status': entry['index_status'],
+                 'worktree_status': entry['worktree_status'], 'untracked': entry['untracked'],
+                 'unmerged': entry['unmerged']}
+                for entry in sorted(git_after_refresh['entries'], key=lambda item: item['path'])],
+            'refresh_invoked_by_fixed_keyboard_stage': 'catalog-git-refresh',
+        },
         'delete_removed_template': True,
         'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
                      'catalog-library-reopened.ppm', 'catalog-library-deleted.ppm',
                      'catalog-pane-rename-dialog.ppm', 'catalog-pane-rename-input.ppm',
                      'catalog-pane-renamed.ppm', 'catalog-pane-palette.ppm',
                      'catalog-stop-review.ppm', 'catalog-stop-complete.ppm',
-                     'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm'],
+                     'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm',
+                     'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm',
+                     'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
+                     'catalog-git-refreshed.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
     save()
@@ -1850,8 +2037,11 @@ def run_setup_fixture(config, report, control, app, env, save):
             return None
         project, workspace, tab = catalog['projects'][0], catalog['workspaces'][0], catalog['tabs'][0]
         selection = catalog['selection']
+        expected_project_path = Path('/home/pigade/demo')
         if (project['name'] != 'demo' or Path(project['canonical_path']).name != 'demo' or
+                project['canonical_path'] != str(expected_project_path) or
                 project['canonical_path'] != workspace['cwd'] or
+                project['git_common_dir'] != str(expected_project_path / '.git') or
                 workspace['task'] != 'Основной' or workspace['mode'] != 'shared_checkout' or
                 workspace['status'] != 'ready' or tab['name'] != 'Development' or
                 selection.get('project_id') != project['id'] or
@@ -2255,7 +2445,7 @@ def bwrap_command(args, config_path, helper):
         '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin',
         '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib', '/lib64',
         '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/run',
-        '--dir', '/home', '--dir', '/etc', '--dir', '/pigade', '--dir', '/pigade/platform-sdk',
+        '--tmpfs', '/home', '--dir', '/etc', '--dir', '/pigade', '--dir', '/pigade/platform-sdk',
         '--ro-bind', '/etc/fonts', '/etc/fonts',
         '--ro-bind', '/etc/ld.so.cache', '/etc/ld.so.cache',
         # Bind the resolved directory, not /usr/share/X11/xkb's symlink.
@@ -2686,6 +2876,20 @@ def run_bwrap(command: list[str], output: Path) -> int:
         drain.join(timeout=2)
 
 
+def mount_filesystem_type(mountpoint: str) -> str | None:
+    matches = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        left, separator, right = line.partition(' - ')
+        if not separator:
+            continue
+        fields = left.split()
+        filesystem = right.split()
+        if len(fields) > 4 and fields[4] == mountpoint and filesystem:
+            matches.append(filesystem[0])
+    require(len(matches) <= 1, 'private mountpoint has ambiguous filesystem identity')
+    return matches[0] if matches else None
+
+
 def inside_run() -> int:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     artifacts = Path('/artifacts')
@@ -2696,7 +2900,11 @@ def inside_run() -> int:
     try:
         config = json.loads((artifacts / 'config.json').read_text())
         runtime = Path('/run/pigade-test'); runtime.mkdir(mode=0o700)
+        require(mount_filesystem_type('/home') == 'tmpfs',
+                'private HOME root is not an isolated tmpfs mount')
         home = Path('/home/pigade'); home.mkdir(mode=0o700)
+        require(not (home / 'Projects').exists() and not (home / 'demo').exists(),
+                'private HOME project default is not empty at fixture startup')
         for relative in ('.config/fcitx5', '.cache', '.local/share', '.local/state'):
             (home / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
         namespaces = {name: os.readlink('/proc/self/ns/' + name) for name in NAMESPACES}
@@ -2719,6 +2927,10 @@ def inside_run() -> int:
                 'private runtime permissions/ownership are wrong')
         report['preflight'] = {'namespaces': namespaces, 'uid': os.getuid(),
                                'host_display_bus_devices_absent': True,
+                               'private_home_tmpfs': True,
+                               'private_home_path': '/home/pigade',
+                               'project_parent_default': '/home/pigade',
+                               'private_home_projects_directory_absent': True,
                                'network_interfaces': sorted(netdev_names),
                                'non_loopback_routes': 0}
         report['stage'] = 'xvfb-start'
@@ -3076,7 +3288,8 @@ def outer_run(args) -> dict:
                   'catalog-pane-rename-input.ppm', 'catalog-pane-renamed.ppm',
                   'catalog-pane-palette.ppm', 'catalog-stop-review.ppm',
                   'catalog-stop-complete.ppm', 'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm',
-                  'catalog-hidden-stop-complete.ppm'] if args.fixture == 'catalog' else
+                  'catalog-hidden-stop-complete.ppm', 'catalog-git-query.ppm',
+                  'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
                   'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
@@ -3106,7 +3319,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, Escape resize rollback, private modifier selection and Alt+F check',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, held Ctrl+LMB cancel preview, Dwindle drop and layout undo',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, then stop hidden bootstrap through Sessions',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, and open/refresh private workspace Git',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3 with no task/auth, focused PTY, fixed private mouse-motion burst then fixed unsent prompt',

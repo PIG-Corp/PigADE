@@ -14,6 +14,7 @@ mod panel_launch;
 mod prepared;
 mod projects;
 mod template_run;
+mod workspace_git;
 pub use catalog::LayoutAction;
 pub use panel_directory::{PanelDirectory, PanelEntry};
 mod ipc_server;
@@ -52,6 +53,7 @@ pub use prepared::{LaunchPreview, PrepareRequest, ResumeSource};
 pub use template_run::{
     TemplateRunRequest, TemplateRunSlotView, TemplateRunSource, TemplateRunView,
 };
+pub use workspace_git::{WorkspaceGitEntry, WorkspaceGitSnapshot};
 pub const PROTOCOL: u32 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK: usize = 16 * 1024;
@@ -221,6 +223,10 @@ pub enum Command {
         task: String,
         worktree: bool,
     },
+    WorkspaceGitSnapshot {
+        workspace: Uuid,
+        expected_revision: u64,
+    },
     CatalogApply {
         batch: pigade_storage::CatalogBatch,
     },
@@ -323,6 +329,8 @@ pub struct Response {
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_directory: Option<PanelDirectory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -681,6 +689,7 @@ fn provider_response(
         template_run: None,
         template_runs: None,
         panel_directory: None,
+        workspace_git_snapshot: None,
     }
 }
 
@@ -1006,6 +1015,7 @@ impl Host {
                 template_run: None,
                 template_runs: None,
                 panel_directory: None,
+                workspace_git_snapshot: None,
             });
         }
         if matches!(
@@ -1053,6 +1063,7 @@ impl Host {
                 template_run: None,
                 template_runs: None,
                 panel_directory: None,
+                workspace_git_snapshot: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -1079,6 +1090,7 @@ impl Host {
                 template_run: None,
                 template_runs: None,
                 panel_directory: None,
+                workspace_git_snapshot: None,
             });
         }
         match &command {
@@ -1115,6 +1127,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: None,
+                    workspace_git_snapshot: None,
                 });
             }
             Command::SearchPanels { query, after } => {
@@ -1142,6 +1155,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: Some(directory),
+                    workspace_git_snapshot: None,
                 });
             }
             Command::ActivatePane {
@@ -1177,6 +1191,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: None,
+                    workspace_git_snapshot: None,
                 });
             }
             Command::Generations { session, before } => {
@@ -1203,6 +1218,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: None,
+                    workspace_git_snapshot: None,
                 });
             }
             Command::SelectGeneration {
@@ -1233,6 +1249,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: None,
+                    workspace_git_snapshot: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -1307,6 +1324,9 @@ impl Host {
         }
         let catalog = match command {
             Command::DetectProviders => unreachable!("provider request routed to worker"),
+            Command::WorkspaceGitSnapshot { .. } => {
+                unreachable!("workspace Git status request routed to worker")
+            }
             Command::Catalog => catalog::read_metadata(&self.metadata)?,
             Command::LaunchInTab {
                 tab,
@@ -1358,6 +1378,7 @@ impl Host {
                     template_run: None,
                     template_runs: None,
                     panel_directory: None,
+                    workspace_git_snapshot: None,
                 });
             }
         };
@@ -1383,6 +1404,7 @@ impl Host {
             template_run: None,
             template_runs: None,
             panel_directory: None,
+            workspace_git_snapshot: None,
         })
     }
     fn launch_response(
@@ -1413,6 +1435,7 @@ impl Host {
             template_run: None,
             template_runs: None,
             panel_directory: None,
+            workspace_git_snapshot: None,
         }
     }
     fn template_run_response(
@@ -1443,6 +1466,7 @@ impl Host {
             template_run,
             template_runs,
             panel_directory: None,
+            workspace_git_snapshot: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -2567,6 +2591,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     let jobs = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
+    let workspace_git_reader = workspace_git::Reader::new()?;
     let provider_detector = ProviderDetector::new()?;
     // Reclamation is optional derived-data maintenance. Never make the first
     // recovered frame wait for old cache removal. Per-cache leases also protect
@@ -2586,6 +2611,26 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     for job in jobs {
         if let Command::DetectProviders = job.request.command {
             provider_detector.submit(job.reply);
+            continue;
+        }
+        if let Command::WorkspaceGitSnapshot {
+            workspace,
+            expected_revision,
+        } = job.request.command
+        {
+            let target = host
+                .metadata
+                .catalog()
+                .and_then(|catalog| workspace_git::target(&catalog, workspace, expected_revision));
+            match target {
+                Ok(target) => workspace_git_reader.submit(target, job.reply),
+                Err(error) => {
+                    let _ = job.reply.try_send(workspace_git::response(
+                        None,
+                        Some(format!("workspace Git status unavailable: {error:#}")),
+                    ));
+                }
+            }
             continue;
         }
         if let Command::HistoryView { query } = job.request.command {
@@ -2630,6 +2675,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 template_run: None,
                 template_runs: None,
                 panel_directory: None,
+                workspace_git_snapshot: None,
             },
         };
         let _ = job.reply.try_send(response);

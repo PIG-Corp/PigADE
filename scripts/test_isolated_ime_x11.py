@@ -292,6 +292,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('rename/find a pane', plan['input']['catalog'])
         self.assertIn('exact-generation stop action', plan['input']['catalog'])
         self.assertIn('stop hidden bootstrap through Sessions', plan['input']['catalog'])
+        self.assertIn('open/refresh private workspace Git', plan['input']['catalog'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         for action in ('open-library', 'close-library', 'open-save-dialog', 'save-template',
@@ -306,6 +307,21 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('hidden_sessions_stop_exited_only_unplaced_bootstrap', source)
         self.assertIn('other_four_process_states_and_pane_tree_preserved_after_hidden_stop', source)
         self.assertIn('current_panes == process_sessions - {bootstrap_key[0]}', source)
+        self.assertIn('workspace_git_snapshot_covers_staged_unstaged_and_untracked', source)
+        self.assertIn('workspace_git_refresh_reflects_private_file_removal', source)
+        self.assertIn("'refresh_invoked_by_fixed_keyboard_stage': 'catalog-git-refresh'", source)
+        self.assertIn("'command': 'workspace_git_snapshot'", source)
+        self.assertIn("untracked_name = 'untracked space\\nline.txt'", source)
+        self.assertIn("mount_filesystem_type('/home') == 'tmpfs'", source)
+        self.assertIn("'--tmpfs', '/home'", source)
+        self.assertIn("'private_home_tmpfs': True", source)
+        self.assertIn("project['canonical_path'] != str(expected_project_path)", source)
+        self.assertIn("expected_git_repo = (private_home / 'demo').resolve(strict=True)", source)
+        self.assertIn("git_repo.parent == private_home", source)
+        hidden_stop_close = source.split("'/artifacts/catalog-hidden-stop-complete.ppm'", 1)[1].split(
+            "report['catalog'] =", 1)[0]
+        self.assertLess(hidden_stop_close.index("helper_call(config, 'catalog-stop-cancel')"),
+                        hidden_stop_close.index("helper_call(config, 'catalog-git-open')"))
         self.assertIn("label.get('name') == 'Review'", source)
         self.assertIn("'pane_labels'", source)
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
@@ -318,7 +334,8 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-stop-open', 'catalog-stop-action', 'catalog-stop-cancel',
                       'catalog-stop-confirm', 'catalog-sessions-open',
                       'catalog-sessions-action', 'catalog-hidden-stop-review',
-                      'catalog-hidden-stop-confirm'):
+                      'catalog-hidden-stop-confirm', 'catalog-git-open',
+                      'catalog-git-query', 'catalog-git-refresh', 'catalog-git-close'):
             self.assertIn(f'\"{stage}\"', helper)
         self.assertIn('modified_key(dpy, XK_Shift_L, XK_r)', helper)
         rename_action = helper.split('} else if (!strcmp(a.stage, "catalog-pane-rename-action")) {', 1)[1].split(
@@ -353,6 +370,18 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'/artifacts/catalog-hidden-stop-review.ppm'", source)
         self.assertIn("'/artifacts/catalog-hidden-stop-complete.ppm'", source)
         self.assertIn('!strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2"', helper)
+        git_query = helper.split('} else if (!strcmp(a.stage, "catalog-git-query")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-git-refresh")) {', 1)[0]
+        self.assertIn('XK_g, XK_i, XK_t', git_query)
+        self.assertIn('.tv_nsec = 400000000', git_query)
+        self.assertLess(git_query.index('nanosleep'), git_query.index('capture('))
+        self.assertLess(git_query.index('capture('), git_query.index('key(dpy, XK_Return)'))
+        git_close = helper.split('} else if (!strcmp(a.stage, "catalog-git-close")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "recipe-select-first")) {', 1)[0]
+        self.assertLess(git_close.index('key(dpy, XK_Tab)'), git_close.index('key(dpy, XK_Return)'))
+        for artifact in ('catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
+                         'catalog-git-refreshed.ppm'):
+            self.assertIn(artifact, source)
         self.assertIn("'stage'] = 'catalog-pane-rename-action'", source)
         self.assertIn("'stage'] = 'catalog-pane-rename-input'", source)
         self.assertIn("time.sleep(.25)\n    helper_call(config, 'capture', '/artifacts/catalog-pane-rename-dialog.ppm')", source)

@@ -3025,3 +3025,67 @@ Integrate explicit generation-bound Stop for selected and hidden CLI sessions, w
 - Files: crates/app/src/session_control.rs, crates/app/src/session_control_ui.rs, crates/app/src/main.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
 - Verification: App198 and harness30 tests pass; strict app Clippy, locked release build, format/diff and version checks pass. Private release stop-20261018-05 passes selected cancel/Stop and hidden Stop with exact generations, unchanged other processes/tree and inspected captures. Runs02-04 retained missing fixture close transition; corrected before05. Prior pointer-current01 covers hover/Dwindle with preserved processes.
 - Risks / next: Top-level Unix SIGHUP may leave descendants; history/degraded never prove exit and unknown ACK never retries Stop. Git snapshot backend is independently logged and awaiting app integration; full platform/MVP gates remain open. Preserve unrelated research and stress edits.
+
+## 2026-10-17T23:53:37+00:00 — layout_templates_luna
+
+Added the read-only workspace Git snapshot overlay with explicit snapshot/stale status, bounded path display, categorized status groups, and refresh/close controls only.
+
+- Files: crates/app/src/git_status_ui.rs
+- Verification: rustfmt --edition 2024 --check passed; git diff --no-index --check passed for the new module. No Cargo or native checks run.
+- Risks / next: Root owns module registration, DTO wiring, integration, compilation and verification.
+
+## 2026-10-17T23:54:41+00:00 — layout_templates_luna
+
+Corrected Git snapshot presentation for porcelain-v2 unchanged markers, status T, distinct staged/unstaged/untracked/conflict groups, safe unborn/unknown branch wording, and user-facing cwd-only metadata; added a grouping regression test.
+
+- Files: crates/app/src/git_status_ui.rs
+- Verification: rustfmt --edition 2024 --check passed and the untracked module passes git diff --no-index --check. Grouping test added but not run because root owns Cargo verification.
+- Risks / next: Root owns Cargo/integration. Keyboard Up/Down currently select the Refresh/Close footer rather than scroll the Git body; I reported this to root.
+
+## 2026-10-17T23:55:42+00:00 — catalog_flow_luna
+
+Bound workspace Git probes and prevent subprocess/output-reader leaks
+
+- Files: crates/session-host/src/workspace_git.rs
+- Verification: cargo fmt --package pigade-session-host; cargo test -p pigade-session-host workspace_git::tests -- --nocapture (9 passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check -- crates/session-host/src/workspace_git.rs WORKLOG.md
+- Risks / next: Root integrates host Git snapshot backend; no DTO changes.
+
+## 2026-10-17T23:57:04+00:00 — recipe_native_luna
+
+Extend catalog fixture with a private workspace Git status sheet, fixed refresh action, and state-preservation proof
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: All 30 isolated harness tests passed; both Python files passed py_compile; fixed X11 helper compiled to a fresh /tmp path; scoped git diff --check passed. Native fixture and Cargo were not run.
+- Risks / next: Root performs release-native catalog Git run, inspects palette/snapshot/refreshed captures, and reports any application or host integration issue
+
+## 2026-10-17T23:57:21+00:00 — catalog_flow_luna
+
+Exercise workspace Git snapshot IPC under a gated worker and preserve exact path terminators
+
+- Files: crates/session-host/src/workspace_git.rs, crates/session-host/tests/project_setup.rs
+- Verification: cargo fmt --package pigade-session-host; cargo test -p pigade-session-host workspace_git::tests -- --nocapture (10 passed); cargo test -p pigade-session-host --test project_setup workspace_git_snapshot_isolated_from_host_commands_and_read_only -- --exact --nocapture (passed); cargo clippy -p pigade-session-host --all-targets -- -D warnings; git diff --check -- owned files
+- Risks / next: Ready for root release-build/native UI integration.
+
+## 2026-10-17T23:57:37+00:00 — recipe_native_luna
+
+Add fixed-input private workspace Git dialog and native refresh coverage to the existing catalog fixture
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: All 30 isolated harness tests passed; both Python files passed py_compile; fixed helper compiled to a new /tmp output; scoped git diff --check passed. No Cargo or native UI execution.
+- Risks / next: Root owns release build and isolated catalog Git run; inspect palette, initial snapshot, and refreshed UI captures
+
+## 2026-10-18T00:00:36+00:00 — recipe_native_luna
+
+Constrain catalog Git fixture to the setup wizard’s exact project path on a verified private HOME tmpfs
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: All 30 isolated harness tests passed; Python syntax checks passed; fixed helper compile passed; scoped git diff --check passed. No native UI or Cargo execution.
+- Risks / next: Root may rerun the release-native catalog fixture; verify preflight reports private_home_tmpfs and the Git snapshot captures
+
+## 2026-10-18T00:02:51+00:00 — root
+
+Integrate native read-only workspace Git snapshots with independent bounded UI requests, exact workspace/dialog reply binding, grouped changes and keyboard scrolling.
+
+- Files: crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation_ui.rs, crates/app/src/protocol.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/projects.rs, crates/session-host/tests/project_setup.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md, docs/PROJECT_MAP.md
+- Verification: Fresh app203, host129 library and harness30 tests pass; agent real-host IPC test gates Git while List/Poll complete without catalog/index mutations. Strict workspace/app Clippy, formatting, version/diff checks and release builds pass. Private native git-release-20261018-02 passes open/three groups/native Refresh/removal/close with all five generation/PID states, aliases, selection and tree preserved; query/snapshot/refreshed captures inspected. Native01 failed before Git at fixture artifact-path assumption; corrected verified tmpfs HOME/exact demo guard and repo-relative common-dir resolution. Final app rebuild changes only group-count copy after captured02.
+- Risks / next: Request snapshots do not implement watchers or live dirty status; filesystem canonicalization has no hard syscall deadline, Git phases each share3s deadline. Non-UTF8 names display lossily with no file actions. Full Wayland/platform/accessibility/provider/performance/MVP gates remain open; preserve unrelated research/stress/quarantined patches and user host/CLI.

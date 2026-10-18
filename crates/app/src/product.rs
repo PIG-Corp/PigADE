@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 use super::{CanvasApp, chrome, protocol, text_edit::EditBuffer};
 
+#[path = "git_status_ui.rs"]
+mod git_status_ui;
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
 #[path = "session_control_ui.rs"]
@@ -27,6 +29,8 @@ const ROW_HEIGHT: f32 = 30.0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
     OpenControls,
+    OpenWorkspaceGit,
+    RefreshWorkspaceGit,
     SetCommandModifier(crate::controls::Modifier),
     AddProject,
     ToggleSidebar,
@@ -122,6 +126,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    WorkspaceGit,
     Controls,
     AddProject,
     CreateProject,
@@ -158,6 +163,7 @@ pub(super) enum DialogKind {
 impl DialogKind {
     fn title(self) -> &'static str {
         match self {
+            Self::WorkspaceGit => "Git воркспейса",
             Self::Controls => "Клавиша управления панелями",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
@@ -194,6 +200,7 @@ impl DialogKind {
 
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::WorkspaceGit => &[],
             Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
             Self::CreateProject => &["Название проекта", "Папка проекта"],
@@ -231,6 +238,7 @@ impl DialogKind {
 
     fn submit_label(self) -> &'static str {
         match self {
+            Self::WorkspaceGit => "Закрыть",
             Self::Controls => "Готово",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
@@ -309,6 +317,8 @@ pub(super) struct ProductUi {
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) git_sheet: Option<crate::workspace_git::GitSheet>,
+    pub(super) git_scroll: gpui::ScrollHandle,
     pub(super) stop_sheet: Option<crate::session_control::StopSheet>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
     pub(super) launch_phase: Option<String>,
@@ -453,6 +463,10 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Создать проект", ProductAction::CreateProject),
         ("Выбрать путь вручную…", ProductAction::OpenProjectPath),
         ("Новый воркспейс", ProductAction::CreateWorkspace),
+        (
+            "Git · ветка и изменения воркспейса",
+            ProductAction::OpenWorkspaceGit,
+        ),
         ("Добавить агента", ProductAction::OpenLauncher),
         ("Управление панелями", ProductAction::OpenPaneMenu),
         ("Переименовать панель", ProductAction::RenamePane),
@@ -883,6 +897,10 @@ impl ProductUi {
 
     pub(super) fn menu_entries(&self) -> Vec<(String, ProductAction)> {
         match self.dialog.as_ref().map(|dialog| dialog.kind) {
+            Some(DialogKind::WorkspaceGit) => vec![
+                ("Обновить".into(), ProductAction::RefreshWorkspaceGit),
+                ("Закрыть".into(), ProductAction::CloseDialog),
+            ],
             Some(DialogKind::Sessions) => self.session_menu_entries(),
             Some(DialogKind::StopSession) => self.stop_menu_entries(),
             Some(
@@ -1562,6 +1580,17 @@ impl ProductUi {
             .gap_1()
             .pr(px(8.));
         bar = bar
+            .child(self.action_control(
+                "workspace-git".into(),
+                "Git".into(),
+                ProductAction::OpenWorkspaceGit,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ))
             .child(self.action_control(
                 "open-agent-launcher".into(),
                 "Агент".into(),
@@ -2366,6 +2395,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(cx);
+        }
+        if dialog.kind == DialogKind::WorkspaceGit {
+            return self.git_overlay(cx);
         }
         if dialog.kind == DialogKind::Sessions {
             return self.sessions_overlay(cx);

@@ -121,6 +121,7 @@ fn error_response(
         template_run: None,
         template_runs: None,
         panel_directory: None,
+        workspace_git_snapshot: None,
     }
 }
 
@@ -204,6 +205,7 @@ fn process_connection(
                 template_run: None,
                 template_runs: None,
                 panel_directory: None,
+                workspace_git_snapshot: None,
             },
             Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
         };
@@ -283,6 +285,7 @@ mod tests {
             template_run: None,
             template_runs: None,
             panel_directory: None,
+            workspace_git_snapshot: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -451,6 +454,7 @@ mod tests {
             template_run: None,
             template_runs: None,
             panel_directory: None,
+            workspace_git_snapshot: None,
         })?;
         assert!(receive::<Response>(&mut command_client)?.error.is_none());
         command_worker.join().unwrap()?;

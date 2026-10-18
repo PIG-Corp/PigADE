@@ -13,6 +13,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run routes and exact-generation asynchronous Stop |
+| crates/session-host/src/workspace_git.rs | Dedicated bounded read-only Git snapshot worker, frozen workspace revision/identity, porcelain-v2/NUL parser and explicit truncation |
+| crates/app/src/workspace_git.rs, git_status_ui.rs | Independent read-only request lane, dialog/workspace-bound replies and grouped native snapshot with keyboard scroll/refresh |
 | crates/session-host/src/template_run.rs | Durable explicit template runs: freeze reviewed plans without launching, advance one CLI per command, reconcile existing plan/launch records without retry, and atomically commit final placement with completion |
 | crates/app/src/template_flow.rs, template_ui.rs, template_commands.rs | Four optional launch presets, per-slot configuration and context/count/cwd review; user-driven prepare/advance/history/cancel flow |
 | crates/session-host/src/panel_directory.rs | Bounded64-entry search pages over placed panes, matching alias, provider, frozen role/state and project/workspace/tab metadata without returning terminal frames |

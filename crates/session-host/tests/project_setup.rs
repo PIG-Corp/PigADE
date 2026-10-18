@@ -236,3 +236,135 @@ fn create_project_rejects_path_components_before_creating_anything() -> Result<(
     ensure!(!host.state().join("escape").exists());
     Ok(())
 }
+
+#[test]
+fn workspace_git_snapshot_isolated_from_host_commands_and_read_only() -> Result<()> {
+    let host = HostFixture::new()?;
+    let parent = host.state().join("snapshot-parent");
+    fs::create_dir(&parent)?;
+    let created = exchange(
+        &host.socket(),
+        Command::CreateProject {
+            parent,
+            name: "SnapshotRepo".into(),
+        },
+    )?;
+    let project = created
+        .catalog
+        .context("CreateProject catalog missing")?
+        .projects
+        .into_iter()
+        .next()
+        .context("created project missing")?;
+    let workspace_response = exchange(
+        &host.socket(),
+        Command::CreateWorkspace {
+            project: project.id,
+            task: "snapshot fixture".into(),
+            worktree: false,
+        },
+    )?;
+    let before = workspace_response
+        .catalog
+        .context("CreateWorkspace catalog missing")?;
+    let workspace = before
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.project_id == project.id)
+        .context("ready workspace missing")?;
+    ensure!(workspace.status == pigade_storage::WorkspaceStatus::Ready);
+    let expected_revision = workspace.revision;
+    let untracked = workspace.cwd.join("untracked snapshot.txt");
+    let untracked_contents = b"untracked\n";
+    fs::write(&untracked, untracked_contents)?;
+    let index_path = workspace.cwd.join(".git/index");
+    let index_before = fs::read(&index_path).ok();
+
+    let stale = exchange(
+        &host.socket(),
+        Command::WorkspaceGitSnapshot {
+            workspace: workspace.id,
+            expected_revision: expected_revision + 1,
+        },
+    );
+    ensure!(stale.is_err(), "stale workspace revision was accepted");
+
+    // Gate the Git worker after it has begun status. This lets List and Poll
+    // prove actor responsiveness while the filesystem probe is outstanding,
+    // without relying on a timing threshold.
+    let started = host.state().join("git-status-started");
+    let release = host.state().join("git-status-release");
+    let wrapper = host.bin.path().join("git");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" status \"*) : > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done ;; esac\nexec /usr/bin/git \"$@\"\n",
+            started.display(),
+            release.display()
+        ),
+    )?;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+
+    let mut pending = std::os::unix::net::UnixStream::connect(host.socket())?;
+    pending.set_read_timeout(Some(Duration::from_secs(5)))?;
+    pending.set_write_timeout(Some(Duration::from_secs(5)))?;
+    send(
+        &mut pending,
+        &Request {
+            protocol: PROTOCOL,
+            command: Command::WorkspaceGitSnapshot {
+                workspace: workspace.id,
+                expected_revision,
+            },
+        },
+    )?;
+    let start_deadline = Instant::now() + Duration::from_secs(3);
+    while !started.exists() {
+        ensure!(
+            Instant::now() < start_deadline,
+            "Git worker did not start status"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let listed = exchange(&host.socket(), Command::List)?;
+    ensure!(listed.error.is_none());
+    ensure!(listed.views.is_empty(), "status request started a terminal");
+    let polled = exchange(&host.socket(), Command::Poll { known: Vec::new() })?;
+    ensure!(polled.error.is_none());
+    fs::write(&release, "release\n")?;
+    let response: Response = receive(&mut pending)?;
+    ensure!(
+        response.error.is_none(),
+        "Git snapshot failed: {:?}",
+        response.error
+    );
+    let snapshot = response
+        .workspace_git_snapshot
+        .context("snapshot response missing its additive DTO")?;
+    ensure!(snapshot.workspace_id == workspace.id);
+    ensure!(snapshot.workspace_revision == expected_revision);
+    ensure!(
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| { entry.path == "untracked snapshot.txt" && entry.untracked })
+    );
+    ensure!(
+        response.views.is_empty(),
+        "snapshot response started a terminal"
+    );
+
+    let after = exchange(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing after snapshot")?;
+    ensure!(
+        after == before,
+        "read-only Git snapshot changed catalog metadata"
+    );
+    ensure!(
+        fs::read(&index_path).ok() == index_before,
+        "snapshot wrote Git index"
+    );
+    ensure!(fs::read(&untracked)? == untracked_contents);
+    Ok(())
+}

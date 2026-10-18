@@ -118,5 +118,6 @@ pub(crate) fn response(
         template_run: None,
         template_runs: None,
         panel_directory: None,
+        workspace_git_snapshot: None,
     }
 }

@@ -29,6 +29,7 @@ mod text_edit;
 mod tiling;
 mod viewport;
 mod wake_signal;
+mod workspace_git;
 use command_worker::{
     CommandNotice, CommandTarget, Dispatch, RequestFailure, ResizeCache, ResizeKey, WorkerGate,
     confirmed_ended_state,
@@ -442,6 +443,7 @@ struct WorkerConnection {
     trace: Trace,
     product_tx: mpsc::SyncSender<Value>,
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
+    git_worker: workspace_git::Worker,
 }
 
 fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
@@ -453,6 +455,7 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
     let worker_wake = wake.clone();
     let (product_tx, product_commands) = mpsc::sync_channel(8);
     let (product_results, product_rx) = mpsc::sync_channel(8);
+    let git_worker = workspace_git::Worker::new(socket.clone(), wake.clone());
     let product_socket = socket.clone();
     let product_shared = shared.clone();
     let poll_gate = Arc::new(Mutex::new(()));
@@ -657,6 +660,7 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
         trace,
         product_tx,
         product_rx,
+        git_worker,
     }
 }
 
@@ -1055,6 +1059,7 @@ struct CanvasApp {
     editor_preferred_x: Option<(uuid::Uuid, usize, Pixels)>,
     product_tx: mpsc::SyncSender<Value>,
     product_rx: mpsc::Receiver<Result<protocol::ProductReply, protocol::ProductError>>,
+    git_worker: workspace_git::Worker,
     product_launch_unknown: bool,
     catalog_edit: Option<CatalogEdit>,
     template_flow: template_flow::RunFlow,
@@ -1093,6 +1098,7 @@ struct CanvasApp {
     hover_position: Option<Point<Pixels>>,
     navigation: navigation::Navigation,
     stop_control: session_control::StopControl,
+    git_flow: workspace_git::Flow,
     deferred_placement: Option<pigade_layout::Command>,
     focus: FocusHandle,
     selected: usize,
@@ -1136,6 +1142,7 @@ impl CanvasApp {
             trace,
             product_tx,
             product_rx,
+            git_worker,
         } = connection;
         let ui_trace = trace.clone();
         let focus = cx.focus_handle();
@@ -1197,6 +1204,7 @@ impl CanvasApp {
                 }
                 if weak
                     .update_in(cx, |this, window, cx| {
+                        this.service_workspace_git(cx);
                         while let Ok(reply) = this.product_rx.try_recv() {
                             let stop_pending=this.stop_control.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
                             let mut navigation_pending=this.navigation.take_reply(match &reply {Ok(reply)=>reply.ui_request,Err(error)=>error.ui_request});
@@ -1537,6 +1545,8 @@ impl CanvasApp {
             editor_preferred_x: None,
             product_tx,
             product_rx,
+            git_worker,
+            git_flow: Default::default(),
             product_launch_unknown: false,
             catalog_edit: None,
             template_flow: Default::default(),
@@ -3080,6 +3090,7 @@ impl CanvasApp {
         if matches!(
             action,
             A::CloseDialog
+                | A::OpenWorkspaceGit
                 | A::OpenControls
                 | A::OpenPalette
                 | A::OpenPaneMenu
@@ -3111,6 +3122,7 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenWorkspaceGit | A::RefreshWorkspaceGit => self.workspace_git_action(action, cx),
             A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
                 self.session_control_action(action, cx)
             }
@@ -3994,6 +4006,9 @@ impl CanvasApp {
                         }
                     }
                     DialogKind::RenamePane => self.submit_pane_name(cx),
+                    DialogKind::WorkspaceGit => {
+                        self.workspace_git_action(A::RefreshWorkspaceGit, cx)
+                    }
                     DialogKind::StopSession => self.confirm_stop(cx),
                     DialogKind::Palette | DialogKind::PaneMenu => {
                         if let Some(action) = self.product.palette_action() {
@@ -5249,10 +5264,32 @@ impl CanvasApp {
             cx.stop_propagation();
             return;
         }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceGit)
+            && matches!(k.key.as_str(), "pageup" | "pagedown" | "home" | "end")
+        {
+            let handle = &self.product.git_scroll;
+            let mut offset = handle.offset();
+            let end = -handle.max_offset().y;
+            offset.y = match k.key.as_str() {
+                "home" => px(0.),
+                "end" => end,
+                "pageup" => (offset.y + px(280.)).min(px(0.)),
+                _ => (offset.y - px(280.)).max(end),
+            };
+            handle.set_offset(offset);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if self.product.dialog.as_ref().is_some_and(|dialog| {
             matches!(
                 dialog.kind,
                 product::DialogKind::Manage
+                    | product::DialogKind::WorkspaceGit
                     | product::DialogKind::StopSession
                     | product::DialogKind::Sessions
                     | product::DialogKind::Layouts

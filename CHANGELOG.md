@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Native read-only workspace Git snapshot: branch/worktree, staged/unstaged/untracked/conflicted groups, explicit async refresh, bounded incomplete state and generation/process-preserving UI.
+
 - Добавлено отдельное подтверждаемое действие остановки CLI для выбранной панели и поколения из списка сессий. Stop фиксирует session/generation, сохраняет размещение и историю, не повторяется после неизвестного ответа и подтверждается только точным состоянием `exited`. Потерянный ответ сверяется запросами только на чтение; `history`/`degraded` остаются неподтверждёнными. На Unix SIGHUP отправляется только верхнему CLI-процессу, дочерние процессы могут сохраниться. Закрытие диалога после отправки скрывает наблюдение, но не отзывает запрос.
 
 - Refine pointer dragging to retain the original relative grab point, including header/edge grabs; extend the private native fixture with stationary-pointer keyboard focus and exact Dwindle sibling insertion assertions.

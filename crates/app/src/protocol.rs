@@ -207,6 +207,60 @@ struct Response {
     template_runs: Option<pigade_storage::TemplateRunPage>,
     #[serde(default)]
     panel_directory: Option<PanelDirectory>,
+    #[serde(default)]
+    workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitSnapshot {
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub detached: bool,
+    pub entries: Vec<WorkspaceGitEntry>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitEntry {
+    pub path: String,
+    pub original_path: Option<String>,
+    pub index_status: char,
+    pub worktree_status: char,
+    pub untracked: bool,
+    pub unmerged: bool,
+}
+
+impl WorkspaceGitSnapshot {
+    fn validate(&self, target: Option<(uuid::Uuid, u64)>) -> Result<(), String> {
+        let status = |value: char| ".MADRCUT?!".contains(value);
+        if target != Some((self.workspace_id, self.workspace_revision))
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || self.entries.len() > 128
+            || self.branch.as_ref().is_some_and(|value| value.len() > 4096)
+            || self.head.as_ref().is_some_and(|value| {
+                value.len() > 128 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            || self.entries.iter().any(|entry| {
+                entry.path.is_empty()
+                    || entry.path.len() > 32768
+                    || entry
+                        .original_path
+                        .as_ref()
+                        .is_some_and(|path| path.len() > 32768)
+                    || !status(entry.index_status)
+                    || !status(entry.worktree_status)
+            })
+        {
+            return Err("Ответ Git не соответствует выбранному воркспейсу".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -425,6 +479,7 @@ pub struct ProductReply {
     pub template_run: Option<TemplateRunView>,
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
     pub panel_directory: Option<PanelDirectory>,
+    pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
 }
 
 pub struct ProductError {
@@ -461,6 +516,19 @@ pub fn product_request(socket: &Path, mut command: Value) -> Result<ProductReply
 
 fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
     let command_name = command.get("command").and_then(Value::as_str);
+    let git_request = command_name == Some("workspace_git_snapshot");
+    let git_target = git_request
+        .then(|| {
+            Some((
+                command
+                    .get("workspace")?
+                    .as_str()?
+                    .parse::<uuid::Uuid>()
+                    .ok()?,
+                command.get("expected_revision")?.as_u64()?,
+            ))
+        })
+        .flatten();
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
     let context_saved = command_name == Some("save_context");
@@ -550,6 +618,12 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             });
         }
     }
+    if git_request || response.workspace_git_snapshot.is_some() {
+        response.workspace_git_snapshot.as_ref()
+            .ok_or_else(|| "Эта версия session host не вернула Git-статус. Обновите приложение при следующем запуске.".to_owned())
+            .and_then(|snapshot| snapshot.validate(git_target))
+            .map_err(|message| ProductError { ui_request:None, providers_request:false, message, rejected_before_launch:false })?;
+    }
     let process_view = if let Some((session, generation)) = process_target {
         if response.views.len() != 1
             || session.is_none()
@@ -589,6 +663,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         template_run: response.template_run,
         template_runs: response.template_runs,
         panel_directory: response.panel_directory,
+        workspace_git_snapshot: response.workspace_git_snapshot,
     })
 }
 
@@ -950,6 +1025,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn git_reply_requires_the_requested_workspace_and_revision() {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        for variant in 0..4 {
+            let workspace = uuid::Uuid::from_u128(301);
+            let request_id = uuid::Uuid::new_v4();
+            let path =
+                std::env::temp_dir().join(format!("pigade-git-{}.sock", uuid::Uuid::new_v4()));
+            let listener = UnixListener::bind(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                let command: Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(command["command"]["command"], "workspace_git_snapshot");
+                assert_eq!(command["command"]["workspace"], workspace.to_string());
+                assert!(command["command"].get("_ui_request").is_none());
+                let snapshot = json!({"workspace_id":if variant==1 {uuid::Uuid::new_v4()} else {workspace},
+                    "workspace_revision":if variant==2 {5} else {4},"project_id":uuid::Uuid::from_u128(302),
+                    "cwd":"/worktree","branch":"main","head":null,"detached":false,"entries":[],"truncated":true});
+                let response = json!({"protocol":2,"views":[],"error":null,"workspace_git_snapshot":if variant==3 {Value::Null} else {snapshot}});
+                let bytes = serde_json::to_vec(&response).unwrap();
+                stream
+                    .write_all(&(bytes.len() as u32).to_le_bytes())
+                    .unwrap();
+                stream.write_all(&bytes).unwrap();
+            });
+            let result = product_request(
+                &path,
+                json!({"command":"workspace_git_snapshot","workspace":workspace,"expected_revision":4,"_ui_request":request_id}),
+            );
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            if variant == 0 {
+                let reply = result.unwrap_or_else(|error| panic!("{}", error.message));
+                assert_eq!(reply.ui_request, Some(request_id));
+                assert!(reply.workspace_git_snapshot.unwrap().truncated);
+                assert!(
+                    reply.catalog.is_none() && reply.sessions.is_none() && !reply.launch_confirmed
+                );
+            } else {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("accepted mismatching Git response"),
+                };
+                assert_eq!(error.ui_request, Some(request_id));
+                assert!(!error.rejected_before_launch);
+            }
+        }
+    }
+
+    #[test]
     fn stop_receipt_is_bound_to_the_frozen_generation_and_does_not_open_sessions() {
         use std::os::unix::{fs::PermissionsExt, net::UnixListener};
         for correct_generation in [true, false] {
@@ -1015,6 +1144,7 @@ mod tests {
             template_run: None,
             template_runs: None,
             panel_directory: None,
+            workspace_git_snapshot: None,
             generations: None,
             generation_selection: None,
             history_view: None,

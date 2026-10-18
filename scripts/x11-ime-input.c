@@ -96,6 +96,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-stop-cancel") && strcmp(a.stage, "catalog-stop-confirm") &&
         strcmp(a.stage, "catalog-sessions-open") && strcmp(a.stage, "catalog-sessions-action") &&
         strcmp(a.stage, "catalog-hidden-stop-review") && strcmp(a.stage, "catalog-hidden-stop-confirm") &&
+        strcmp(a.stage, "catalog-git-open") && strcmp(a.stage, "catalog-git-query") &&
+        strcmp(a.stage, "catalog-git-refresh") && strcmp(a.stage, "catalog-git-close") &&
         strcmp(a.stage, "recipe-select-first") &&
         strcmp(a.stage, "recipe-open-editor") &&
         strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
@@ -927,6 +929,20 @@ int main(int argc, char **argv) {
                    !strcmp(a.stage, "catalog-hidden-stop-confirm")) {
             key(dpy, XK_Tab);
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-open")) {
+            setup_prefix(dpy, XK_p, 0);
+        } else if (!strcmp(a.stage, "catalog-git-query")) {
+            const KeySym query[] = { XK_g, XK_i, XK_t };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            capture(dpy, "/artifacts/catalog-git-query.ppm");
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-refresh")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-close")) {
+            key(dpy, XK_Tab);
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "recipe-select-first")) {
             key(dpy, XK_Down);
         } else if (!strcmp(a.stage, "recipe-open-editor")) {
@@ -1104,6 +1120,10 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-sessions-action") ? "9" :
                             !strcmp(a.stage, "catalog-hidden-stop-review") ? "2" :
                             !strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2" :
+                            !strcmp(a.stage, "catalog-git-open") ? "4" :
+                            !strcmp(a.stage, "catalog-git-query") ? "8" :
+                            !strcmp(a.stage, "catalog-git-refresh") ? "1" :
+                            !strcmp(a.stage, "catalog-git-close") ? "2" :
                             !strcmp(a.stage, "recipe-select-first") ? "1" :
                             !strcmp(a.stage, "recipe-open-editor") ? "2" :
                             !strcmp(a.stage, "recipe-save-editor") ? "2" :

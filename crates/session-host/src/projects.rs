@@ -324,7 +324,7 @@ fn validate_project(project: &Project) -> Result<()> {
     Ok(())
 }
 
-fn git_root(path: &Path) -> Result<PathBuf> {
+pub(super) fn git_root(path: &Path) -> Result<PathBuf> {
     let canonical_input = fs::canonicalize(path)
         .with_context(|| format!("cannot resolve project path {}", path.display()))?;
     ensure!(canonical_input.is_dir(), "project path is not a directory");
@@ -335,7 +335,7 @@ fn git_root(path: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn git_common_dir(root: &Path) -> Result<PathBuf> {
+pub(super) fn git_common_dir(root: &Path) -> Result<PathBuf> {
     let output = git_output(root, &["rev-parse", "--git-common-dir"])?;
     let common = output_path(&output, "Git common directory")?;
     let common = if common.is_absolute() {
