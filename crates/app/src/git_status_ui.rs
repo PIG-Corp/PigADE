@@ -455,6 +455,20 @@ impl ProductUi {
             },
             cx,
         );
+        let can_commit = sheet.can_prepare_commit();
+        let commit = can_commit.then(|| {
+            self.action_control(
+                "workspace-git-commit".into(),
+                "Создать коммит…".into(),
+                ProductAction::GitPrepareCommit,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: selected(2),
+                    compact: true,
+                },
+                cx,
+            )
+        });
 
         let mut body = div()
             .id("workspace-git-entry-list")
@@ -473,6 +487,97 @@ impl ProductUi {
         if let Some(notice) = &sheet.last_index {
             body = body.child(self.git_index_banner(notice, cx));
         }
+        if let Some(result) = &sheet.commit_operation {
+            let (label, detail) = match result.phase {
+                protocol::GitCommitPhase::Running => (
+                    "Коммит выполняется…",
+                    "Ожидаем сохранённую квитанцию host-а.".to_owned(),
+                ),
+                protocol::GitCommitPhase::Applied => (
+                    "Коммит создан",
+                    format!(
+                        "OID {}",
+                        result.commit.as_deref().unwrap_or("не предоставлен")
+                    ),
+                ),
+                protocol::GitCommitPhase::Failed | protocol::GitCommitPhase::Rejected => (
+                    "Коммит не создан",
+                    result
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "Операция завершилась ошибкой.".into()),
+                ),
+                protocol::GitCommitPhase::Unknown => (
+                    "Исход неизвестен",
+                    result.message.clone().unwrap_or_else(|| {
+                        "Проверьте сохранённый результат. Новый коммит не отправляется.".into()
+                    }),
+                ),
+                protocol::GitCommitPhase::Unavailable => (
+                    "Результат недоступен",
+                    result
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "Подтвердите, что вы просмотрели это состояние.".into()),
+                ),
+            };
+            let mut banner = div()
+                .id("workspace-git-commit-banner")
+                .role(Role::Status)
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.base)
+                .p(px(8.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.accent)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(colors.muted)
+                        .whitespace_normal()
+                        .child(safe_path(&detail, 400)),
+                );
+            if result.phase == protocol::GitCommitPhase::Unknown {
+                banner = banner.child(self.action_control(
+                    "workspace-git-commit-inspect".into(),
+                    "Проверить квитанцию".into(),
+                    ProductAction::GitInspectCommit,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
+            if matches!(
+                result.phase,
+                protocol::GitCommitPhase::Unknown | protocol::GitCommitPhase::Unavailable
+            ) {
+                banner = banner.child(self.action_control(
+                    "workspace-git-commit-ack".into(),
+                    "Просмотрено".into(),
+                    ProductAction::GitAcknowledgeCommit,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            }
+            body = body.child(banner);
+        }
         if let Some(reason) = sheet
             .snapshot
             .as_ref()
@@ -487,6 +592,24 @@ impl ProductUi {
                     .whitespace_normal()
                     .child(format!(
                         "Изменение индекса недоступно: {}",
+                        safe_path(reason, 400)
+                    )),
+            );
+        }
+        if let Some(reason) = sheet
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.commit_unavailable_reason.as_deref())
+        {
+            body = body.child(
+                div()
+                    .id("workspace-git-commit-unavailable")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child(format!(
+                        "Создание коммита недоступно: {}",
                         safe_path(reason, 400)
                     )),
             );
@@ -718,6 +841,7 @@ impl ProductUi {
                             .gap_2()
                             .mt(px(10.))
                             .child(refresh)
+                            .children(commit)
                             .child(close),
                     ),
             )
@@ -1026,6 +1150,14 @@ impl ProductUi {
                     && !diff_sheet.loading
                     && diff_sheet.error.is_none()
                     && diff_sheet.side != protocol::GitDiffSide::Conflict
+                    && !sheet.commit_operation.as_ref().is_some_and(|operation| {
+                        matches!(
+                            operation.phase,
+                            protocol::GitCommitPhase::Running
+                                | protocol::GitCommitPhase::Unknown
+                                | protocol::GitCommitPhase::Unavailable
+                        )
+                    })
                     && !sheet.last_index.as_ref().is_some_and(|notice| {
                         matches!(
                             notice.state.phase,
@@ -1189,6 +1321,21 @@ impl ProductUi {
                     .when_some(sheet.last_index.as_ref(), |view, notice| {
                         view.child(self.git_index_banner(notice, cx))
                     })
+                    .when_some(sheet.commit_operation.as_ref(), |view, result| {
+                        let (label,detail)=match result.phase {
+                            protocol::GitCommitPhase::Running=>("Коммит выполняется…","Ожидаем сохранённую квитанцию host-а.".to_owned()),
+                            protocol::GitCommitPhase::Applied=>("Коммит создан",format!("OID {}",result.commit.as_deref().unwrap_or("не предоставлен"))),
+                            protocol::GitCommitPhase::Failed|protocol::GitCommitPhase::Rejected=>("Коммит не создан",result.message.clone().unwrap_or_else(||"Операция завершилась ошибкой.".into())),
+                            protocol::GitCommitPhase::Unknown=>("Исход неизвестен",result.message.clone().unwrap_or_else(||"Проверьте сохранённый результат. Новый коммит не отправляется.".into())),
+                            protocol::GitCommitPhase::Unavailable=>("Результат недоступен",result.message.clone().unwrap_or_else(||"Подтвердите, что вы просмотрели это состояние.".into())),
+                        };
+                        let mut banner=div().id("workspace-git-commit-diff-banner").role(Role::Status).flex().flex_col().gap(px(4.)).rounded(px(6.)).border_1().border_color(colors.border).bg(colors.base).p(px(8.))
+                            .child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(colors.accent).child(label))
+                            .child(div().text_size(px(10.)).text_color(colors.muted).whitespace_normal().child(safe_path(&detail,400)));
+                        if result.phase==protocol::GitCommitPhase::Unknown { banner=banner.child(self.action_control("workspace-git-commit-diff-inspect".into(),"Проверить квитанцию".into(),ProductAction::GitInspectCommit,ControlStyle{role:Role::Button,selected:false,compact:true},cx)); }
+                        if matches!(result.phase,protocol::GitCommitPhase::Unknown|protocol::GitCommitPhase::Unavailable) { banner=banner.child(self.action_control("workspace-git-commit-diff-ack".into(),"Просмотрено".into(),ProductAction::GitAcknowledgeCommit,ControlStyle{role:Role::Button,selected:false,compact:true},cx)); }
+                        view.child(banner)
+                    })
                     .when_some(conflict_note, |view, text| {
                         view.child(
                             div()
@@ -1299,6 +1446,9 @@ mod tests {
             truncated: false,
             index_operation: None,
             index_operation_unavailable_reason: None,
+            commit_schema: None,
+            commit_operation: None,
+            commit_unavailable_reason: None,
         };
         let rows = ordered_entries(&snapshot);
         assert_eq!(

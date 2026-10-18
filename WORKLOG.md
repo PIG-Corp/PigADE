@@ -3901,3 +3901,75 @@ Repair pointer focus across activation ordering and repeated inactive notificati
 - Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md
 - Verification: 272 app tests,34 harness tests including strict C compile, strict app Clippy, app debug/release builds, version/diff checks pass. Private release /tmp/pigade-hover-gap-20261018-04 full pointer flow passes; inspected hover/header/gutter screenshots. Earlier01-03/debug probes failed; debug3 proved duplicate inactive callback discarded pending entry; fixed and retested. No active-desktop automation or system config edits.
 - Risks / next: Commit pointer slice only. Native Hyprland/Wayland pointer certification remains open. Incomplete Git commit UI patch preserved at /tmp/pigade-deferred-git-commit-ui-20261018.patch; unregistered hook helper and unrelated research/stress/GPUI changes remain outside this feature.
+
+## 2026-10-18T05:00:38+00:00 — git_commit_research_luna
+
+Added prepared-proof query and tightened commit proof validation, process identity handling, and pure guard tests
+
+- Files: crates/session-host/src/workspace_git_commit_hooks.rs
+- Verification: rustfmt --edition 2024 --check crates/session-host/src/workspace_git_commit_hooks.rs (passed); pure tests added but not run; Cargo/native runs explicitly excluded
+- Risks / next: Root to integrate prepared/committed queries and run Cargo/host validation
+
+## 2026-10-18T05:04:10+00:00 — git_commit_engine_luna
+
+Implemented the bounded native Git commit engine with staged-index review, exact-scope leases, durable receipts, native Git hook proof reconciliation, restart observation, and nonblocking child polling.
+
+- Files: crates/session-host/src/workspace_git_commit.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 --check crates/session-host/src/workspace_git_commit.rs and git diff --check -- crates/session-host/src/workspace_git_commit.rs passed; Cargo/native tests not run per assigned scope.
+- Risks / next: Root integration must compile and exercise native commit and hook/signing/recovery flows; review compile feedback without broadening this module surface.
+
+## 2026-10-18T05:04:42+00:00 — /root/git_commit_ui_luna
+
+Integrated workspace Git commit review, ticketed start/inspect/ack flow, outcome polling, bounded per-workspace drafts, and protocol/pureflow tests while preserving pointer-focus changes
+
+- Files: crates/app/src/protocol.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/product.rs, crates/app/src/main.rs
+- Verification: No Cargo/build/native tests run by instruction; protocol and pureflow tests added but outstanding. Earlier git diff --check passed before final small edits, so root should rerun after formatting.
+- Risks / next: Root owns app formatting and Cargo verification; review compiler/test feedback and resolve any integration issues.
+
+## 2026-10-18T05:06:29+00:00 — /root/git_commit_ui_luna
+
+Repaired four app compile errors in the Git commit UI integration: added GPUI IDs before interactive roles, retained commit command classification before moving the request, and made commit request kinds exhaustive in dialog delivery.
+
+- Files: crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/workspace_git.rs, WORKLOG.md
+- Verification: Root reported two InteractiveDiv ID errors, one moved command_name borrow error, and one non-exhaustive pending-kind match. Applied targeted fixes; git diff --check passed. Cargo, rustfmt, and app tests were not run per root-owned verification lane.
+- Risks / next: Root should format and rerun app check/tests. Reviewed prepare plan target identity, commit ticket/scope receipt matching, inspect-only polling cadence, and receipt retention after close; compile/runtime behavior remains unverified.
+
+## 2026-10-18T05:16:50+00:00 — /root/git_commit_ui_luna
+
+Added Git-list Ctrl+Enter to open commit review using the shared staged-plan eligibility rule; guarded held Ctrl+Enter in list/review; correlated prepare replies to the exact review dialog ID; exposed retryable prepare errors with refresh; preserved oversized-for-Git drafts without truncation under an enforced 32 KiB editor bound.
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, WORKLOG.md
+- Verification: Added a pure eligibility test for unsupported/no-staged and unresolved-index states, draft validation/preservation coverage, and a commit editor 32 KiB acceptance-bound test. git diff --check passed. Cargo, native fixture, and rustfmt were not run per root-owned lane.
+- Risks / next: Root should format, compile and run app tests, then run the native UI fixture for Ctrl+Enter review/type/confirm and confirm late prepare replies cannot repopulate a replaced dialog.
+
+## 2026-10-18T05:17:20+00:00 — git_commit_engine_luna
+
+Extended the isolated catalog X11 fixture with a fixed native Git commit review/message/confirmation flow, exact frozen-tree and hook assertions, and Escape-based Git dialog close; added bounded harness regression coverage.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed all 34 tests; strict C syntax check with -Wall -Wextra -Werror passed; git diff --check passed. No isolated desktop fixture run was performed.
+- Risks / next: Root should run the approved isolated fixture/build to validate runtime UI navigation, native commit proof, hook forwarding, and post-commit close/reattach.
+
+## 2026-10-18T05:18:28+00:00 — git_commit_research_luna
+
+Documented the limited guarded native Git commit slice, including its frozen-state and publication-proof guarantees, native hook/signing behavior, bounds, exclusions and current verification gap.
+
+- Files: docs/adr/0015-guarded-native-git-commit.md
+- Verification: Read the new ADR and used scripts/log-change.py to append this work record; no builds or tests were run for this documentation-only change.
+- Risks / next: Root owns final integration, full/native UI verification and release acceptance; ADR evidence records nine real-IPC tests already reported by root.
+
+## 2026-10-18T05:24:11+00:00 — /root/git_commit_ui_luna
+
+Refreshes the Git snapshot once when a commit receipt first transitions from Running or Unknown to verified Applied, while preserving already queued read-only work and keeping the global result notice intact; shortened the sidebar success OID preview.
+
+- Files: crates/app/src/workspace_git.rs, WORKLOG.md
+- Verification: Added pure tests for one-shot Applied transition recovery and queue ordering/deduplication. git diff --check passed. Cargo, rustfmt, and native UI were not run per root-owned verification lane.
+- Risks / next: Root should format and compile/test, then rerun native catalog01/02 to verify refreshed HEAD/index list, full OID in the Git banner, and no duplicate snapshot refresh.
+
+## 2026-10-18T05:27:22+00:00 — /root
+
+Integrated frozen native Git commit review with original hooks/signing, durable publication proofs and nonretrying host-restart receipts; fixed postcommit list refresh
+
+- Files: crates/session-host/src/workspace_git_commit.rs, crates/session-host/src/workspace_git_commit_hooks.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs, crates/session-host/src/lib.rs, crates/session-host/src/main.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0015-guarded-native-git-commit.md
+- Verification: Workspace tests passed; final guard change:7 module and9 real IPC tests passed; app283 tests then23 targeted Git tests passed; strict workspace/app Clippy, debug/release builds, format/version/diff checks and34 harness tests passed. Private release catalog02 passed exact commit tree/parent/message, hooks once, unchanged unstaged bytes/catalog/process identity and tab close/reattach; fresh review/result visually inspected.
+- Risks / next: Linux actual Git2.55.0 attached local/unborn branch only; no merge/rebase/amend/commit-all/remotes/interactive prompts. Unknown never repeats; hooks side effects are not rolled back. Full MVP/platform/reboot/soak/performance/a11y gates remain open; user hosts/CLI and unrelated dirt/stash untouched.

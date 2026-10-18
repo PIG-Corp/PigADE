@@ -8,7 +8,7 @@ use crate::{
 use gpui::{ClipboardItem, Context};
 use pigade_storage::{Catalog, WorkspaceStatus};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::mpsc, thread};
+use std::{path::PathBuf, sync::mpsc, thread, time::Instant};
 use uuid::Uuid;
 
 pub(crate) const DIFF_PAGE_LINES: usize = 200;
@@ -80,6 +80,10 @@ impl Target {
         })
     }
 
+    fn same_scope(&self, other: &Self) -> bool {
+        self.workspace == other.workspace && self.project == other.project && self.cwd == other.cwd
+    }
+
     fn matches(&self, snapshot: &protocol::WorkspaceGitSnapshot) -> bool {
         snapshot.workspace_id == self.workspace
             && snapshot.workspace_revision == self.revision
@@ -99,6 +103,7 @@ pub(crate) struct GitSheet {
     pub selected: usize,
     pub diff: Option<DiffSheet>,
     pub last_index: Option<IndexNotice>,
+    pub commit_operation: Option<protocol::WorkspaceGitCommitResult>,
 }
 
 #[derive(Clone)]
@@ -149,6 +154,13 @@ enum Kind {
     },
     IndexAcknowledge {
         ticket: Uuid,
+    },
+    CommitPrepare,
+    Commit {
+        ticket: Uuid,
+        message: Option<String>,
+        inspect: bool,
+        acknowledge: bool,
     },
 }
 
@@ -223,6 +235,36 @@ impl IndexOperation {
 }
 
 impl GitSheet {
+    pub(crate) fn can_prepare_commit(&self) -> bool {
+        !self.loading
+            && self.error.is_none()
+            && self.diff.is_none()
+            && self.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.commit_schema == Some(1)
+                    && snapshot.commit_unavailable_reason.is_none()
+                    && snapshot.index_operation_unavailable_reason.is_none()
+                    && !snapshot.truncated
+                    && snapshot.entries.iter().any(|entry| {
+                        !entry.unmerged
+                            && matches!(entry.index_status, 'A' | 'M' | 'D' | 'T' | 'R' | 'C')
+                    })
+            })
+            && !self.last_index.as_ref().is_some_and(|notice| {
+                matches!(
+                    notice.state.phase,
+                    IndexPhase::Applying | IndexPhase::Unknown | IndexPhase::Unavailable
+                )
+            })
+            && self.commit_operation.as_ref().is_none_or(|operation| {
+                !matches!(
+                    operation.phase,
+                    protocol::GitCommitPhase::Running
+                        | protocol::GitCommitPhase::Unknown
+                        | protocol::GitCommitPhase::Unavailable
+                )
+            })
+    }
+
     /// The same visible control order used by Tab/Shift+Tab and Enter.
     pub(crate) fn control_actions(&self) -> Vec<ProductAction> {
         use ProductAction as A;
@@ -236,6 +278,17 @@ impl GitSheet {
                 IndexPhase::Unknown | IndexPhase::Unavailable
             ) {
                 actions.push(A::GitDismissIndexOutcome);
+            }
+        }
+        if let Some(commit) = &self.commit_operation {
+            if commit.phase == protocol::GitCommitPhase::Unknown {
+                actions.push(A::GitInspectCommit);
+            }
+            if matches!(
+                commit.phase,
+                protocol::GitCommitPhase::Unknown | protocol::GitCommitPhase::Unavailable
+            ) {
+                actions.push(A::GitAcknowledgeCommit);
             }
         }
         let applying = self
@@ -268,6 +321,14 @@ impl GitSheet {
             actions.extend([A::GitCopyDiff, A::CloseDialog]);
             let can_apply = !diff.loading
                 && diff.error.is_none()
+                && !self.commit_operation.as_ref().is_some_and(|operation| {
+                    matches!(
+                        operation.phase,
+                        protocol::GitCommitPhase::Running
+                            | protocol::GitCommitPhase::Unknown
+                            | protocol::GitCommitPhase::Unavailable
+                    )
+                })
                 && !self.last_index.as_ref().is_some_and(|notice| {
                     matches!(
                         notice.state.phase,
@@ -295,6 +356,9 @@ impl GitSheet {
         } else {
             if !applying {
                 actions.push(A::RefreshWorkspaceGit);
+            }
+            if self.can_prepare_commit() {
+                actions.push(A::GitPrepareCommit);
             }
             actions.push(A::CloseDialog);
         }
@@ -374,7 +438,104 @@ impl GitSheet {
 pub(crate) struct Flow {
     pending: Option<Pending>,
     next: Option<Pending>,
+    after_read: Option<Pending>,
     index: Option<IndexOperation>,
+    commit: Option<CommitOperation>,
+    commit_drafts: Vec<(Uuid, String)>,
+    commit_plan: Option<(Target, protocol::WorkspaceGitCommitPlan)>,
+    last_commit_inspect: Option<Instant>,
+}
+
+#[derive(Clone)]
+struct CommitOperation {
+    target: Target,
+    state: protocol::WorkspaceGitCommitResult,
+}
+
+fn valid_commit_message(message: &str) -> bool {
+    !message.trim().is_empty()
+        && message.len() <= 8192
+        && !message
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
+}
+
+impl CommitOperation {
+    fn unresolved(&self) -> bool {
+        matches!(
+            self.state.phase,
+            protocol::GitCommitPhase::Running
+                | protocol::GitCommitPhase::Unknown
+                | protocol::GitCommitPhase::Unavailable
+        )
+    }
+    fn receive(&mut self, result: Result<protocol::WorkspaceGitCommitResult, String>) -> bool {
+        let can_transition = matches!(
+            self.state.phase,
+            protocol::GitCommitPhase::Running | protocol::GitCommitPhase::Unknown
+        );
+        match result {
+            Ok(receipt)
+                if receipt.ticket == self.state.ticket
+                    && receipt.workspace_id == self.target.workspace
+                    && receipt.workspace_revision == self.target.revision
+                    && receipt.project_id == self.target.project
+                    && receipt.cwd == self.target.cwd =>
+            {
+                let applied = receipt.phase == protocol::GitCommitPhase::Applied;
+                self.state = receipt;
+                can_transition && applied
+            }
+            Ok(_) => {
+                self.state.phase = protocol::GitCommitPhase::Unknown;
+                self.state.commit = None;
+                self.state.acknowledged = false;
+                self.state.message = Some(
+                    "Ответ относится к другому воркспейсу или коммиту. Повтор не отправлен.".into(),
+                );
+                false
+            }
+            Err(error) => {
+                self.state.phase = protocol::GitCommitPhase::Unknown;
+                self.state.commit = None;
+                self.state.acknowledged = false;
+                self.state.message = Some(format!(
+                    "Исход не подтверждён: {}. Проверьте квитанцию; коммит не повторяется.",
+                    error.chars().take(512).collect::<String>()
+                ));
+                false
+            }
+        }
+    }
+}
+
+impl Flow {
+    pub(crate) fn commit_draft(&self, workspace: Uuid) -> String {
+        self.commit_drafts
+            .iter()
+            .find(|(id, _)| *id == workspace)
+            .map(|(_, draft)| draft.clone())
+            .unwrap_or_default()
+    }
+    pub(crate) fn remember_commit_draft(&mut self, workspace: Uuid, draft: &str) {
+        // The editor enforces this memory bound without trimming accepted text.
+        // Commit start separately enforces Git's stricter 8192-byte message limit.
+        if draft.len() > 32 * 1024 {
+            return;
+        }
+        if let Some((_, value)) = self
+            .commit_drafts
+            .iter_mut()
+            .find(|(id, _)| *id == workspace)
+        {
+            *value = draft.to_owned();
+            return;
+        }
+        if self.commit_drafts.len() == 16 {
+            self.commit_drafts.remove(0);
+        }
+        self.commit_drafts.push((workspace, draft.to_owned()));
+    }
 }
 
 impl Pending {
@@ -388,7 +549,10 @@ impl Pending {
                     .diff
                     .as_ref()
                     .is_some_and(|diff| diff.path == *path && diff.side == *side),
-                Kind::Index { .. } | Kind::IndexAcknowledge { .. } => false,
+                Kind::Index { .. }
+                | Kind::IndexAcknowledge { .. }
+                | Kind::CommitPrepare
+                | Kind::Commit { .. } => false,
             }
     }
     fn command(&self) -> Value {
@@ -405,7 +569,45 @@ impl Pending {
             Kind::IndexAcknowledge { ticket } => {
                 json!({"command":"workspace_git_index_acknowledge","workspace":self.target.workspace,"expected_revision":self.target.revision,"ticket":ticket,"_ui_request":self.request})
             }
+            Kind::CommitPrepare => {
+                json!({"command":"workspace_git_commit_prepare","workspace":self.target.workspace,"expected_revision":self.target.revision,"_ui_request":self.request})
+            }
+            Kind::Commit {
+                ticket,
+                message,
+                inspect,
+                acknowledge,
+            } => {
+                if *acknowledge {
+                    json!({"command":"workspace_git_commit_acknowledge","workspace":self.target.workspace,"expected_revision":self.target.revision,"ticket":ticket,"_ui_request":self.request})
+                } else {
+                    json!({"command":"workspace_git_commit","workspace":self.target.workspace,"expected_revision":self.target.revision,"ticket":ticket,"message":message,"inspect":inspect,"_ui_request":self.request})
+                }
+            }
         }
+    }
+}
+
+fn enqueue_commit_refresh(
+    next: &mut Option<Pending>,
+    after_read: &mut Option<Pending>,
+    refresh: Pending,
+) {
+    if next.as_ref().is_some_and(|pending| {
+        matches!(pending.kind, Kind::Snapshot)
+            && pending.dialog == refresh.dialog
+            && pending.target == refresh.target
+    }) || after_read.as_ref().is_some_and(|pending| {
+        matches!(pending.kind, Kind::Snapshot)
+            && pending.dialog == refresh.dialog
+            && pending.target == refresh.target
+    }) {
+        return;
+    }
+    if next.is_none() {
+        *next = Some(refresh);
+    } else if after_read.is_none() {
+        *after_read = Some(refresh);
     }
 }
 
@@ -472,7 +674,10 @@ impl GitSheet {
                     diff.error = Some(message.into());
                 }
             }
-            Kind::Index { .. } | Kind::IndexAcknowledge { .. } => (),
+            Kind::Index { .. }
+            | Kind::IndexAcknowledge { .. }
+            | Kind::CommitPrepare
+            | Kind::Commit { .. } => (),
         }
     }
 }
@@ -481,6 +686,12 @@ impl CanvasApp {
     fn sync_git_index_notice(&mut self) {
         if let Some(sheet) = &mut self.product.git_sheet {
             sheet.last_index = self.git_flow.index.as_ref().map(IndexOperation::notice);
+            sheet.commit_operation = self
+                .git_flow
+                .commit
+                .as_ref()
+                .filter(|operation| operation.target.same_scope(&sheet.target))
+                .map(|operation| operation.state.clone());
             if let Some(operation) = &self.git_flow.index
                 && sheet.target == operation.target
                 && let Some(diff) = &mut sheet.diff
@@ -518,6 +729,19 @@ impl CanvasApp {
             }
             operation
         } else {
+            let active_workspace = self
+                .product
+                .git_sheet
+                .as_ref()
+                .map(|sheet| sheet.target.workspace);
+            if self.git_flow.commit.as_ref().is_some_and(|operation| {
+                Some(operation.target.workspace) == active_workspace && operation.unresolved()
+            }) {
+                self.product.notice =
+                    Some("Сначала разрешите исход предыдущего коммита Git.".into());
+                cx.notify();
+                return;
+            }
             if self
                 .git_flow
                 .index
@@ -620,14 +844,26 @@ impl CanvasApp {
                 self.product.git_sheet = Some(GitSheet {
                     action_focus: None,
                     dialog: dialog.id,
-                    target,
+                    target: target.clone(),
                     snapshot: None,
                     loading: false,
                     error: None,
                     selected: 0,
                     diff: None,
                     last_index: self.git_flow.index.as_ref().map(IndexOperation::notice),
+                    commit_operation: self
+                        .git_flow
+                        .commit
+                        .as_ref()
+                        .filter(|operation| operation.target.same_scope(&target))
+                        .map(|operation| operation.state.clone()),
                 });
+                self.product.git_commit_plan = self
+                    .git_flow
+                    .commit_plan
+                    .as_ref()
+                    .filter(|(plan_target, _)| plan_target == &target)
+                    .map(|(_, plan)| plan.clone());
                 self.product.git_scroll = Default::default();
                 self.product.dialog = Some(dialog);
                 self.request_git(Kind::Snapshot, cx);
@@ -754,8 +990,196 @@ impl CanvasApp {
             ProductAction::GitDismissIndexOutcome => {
                 self.request_git_index(true, true, cx);
             }
+            ProductAction::GitPrepareCommit => self.prepare_git_commit(cx),
+            ProductAction::GitRefreshCommitPlan => self.prepare_git_commit(cx),
+            ProductAction::GitStartCommit => self.start_git_commit(cx),
+            ProductAction::GitInspectCommit => self.request_git_commit(false, true, cx),
+            ProductAction::GitAcknowledgeCommit => self.request_git_commit(true, false, cx),
             _ => return,
         }
+        cx.notify();
+    }
+
+    fn prepare_git_commit(&mut self, cx: &mut Context<Self>) {
+        let Some(sheet) = self.product.git_sheet.as_ref() else {
+            return;
+        };
+        let Some(snapshot) = sheet.snapshot.as_ref() else {
+            return;
+        };
+        if snapshot.commit_schema != Some(1)
+            || snapshot.truncated
+            || self.git_flow.commit.as_ref().is_some_and(|operation| {
+                operation.target.same_scope(&sheet.target) && operation.unresolved()
+            })
+            || self
+                .git_flow
+                .index
+                .as_ref()
+                .is_some_and(IndexOperation::unresolved)
+            || self.git_flow.pending.is_some()
+        {
+            self.product.notice = Some("Подготовка коммита сейчас недоступна: обновите снимок или сначала разрешите предыдущий исход.".into());
+            cx.notify();
+            return;
+        }
+        if !sheet.target.current(self.product.catalog.as_ref()) {
+            return;
+        }
+        let target = sheet.target.clone();
+        let review = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == DialogKind::WorkspaceGitCommit)
+            .cloned()
+            .unwrap_or_else(|| Dialog::new(DialogKind::WorkspaceGitCommit));
+        let pending = Pending {
+            request: Uuid::new_v4(),
+            dialog: review.id,
+            target: target.clone(),
+            kind: Kind::CommitPrepare,
+        };
+        if self.git_worker.sender.try_send(pending.command()).is_err() {
+            self.product.notice = Some("План коммита не запрошен: очередь Git занята.".into());
+            cx.notify();
+            return;
+        }
+        self.git_flow.commit_plan = None;
+        self.product.git_commit_plan = None;
+        self.product.git_commit_plan_error = None;
+        let mut review = review;
+        if review.fields.is_empty() {
+            review
+                .fields
+                .push(self.git_flow.commit_draft(target.workspace).into());
+        }
+        self.product.dialog = Some(review);
+        self.git_flow.pending = Some(pending);
+        self.git_flow.next = None;
+        cx.notify();
+    }
+
+    fn start_git_commit(&mut self, cx: &mut Context<Self>) {
+        let Some((target, plan)) = self.git_flow.commit_plan.clone() else {
+            return;
+        };
+        if !target.current(self.product.catalog.as_ref())
+            || self
+                .git_flow
+                .commit
+                .as_ref()
+                .is_some_and(|operation| operation.target == target && operation.unresolved())
+            || self
+                .git_flow
+                .index
+                .as_ref()
+                .is_some_and(IndexOperation::unresolved)
+        {
+            return;
+        }
+        let message = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == DialogKind::WorkspaceGitCommit)
+            .and_then(|dialog| dialog.fields.first())
+            .map(|field| field.text().to_owned())
+            .unwrap_or_default();
+        if !valid_commit_message(&message) {
+            self.product.notice=Some("Сообщение должно содержать текст, не превышать 8192 байта и не содержать управляющие символы.".into());
+            cx.notify();
+            return;
+        }
+        let state = protocol::WorkspaceGitCommitResult {
+            ticket: plan.ticket,
+            workspace_id: target.workspace,
+            workspace_revision: target.revision,
+            project_id: target.project,
+            cwd: target.cwd.clone(),
+            phase: protocol::GitCommitPhase::Running,
+            commit: None,
+            acknowledged: false,
+            message: None,
+        };
+        let operation = CommitOperation {
+            target: target.clone(),
+            state: state.clone(),
+        };
+        let pending = Pending {
+            request: Uuid::new_v4(),
+            dialog: self
+                .product
+                .git_sheet
+                .as_ref()
+                .map_or_else(Uuid::new_v4, |sheet| sheet.dialog),
+            target: target.clone(),
+            kind: Kind::Commit {
+                ticket: plan.ticket,
+                message: Some(message.clone()),
+                inspect: false,
+                acknowledge: false,
+            },
+        };
+        if self.git_worker.sender.try_send(pending.command()).is_err() {
+            self.product.notice=Some("Коммит не отправлен: очередь Git занята. План сохранён; явный повтор остаётся под вашим контролем.".into());
+            cx.notify();
+            return;
+        }
+        self.git_flow
+            .remember_commit_draft(target.workspace, &message);
+        self.git_flow.commit = Some(operation);
+        self.git_flow.last_commit_inspect = Some(Instant::now());
+        self.git_flow.commit_plan = None;
+        self.product.git_commit_plan = None;
+        self.git_flow.pending = Some(pending);
+        self.product.dialog = self.product.git_sheet.as_ref().map(|sheet| Dialog {
+            kind: DialogKind::WorkspaceGit,
+            id: sheet.dialog,
+            fields: vec![],
+            active_field: 0,
+        });
+        cx.notify();
+    }
+
+    fn request_git_commit(&mut self, acknowledge: bool, inspect: bool, cx: &mut Context<Self>) {
+        if self.git_flow.pending.is_some() {
+            return;
+        }
+        let Some(operation) = self.git_flow.commit.clone() else {
+            return;
+        };
+        if acknowledge
+            && !matches!(
+                operation.state.phase,
+                protocol::GitCommitPhase::Unknown | protocol::GitCommitPhase::Unavailable
+            )
+        {
+            return;
+        }
+        let pending = Pending {
+            request: Uuid::new_v4(),
+            dialog: self
+                .product
+                .git_sheet
+                .as_ref()
+                .map_or_else(Uuid::new_v4, |sheet| sheet.dialog),
+            target: operation.target.clone(),
+            kind: Kind::Commit {
+                ticket: operation.state.ticket,
+                message: None,
+                inspect,
+                acknowledge,
+            },
+        };
+        if self.git_worker.sender.try_send(pending.command()).is_err() {
+            return;
+        }
+        if inspect {
+            self.git_flow.last_commit_inspect = Some(Instant::now());
+        }
+        self.git_flow.pending = Some(pending);
+        self.git_flow.next = None;
         cx.notify();
     }
 
@@ -791,7 +1215,10 @@ impl CanvasApp {
                 diff.loading = true;
                 diff.error = None;
             }
-            Kind::Index { .. } | Kind::IndexAcknowledge { .. } => return,
+            Kind::Index { .. }
+            | Kind::IndexAcknowledge { .. }
+            | Kind::CommitPrepare
+            | Kind::Commit { .. } => return,
         }
         let pending = Pending {
             request: Uuid::new_v4(),
@@ -820,7 +1247,10 @@ impl CanvasApp {
                             diff.loading = true;
                         }
                     }
-                    Kind::Index { .. } | Kind::IndexAcknowledge { .. } => (),
+                    Kind::Index { .. }
+                    | Kind::IndexAcknowledge { .. }
+                    | Kind::CommitPrepare
+                    | Kind::Commit { .. } => (),
                 }
             }
             self.git_flow.pending = Some(pending);
@@ -833,6 +1263,26 @@ impl CanvasApp {
     }
 
     pub(crate) fn service_workspace_git(&mut self, cx: &mut Context<Self>) {
+        if self.git_flow.pending.is_none()
+            && self
+                .product
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.kind == DialogKind::WorkspaceGit)
+            && let Some(operation) = self.git_flow.commit.as_ref()
+            && operation.state.phase == protocol::GitCommitPhase::Running
+            && self.product.git_sheet.as_ref().is_some_and(|sheet| {
+                sheet.target.same_scope(&operation.target)
+                    && sheet.target.current(self.product.catalog.as_ref())
+            })
+            && self
+                .git_flow
+                .last_commit_inspect
+                .is_none_or(|last| last.elapsed().as_secs() >= 1)
+        {
+            self.git_flow.last_commit_inspect = Some(Instant::now());
+            self.request_git_commit(false, true, cx);
+        }
         let Ok(reply) = self.git_worker.receiver.try_recv() else {
             return;
         };
@@ -849,6 +1299,124 @@ impl CanvasApp {
             return;
         }
         let pending = self.git_flow.pending.take().expect("matching Git request");
+        if matches!(pending.kind, Kind::CommitPrepare | Kind::Commit { .. }) {
+            match pending.kind {
+                Kind::CommitPrepare => {
+                    let review_is_current = self.product.dialog.as_ref().is_some_and(|dialog| {
+                        dialog.id == pending.dialog
+                            && dialog.kind == DialogKind::WorkspaceGitCommit
+                            && self.product.git_sheet.as_ref().is_some_and(|sheet| {
+                                sheet.target == pending.target
+                                    && pending.target.current(self.product.catalog.as_ref())
+                            })
+                    });
+                    let result = reply.and_then(|reply| {
+                        reply
+                            .workspace_git_commit_plan
+                            .ok_or_else(|| protocol::ProductError {
+                                ui_request: None,
+                                providers_request: false,
+                                message: "Session host не вернул план коммита.".into(),
+                                rejected_before_launch: false,
+                            })
+                    });
+                    match result {
+                        Ok(_) if !review_is_current => {
+                            // A late response from a closed/replaced review cannot
+                            // install a plan into the next dialog instance.
+                        }
+                        Ok(plan)
+                            if plan.workspace_id == pending.target.workspace
+                                && plan.workspace_revision == pending.target.revision
+                                && plan.project_id == pending.target.project
+                                && plan.cwd == pending.target.cwd =>
+                        {
+                            if let Some(draft) = self
+                                .product
+                                .dialog
+                                .as_ref()
+                                .filter(|dialog| dialog.kind == DialogKind::WorkspaceGitCommit)
+                                .and_then(|dialog| dialog.fields.first())
+                                .map(|field| field.text().to_owned())
+                            {
+                                self.git_flow
+                                    .remember_commit_draft(pending.target.workspace, &draft);
+                            }
+                            self.git_flow.commit_plan =
+                                Some((pending.target.clone(), plan.clone()));
+                            self.product.git_commit_plan = Some(plan.clone());
+                            self.product.git_commit_plan_error = None;
+                        }
+                        Ok(_) => {
+                            self.git_flow.commit_plan = None;
+                            self.product.git_commit_plan = None;
+                            self.product.git_commit_plan_error =
+                                Some("План коммита относится к другой ревизии воркспейса.".into());
+                            self.product.notice =
+                                Some("План коммита относится к другой ревизии воркспейса.".into());
+                        }
+                        Err(error) => {
+                            if review_is_current {
+                                self.git_flow.commit_plan = None;
+                                self.product.git_commit_plan = None;
+                                self.product.git_commit_plan_error = Some(error.message.clone());
+                                self.product.notice = Some(format!(
+                                    "Не удалось подготовить план коммита: {}",
+                                    error.message
+                                ));
+                            }
+                        }
+                    }
+                }
+                Kind::Commit {
+                    ticket,
+                    acknowledge,
+                    ..
+                } => {
+                    let receipt = reply.and_then(|reply| {
+                        reply
+                            .workspace_git_commit
+                            .ok_or_else(|| protocol::ProductError {
+                                ui_request: None,
+                                providers_request: false,
+                                message: "Session host не вернул квитанцию коммита.".into(),
+                                rejected_before_launch: false,
+                            })
+                    });
+                    let mut applied_transition = false;
+                    if let Some(operation) = &mut self.git_flow.commit
+                        && operation.target == pending.target
+                        && operation.state.ticket == ticket
+                    {
+                        applied_transition =
+                            operation.receive(receipt.map_err(|error| error.message));
+                        if acknowledge && operation.state.acknowledged {
+                            self.git_flow.commit = None;
+                        }
+                    }
+                    if applied_transition {
+                        self.queue_commit_snapshot_refresh(&pending);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            // Receipt state is global; only the active dialog gets presentation changes.
+            self.sync_git_index_notice();
+            if self.product.dialog.as_ref().is_some_and(|dialog| {
+                dialog.kind == DialogKind::WorkspaceGit
+                    && self
+                        .product
+                        .git_sheet
+                        .as_ref()
+                        .is_some_and(|sheet| sheet.target.same_scope(&pending.target))
+            }) && let Some(operation) = &self.git_flow.commit
+            {
+                self.product.notice = Some(commit_notice(&operation.state));
+            }
+            cx.notify();
+            self.dispatch_queued_git();
+            return;
+        }
         if matches!(
             pending.kind,
             Kind::Index { .. } | Kind::IndexAcknowledge { .. }
@@ -946,6 +1514,29 @@ impl CanvasApp {
                     },
                 });
             }
+            if let Ok(reply) = &reply
+                && let Some(snapshot) = &reply.workspace_git_snapshot
+                && let Some(receipt) = &snapshot.commit_operation
+                && !self
+                    .git_flow
+                    .commit
+                    .as_ref()
+                    .is_some_and(CommitOperation::unresolved)
+                && let Some(sheet) = &self.product.git_sheet
+                && pending.current(sheet, self.product.catalog.as_ref())
+            {
+                let mut target = sheet.target.clone();
+                target.revision = receipt.workspace_revision;
+                if receipt.workspace_id == target.workspace
+                    && receipt.project_id == target.project
+                    && receipt.cwd == target.cwd
+                {
+                    self.git_flow.commit = Some(CommitOperation {
+                        target,
+                        state: receipt.clone(),
+                    });
+                }
+            }
             if self.product.dialog.as_ref().is_some_and(|dialog| {
                 dialog.id == pending.dialog && dialog.kind == DialogKind::WorkspaceGit
             }) && let Some(sheet) = &mut self.product.git_sheet
@@ -955,23 +1546,97 @@ impl CanvasApp {
                     Kind::Snapshot => (),
                     Kind::Diff {..} => sheet.receive_diff(&pending,self.product.catalog.as_ref(),reply.map_err(|error|error.message).and_then(|reply|reply.workspace_git_diff.ok_or_else(||"Session host не вернул diff. Возможно, требуется новая версия host.".into()))),
                     Kind::Index {..} | Kind::IndexAcknowledge {..} => (),
+                    Kind::CommitPrepare | Kind::Commit { .. } => (),
                 }
             }
             self.sync_git_index_notice();
+            if let Some(operation) = &self.git_flow.commit {
+                self.product.notice = Some(commit_notice(&operation.state));
+            }
         }
-        if let Some(next) = self.git_flow.next.take()
-            && self.product.dialog.as_ref().is_some_and(|dialog| {
+        self.dispatch_queued_git();
+        cx.notify();
+    }
+
+    fn queue_commit_snapshot_refresh(&mut self, completed: &Pending) {
+        let Some(sheet) = self.product.git_sheet.as_ref() else {
+            return;
+        };
+        if !self.product.dialog.as_ref().is_some_and(|dialog| {
+            dialog.id == completed.dialog && dialog.kind == DialogKind::WorkspaceGit
+        }) || sheet.target != completed.target
+            || !sheet.target.current(self.product.catalog.as_ref())
+            || sheet.diff.is_some()
+        {
+            return;
+        }
+        let refresh = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Snapshot,
+        };
+        enqueue_commit_refresh(
+            &mut self.git_flow.next,
+            &mut self.git_flow.after_read,
+            refresh,
+        );
+    }
+
+    fn dispatch_queued_git(&mut self) {
+        while self.git_flow.pending.is_none() {
+            let next = self.git_flow.next.take();
+            let next = next.or_else(|| self.git_flow.after_read.take());
+            let Some(next) = next else {
+                return;
+            };
+            let valid = self.product.dialog.as_ref().is_some_and(|dialog| {
                 dialog.id == next.dialog && dialog.kind == DialogKind::WorkspaceGit
-            })
-            && self
+            }) && self
                 .product
                 .git_sheet
                 .as_ref()
-                .is_some_and(|sheet| next.current(sheet, self.product.catalog.as_ref()))
-        {
+                .is_some_and(|sheet| next.current(sheet, self.product.catalog.as_ref()));
+            if !valid {
+                continue;
+            }
             self.dispatch_git(next);
+            if self.git_flow.pending.is_some() {
+                if self.git_flow.next.is_none() {
+                    self.git_flow.next = self.git_flow.after_read.take();
+                }
+                return;
+            }
         }
-        cx.notify();
+    }
+}
+
+fn commit_notice(receipt: &protocol::WorkspaceGitCommitResult) -> String {
+    match receipt.phase {
+        protocol::GitCommitPhase::Running => "Создаём коммит…".into(),
+        protocol::GitCommitPhase::Applied => format!(
+            "Коммит создан: {}",
+            receipt
+                .commit
+                .as_deref()
+                .map(|oid| oid.chars().take(12).collect::<String>())
+                .unwrap_or_else(|| "OID отсутствует".into())
+        ),
+        protocol::GitCommitPhase::Failed | protocol::GitCommitPhase::Rejected => format!(
+            "Коммит не создан: {}",
+            receipt
+                .message
+                .as_deref()
+                .unwrap_or("операция завершилась ошибкой")
+        ),
+        protocol::GitCommitPhase::Unknown => format!(
+            "Исход коммита неизвестен. Проверьте квитанцию; повтор запрещён. {}",
+            receipt.message.as_deref().unwrap_or("")
+        ),
+        protocol::GitCommitPhase::Unavailable => format!(
+            "Квитанция коммита недоступна. {}",
+            receipt.message.as_deref().unwrap_or("")
+        ),
     }
 }
 
@@ -1029,6 +1694,7 @@ mod tests {
                 selected: 0,
                 diff: None,
                 last_index: None,
+                commit_operation: None,
             },
             pending,
         )
@@ -1046,7 +1712,57 @@ mod tests {
             truncated: false,
             index_operation: None,
             index_operation_unavailable_reason: None,
+            commit_schema: None,
+            commit_operation: None,
+            commit_unavailable_reason: None,
         }
+    }
+
+    #[test]
+    fn commit_review_action_requires_supported_host_and_staged_entries() {
+        let (_, mut sheet, _) = fixture();
+        assert!(!sheet.can_prepare_commit());
+        let mut status = snapshot(&sheet.target);
+        status.commit_schema = Some(1);
+        status.entries.push(protocol::WorkspaceGitEntry {
+            path: "tracked.txt".into(),
+            original_path: None,
+            index_status: 'M',
+            worktree_status: '.',
+            untracked: false,
+            unmerged: false,
+        });
+        sheet.snapshot = Some(status);
+        sheet.loading = false;
+        assert!(sheet.can_prepare_commit());
+        sheet.snapshot.as_mut().unwrap().commit_unavailable_reason =
+            Some("Git version unavailable".into());
+        assert!(!sheet.can_prepare_commit());
+        sheet.snapshot.as_mut().unwrap().commit_unavailable_reason = None;
+        sheet
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .index_operation_unavailable_reason = Some("Receipt unavailable".into());
+        assert!(!sheet.can_prepare_commit());
+        sheet
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .index_operation_unavailable_reason = None;
+        sheet.last_index = Some(IndexNotice {
+            path: "tracked.txt".into(),
+            workspace: "Task".into(),
+            state: IndexState {
+                ticket: protocol::GitIndexTicket {
+                    id: Uuid::new_v4(),
+                    action: protocol::GitIndexAction::Stage,
+                },
+                phase: IndexPhase::Unknown,
+                message: None,
+            },
+        });
+        assert!(!sheet.can_prepare_commit());
     }
     fn index_fixture() -> (IndexOperation, protocol::WorkspaceGitIndexResult) {
         let (_, sheet, _) = fixture();
@@ -1341,5 +2057,226 @@ mod tests {
         assert!(!pending.current(&sheet, Some(&catalog)));
         sheet.receive_diff(&pending, Some(&catalog), Ok(result));
         assert!(sheet.diff.as_ref().unwrap().result.is_none());
+    }
+
+    #[test]
+    fn commit_message_validation_and_workspace_drafts_are_bounded() {
+        assert!(valid_commit_message("subject\nbody\tcolumn"));
+        assert!(!valid_commit_message(" \n\t"));
+        assert!(!valid_commit_message(&"x".repeat(8193)));
+        assert!(!valid_commit_message("subject\u{0007}"));
+
+        let mut flow = Flow::default();
+        let workspace = Uuid::new_v4();
+        let oversized_for_git = format!("{}界", "x".repeat(8191));
+        flow.remember_commit_draft(workspace, &oversized_for_git);
+        assert_eq!(flow.commit_draft(workspace), oversized_for_git);
+        for _ in 0..16 {
+            flow.remember_commit_draft(Uuid::new_v4(), "draft");
+        }
+        assert_eq!(flow.commit_drafts.len(), 16);
+    }
+
+    #[test]
+    fn commit_transport_or_mismatched_receipt_stays_unknown_without_retry() {
+        let (_, sheet, _) = fixture();
+        let receipt = protocol::WorkspaceGitCommitResult {
+            ticket: Uuid::new_v4(),
+            workspace_id: sheet.target.workspace,
+            workspace_revision: sheet.target.revision,
+            project_id: sheet.target.project,
+            cwd: sheet.target.cwd.clone(),
+            phase: protocol::GitCommitPhase::Running,
+            commit: None,
+            acknowledged: false,
+            message: None,
+        };
+        let mut operation = CommitOperation {
+            target: sheet.target.clone(),
+            state: receipt.clone(),
+        };
+        operation.receive(Err("reply lost".into()));
+        assert_eq!(operation.state.phase, protocol::GitCommitPhase::Unknown);
+        assert!(operation.unresolved());
+        assert!(
+            operation
+                .state
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("не повторяется")
+        );
+
+        operation.state = receipt;
+        let mut wrong = operation.state.clone();
+        wrong.ticket = Uuid::new_v4();
+        wrong.phase = protocol::GitCommitPhase::Applied;
+        wrong.commit = Some("a".repeat(40));
+        operation.receive(Ok(wrong));
+        assert_eq!(operation.state.phase, protocol::GitCommitPhase::Unknown);
+        assert!(operation.state.commit.is_none());
+    }
+
+    #[test]
+    fn applied_commit_transition_is_emitted_once_for_refresh_scheduling() {
+        let (_, sheet, _) = fixture();
+        let running = protocol::WorkspaceGitCommitResult {
+            ticket: Uuid::new_v4(),
+            workspace_id: sheet.target.workspace,
+            workspace_revision: sheet.target.revision,
+            project_id: sheet.target.project,
+            cwd: sheet.target.cwd.clone(),
+            phase: protocol::GitCommitPhase::Running,
+            commit: None,
+            acknowledged: false,
+            message: None,
+        };
+        let mut operation = CommitOperation {
+            target: sheet.target.clone(),
+            state: running,
+        };
+        let mut applied = operation.state.clone();
+        applied.phase = protocol::GitCommitPhase::Applied;
+        applied.commit = Some("a".repeat(40));
+        assert!(operation.receive(Ok(applied.clone())));
+        assert!(!operation.receive(Ok(applied)));
+
+        operation.state.phase = protocol::GitCommitPhase::Unknown;
+        let mut recovered = operation.state.clone();
+        recovered.phase = protocol::GitCommitPhase::Applied;
+        recovered.commit = Some("b".repeat(40));
+        assert!(operation.receive(Ok(recovered)));
+    }
+
+    #[test]
+    fn commit_snapshot_refresh_queues_after_existing_read_without_replacing_it() {
+        let (_, sheet, _) = fixture();
+        let existing = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Diff {
+                path: "file.txt".into(),
+                side: protocol::GitDiffSide::Worktree,
+            },
+        };
+        let existing_request = existing.request;
+        let refresh = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Snapshot,
+        };
+        let mut next = Some(existing);
+        let mut after_read = None;
+        enqueue_commit_refresh(&mut next, &mut after_read, refresh);
+        assert_eq!(next.as_ref().unwrap().request, existing_request);
+        assert!(matches!(after_read.as_ref().unwrap().kind, Kind::Snapshot));
+
+        let duplicate = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Snapshot,
+        };
+        enqueue_commit_refresh(&mut next, &mut after_read, duplicate);
+        assert!(matches!(after_read.as_ref().unwrap().kind, Kind::Snapshot));
+    }
+
+    #[test]
+    fn commit_start_and_inspection_have_distinct_non_retrying_payloads() {
+        let (_, sheet, _) = fixture();
+        let ticket = Uuid::new_v4();
+        let start = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Commit {
+                ticket,
+                message: Some("Review first".into()),
+                inspect: false,
+                acknowledge: false,
+            },
+        }
+        .command();
+        assert_eq!(start["command"], "workspace_git_commit");
+        assert_eq!(start["message"], "Review first");
+        assert_eq!(start["inspect"], false);
+        let inspect = Pending {
+            request: Uuid::new_v4(),
+            dialog: sheet.dialog,
+            target: sheet.target.clone(),
+            kind: Kind::Commit {
+                ticket,
+                message: None,
+                inspect: true,
+                acknowledge: false,
+            },
+        }
+        .command();
+        assert_eq!(inspect["command"], "workspace_git_commit");
+        assert!(inspect["message"].is_null());
+        assert_eq!(inspect["inspect"], true);
+        assert_eq!(inspect["ticket"], ticket.to_string());
+    }
+
+    #[test]
+    fn unresolved_commit_blocks_index_mutation_and_exposes_only_inspection_choices() {
+        let (_, mut sheet, _) = fixture();
+        let mut snapshot = snapshot(&sheet.target);
+        snapshot.commit_schema = Some(1);
+        snapshot.entries.push(protocol::WorkspaceGitEntry {
+            path: "staged.rs".into(),
+            original_path: None,
+            index_status: 'M',
+            worktree_status: ' ',
+            untracked: false,
+            unmerged: false,
+        });
+        sheet.snapshot = Some(snapshot);
+        let ticket = protocol::GitIndexTicket {
+            id: Uuid::new_v4(),
+            action: protocol::GitIndexAction::Stage,
+        };
+        sheet.diff = Some(DiffSheet {
+            path: "staged.rs".into(),
+            side: protocol::GitDiffSide::Worktree,
+            result: Some(protocol::WorkspaceGitDiff {
+                workspace_id: sheet.target.workspace,
+                workspace_revision: sheet.target.revision,
+                project_id: sheet.target.project,
+                cwd: sheet.target.cwd.clone(),
+                path: "staged.rs".into(),
+                side: protocol::GitDiffSide::Worktree,
+                text: "diff".into(),
+                truncated: false,
+                binary: false,
+                index_ticket: Some(ticket),
+                index_unavailable_reason: None,
+            }),
+            loading: false,
+            error: None,
+            page: 0,
+            index_state: Some(IndexState {
+                ticket,
+                phase: IndexPhase::Ready,
+                message: None,
+            }),
+        });
+        sheet.commit_operation = Some(protocol::WorkspaceGitCommitResult {
+            ticket: Uuid::new_v4(),
+            workspace_id: sheet.target.workspace,
+            workspace_revision: sheet.target.revision,
+            project_id: sheet.target.project,
+            cwd: sheet.target.cwd.clone(),
+            phase: protocol::GitCommitPhase::Unknown,
+            commit: None,
+            acknowledged: false,
+            message: None,
+        });
+        let actions = sheet.control_actions();
+        assert!(actions.contains(&ProductAction::GitInspectCommit));
+        assert!(actions.contains(&ProductAction::GitAcknowledgeCommit));
+        assert!(!actions.contains(&ProductAction::GitApplyIndex));
     }
 }

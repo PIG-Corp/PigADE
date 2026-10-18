@@ -19,8 +19,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run routes and exact-generation asynchronous Stop |
-| crates/session-host/src/workspace_git.rs, workspace_git_index.rs | Bounded Git snapshots/diffs plus ticket-bound per-file Stage/Unstage using a private candidate index, exact identity/input validation, native index.lock CAS and durable operation receipts |
-| crates/app/src/workspace_git.rs, git_status_ui.rs | Dialog/workspace-bound snapshot and diff UI, ticket-bound Ctrl+S Stage/Unstage, persistent outcome notices, Ctrl+R inspect/refresh and explicit Ctrl+Shift+R acknowledgement |
+| crates/session-host/src/workspace_git.rs, workspace_git_index.rs, workspace_git_commit.rs, workspace_git_commit_hooks.rs | Bounded Git snapshots/diffs, ticket-bound Stage/Unstage, and guarded native commit with original hooks/signing, exact ref publication proofs and durable nonretrying receipts |
+| crates/app/src/workspace_git.rs, git_status_ui.rs | Dialog/workspace-bound snapshot and diff UI, ticket-bound Ctrl+S Stage/Unstage, Ctrl+Enter frozen commit review/message, persistent outcomes, Ctrl+R inspect/refresh and explicit Ctrl+Shift+R acknowledgement |
 | crates/session-host/src/template_run.rs | Durable explicit template runs: freeze reviewed plans without launching, advance one CLI per command, reconcile existing plan/launch records without retry, and atomically commit final placement with completion |
 | crates/app/src/template_flow.rs, template_ui.rs, template_commands.rs | Four optional launch presets, per-slot model/effort configuration and context/count/cwd review; user-driven prepare/advance/history/cancel flow |
 | crates/session-host/src/panel_directory.rs | Bounded64-entry search pages over placed panes, matching alias, provider, frozen role/state and project/workspace/tab metadata without returning terminal frames |
@@ -155,3 +155,5 @@ and typed receipts protect checkpoint watermarks. This is reader/storage support
 not live memory admission; see ADR0013 and the resource-refusal report.
 
 [ADR0014](adr/0014-diff-bound-git-index-actions.md) records per-file index action durability and refusal boundaries. Git dialog control focus and pagination policy live in `crates/app/src/workspace_git.rs`; `git_status_ui.rs` renders the same control/page state.
+
+[ADR0015](adr/0015-guarded-native-git-commit.md) records native commit publication guards, original hook delegation, signing, host-restart identity and Unknown receipts. Real IPC coverage is in `crates/session-host/tests/project_setup.rs`; existing isolated catalog fixture includes commit review and confirmation after its Stage/Unstage checks.

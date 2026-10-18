@@ -24,6 +24,19 @@ fn main() -> Result<()> {
                 _ => anyhow::bail!("serve STATE_DIRECTORY [--runtime DIRECTORY]"),
             }
         }
+        Some("__git_commit_run") => {
+            anyhow::ensure!(args.len() == 2, "invalid Git commit helper invocation");
+            pigade_session_host::run_git_commit_helper(std::path::Path::new(&args[1]))
+        }
+        Some("__git_commit_hook") => {
+            anyhow::ensure!(args.len() >= 3, "invalid Git hook helper invocation");
+            let code = pigade_session_host::git_commit_hook_helper(
+                std::path::Path::new(&args[1]),
+                &args[2],
+                &args[3..],
+            )?;
+            std::process::exit(code);
+        }
         Some("__helper") => pigade_session_host::helper(
             std::path::Path::new(args.get(1).context("socket")?),
             args.get(2).context("nonce")?,

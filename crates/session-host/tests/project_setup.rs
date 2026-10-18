@@ -58,6 +58,8 @@ impl HostFixture {
             .arg("serve")
             .arg(self.state())
             .env("PATH", path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -674,6 +676,403 @@ fn index_actions_bind_preview_and_survive_host_restart_without_repeating_filters
     ensure!(
         exchange(&host.socket(), Command::List)?.views.is_empty(),
         "index operation launched a terminal"
+    );
+    Ok(())
+}
+
+struct CommitFixture {
+    host: HostFixture,
+    workspace: pigade_storage::Workspace,
+}
+impl CommitFixture {
+    fn new() -> Result<Self> {
+        let host = HostFixture::new()?;
+        let parent = host.state().join("commit-parent");
+        fs::create_dir(&parent)?;
+        let project = exchange(
+            &host.socket(),
+            Command::CreateProject {
+                parent,
+                name: "CommitRepo".into(),
+            },
+        )?
+        .catalog
+        .context("project catalog")?
+        .projects
+        .into_iter()
+        .next()
+        .context("project")?;
+        let workspace = exchange(
+            &host.socket(),
+            Command::CreateWorkspace {
+                project: project.id,
+                task: "native commit".into(),
+                worktree: false,
+            },
+        )?
+        .catalog
+        .context("workspace catalog")?
+        .workspaces
+        .into_iter()
+        .next()
+        .context("workspace")?;
+        let fixture = Self { host, workspace };
+        fixture.git(&["config", "user.name", "PigADE Fixture"])?;
+        fixture.git(&["config", "user.email", "fixture@example.test"])?;
+        fixture.git(&["config", "commit.gpgsign", "false"])?;
+        fs::write(
+            fixture.workspace.cwd.join("staged.txt"),
+            "reviewed staged text\n",
+        )?;
+        fixture.git(&["add", "--", "staged.txt"])?;
+        Ok(fixture)
+    }
+    fn git(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let output = ProcessCommand::new("/usr/bin/git")
+            .arg("-C")
+            .arg(&self.workspace.cwd)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "private Git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(output.stdout)
+    }
+    fn prepare(&self) -> Result<pigade_session_host::WorkspaceGitCommitPlan> {
+        exchange(
+            &self.host.socket(),
+            Command::WorkspaceGitCommitPrepare {
+                workspace: self.workspace.id,
+                expected_revision: self.workspace.revision,
+            },
+        )?
+        .workspace_git_commit_plan
+        .context("commit preview missing")
+    }
+    fn start(
+        &self,
+        ticket: uuid::Uuid,
+        message: &str,
+    ) -> Result<pigade_session_host::WorkspaceGitCommitResult> {
+        exchange(
+            &self.host.socket(),
+            Command::WorkspaceGitCommit {
+                workspace: self.workspace.id,
+                expected_revision: self.workspace.revision,
+                ticket,
+                message: Some(message.into()),
+                inspect: false,
+            },
+        )?
+        .workspace_git_commit
+        .context("commit result missing")
+    }
+    fn inspect(&self, ticket: uuid::Uuid) -> Result<pigade_session_host::WorkspaceGitCommitResult> {
+        exchange(
+            &self.host.socket(),
+            Command::WorkspaceGitCommit {
+                workspace: self.workspace.id,
+                expected_revision: self.workspace.revision,
+                ticket,
+                message: None,
+                inspect: true,
+            },
+        )?
+        .workspace_git_commit
+        .context("commit inspection missing")
+    }
+    fn finish(&self, ticket: uuid::Uuid) -> Result<pigade_session_host::WorkspaceGitCommitResult> {
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            let result = self.inspect(ticket)?;
+            if result.phase != pigade_session_host::GitCommitPhase::Running {
+                return Ok(result);
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "native commit remained running: {:?}",
+                result
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn hook(&self, name: &str, body: &str) -> Result<()> {
+        let hooks = self.workspace.cwd.join(".git/fixture-hooks");
+        fs::create_dir_all(&hooks)?;
+        self.git(&["config", "core.hooksPath", ".git/fixture-hooks"])?;
+        let path = hooks.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n"))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
+}
+
+#[test]
+fn native_commit_keeps_git_hooks_and_signature_and_is_idempotent_after_restart() -> Result<()> {
+    use pigade_session_host::GitCommitPhase;
+    let mut f = CommitFixture::new()?;
+    for name in [
+        "pre-commit",
+        "prepare-commit-msg",
+        "commit-msg",
+        "post-commit",
+    ] {
+        f.hook(name, &format!("printf '%s\\n' '{name}' >> .git/hook-calls"))?;
+    }
+    // A configured named hook must remain native and run exactly once as well.
+    f.git(&["config", "hook.pigade-fixture.event", "pre-commit"])?;
+    f.git(&[
+        "config",
+        "hook.pigade-fixture.command",
+        "printf 'named-hook\\n' >> .git/hook-calls",
+    ])?;
+    let key = f.host.state().join("fixture-signing-key");
+    let status = ProcessCommand::new("/usr/bin/ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&key)
+        .status()?;
+    ensure!(
+        status.success(),
+        "fixture SSH signing key generation failed"
+    );
+    f.git(&["config", "gpg.format", "ssh"])?;
+    f.git(&[
+        "config",
+        "user.signingkey",
+        key.to_str().context("key path")?,
+    ])?;
+    f.git(&["config", "commit.gpgsign", "true"])?;
+    let signers = f.host.state().join("allowed-signers");
+    fs::write(
+        &signers,
+        format!(
+            "fixture@example.test {}",
+            fs::read_to_string(key.with_extension("pub"))?
+        ),
+    )?;
+    f.git(&[
+        "config",
+        "gpg.ssh.allowedSignersFile",
+        signers.to_str().context("signers path")?,
+    ])?;
+    let plan = f.prepare()?;
+    ensure!(plan.signing_requested && plan.head.is_none() && plan.files.len() == 1);
+    ensure!(plan.files[0].path == "staged.txt");
+    let started = Instant::now();
+    let running = f.start(plan.ticket, "Commit reviewed staged text\n")?;
+    ensure!(
+        running.phase == GitCommitPhase::Running,
+        "start: {:?}",
+        running
+    );
+    ensure!(
+        started.elapsed() < Duration::from_secs(4),
+        "start blocked on native Git exit"
+    );
+    let result = f.finish(plan.ticket)?;
+    ensure!(
+        result.phase == GitCommitPhase::Applied,
+        "native commit: {:?}",
+        result
+    );
+    let commit = result.commit.as_deref().context("commit OID missing")?;
+    ensure!(String::from_utf8(f.git(&["rev-parse", "HEAD"])?)?.trim() == commit);
+    f.git(&["verify-commit", commit])?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !fs::read_to_string(f.workspace.cwd.join(".git/hook-calls"))?
+        .lines()
+        .any(|line| line == "post-commit")
+    {
+        ensure!(
+            Instant::now() < deadline,
+            "native post-commit hook did not finish after publication: {:?}; {}",
+            result,
+            fs::read_to_string(f.host.state().join("host.log"))?
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let calls = fs::read_to_string(f.workspace.cwd.join(".git/hook-calls"))?;
+    for name in [
+        "named-hook",
+        "pre-commit",
+        "prepare-commit-msg",
+        "commit-msg",
+        "post-commit",
+    ] {
+        ensure!(
+            calls.lines().filter(|line| *line == name).count() == 1,
+            "hook was skipped/duplicated: {name}: {calls:?}"
+        );
+    }
+    ensure!(f.git(&["config", "--get", "core.hooksPath"])? == b".git/fixture-hooks\n");
+    ensure!(f.start(plan.ticket, "Commit reviewed staged text\n")? == result);
+    f.host.restart()?;
+    ensure!(f.inspect(plan.ticket)? == result);
+    ensure!(f.start(plan.ticket, "Commit reviewed staged text\n")? == result);
+    ensure!(fs::read_to_string(f.workspace.cwd.join(".git/hook-calls"))? == calls);
+    ensure!(
+        exchange(&f.host.socket(), Command::List)?.views.is_empty(),
+        "commit spawned a terminal"
+    );
+    Ok(())
+}
+
+#[test]
+fn commit_rejects_stale_index_and_hook_changed_tree_without_publishing_head() -> Result<()> {
+    use pigade_session_host::GitCommitPhase;
+    let f = CommitFixture::new()?;
+    let stale = f.prepare()?;
+    fs::write(f.workspace.cwd.join("later.txt"), "later staged text\n")?;
+    f.git(&["add", "--", "later.txt"])?;
+    ensure!(f.start(stale.ticket, "stale")?.phase == GitCommitPhase::Rejected);
+    let plan = f.prepare()?;
+    f.git(&["config", "hook.reference-transaction.enabled", "false"])?;
+    f.hook(
+        "pre-commit",
+        "printf 'hook change\\n' > staged.txt\ngit add -- staged.txt",
+    )?;
+    ensure!(f.start(plan.ticket, "hook changes the tree")?.phase == GitCommitPhase::Running);
+    let result = f.finish(plan.ticket)?;
+    ensure!(
+        result.phase == GitCommitPhase::Failed,
+        "changed tree was not refused: {:?}",
+        result
+    );
+    ensure!(
+        !ProcessCommand::new("/usr/bin/git")
+            .arg("-C")
+            .arg(&f.workspace.cwd)
+            .args(["rev-parse", "--verify", "HEAD"])
+            .output()?
+            .status
+            .success()
+    );
+    // Hook side effects are native Git behavior and are deliberately not rolled back.
+    ensure!(f.git(&["show", ":0:staged.txt"])? == b"hook change\n");
+    Ok(())
+}
+
+#[test]
+fn commit_survives_host_kill_and_inspection_never_repeats_the_hook() -> Result<()> {
+    use pigade_session_host::GitCommitPhase;
+    let mut f = CommitFixture::new()?;
+    f.hook("pre-commit", "printf x >> .git/hook-calls\ntouch .git/hook-started\ni=0\nwhile ! test -f .git/hook-release; do\n  i=$((i+1)); test \"$i\" -lt 200 || exit 1\n  sleep 0.05\ndone")?;
+    let plan = f.prepare()?;
+    ensure!(f.start(plan.ticket, "survive host restart")?.phase == GitCommitPhase::Running);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.workspace.cwd.join(".git/hook-started").exists() {
+        ensure!(Instant::now() < deadline, "pre-commit hook did not start");
+        thread::sleep(Duration::from_millis(10));
+    }
+    // Actor commands remain usable while native hooks wait.
+    ensure!(
+        exchange(&f.host.socket(), Command::Catalog)?
+            .catalog
+            .is_some()
+    );
+    f.host.restart()?;
+    ensure!(
+        f.inspect(plan.ticket)?.phase == GitCommitPhase::Running,
+        "live native Git lost on host reopen"
+    );
+    fs::write(f.workspace.cwd.join(".git/hook-release"), b"release")?;
+    let result = f.finish(plan.ticket)?;
+    ensure!(
+        result.phase == GitCommitPhase::Applied,
+        "surviving native Git result: {:?}",
+        result
+    );
+    ensure!(fs::read(f.workspace.cwd.join(".git/hook-calls"))? == b"x");
+    ensure!(f.start(plan.ticket, "survive host restart")? == result);
+    Ok(())
+}
+
+#[test]
+fn lost_publication_proof_stays_unknown_across_restart_and_cannot_be_repeated() -> Result<()> {
+    use pigade_session_host::GitCommitPhase;
+    let mut f = CommitFixture::new()?;
+    f.hook("pre-commit", "printf x >> .git/fault-hook-calls\ntouch .git/hook-started\ni=0\nwhile ! test -f .git/hook-release; do\n i=$((i+1)); test \"$i\" -lt 200 || exit 1\n sleep 0.05\ndone")?;
+    let plan = f.prepare()?;
+    ensure!(f.start(plan.ticket, "prepared fault")?.phase == GitCommitPhase::Running);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.workspace.cwd.join(".git/hook-started").exists() {
+        ensure!(
+            Instant::now() < deadline,
+            "fault fixture pre-commit did not start"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    // Prevent the committed hook from recording publication after the real guard
+    // durably publishes its prepared proof. Only this private fixture
+    // operation is altered; the application has no production failpoint flag.
+    let operation = f
+        .host
+        .state()
+        .join("git-commit-operations")
+        .join(plan.ticket.to_string());
+    let wrapper = operation.join("hooks/reference-transaction");
+    let original = fs::read_to_string(&wrapper)?;
+    ensure!(original.contains("exec /proc/self/fd/"));
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif test \"$1\" = committed; then exit 1; fi\n{}",
+            original
+                .strip_prefix("#!/bin/sh\n")
+                .context("wrapper shebang missing")?
+        ),
+    )?;
+    fs::write(f.workspace.cwd.join(".git/hook-release"), b"release")?;
+    let result = f.finish(plan.ticket)?;
+    ensure!(
+        result.phase == GitCommitPhase::Unknown && !result.acknowledged,
+        "fault fabricated a known outcome: {:?}",
+        result
+    );
+    ensure!(
+        operation.join("prepared.json").is_file() && !operation.join("committed.json").exists()
+    );
+    ensure!(fs::read(f.workspace.cwd.join(".git/fault-hook-calls"))? == b"x");
+    f.host.restart()?;
+    ensure!(f.inspect(plan.ticket)?.phase == GitCommitPhase::Unknown);
+    ensure!(f.start(plan.ticket, "prepared fault")?.phase == GitCommitPhase::Unknown);
+    ensure!(fs::read(f.workspace.cwd.join(".git/fault-hook-calls"))? == b"x");
+    let ack = exchange(
+        &f.host.socket(),
+        Command::WorkspaceGitCommitAcknowledge {
+            workspace: f.workspace.id,
+            expected_revision: f.workspace.revision,
+            ticket: plan.ticket,
+        },
+    )?
+    .workspace_git_commit
+    .context("acknowledgement missing")?;
+    ensure!(ack.phase == GitCommitPhase::Unknown && ack.acknowledged);
+    ensure!(f.start(plan.ticket, "prepared fault")?.acknowledged);
+    ensure!(fs::read(f.workspace.cwd.join(".git/fault-hook-calls"))? == b"x");
+    // JSON-shaped corruption must not be trusted as proof of publication.
+    let receipt_path = operation.join("receipt.json");
+    let mut receipt: serde_json::Value = serde_json::from_slice(&fs::read(&receipt_path)?)?;
+    let proof: serde_json::Value =
+        serde_json::from_slice(&fs::read(operation.join("prepared.json"))?)?;
+    ensure!(
+        String::from_utf8(f.git(&["rev-parse", "HEAD"])?)?.trim()
+            == proof["commit"].as_str().context("prepared OID missing")?
+    );
+    receipt["result"]["phase"] = "applied".into();
+    receipt["result"]["commit"] = proof["commit"].clone();
+    fs::write(&receipt_path, serde_json::to_vec(&receipt)?)?;
+    ensure!(
+        f.inspect(plan.ticket)?.phase == GitCommitPhase::Unavailable,
+        "forged Applied receipt was accepted without committed proof"
     );
     Ok(())
 }

@@ -112,6 +112,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-git-diff-first") &&
         strcmp(a.stage, "catalog-git-diff-second") &&
         strcmp(a.stage, "catalog-git-index-apply") &&
+        strcmp(a.stage, "catalog-git-commit-open") &&
+        strcmp(a.stage, "catalog-git-commit-message") &&
+        strcmp(a.stage, "catalog-git-commit-confirm") &&
         strcmp(a.stage, "catalog-close-open") && strcmp(a.stage, "catalog-close-query") &&
         strcmp(a.stage, "catalog-close-inspect") && strcmp(a.stage, "catalog-close-cancel") &&
         strcmp(a.stage, "catalog-close-confirm") &&
@@ -1481,10 +1484,19 @@ int main(int argc, char **argv) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-git-index-apply")) {
             modified_key(dpy, XK_Control_L, XK_s);
+        } else if (!strcmp(a.stage, "catalog-git-commit-open") ||
+                   !strcmp(a.stage, "catalog-git-commit-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-git-commit-message")) {
+            modified_key(dpy, XK_Shift_L, XK_p);
+            const KeySym message[] = {
+                XK_r, XK_i, XK_v, XK_a, XK_t, XK_e, XK_space,
+                XK_r, XK_e, XK_v, XK_i, XK_e, XK_w, XK_e, XK_d, XK_space,
+                XK_c, XK_o, XK_m, XK_m, XK_i, XK_t,
+            };
+            for (size_t i = 0; i < sizeof(message) / sizeof(message[0]); ++i) key(dpy, message[i]);
         } else if (!strcmp(a.stage, "catalog-git-close")) {
-            key(dpy, XK_Tab);
-            key(dpy, XK_Tab);
-            key(dpy, XK_Return);
+            key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "catalog-close-open")) {
             setup_prefix(dpy, XK_p, 0);
         } else if (!strcmp(a.stage, "catalog-close-query")) {
@@ -1890,7 +1902,10 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-git-diff-first") ? "1" :
                             !strcmp(a.stage, "catalog-git-diff-second") ? "2" :
                             !strcmp(a.stage, "catalog-git-index-apply") ? "2" :
-                            !strcmp(a.stage, "catalog-git-close") ? "3" :
+                            !strcmp(a.stage, "catalog-git-commit-open") ? "2" :
+                            !strcmp(a.stage, "catalog-git-commit-message") ? "23" :
+                            !strcmp(a.stage, "catalog-git-commit-confirm") ? "2" :
+                            !strcmp(a.stage, "catalog-git-close") ? "1" :
                             !strcmp(a.stage, "catalog-close-open") ? "4" :
                             !strcmp(a.stage, "catalog-close-query") ? "10" :
                             !strcmp(a.stage, "catalog-close-inspect") ? "2" :

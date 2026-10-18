@@ -213,6 +213,10 @@ struct Response {
     workspace_git_diff: Option<WorkspaceGitDiff>,
     #[serde(default)]
     workspace_git_index: Option<WorkspaceGitIndexResult>,
+    #[serde(default)]
+    workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
+    #[serde(default)]
+    workspace_git_commit: Option<WorkspaceGitCommitResult>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -230,6 +234,12 @@ pub struct WorkspaceGitSnapshot {
     pub index_operation: Option<WorkspaceGitIndexResult>,
     #[serde(default)]
     pub index_operation_unavailable_reason: Option<String>,
+    #[serde(default)]
+    pub commit_schema: Option<u32>,
+    #[serde(default)]
+    pub commit_operation: Option<WorkspaceGitCommitResult>,
+    #[serde(default)]
+    pub commit_unavailable_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -258,6 +268,17 @@ impl WorkspaceGitSnapshot {
                 .index_operation_unavailable_reason
                 .as_ref()
                 .is_some_and(|reason| reason.len() > 1024)
+            || self.commit_schema.is_some_and(|schema| schema != 1)
+            || self
+                .commit_unavailable_reason
+                .as_ref()
+                .is_some_and(|reason| reason.len() > 1024)
+            || self.commit_operation.as_ref().is_some_and(|operation| {
+                operation.validate().is_err()
+                    || operation.workspace_id != self.workspace_id
+                    || operation.project_id != self.project_id
+                    || operation.cwd != self.cwd
+            })
             || self.entries.iter().any(|entry| {
                 entry.path.is_empty()
                     || entry.path.len() > 32768
@@ -274,6 +295,112 @@ impl WorkspaceGitSnapshot {
                 .is_some_and(|operation| operation.validate_pending_snapshot(self).is_err())
         {
             return Err("Ответ Git не соответствует выбранному воркспейсу".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GitCommitEntry {
+    pub path: String,
+    pub status: char,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGitCommitPlan {
+    pub ticket: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub files: Vec<GitCommitEntry>,
+    pub signing_requested: bool,
+}
+
+impl WorkspaceGitCommitPlan {
+    fn validate(&self, target: Option<(uuid::Uuid, u64)>) -> Result<(), String> {
+        if self.ticket.is_nil()
+            || target != Some((self.workspace_id, self.workspace_revision))
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || self.files.is_empty()
+            || self.files.len() > 512
+            || self.files.iter().any(|file| {
+                file.path.is_empty()
+                    || file.path.len() > 32768
+                    || !matches!(file.status, 'A' | 'M' | 'D' | 'T')
+            })
+            || self.files.iter().map(|file| file.path.len()).sum::<usize>() > LIMIT
+            || self
+                .files
+                .windows(2)
+                .any(|pair| pair[0].path == pair[1].path)
+            || self
+                .head
+                .as_ref()
+                .is_some_and(|head| !valid_commit_oid(head))
+            || self
+                .branch
+                .as_ref()
+                .is_some_and(|branch| branch.len() > 4096)
+        {
+            return Err("План коммита Git не соответствует воркспейсу".into());
+        }
+        Ok(())
+    }
+}
+
+fn valid_commit_oid(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitCommitPhase {
+    Running,
+    Applied,
+    Rejected,
+    Failed,
+    Unknown,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGitCommitResult {
+    pub ticket: uuid::Uuid,
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub phase: GitCommitPhase,
+    pub commit: Option<String>,
+    pub acknowledged: bool,
+    pub message: Option<String>,
+}
+
+impl WorkspaceGitCommitResult {
+    fn validate(&self) -> Result<(), String> {
+        if self.ticket.is_nil()
+            || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || self
+                .commit
+                .as_ref()
+                .is_some_and(|oid| !valid_commit_oid(oid))
+            || self
+                .message
+                .as_ref()
+                .is_some_and(|message| message.len() > 1024)
+            || (self.phase == GitCommitPhase::Applied) != self.commit.is_some()
+        {
+            return Err("Квитанция коммита Git некорректна".into());
         }
         Ok(())
     }
@@ -778,6 +905,8 @@ pub struct ProductReply {
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
     pub workspace_git_diff: Option<WorkspaceGitDiff>,
     pub workspace_git_index: Option<WorkspaceGitIndexResult>,
+    pub workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
+    pub workspace_git_commit: Option<WorkspaceGitCommitResult>,
 }
 
 pub struct ProductError {
@@ -827,6 +956,27 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             message,
             rejected_before_launch: false,
         })?;
+    let git_commit_request = matches!(
+        command_name,
+        Some(
+            "workspace_git_commit_prepare"
+                | "workspace_git_commit"
+                | "workspace_git_commit_acknowledge"
+        )
+    );
+    let git_commit_prepare_request = command_name == Some("workspace_git_commit_prepare");
+    let git_commit_target = git_commit_request
+        .then(|| {
+            Some((
+                command
+                    .get("workspace")?
+                    .as_str()?
+                    .parse::<uuid::Uuid>()
+                    .ok()?,
+                command.get("expected_revision")?.as_u64()?,
+            ))
+        })
+        .flatten();
     let git_request = command_name == Some("workspace_git_snapshot");
     let git_target = git_request
         .then(|| {
@@ -969,6 +1119,42 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
                 rejected_before_launch: false,
             })?;
     }
+    if git_commit_prepare_request || response.workspace_git_commit_plan.is_some() {
+        response
+            .workspace_git_commit_plan
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул план коммита Git".to_owned())
+            .and_then(|plan| plan.validate(git_commit_target))
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
+    if (git_commit_request && !git_commit_prepare_request)
+        || response.workspace_git_commit.is_some()
+    {
+        response
+            .workspace_git_commit
+            .as_ref()
+            .ok_or_else(|| "Session host не вернул квитанцию коммита Git".to_owned())
+            .and_then(|result| result.validate())
+            .and_then(|_| {
+                let result = response.workspace_git_commit.as_ref().unwrap();
+                if git_commit_target == Some((result.workspace_id, result.workspace_revision)) {
+                    Ok(())
+                } else {
+                    Err("Квитанция коммита относится к другому воркспейсу".into())
+                }
+            })
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
     let process_view = if let Some((session, generation)) = process_target {
         if response.views.len() != 1
             || session.is_none()
@@ -1011,6 +1197,8 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         workspace_git_snapshot: response.workspace_git_snapshot,
         workspace_git_diff: response.workspace_git_diff,
         workspace_git_index: response.workspace_git_index,
+        workspace_git_commit_plan: response.workspace_git_commit_plan,
+        workspace_git_commit: response.workspace_git_commit,
     })
 }
 
@@ -1964,6 +2152,8 @@ mod tests {
             workspace_git_snapshot: None,
             workspace_git_diff: None,
             workspace_git_index: None,
+            workspace_git_commit_plan: None,
+            workspace_git_commit: None,
             generations: None,
             generation_selection: None,
             history_view: None,
@@ -2403,5 +2593,95 @@ mod notification_tests {
                 .unwrap();
         assert!(reply.change_token.is_none());
         assert!(poll_response(reply).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod workspace_git_commit_tests {
+    use super::*;
+
+    fn plan() -> WorkspaceGitCommitPlan {
+        WorkspaceGitCommitPlan {
+            ticket: uuid::Uuid::from_u128(91),
+            workspace_id: uuid::Uuid::from_u128(92),
+            workspace_revision: 7,
+            project_id: uuid::Uuid::from_u128(93),
+            cwd: "/worktree".into(),
+            head: Some("a".repeat(40)),
+            branch: Some("main".into()),
+            files: vec![GitCommitEntry {
+                path: "src/main.rs".into(),
+                status: 'M',
+            }],
+            signing_requested: true,
+        }
+    }
+
+    #[test]
+    fn plan_is_bound_to_workspace_and_staged_file_contract() {
+        let value = plan();
+        assert!(
+            value
+                .validate(Some((value.workspace_id, value.workspace_revision)))
+                .is_ok()
+        );
+        assert!(
+            value
+                .validate(Some((value.workspace_id, value.workspace_revision + 1)))
+                .is_err()
+        );
+        let mut invalid = value.clone();
+        invalid.files[0].status = '?';
+        assert!(
+            invalid
+                .validate(Some((invalid.workspace_id, invalid.workspace_revision)))
+                .is_err()
+        );
+        let mut invalid = value;
+        invalid.ticket = uuid::Uuid::nil();
+        assert!(
+            invalid
+                .validate(Some((invalid.workspace_id, invalid.workspace_revision)))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn commit_receipt_requires_oid_only_for_applied_and_bounds_messages() {
+        let mut receipt = WorkspaceGitCommitResult {
+            ticket: uuid::Uuid::from_u128(94),
+            workspace_id: uuid::Uuid::from_u128(92),
+            workspace_revision: 7,
+            project_id: uuid::Uuid::from_u128(93),
+            cwd: "/worktree".into(),
+            phase: GitCommitPhase::Running,
+            commit: None,
+            acknowledged: false,
+            message: None,
+        };
+        assert!(receipt.validate().is_ok());
+        receipt.phase = GitCommitPhase::Applied;
+        receipt.commit = Some("b".repeat(64));
+        assert!(receipt.validate().is_ok());
+        receipt.commit = Some("not-an-oid".into());
+        assert!(receipt.validate().is_err());
+        receipt.commit = None;
+        receipt.phase = GitCommitPhase::Unknown;
+        receipt.message = Some("x".repeat(1025));
+        assert!(receipt.validate().is_err());
+    }
+
+    #[test]
+    fn old_snapshot_and_reply_without_commit_fields_remain_supported() {
+        let snapshot:WorkspaceGitSnapshot=serde_json::from_value(json!({
+            "workspace_id":uuid::Uuid::from_u128(1),"workspace_revision":1,"project_id":uuid::Uuid::from_u128(2),
+            "cwd":"/worktree","branch":"main","head":null,"detached":false,"entries":[],"truncated":false
+        })).unwrap();
+        assert_eq!(snapshot.commit_schema, None);
+        assert_eq!(snapshot.commit_operation, None);
+        let reply: Response =
+            serde_json::from_value(json!({"protocol":2,"views":[],"error":null})).unwrap();
+        assert!(reply.workspace_git_commit_plan.is_none());
+        assert!(reply.workspace_git_commit.is_none());
     }
 }

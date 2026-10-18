@@ -73,6 +73,11 @@ pub(super) enum ProductAction {
     GitApplyIndex,
     GitInspectIndex,
     GitDismissIndexOutcome,
+    GitPrepareCommit,
+    GitRefreshCommitPlan,
+    GitStartCommit,
+    GitInspectCommit,
+    GitAcknowledgeCommit,
     SetCommandModifier(crate::controls::Modifier),
     AddProject,
     ToggleSidebar,
@@ -180,6 +185,7 @@ pub(super) enum DialogKind {
     AgentProfile,
     DeleteAgentProfile,
     WorkspaceGit,
+    WorkspaceGitCommit,
     Controls,
     AddProject,
     CreateProject,
@@ -226,6 +232,7 @@ impl DialogKind {
             Self::AgentProfile => "Настройки профиля",
             Self::DeleteAgentProfile => "Удалить профиль?",
             Self::WorkspaceGit => "Git воркспейса",
+            Self::WorkspaceGitCommit => "Проверка коммита Git",
             Self::Controls => "Клавиша управления панелями",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
@@ -276,6 +283,7 @@ impl DialogKind {
                 "Reasoning effort · пусто — настройки CLI",
             ],
             Self::WorkspaceGit => &[],
+            Self::WorkspaceGitCommit => &["Сообщение коммита"],
             Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
             Self::CreateProject => &["Название проекта", "Папка проекта"],
@@ -329,6 +337,7 @@ impl DialogKind {
             Self::AgentProfile => "Сохранить профиль",
             Self::DeleteAgentProfile => "Удалить профиль",
             Self::WorkspaceGit => "Закрыть",
+            Self::WorkspaceGitCommit => "Создать коммит",
             Self::Controls => "Готово",
             Self::AddProject => "Добавить проект",
             Self::CreateProject => "Создать проект",
@@ -425,6 +434,8 @@ pub(super) struct ProductUi {
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
     pub(super) git_sheet: Option<crate::workspace_git::GitSheet>,
+    pub(super) git_commit_plan: Option<protocol::WorkspaceGitCommitPlan>,
+    pub(super) git_commit_plan_error: Option<String>,
     pub(super) git_scroll: gpui::ScrollHandle,
     pub(super) stop_sheet: Option<crate::session_control::StopSheet>,
     pub(super) launch_preview: Option<protocol::LaunchPreview>,
@@ -449,6 +460,25 @@ pub(super) struct SessionSummary {
     pub(super) title: String,
     pub(super) state: String,
     pub(super) pid: Option<u32>,
+}
+
+fn commit_draft_fits(
+    field: &EditBuffer,
+    range_utf16: Option<std::ops::Range<usize>>,
+    inserted: &str,
+) -> bool {
+    let range = range_utf16.unwrap_or_else(|| {
+        let bytes = field.marked().unwrap_or_else(|| field.selection());
+        super::text_edit::utf16_at_byte(field.text(), bytes.start)
+            ..super::text_edit::utf16_at_byte(field.text(), bytes.end)
+    });
+    let bytes = super::text_edit::byte_range_from_utf16(field.text(), &range);
+    field
+        .text()
+        .len()
+        .saturating_sub(bytes.len())
+        .saturating_add(inserted.len())
+        <= 32 * 1024
 }
 
 impl From<protocol::View> for SessionSummary {
@@ -885,6 +915,7 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Prompt => index == 1,
         DialogKind::RecipeSlot => index < 2,
         DialogKind::History => index == 1,
+        DialogKind::WorkspaceGitCommit => true,
         _ => false,
     }
 }
@@ -1249,11 +1280,38 @@ impl ProductUi {
 
     pub(super) fn insert_text(&mut self, text: &str) {
         let multiline = self.active_multiline();
+        if self.dialog.as_ref().is_some_and(|dialog| {
+            dialog.kind == DialogKind::WorkspaceGitCommit && dialog.active_field == 0
+        }) && self
+            .dialog
+            .as_ref()
+            .and_then(|dialog| dialog.fields.first())
+            .is_some_and(|field| !commit_draft_fits(field, None, text))
+        {
+            self.notice = Some("Черновик ограничен 32 КиБ; текст не добавлен.".into());
+            return;
+        }
         if let Some(field) = self.active_editor_mut()
             && let Err(error) = field.replace(None, text, multiline)
         {
             self.notice = Some(format!("Текст не изменён: {error}"));
         }
+    }
+
+    pub(super) fn commit_draft_fits(
+        &self,
+        range_utf16: Option<std::ops::Range<usize>>,
+        text: &str,
+    ) -> bool {
+        self.dialog.as_ref().is_none_or(|dialog| {
+            if dialog.kind != DialogKind::WorkspaceGitCommit || dialog.active_field != 0 {
+                return true;
+            }
+            dialog
+                .fields
+                .first()
+                .is_none_or(|field| commit_draft_fits(field, range_utf16, text))
+        })
     }
 
     pub(super) fn header(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
@@ -2763,6 +2821,10 @@ impl ProductUi {
             || self.launch_preview.as_ref().is_some_and(|preview| {
                 matches!(preview.provider.as_str(), "codex" | "claude" | "opencode")
             });
+        let can_bind = can_bind
+            && (dialog.kind != DialogKind::WorkspaceGitCommit
+                || self.git_commit_plan.is_some()
+                || self.git_commit_plan_error.is_some());
         let mut fields = div().flex().flex_col().gap_2().mt(px(16.));
         if dialog.kind == DialogKind::RenamePane {
             fields=fields.child(div().text_size(px(12.)).text_color(colors.muted).whitespace_normal().child("Имя хранится в PigADE. Пустое поле возвращает название CLI. Процесс и его контекст сохраняются."));
@@ -2919,6 +2981,115 @@ impl ProductUi {
                     ))
                     .child(binding_status),
             );
+        }
+        if dialog.kind == DialogKind::WorkspaceGitCommit {
+            if let Some(plan) = &self.git_commit_plan {
+                let escape_controls = |value: &str| {
+                    value
+                        .chars()
+                        .map(|ch| {
+                            if ch.is_control() {
+                                ch.escape_default().to_string()
+                            } else {
+                                ch.to_string()
+                            }
+                        })
+                        .collect::<String>()
+                };
+                let branch = plan
+                    .branch
+                    .as_deref()
+                    .map(escape_controls)
+                    .unwrap_or_else(|| "Отключённая HEAD".into());
+                let cwd = escape_controls(&plan.cwd.to_string_lossy());
+                fields = fields.child(
+                    div()
+                        .id("git-commit-review-meta")
+                        .role(Role::Status)
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(format!(
+                            "Ветка: {branch} · HEAD: {}",
+                            plan.head.as_deref().unwrap_or("первый коммит")
+                        ))
+                        .child(format!("Рабочая папка: {cwd}"))
+                        .child(if plan.signing_requested {
+                            "Подпись коммита запрошена настройками Git."
+                        } else {
+                            "Подпись коммита настройками Git не запрошена."
+                        }),
+                );
+                let mut file_list = div()
+                    .id("git-commit-review-files")
+                    .role(Role::List)
+                    .aria_label("Файлы в замороженном плане коммита")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .max_h(px(240.))
+                    .overflow_y_scroll()
+                    .rounded(px(6.))
+                    .bg(colors.base)
+                    .p(px(8.));
+                for (index, file) in plan.files.iter().enumerate() {
+                    let path = escape_controls(&file.path);
+                    file_list = file_list.child(
+                        div()
+                            .id(format!("git-commit-review-file-{index}"))
+                            .role(Role::ListItem)
+                            .text_size(px(11.))
+                            .child(format!("{}  {}", file.status, path)),
+                    );
+                }
+                fields=fields.child(file_list).child(div().text_size(px(10.)).text_color(colors.muted).whitespace_normal().child("Коммит будет создан для этого точного списка. Обновление плана заменит просмотренный список."));
+                fields = fields.child(self.action_control(
+                    "git-commit-refresh-plan".into(),
+                    "Обновить список файлов".into(),
+                    ProductAction::GitRefreshCommitPlan,
+                    ControlStyle {
+                        role: Role::Button,
+                        selected: false,
+                        compact: true,
+                    },
+                    cx,
+                ));
+            } else {
+                if let Some(error) = &self.git_commit_plan_error {
+                    fields = fields
+                        .child(
+                            div()
+                                .id("git-commit-plan-error")
+                                .role(Role::Alert)
+                                .text_size(px(12.))
+                                .text_color(colors.accent)
+                                .whitespace_normal()
+                                .child(error.clone()),
+                        )
+                        .child(self.action_control(
+                            "git-commit-refresh-plan".into(),
+                            "Обновить список файлов".into(),
+                            ProductAction::GitRefreshCommitPlan,
+                            ControlStyle {
+                                role: Role::Button,
+                                selected: false,
+                                compact: true,
+                            },
+                            cx,
+                        ));
+                } else {
+                    fields = fields.child(
+                        div()
+                            .id("git-commit-plan-loading")
+                            .role(Role::Status)
+                            .text_size(px(12.))
+                            .text_color(colors.accent)
+                            .child("Подготавливаем замороженный список staged-файлов…"),
+                    );
+                }
+            }
         }
         for (index, label) in dialog.kind.fields().iter().enumerate() {
             if !can_bind {
@@ -3321,7 +3492,9 @@ impl ProductUi {
                 .tab_close_sheet
                 .as_ref()
                 .is_none_or(|sheet| sheet.request.is_some() || sheet.uncertain);
-        let submit = if !can_bind || close_blocked {
+        let can_submit = can_bind
+            && (dialog.kind != DialogKind::WorkspaceGitCommit || self.git_commit_plan.is_some());
+        let submit = if !can_submit || close_blocked {
             div().into_any_element()
         } else {
             self.action_control(
@@ -3390,6 +3563,7 @@ impl ProductUi {
                                 | DialogKind::NewTemplateTab
                                 | DialogKind::TemplateRun
                                 | DialogKind::TemplateRunContext
+                                | DialogKind::WorkspaceGitCommit
                         ) {
                             560.
                         } else {
@@ -5912,6 +6086,16 @@ impl ProductUi {
 #[cfg(test)]
 mod context_edit_tests {
     use super::*;
+
+    #[test]
+    fn commit_editor_preserves_git_oversized_draft_but_rejects_unbounded_growth() {
+        let field = EditBuffer::new("x".repeat(8193));
+        assert!(commit_draft_fits(&field, None, "\nbody"));
+
+        let field = EditBuffer::new("x".repeat(32 * 1024));
+        assert!(!commit_draft_fits(&field, None, "y"));
+        assert!(commit_draft_fits(&field, Some(0..1), "y"));
+    }
 
     #[test]
     fn legacy_host_catalog_cannot_offer_template_writes() {

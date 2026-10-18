@@ -19,6 +19,7 @@ import resource
 import select
 import shutil
 import signal
+import shlex
 import socket
 import sqlite3
 import stat
@@ -2895,6 +2896,113 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     require_git_fixture_invariants(
         'per-file Git index actions changed process states, pane aliases, selection, or layout')
 
+    # The fixture commands suppress hooks; the UI commit intentionally runs
+    # the configured private hooks through the host's native hook wrappers.
+    hook_dir = git_common_dir / 'fixture-hooks'
+    hook_dir.mkdir(mode=0o700)
+    hook_counts = {}
+    for hook_name in ('pre-commit', 'post-commit'):
+        counter = hook_dir / (hook_name + '.count')
+        hook_counts[hook_name] = counter
+        hook_path = hook_dir / hook_name
+        hook_path.write_text('#!/bin/sh\nset -eu\nprintf x >> ' +
+                             shlex.quote(str(counter)) + '\n', encoding='utf-8')
+        hook_path.chmod(0o700)
+    private_git(['config', '--local', 'user.name', 'PigADE fixture'])
+    private_git(['config', '--local', 'user.email', 'fixture@localhost'])
+    private_git(['config', '--local', 'commit.gpgsign', 'false'])
+    private_git(['config', '--local', 'core.hooksPath', str(hook_dir)])
+    git_config_before_commit = (git_common_dir / 'config').read_bytes()
+    frozen_index_tree = private_git(['write-tree']).strip()
+    require(re.fullmatch(rb'[0-9a-f]{40,64}', frozen_index_tree) is not None and
+            str(hook_dir).encode('utf-8') in git_config_before_commit and
+            all(not path.exists() for path in hook_counts.values()),
+            'commit fixture did not freeze a valid index tree or start with clean hook counters')
+
+    def catalog_metadata_signature(catalog):
+        return (
+            catalog.get('selection'),
+            catalog.get('layout', {}).get('revision'),
+            tuple(sorted((item.get('id'), item.get('revision'), item.get('canonical_path'),
+                          item.get('git_common_dir')) for item in catalog.get('projects', []))),
+            tuple(sorted((item.get('id'), item.get('revision'), item.get('cwd'), item.get('status'))
+                         for item in catalog.get('workspaces', []))),
+            tuple(sorted((item.get('id'), item.get('revision'), item.get('layout_json'),
+                          item.get('active_pane')) for item in catalog.get('tabs', []))),
+        )
+
+    review_catalog, review_layout = catalog_layout()
+    commit_review_metadata = catalog_metadata_signature(review_catalog)
+    commit_review_processes = process_identities()
+    commit_review_generations = fixture_generations()
+    commit_review_states = process_state_snapshot()
+    commit_review_head = private_git(['rev-parse', 'HEAD']).strip()
+    commit_review_index = (git_common_dir / 'index').read_bytes()
+    commit_review_cached = private_git(['diff', '--cached', '--raw', '-z'])
+
+    def require_commit_review_unchanged(message):
+        current_catalog, current_layout = catalog_layout()
+        snapshot = request_git_snapshot()
+        require(commit_review_head == head_baseline and
+                snapshot.get('head') == head_baseline.decode('ascii') and
+                private_git(['rev-parse', 'HEAD']).strip() == commit_review_head and
+                private_git(['ls-files', '--stage', '-z']) == index_baseline and
+                (git_common_dir / 'index').read_bytes() == commit_review_index and
+                private_git(['diff', '--cached', '--raw', '-z']) == commit_review_cached == cached_baseline and
+                (git_repo / 'tracked.txt').read_bytes() == tracked_bytes and
+                (git_repo / 'staged-only.txt').read_bytes() == staged_only_bytes and
+                (git_common_dir / 'config').read_bytes() == git_config_before_commit and
+                all(not path.exists() for path in hook_counts.values()) and
+                process_identities() == commit_review_processes and
+                fixture_generations() == commit_review_generations and
+                process_state_snapshot() == commit_review_states and
+                catalog_metadata_signature(current_catalog) == commit_review_metadata and
+                current_layout.get('root') == review_layout.get('root'),
+                message)
+
+    report['stage'] = 'catalog-git-commit-review'
+    save()
+    helper_call(config, 'catalog-git-commit-open')
+    time.sleep(.5)  # bounded time for the frozen Git plan to reach the dialog
+    helper_call(config, 'catalog-git-commit-message')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/catalog-git-commit-review.ppm')
+    require_commit_review_unchanged(
+        'opening and composing the Git commit review changed HEAD, index, worktree, hooks, process, or catalog metadata')
+    require_git_fixture_invariants(
+        'opening the commit review changed process states, pane aliases, selection, or layout')
+
+    report['stage'] = 'catalog-git-commit-confirm'
+    save()
+    helper_call(config, 'catalog-git-commit-confirm')
+    committed_head = wait_until(
+        lambda: (value if value and value != head_baseline else None)
+        if (value := private_git(['rev-parse', 'HEAD']).strip()) else None,
+        time.monotonic() + 15)
+    committed_tree = private_git(['rev-parse', 'HEAD^{tree}']).strip()
+    committed_parent = private_git(['rev-parse', 'HEAD^']).strip()
+    committed_message = private_git(['log', '-1', '--format=%s']).decode('utf-8').strip()
+    committed_paths = set(private_git(['ls-tree', '-r', '--name-only', '-z', 'HEAD']).split(b'\0'))
+    committed_entries = git_snapshot_entries()
+    require(committed_head != head_baseline and committed_parent == head_baseline and
+            committed_tree == frozen_index_tree and committed_message == 'Private reviewed commit' and
+            b'staged-only.txt' in committed_paths and
+            private_git(['show', 'HEAD:tracked.txt']) == b'base revision\n' and
+            private_git(['ls-files', '--stage', '-z']) == index_baseline and
+            private_git(['diff', '--cached', '--raw', '-z']) == b'' and
+            committed_entries.get('tracked.txt', {}).get('index_status') == '.' and
+            committed_entries.get('tracked.txt', {}).get('worktree_status') == 'M' and
+            'staged-only.txt' not in committed_entries and
+            (git_repo / 'tracked.txt').read_bytes() == tracked_bytes and
+            (git_repo / 'staged-only.txt').read_bytes() == staged_only_bytes and
+            all(path.read_bytes() == b'x' for path in hook_counts.values()) and
+            (git_common_dir / 'config').read_bytes() == git_config_before_commit,
+            'confirmed native commit did not publish the exact frozen tree once while preserving the unstaged worktree edit')
+    require_git_fixture_invariants(
+        'native Git commit changed process states, pane aliases, selection, or layout')
+    time.sleep(1.25)  # allow the bounded one-second receipt inspection to render
+    helper_call(config, 'capture', '/artifacts/catalog-git-commit-complete.ppm')
+
     report['stage'] = 'catalog-git-close'
     save()
     helper_call(config, 'catalog-git-close')
@@ -3068,6 +3176,8 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
         'workspace_git_refresh_reflects_private_file_removal': True,
         'workspace_git_index_actions_used_fixed_ui_and_restored_exact_index': True,
+        'workspace_git_commit_review_left_head_index_worktree_hooks_process_and_catalog_metadata_unchanged': True,
+        'workspace_git_commit_confirmed_exact_frozen_tree_once_with_native_hooks': True,
         'workspace_git_ui_preserved_all_five_generation_states_aliases_selection_and_tree': True,
         'close_tab_cancel_preserved_selection_layout_process_frames_and_journals': True,
         'close_tab_confirm_removed_tab_and_reselected_adjacent_fallback': True,
@@ -3100,6 +3210,18 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
             'normalized_index_listing_restored': True,
             'cached_diff_restored': True,
             'head_and_worktree_file_bytes_unchanged': True,
+            'commit': {
+                'message': committed_message,
+                'parent': committed_parent.decode('ascii'),
+                'tree': committed_tree.decode('ascii'),
+                'frozen_index_tree': frozen_index_tree.decode('ascii'),
+                'committed_staged_only_path': True,
+                'unstaged_tracked_worktree_edit_preserved': True,
+                'pre_commit_hook_count': hook_counts['pre-commit'].read_bytes().decode('ascii'),
+                'post_commit_hook_count': hook_counts['post-commit'].read_bytes().decode('ascii'),
+                'review_capture_before_confirmation': 'catalog-git-commit-review.ppm',
+                'result_capture': 'catalog-git-commit-complete.ppm',
+            },
         },
         'delete_removed_template': True,
         'captures': ['catalog-library-empty.ppm', 'catalog-library-saved.ppm',
@@ -3112,7 +3234,8 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
                      'catalog-git-refreshed.ppm', 'catalog-git-index-staged-review.ppm',
                      'catalog-git-worktree-review.ppm', 'catalog-git-index-tracked-review.ppm',
-                     'catalog-git-untracked-review.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
+                     'catalog-git-untracked-review.ppm', 'catalog-git-commit-review.ppm',
+                     'catalog-git-commit-complete.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
                      'catalog-close-tab-fallback.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
@@ -5578,6 +5701,7 @@ def outer_run(args) -> dict:
                   'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm',
                   'catalog-git-index-staged-review.ppm', 'catalog-git-worktree-review.ppm',
                   'catalog-git-index-tracked-review.ppm', 'catalog-git-untracked-review.ppm',
+                  'catalog-git-commit-review.ppm', 'catalog-git-commit-complete.ppm',
                   'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm', 'catalog-close-tab-fallback.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
@@ -5613,7 +5737,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI and restore the normalized index, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',

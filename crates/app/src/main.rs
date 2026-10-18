@@ -2812,6 +2812,20 @@ impl CanvasApp {
 
     fn editor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.service_panel_search(cx);
+        if let Some((workspace, draft)) = self.product.git_sheet.as_ref().and_then(|sheet| {
+            self.product
+                .dialog
+                .as_ref()
+                .filter(|dialog| dialog.kind == product::DialogKind::WorkspaceGitCommit)
+                .and_then(|dialog| {
+                    dialog
+                        .fields
+                        .first()
+                        .map(|field| (sheet.target.workspace, field.text().to_owned()))
+                })
+        }) {
+            self.git_flow.remember_commit_draft(workspace, &draft);
+        }
         if let Some(dialog) = self
             .product
             .dialog
@@ -3497,6 +3511,11 @@ impl CanvasApp {
                 | A::GitApplyIndex
                 | A::GitInspectIndex
                 | A::GitDismissIndexOutcome
+                | A::GitPrepareCommit
+                | A::GitRefreshCommitPlan
+                | A::GitStartCommit
+                | A::GitInspectCommit
+                | A::GitAcknowledgeCommit
                 | A::FocusPane(_)
                 | A::ToggleSidebar
                 | A::ToggleArchived
@@ -3621,7 +3640,12 @@ impl CanvasApp {
             | A::GitDiffPage(_)
             | A::GitApplyIndex
             | A::GitInspectIndex
-            | A::GitDismissIndexOutcome => self.workspace_git_action(action, cx),
+            | A::GitDismissIndexOutcome
+            | A::GitPrepareCommit
+            | A::GitRefreshCommitPlan
+            | A::GitStartCommit
+            | A::GitInspectCommit
+            | A::GitAcknowledgeCommit => self.workspace_git_action(action, cx),
             A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
                 self.session_control_action(action, cx)
             }
@@ -4189,6 +4213,22 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if let Some((workspace, draft)) =
+                    self.product.git_sheet.as_ref().and_then(|sheet| {
+                        self.product
+                            .dialog
+                            .as_ref()
+                            .filter(|dialog| dialog.kind == DialogKind::WorkspaceGitCommit)
+                            .and_then(|dialog| {
+                                dialog
+                                    .fields
+                                    .first()
+                                    .map(|field| (sheet.target.workspace, field.text().to_owned()))
+                            })
+                    })
+                {
+                    self.git_flow.remember_commit_draft(workspace, &draft);
+                }
                 if self
                     .product
                     .dialog
@@ -4690,6 +4730,9 @@ impl CanvasApp {
                     DialogKind::RenamePane => self.submit_pane_name(cx),
                     DialogKind::WorkspaceGit => {
                         self.workspace_git_action(A::RefreshWorkspaceGit, cx)
+                    }
+                    DialogKind::WorkspaceGitCommit => {
+                        self.workspace_git_action(A::GitStartCommit, cx)
                     }
                     DialogKind::StopSession => self.confirm_stop(cx),
                     DialogKind::Palette | DialogKind::PaneMenu => {
@@ -6214,6 +6257,20 @@ impl CanvasApp {
                 } else {
                     A::RefreshWorkspaceGit
                 }),
+                "enter" if control && !k.modifiers.alt => {
+                    if !event.is_held
+                        && !k.modifiers.shift
+                        && self
+                            .product
+                            .git_sheet
+                            .as_ref()
+                            .is_some_and(crate::workspace_git::GitSheet::can_prepare_commit)
+                    {
+                        Some(A::GitPrepareCommit)
+                    } else {
+                        None
+                    }
+                }
                 "c" if control && diff && !event.is_held => Some(A::GitCopyDiff),
                 "s" if control && diff && !event.is_held => Some(A::GitApplyIndex),
                 "enter" if !control && !k.modifiers.alt && !event.is_held => {
@@ -6610,6 +6667,21 @@ impl CanvasApp {
             }
         }
         if self.product.dialog.is_some() {
+            if self.product.dialog.as_ref().is_some_and(|dialog| {
+                dialog.kind == product::DialogKind::WorkspaceGitCommit
+                    && k.key == "enter"
+                    && (k.modifiers.control || k.modifiers.platform)
+            }) {
+                if !event.is_held
+                    && !k.modifiers.alt
+                    && !k.modifiers.shift
+                    && self.text_input.preedit.is_empty()
+                {
+                    self.product_action(product::ProductAction::SubmitDialog, window, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
             if k.modifiers.control
                 && self
                     .product
@@ -7561,6 +7633,13 @@ impl EntityInputHandler for CanvasApp {
             return;
         }
         if self.product.dialog.is_some() {
+            if !self.product.commit_draft_fits(range.clone(), text) {
+                self.text_input.cancel();
+                self.product.notice = Some("Черновик ограничен 32 КиБ; текст не добавлен.".into());
+                window.notify_text_input_changed(&self.focus);
+                cx.notify();
+                return;
+            }
             let multiline = self.product.active_multiline();
             if let Some(buffer) = self.product.active_editor_mut()
                 && let Err(error) = buffer.replace(range, text, multiline)

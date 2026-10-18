@@ -1253,7 +1253,7 @@ fn head_entry(cwd: &Path, head: &str, path: &str) -> Result<Option<(String, Stri
     Ok(None)
 }
 
-fn run_git_input(
+pub(super) fn run_git_input(
     cwd: &Path,
     private_index: Option<&Path>,
     args: &[&str],

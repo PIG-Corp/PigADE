@@ -22,8 +22,20 @@ use pigade_storage::{Catalog, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "workspace_git_commit.rs"]
+mod commit;
 #[path = "workspace_git_index.rs"]
 mod index;
+pub use commit::{
+    GitCommitEntry, GitCommitPhase, WorkspaceGitCommitPlan, WorkspaceGitCommitResult,
+};
+
+pub(crate) fn run_commit_helper(operation: &Path) -> Result<()> {
+    commit::run_helper(operation)
+}
+pub(crate) fn commit_hook_helper(operation: &Path, name: &str, args: &[String]) -> Result<i32> {
+    commit::hook_helper(operation, name, args)
+}
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
 // Each identity-validation phase and the status command receive a fresh
@@ -64,6 +76,12 @@ pub struct WorkspaceGitSnapshot {
     pub index_operation: Option<WorkspaceGitIndexResult>,
     #[serde(default)]
     pub index_operation_unavailable_reason: Option<String>,
+    #[serde(default)]
+    pub commit_schema: Option<u32>,
+    #[serde(default)]
+    pub commit_operation: Option<WorkspaceGitCommitResult>,
+    #[serde(default)]
+    pub commit_unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,6 +191,18 @@ enum Task {
         ticket: Uuid,
         reply: mpsc::SyncSender<crate::Response>,
     },
+    CommitPrepare {
+        target: Target,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
+    Commit {
+        target: Target,
+        ticket: Uuid,
+        message: Option<String>,
+        inspect: bool,
+        acknowledge: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
 }
 
 pub(crate) struct Reader {
@@ -183,20 +213,37 @@ pub(crate) struct Reader {
 impl Reader {
     pub(crate) fn new(root: PathBuf) -> Result<Self> {
         let (sender, receiver) = mpsc::sync_channel::<Task>(1);
-        let index_busy = Arc::new(AtomicBool::new(false));
+        // Until recovery has inspected durable commit attempts, metadata edits
+        // must not rebind a workspace beneath a surviving native Git process.
+        let index_busy = Arc::new(AtomicBool::new(true));
         let worker_busy = index_busy.clone();
         let receiver = Arc::new(Mutex::new(receiver));
         let worker_receiver = receiver.clone();
         thread::Builder::new()
             .name("pigade-workspace-git".into())
             .spawn(move || {
-                let mut index = index::Engine::new(root);
+                let mut index = index::Engine::new(root.clone());
+                let mut commit = commit::Engine::new(root);
+                let mut commit_active = commit.is_running();
+                worker_busy.store(commit_active, Ordering::Release);
                 loop {
-                    let task = worker_receiver
-                        .lock()
-                        .expect("workspace Git worker queue")
-                        .recv();
-                    let Ok(task) = task else { break };
+                    let was_running = commit_active;
+                    commit.tick();
+                    if was_running && !commit.is_running() {
+                        worker_busy.store(false, Ordering::Release);
+                    }
+                    commit_active = commit.is_running();
+                    let task = {
+                        let receiver = worker_receiver.lock().expect("workspace Git worker queue");
+                        if commit.is_running() {
+                            match receiver.recv_timeout(Duration::from_millis(50)) {
+                                Ok(task) => Some(task),
+                                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                Err(mpsc::RecvTimeoutError::Disconnected) => None,
+                            }
+                        } else { receiver.recv().ok() }
+                    };
+                    let Some(task) = task else { break };
                     match task {
                         Task::Snapshot { target, reply } => {
                             let response = match snapshot(target.clone()) {
@@ -205,6 +252,14 @@ impl Reader {
                                         Ok(operation) => snapshot.index_operation = operation,
                                         Err(error) => snapshot.index_operation_unavailable_reason = Some(bounded_notice(format!("Git index operation status unavailable: {error:#}"))),
                                     }
+                                    if let Err(error) = commit.availability(&target) {
+                                        snapshot.commit_unavailable_reason = Some(bounded_notice(format!("Git commit unavailable: {error:#}")));
+                                    }
+                                    match commit.pending_for_target(&target) {
+                                        Ok(operation) => snapshot.commit_operation = operation,
+                                        Err(error) => snapshot.commit_unavailable_reason = Some(bounded_notice(format!("Git commit status unavailable: {error:#}"))),
+                                    }
+                                    if commit.is_running() { worker_busy.store(true, Ordering::Release); }
                                     response(Some(snapshot), None)
                                 }
                                 Err(error) => response(
@@ -220,8 +275,19 @@ impl Reader {
                             side,
                             reply,
                         } => {
+                            let commit_block = match commit.pending_for_target(&target) {
+                                Ok(Some(_)) => Some("Inspect and resolve the previous Git commit before changing the index".to_owned()),
+                                Err(error) => Some(bounded_notice(format!("Git commit status unavailable: {error:#}"))),
+                                Ok(None) => None,
+                            };
                             let response = match diff(target, path, side, &mut index) {
-                                Ok(diff) => diff_response(Some(diff), None),
+                                Ok(mut diff) => {
+                                    if let Some(reason) = commit_block {
+                                        diff.index_ticket = None;
+                                        diff.index_unavailable_reason = Some(reason);
+                                    }
+                                    diff_response(Some(diff), None)
+                                },
                                 Err(error) => diff_response(
                                     None,
                                     Some(format!("workspace Git diff unavailable: {error:#}")),
@@ -230,18 +296,54 @@ impl Reader {
                             let _ = reply.try_send(response);
                         }
                         Task::Index { target, ticket, inspect, reply } => {
-                            let result = index.request(target, ticket, inspect);
+                            let result = if !inspect {
+                                match commit.pending_for_target(&target) {
+                                    Ok(None) if !commit.is_running() => index.request(target, ticket, inspect),
+                                    Ok(_) => index::unavailable_result(&target, ticket, "A Git commit is unresolved; inspect its result first".into()),
+                                    Err(error) => index::unavailable_result(&target, ticket, bounded_notice(format!("Git commit status unavailable: {error:#}"))),
+                                }
+                            } else { index.request(target, ticket, inspect) };
                             let mut response = response(None, None);
                             response.workspace_git_index = Some(result);
                             let _ = reply.try_send(response);
                             if !inspect {
-                                worker_busy.store(false, Ordering::Release);
+                                worker_busy.store(commit.is_running(), Ordering::Release);
                             }
                         }
                         Task::IndexAck { target, ticket, reply } => {
                             let result = index.acknowledge(&target, ticket);
                             let mut response = response(None, None);
                             response.workspace_git_index = Some(result);
+                            let _ = reply.try_send(response);
+                        }
+                        Task::CommitPrepare { target, reply } => {
+                            let result = index.pending_for_target(&target).and_then(|pending| {
+                                ensure!(pending.is_none(), "A Git index operation has an unknown outcome; inspect and acknowledge it first");
+                                commit.prepare(&target)
+                            });
+                            let mut response = response(None, None);
+                            match result {
+                                Ok(plan) => response.workspace_git_commit_plan = Some(plan),
+                                Err(error) => response.error = Some(bounded_notice(format!("Git commit preview unavailable: {error:#}"))),
+                            }
+                            let _ = reply.try_send(response);
+                        }
+                        Task::Commit { target, ticket, message, inspect, acknowledge, reply } => {
+                            let result = if acknowledge { commit.acknowledge(&target, ticket) }
+                            else if inspect { commit.request(&target, ticket, message, true) }
+                            else {
+                                match index.pending_for_target(&target) {
+                                    Ok(None) => commit.request(&target, ticket, message, false),
+                                    Ok(Some(_)) => commit::unavailable_result(&target, ticket, "A Git index operation has an unknown outcome; inspect and acknowledge it first"),
+                                    Err(error) => commit::unavailable_result(&target, ticket, bounded_notice(format!("Git index operation status unavailable: {error:#}"))),
+                                }
+                            };
+                            let mut response = response(None, None);
+                            response.workspace_git_commit = Some(result);
+                            if !inspect || commit_active || commit.is_running() {
+                                worker_busy.store(commit.is_running(), Ordering::Release);
+                            }
+                            commit_active = commit.is_running();
                             let _ = reply.try_send(response);
                         }
                     }
@@ -380,6 +482,75 @@ impl Reader {
         }
     }
 
+    pub(crate) fn submit_commit_prepare(
+        &self,
+        target: Target,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        if let Err(error) = self.sender.try_send(Task::CommitPrepare { target, reply }) {
+            let task = match error {
+                mpsc::TrySendError::Full(task) | mpsc::TrySendError::Disconnected(task) => task,
+            };
+            if let Task::CommitPrepare { reply, .. } = task {
+                let _ = reply.try_send(response(
+                    None,
+                    Some("Git commit preview worker is busy or unavailable".into()),
+                ));
+            }
+        }
+    }
+
+    pub(crate) fn submit_commit(
+        &self,
+        target: Target,
+        ticket: Uuid,
+        message: Option<String>,
+        inspect: bool,
+        acknowledge: bool,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        let write = !inspect && !acknowledge;
+        if write
+            && self
+                .index_busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            let mut response = response(None, None);
+            response.workspace_git_commit = Some(commit::unavailable_result(
+                &target,
+                ticket,
+                "Another Git write is in progress",
+            ));
+            let _ = reply.try_send(response);
+            return;
+        }
+        if let Err(error) = self.sender.try_send(Task::Commit {
+            target,
+            ticket,
+            message,
+            inspect,
+            acknowledge,
+            reply,
+        }) {
+            if write {
+                self.index_busy.store(false, Ordering::Release);
+            }
+            let task = match error {
+                mpsc::TrySendError::Full(task) | mpsc::TrySendError::Disconnected(task) => task,
+            };
+            if let Task::Commit { target, reply, .. } = task {
+                let mut response = response(None, None);
+                response.workspace_git_commit = Some(commit::unavailable_result(
+                    &target,
+                    ticket,
+                    "Git commit worker is busy or unavailable",
+                ));
+                let _ = reply.try_send(response);
+            }
+        }
+    }
+
     pub(crate) fn submit_index_ack(
         &self,
         target: Target,
@@ -407,6 +578,27 @@ impl Reader {
             }
         }
     }
+}
+
+pub(crate) fn receipt_target(catalog: &Catalog, workspace: Uuid, revision: u64) -> Result<Target> {
+    let current = catalog
+        .workspaces
+        .iter()
+        .find(|value| value.id == workspace)
+        .context("workspace does not exist")?;
+    let project = catalog
+        .projects
+        .iter()
+        .find(|value| value.id == current.project_id)
+        .context("workspace project does not exist")?;
+    Ok(Target {
+        workspace_id: workspace,
+        workspace_revision: revision,
+        project_id: current.project_id,
+        cwd: current.cwd.clone(),
+        project_root: project.canonical_path.clone(),
+        git_common_dir: project.git_common_dir.clone(),
+    })
 }
 
 pub(crate) fn target(
@@ -474,6 +666,9 @@ fn snapshot(target: Target) -> Result<WorkspaceGitSnapshot> {
         truncated: truncated || parsed.truncated,
         index_operation: None,
         index_operation_unavailable_reason: None,
+        commit_schema: Some(1),
+        commit_operation: None,
+        commit_unavailable_reason: None,
     })
 }
 
@@ -1528,6 +1723,8 @@ pub(crate) fn response(
         workspace_git_snapshot: snapshot,
         workspace_git_diff: None,
         workspace_git_index: None,
+        workspace_git_commit_plan: None,
+        workspace_git_commit: None,
     }
 }
 
