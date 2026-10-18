@@ -342,16 +342,29 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'controls-resize-cancel', 'controls-resize-commit', 'controls-close',
                       'controls-open', 'controls-select-alt', 'controls-select-control',
                       'controls-select-disabled', 'appearance-open', 'appearance-light',
-                      'appearance-motion', 'appearance-dark', 'appearance-reload',
-                      'appearance-close'):
+                      'appearance-motion', 'appearance-dark', 'appearance-font-increase',
+                      'appearance-font-decrease', 'appearance-font-reset',
+                      'appearance-reload', 'appearance-close'):
             self.assertIn(f'"{stage}"', source)
         harness = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         appearance_flow = harness.split("appearance_path = Path('/home/pigade/.config/pigade/appearance.json')", 1)[1].split(
             "report['controls'].update", 1)[0]
-        self.assertIn("'version', 'revision', 'theme', 'reduced_motion'", appearance_flow)
+        self.assertIn("'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size'", appearance_flow)
         self.assertIn("wait_appearance(1, 'light', False)", appearance_flow)
         self.assertIn("wait_appearance(2, 'light', True)", appearance_flow)
         self.assertIn("wait_appearance(3, 'dark', True)", appearance_flow)
+        self.assertIn("'terminal_font_size': 15", appearance_flow)
+        self.assertIn("'terminal_font_size': 14", appearance_flow)
+        self.assertIn("def probe_kernel_pty_geometries(label)", appearance_flow)
+        self.assertIn("'command': 'input'", appearance_flow)
+        self.assertIn("stty size", appearance_flow)
+        self.assertIn("host frame geometry did not match the actual kernel PTY size", appearance_flow)
+        self.assertIn("decreasing terminal font size did not restore the exact actual kernel PTY geometry", appearance_flow)
+        self.assertIn("step('appearance-font-increase')", appearance_flow)
+        self.assertIn("step('appearance-font-decrease')", appearance_flow)
+        self.assertIn("step('appearance-font-reset')", appearance_flow)
+        self.assertIn("terminal_geometries() == original_terminal_geometries", appearance_flow)
+        self.assertIn("increased_geometries[key] != original_terminal_geometries[key]", appearance_flow)
         self.assertIn("config_path.read_bytes() == controls_bytes", appearance_flow)
         self.assertIn('appearance_snapshot() == terminal_before_appearance', appearance_flow)
         self.assertIn('journals_before_appearance', appearance_flow)

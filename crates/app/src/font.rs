@@ -4,12 +4,17 @@
 //! affect pixels, not parsing, journal identity, or checkpoint compatibility.
 use std::{borrow::Cow, sync::Arc};
 
-use gpui::{App, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, font};
+use gpui::{App, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, Pixels, font};
 
 pub const PROFILE_ID: &str = "pigade-terminal-render-profile-aliases-v1";
 pub const PRIMARY_FAMILY: &str = "PigADE Terminal Mono v1";
 pub const CJK_FAMILY: &str = "PigADE Terminal CJK JP v1";
-pub const SIZE: f32 = 14.;
+
+/// Glyph shaping and grid metrics use the same logical size for each frame.
+pub struct TerminalFont {
+    pub face: Font,
+    pub size: Pixels,
+}
 
 fn features() -> FontFeatures {
     FontFeatures(Arc::new(vec![("liga".into(), 0), ("calt".into(), 0)]))
@@ -97,7 +102,6 @@ mod tests {
     #[test]
     fn render_profile_pins_primary_family_and_disables_liga_and_calt() {
         assert_eq!(PROFILE_ID, "pigade-terminal-render-profile-aliases-v1");
-        assert_eq!(SIZE, 14.);
         let face = terminal_font();
         assert_eq!(face.family.as_ref(), PRIMARY_FAMILY);
         assert_eq!(

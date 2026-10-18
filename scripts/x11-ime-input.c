@@ -136,6 +136,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "controls-select-control") && strcmp(a.stage, "controls-select-disabled") &&
         strcmp(a.stage, "appearance-open") && strcmp(a.stage, "appearance-light") &&
         strcmp(a.stage, "appearance-motion") && strcmp(a.stage, "appearance-dark") &&
+        strcmp(a.stage, "appearance-font-increase") && strcmp(a.stage, "appearance-font-decrease") &&
+        strcmp(a.stage, "appearance-font-reset") &&
         strcmp(a.stage, "appearance-reload") && strcmp(a.stage, "appearance-close") &&
         strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
@@ -1194,6 +1196,12 @@ int main(int argc, char **argv) {
             key(dpy, XK_r);
         } else if (!strcmp(a.stage, "appearance-dark")) {
             key(dpy, XK_1);
+        } else if (!strcmp(a.stage, "appearance-font-increase")) {
+            key(dpy, XK_equal);
+        } else if (!strcmp(a.stage, "appearance-font-decrease")) {
+            key(dpy, XK_minus);
+        } else if (!strcmp(a.stage, "appearance-font-reset")) {
+            key(dpy, XK_0);
         } else if (!strcmp(a.stage, "appearance-reload")) {
             modified_key(dpy, XK_Control_L, XK_r);
         } else if (!strcmp(a.stage, "appearance-close")) {
@@ -1279,6 +1287,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "appearance-light") ? "1" :
                             !strcmp(a.stage, "appearance-motion") ? "1" :
                             !strcmp(a.stage, "appearance-dark") ? "1" :
+                            !strcmp(a.stage, "appearance-font-increase") ? "1" :
+                            !strcmp(a.stage, "appearance-font-decrease") ? "1" :
+                            !strcmp(a.stage, "appearance-font-reset") ? "1" :
                             !strcmp(a.stage, "appearance-reload") ? "2" :
                             !strcmp(a.stage, "appearance-close") ? "1" :
                             !strcmp(a.stage, "pointer-no-motion-release") ? "0" :

@@ -4,7 +4,7 @@
 
 - Pointer: modifier-click without travel no longer changes placement or undo; invalid drops show explicit text and an amber outline. Hover focus and relative-grab Dwindle insertion remain available without clicking the destination.
 
-- Added local Appearance settings for dark/light chrome and reduced motion, available from the header and command palette. Revision-checked preferences live under the user's config directory; terminal ANSI colors remain an independent dark profile.
+- Added local Appearance settings for dark/light chrome, reduced motion, and terminal font sizing from 10–24 px. Header/palette access, keyboard controls and visible size buttons share one revision-checked preference file; metric changes update terminal grids and PTY sizes without relaunching CLI. Terminal ANSI colors remain an independent dark profile.
 
 - Confirmed tab closing atomically rebases placement history and selects an adjacent tab while retaining live sessions and journals. Conflicts/unknown outcomes require explicit inspection; active configured launches block tab deletion.
 

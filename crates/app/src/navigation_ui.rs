@@ -5,6 +5,9 @@ use crate::navigation::{PaletteEntry, search_matches, search_score};
 fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
     match action {
         ProductAction::OpenAppearance => &["appearance", "theme", "внешний вид", "тема"],
+        ProductAction::AdjustTerminalFont(1) => &["font increase", "увеличить шрифт"],
+        ProductAction::AdjustTerminalFont(_) => &["font decrease", "уменьшить шрифт"],
+        ProductAction::ResetTerminalFont => &["font reset", "сбросить шрифт"],
         ProductAction::OpenCloseTab => &["close tab", "закрыть вкладку"],
         ProductAction::OpenPrompts => &["prompts", "шаблоны текста", "промпты"],
         ProductAction::RenamePane => &["rename", "alias", "имя"],

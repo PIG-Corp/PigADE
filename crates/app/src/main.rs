@@ -3228,9 +3228,12 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
-            A::OpenAppearance | A::SetTheme(_) | A::ToggleReducedMotion | A::ReloadAppearance => {
-                self.appearance_action(action, cx)
-            }
+            A::OpenAppearance
+            | A::SetTheme(_)
+            | A::ToggleReducedMotion
+            | A::ReloadAppearance
+            | A::AdjustTerminalFont(_)
+            | A::ResetTerminalFont => self.appearance_action(action, window, cx),
             A::OpenCloseTab | A::CloseManagedTab | A::ConfirmCloseTab | A::InspectCloseTab => {
                 self.tab_close_action(action, cx)
             }
@@ -5724,6 +5727,15 @@ impl CanvasApp {
                     Some(product::ProductAction::ReloadAppearance)
                 }
                 "r" if !k.modifiers.alt => Some(product::ProductAction::ToggleReducedMotion),
+                "+" | "=" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
+                    Some(product::ProductAction::AdjustTerminalFont(1))
+                }
+                "-" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
+                    Some(product::ProductAction::AdjustTerminalFont(-1))
+                }
+                "0" if !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform => {
+                    Some(product::ProductAction::ResetTerminalFont)
+                }
                 "escape" | "enter" => Some(product::ProductAction::CloseDialog),
                 _ => None,
             };
@@ -6839,7 +6851,10 @@ impl EntityInputHandler for CanvasApp {
         }
         let line = preedit_line(
             &self.text_input.preedit,
-            &crate::font::terminal_font(),
+            &crate::font::TerminalFont {
+                face: crate::font::terminal_font(),
+                size: px(f32::from(self.product.appearance.terminal_font_size)),
+            },
             window,
         );
         let bytes = self.text_input.range_bytes(range);
@@ -6890,6 +6905,7 @@ impl Render for CanvasApp {
             .flatten();
         let entity = cx.entity();
         let colors = chrome::colors(self.product.appearance.theme);
+        let terminal_font_size = px(f32::from(self.product.appearance.terminal_font_size));
         let painter = entity.clone();
         let trace = self.trace.clone();
         let paint_revision = self.state.revision;
@@ -7031,20 +7047,20 @@ impl Render for CanvasApp {
                                 .child(
                                     canvas(
                                         move |bounds, window, cx| {
-                                            let font = crate::font::terminal_font();
-                                            let fontid = window.text_system().resolve_font(&font);
+                                            let font = crate::font::TerminalFont {
+                                                face: crate::font::terminal_font(),
+                                                size: terminal_font_size,
+                                            };
+                                            let fontid =
+                                                window.text_system().resolve_font(&font.face);
                                             let width = window
                                                 .text_system()
-                                                .advance(fontid, px(crate::font::SIZE), 'M')
+                                                .advance(fontid, font.size, 'M')
                                                 .map(|s| s.width)
-                                                .unwrap_or(px(9.));
+                                                .unwrap_or(terminal_font_size * (9. / 14.));
                                             let height = terminal_line_height(
-                                                window
-                                                    .text_system()
-                                                    .ascent(fontid, px(crate::font::SIZE)),
-                                                window
-                                                    .text_system()
-                                                    .descent(fontid, px(crate::font::SIZE)),
+                                                window.text_system().ascent(fontid, font.size),
+                                                window.text_system().descent(fontid, font.size),
                                             );
                                             let cell = size(width, height);
                                             let scale = window.scale_factor();
@@ -7353,7 +7369,7 @@ fn glyph_span_bounds(origin: Point<Pixels>, cell: Size<Pixels>, flags: u16) -> B
 fn text(
     text: String,
     origin: Point<Pixels>,
-    font: &Font,
+    font: &crate::font::TerminalFont,
     color: Hsla,
     line_height: Pixels,
     window: &mut Window,
@@ -7365,10 +7381,10 @@ fn text(
     }
     let line = window.text_system().shape_line(
         text.into(),
-        px(crate::font::SIZE),
+        font.size,
         &[TextRun {
             len,
-            font: font.clone(),
+            font: font.face.clone(),
             color,
             background_color: None,
             underline: None,
@@ -7392,13 +7408,13 @@ fn preedit_area(pane: PaneGeometry, view: &View) -> Option<Bounds<Pixels>> {
     ))
 }
 
-fn preedit_line(text: &str, font: &Font, window: &Window) -> ShapedLine {
+fn preedit_line(text: &str, font: &crate::font::TerminalFont, window: &Window) -> ShapedLine {
     window.text_system().shape_line(
         text.to_owned().into(),
-        px(crate::font::SIZE),
+        font.size,
         &[TextRun {
             len: text.len(),
-            font: font.clone(),
+            font: font.face.clone(),
             color: rgb(0xf2f4f7).into(),
             background_color: None,
             underline: None,
@@ -7413,7 +7429,7 @@ fn paint_preedit(
     view: Option<&View>,
     preedit: &str,
     selection: Range<usize>,
-    font: &Font,
+    font: &crate::font::TerminalFont,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -7524,7 +7540,7 @@ fn paint_panel(
         colors,
     }: PanelState<'_>,
     selection: Option<&selection::CellSelection>,
-    font: &Font,
+    font: &crate::font::TerminalFont,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -7752,7 +7768,7 @@ fn paint_panel(
                                         ));
                                     }
                                 } else {
-                                    let mut glyphfont = font.clone();
+                                    let mut glyphfont = font.face.clone();
                                     if c.flags & 2 != 0 {
                                         glyphfont.weight = FontWeight::BOLD;
                                     }
@@ -7762,7 +7778,10 @@ fn paint_panel(
                                     text(
                                         c.text.clone(),
                                         origin,
-                                        &glyphfont,
+                                        &crate::font::TerminalFont {
+                                            face: glyphfont,
+                                            size: font.size,
+                                        },
                                         rgb(fg).into(),
                                         cell.height,
                                         window,

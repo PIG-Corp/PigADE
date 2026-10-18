@@ -972,11 +972,13 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
         except (UnicodeDecodeError, ValueError) as error:
             raise RuntimeError('appearance preference is not strict JSON') from error
         require(isinstance(value, dict) and set(value) == {
-                    'version', 'revision', 'theme', 'reduced_motion'} and
+                    'version', 'revision', 'theme', 'reduced_motion', 'terminal_font_size'} and
                 type(value.get('version')) is int and value['version'] == 1 and
                 type(value.get('revision')) is int and value['revision'] >= 1 and
                 value.get('theme') in ('light', 'dark') and
-                type(value.get('reduced_motion')) is bool,
+                type(value.get('reduced_motion')) is bool and
+                type(value.get('terminal_font_size')) is int and
+                10 <= value['terminal_font_size'] <= 24,
                 'appearance preference schema or value is invalid')
         return value
 
@@ -1039,7 +1041,7 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
 
     def wait_appearance(revision, theme, reduced_motion):
         expected = {'version': 1, 'revision': revision, 'theme': theme,
-                    'reduced_motion': reduced_motion}
+                    'reduced_motion': reduced_motion, 'terminal_font_size': 14}
         return wait_until(lambda: value if (value := appearance_document()) == expected else None,
                           time.monotonic() + 8)
 
@@ -1082,8 +1084,151 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
     require(all(abs(channel - expected) <= 2
                 for channel, expected in zip(dark_pixel, (45, 45, 49))),
             f'Dark modal surface pixel at (430,150) was {dark_pixel}, expected #2D2D31')
+
+    def terminal_geometries():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'font-size fixture terminal geometry snapshot exceeds bounds')
+        result = {}
+        for view in views:
+            session, generation = view.get('session'), view.get('generation')
+            frame = view.get('frame')
+            geometry = frame.get('geometry') if isinstance(frame, dict) else None
+            require(isinstance(session, str) and isinstance(generation, str) and
+                    isinstance(geometry, dict) and
+                    type(geometry.get('rows')) is int and 0 < geometry['rows'] <= 512 and
+                    type(geometry.get('cols')) is int and 0 < geometry['cols'] <= 512 and
+                    (session, generation) not in result,
+                    'font-size fixture received invalid host terminal geometry')
+            result[(session, generation)] = (geometry['rows'], geometry['cols'])
+        require(set(result) == set(generations_before_appearance),
+                'font-size geometry snapshot omitted or added a terminal generation')
+        return result
+
+    def probe_kernel_pty_geometries(label):
+        # Run a fixed stty size probe inside each currently placed shell so
+        # this checks the kernel PTY window size, not only the host frame model.
+        active_sessions = set(pane_ids(catalog_layout()[1].get('root')))
+        generation_for = {session: generation for session, generation
+                          in generations_before_appearance}
+        require(active_sessions and active_sessions.issubset(generation_for),
+                'font-size fixture has no valid placed PTY targets')
+        begin, end = f'PIGADE_FONT_{label}_BEGIN', f'PIGADE_FONT_{label}_END'
+        command = f"printf '{begin} '; stty size; printf '{end}\\n'\n".encode('ascii')
+        for session in sorted(active_sessions):
+            reply = host_request({'command': 'input', 'session': session,
+                                  'generation': generation_for[session],
+                                  'bytes': list(command)})
+            require(reply.get('error') is None,
+                    f'fixed kernel PTY size probe was not admitted for {session}')
+
+        def read_sizes():
+            result = {}
+            for session in sorted(active_sessions):
+                view = fixture_session_models(session).get(generation_for[session])
+                if not view or not isinstance(view.get('frame'), dict):
+                    return None
+                text = view_text(view)
+                marker_at = text.rfind(begin)
+                if marker_at < 0:
+                    return None
+                match = re.match(re.escape(begin) + r'\s*(\d{1,3})\s+(\d{1,3})\s*' +
+                                 re.escape(end), text[marker_at:])
+                if not match:
+                    return None
+                rows, cols = int(match.group(1)), int(match.group(2))
+                geometry = view['frame'].get('geometry', {})
+                if (type(geometry.get('rows')) is not int or type(geometry.get('cols')) is not int or
+                        geometry.get('rows') != rows or geometry.get('cols') != cols):
+                    return None
+                result[session] = (rows, cols)
+            return result
+
+        return wait_until(read_sizes, time.monotonic() + 8)
+
+    def font_layout_invariants(message):
+        current_catalog = host_request({'command': 'catalog'})['catalog']
+        current_layouts = {
+            item['id']: (item.get('layout_json'), item.get('active_pane'), item.get('revision'))
+            for item in current_catalog.get('tabs', [])
+        }
+        require(fixture_generations() == generations_before_appearance and
+                process_identities() == processes_before_appearance and
+                same_live_generations(generations_before_appearance) and
+                current_catalog.get('selection') == selection_before_appearance and
+                current_catalog.get('layout') == layout_document_before_appearance and
+                current_layouts == layouts_before_appearance and
+                config_path.read_bytes() == controls_bytes,
+                message)
+
+    kernel_geometries_before = probe_kernel_pty_geometries('BASE')
+    original_terminal_geometries = terminal_geometries()
+    active_sessions_before_font = set(pane_ids(catalog_layout()[1].get('root')))
+    geometry_by_session = {
+        session: original_terminal_geometries[(session, generation)]
+        for session, generation in generations_before_appearance
+        if session in active_sessions_before_font
+    }
+    require(geometry_by_session == kernel_geometries_before,
+            'host frame geometry did not match the actual kernel PTY size before font change')
+    step('appearance-font-increase')
+    font15 = wait_until(
+        lambda: value if (value := appearance_document()) == {
+            'version': 1, 'revision': 4, 'theme': 'dark', 'reduced_motion': True,
+            'terminal_font_size': 15} else None, time.monotonic() + 8)
+    increased_geometries = wait_until(
+        lambda: value if (value := terminal_geometries()) != original_terminal_geometries else None,
+        time.monotonic() + 8)
+    kernel_geometries_increased = probe_kernel_pty_geometries('INCREASED')
+    font_layout_invariants('increasing terminal font size changed tab placement or process identity')
+    helper_call(config, 'capture', '/artifacts/appearance-font15.ppm')
+    require(font15['terminal_font_size'] == 15 and
+            any(increased_geometries[key] != original_terminal_geometries[key]
+                for key in original_terminal_geometries) and
+            kernel_geometries_increased == {
+                session: increased_geometries[(session, generation)]
+                for session, generation in generations_before_appearance
+                if session in active_sessions_before_font
+            },
+            'increasing terminal font size did not persist 15 or change host-reported PTY geometry')
+
+    step('appearance-font-decrease')
+    font14 = wait_until(
+        lambda: value if (value := appearance_document()) == {
+            'version': 1, 'revision': 5, 'theme': 'dark', 'reduced_motion': True,
+            'terminal_font_size': 14} else None, time.monotonic() + 8)
+    restored_geometries = wait_until(
+        lambda: value if (value := terminal_geometries()) == original_terminal_geometries else None,
+        time.monotonic() + 8)
+    kernel_geometries_restored = probe_kernel_pty_geometries('RESTORED')
+    font_layout_invariants('restoring terminal font size changed tab placement or process identity')
+    require(font14['terminal_font_size'] == 14 and restored_geometries == original_terminal_geometries,
+            'decreasing terminal font size did not restore its exact prior host-reported geometry')
+    require(kernel_geometries_restored == kernel_geometries_before,
+            'decreasing terminal font size did not restore the exact actual kernel PTY geometry')
+
+    step('appearance-font-reset')
+    time.sleep(0.3)
+    require(appearance_document() == font14 and
+            terminal_geometries() == original_terminal_geometries,
+            'resetting the already-default terminal font changed its revision or geometry')
+    font_layout_invariants('resetting the already-default terminal font changed tab placement or process identity')
+    step('appearance-reload')
+    time.sleep(0.4)
+    require(appearance_document() == font14 and
+            terminal_geometries() == original_terminal_geometries,
+            'reloading Appearance did not preserve terminal font size 14')
+    font_layout_invariants('reloading font settings changed tab placement or process identity')
     step('appearance-close')
-    appearance_invariants('closing Appearance changed a terminal, controls preference, selection, or layout')
+    font_layout_invariants('closing Appearance changed tab placement or process identity')
+    step('appearance-open')
+    time.sleep(0.3)
+    require(appearance_document() == font14 and
+            terminal_geometries() == original_terminal_geometries,
+            'reopening Appearance did not preserve terminal font size 14')
+    font_layout_invariants('reopening font settings changed tab placement or process identity')
+    helper_call(config, 'capture', '/artifacts/appearance-font14.ppm')
+    step('appearance-close')
 
     report['controls'].update({'modifier_alt_persisted_before_use': True,
                                'alt_focus_mode_restored_exact_layout': True,
@@ -1093,15 +1238,28 @@ def run_controls_fixture(config, report, control, app, env, save, tab_id, baseli
                                'appearance_light_saved_revision_1': light_preference,
                                'appearance_reduced_motion_saved_revision_2': motion_preference,
                                'appearance_dark_saved_revision_3_kept_motion': dark_preference,
+                               'appearance_font_size_15_saved_revision_4': font15,
+                               'appearance_font_size_14_saved_revision_5': font14,
+                               'appearance_kernel_pty_geometry_before': kernel_geometries_before,
+                               'appearance_kernel_pty_geometry_at_15': kernel_geometries_increased,
+                               'appearance_kernel_pty_geometry_after_14': kernel_geometries_restored,
+                               'appearance_font_increase_changed_host_reported_geometry':
+                                   increased_geometries != original_terminal_geometries,
+                               'appearance_font_decrease_restored_exact_host_reported_geometry':
+                                   restored_geometries == original_terminal_geometries,
+                               'appearance_default_font_reset_was_revision_noop': True,
+                               'appearance_reload_reopen_preserved_font_size_14': True,
                                'appearance_reopen_preserved_light_and_motion': True,
-                               'appearance_changes_preserved_all_terminal_frames_sequences_journals': True,
+                               'appearance_theme_motion_preserved_terminal_frames_sequences_journals': True,
                                'appearance_changes_preserved_disabled_modifier_config': True,
                                'appearance_modal_surface_pixel': {'position': [430, 150],
                                                                  'light_rgb': light_pixel,
                                                                  'dark_rgb': dark_pixel},
                                'appearance_restart_recovery_tested': False,
                                'appearance_captures': ['appearance-light.ppm',
-                                                       'appearance-dark.ppm']})
+                                                       'appearance-dark.ppm',
+                                                       'appearance-font15.ppm',
+                                                       'appearance-font14.ppm']})
     report.update({'status': CONTROLS_PASS, 'stage': 'complete'})
     save()
 
@@ -4487,7 +4645,8 @@ def outer_run(args) -> dict:
                   'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm',
-                  'appearance-light.ppm', 'appearance-dark.ppm']
+                  'appearance-light.ppm', 'appearance-dark.ppm',
+                  'appearance-font15.ppm', 'appearance-font14.ppm']
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
@@ -4535,7 +4694,7 @@ def plan(args) -> dict:
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
-                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then persist Light/reduced-motion/Dark Appearance settings without terminal effects',
+                  'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, held cancel preview, Dwindle drop and layout undo',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',

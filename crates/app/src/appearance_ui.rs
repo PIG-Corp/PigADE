@@ -46,7 +46,60 @@ impl ProductUi {
                     .text_size(px(11.))
                     .text_color(colors.muted)
                     .whitespace_normal()
-                    .child("Тема интерфейса. Терминалы сохраняют свою палитру и размер клеток."),
+                    .child("Тема меняет интерфейс. Палитра CLI остаётся независимой."),
+            );
+        let mut font_controls = div().flex().items_center().gap_2();
+        for (id, label, name, action) in [
+            (
+                "appearance-font-smaller",
+                "−",
+                "Уменьшить шрифт терминала · −",
+                ProductAction::AdjustTerminalFont(-1),
+            ),
+            (
+                "appearance-font-larger",
+                "+",
+                "Увеличить шрифт терминала · +",
+                ProductAction::AdjustTerminalFont(1),
+            ),
+            (
+                "appearance-font-reset",
+                "14 px · 0",
+                "Сбросить размер шрифта терминала до 14 px · 0",
+                ProductAction::ResetTerminalFont,
+            ),
+        ] {
+            font_controls = font_controls.child(self.action_control_with_accessible_name(
+                id.into(),
+                label.into(),
+                name.into(),
+                action,
+                ControlStyle {
+                    role: Role::Button,
+                    selected: false,
+                    compact: true,
+                },
+                cx,
+            ));
+        }
+        fields = fields
+            .child(
+                div()
+                    .id("appearance-font-value")
+                    .role(Role::Status)
+                    .text_size(px(12.))
+                    .child(format!(
+                        "Шрифт терминала · {} px",
+                        self.appearance.terminal_font_size
+                    )),
+            )
+            .child(font_controls)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .whitespace_normal()
+                    .child("10–24 px. Масштаб интерфейса PigADE не меняется."),
             );
         if self.motion_forced {
             fields = fields.child(

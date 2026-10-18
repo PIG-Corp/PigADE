@@ -36,6 +36,8 @@ pub(crate) fn local_palette_command(action: &A) -> bool {
     matches!(
         action,
         A::OpenAppearance
+            | A::AdjustTerminalFont(_)
+            | A::ResetTerminalFont
             | A::OpenCloseTab
             | A::OpenPrompts
             | A::OpenAgentProfiles

@@ -11,6 +11,9 @@ const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 4096;
 const MAX_REVISION: u64 = i64::MAX as u64;
 const LOCK_WAIT: Duration = Duration::from_secs(2);
+pub(crate) const MIN_TERMINAL_FONT_SIZE: u8 = 10;
+pub(crate) const MAX_TERMINAL_FONT_SIZE: u8 = 24;
+pub(crate) const DEFAULT_TERMINAL_FONT_SIZE: u8 = 14;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,6 +31,12 @@ pub(crate) struct Config {
     pub(crate) revision: u64,
     pub(crate) theme: Theme,
     pub(crate) reduced_motion: bool,
+    #[serde(default = "default_terminal_font_size")]
+    pub(crate) terminal_font_size: u8,
+}
+
+fn default_terminal_font_size() -> u8 {
+    DEFAULT_TERMINAL_FONT_SIZE
 }
 
 impl Default for Config {
@@ -37,6 +46,7 @@ impl Default for Config {
             revision: 0,
             theme: Theme::Dark,
             reduced_motion: false,
+            terminal_font_size: DEFAULT_TERMINAL_FONT_SIZE,
         }
     }
 }
@@ -53,8 +63,15 @@ pub(crate) fn save(
     expected_revision: u64,
     theme: Theme,
     reduced_motion: bool,
+    terminal_font_size: u8,
 ) -> Result<Config, String> {
-    save_to(&config_path()?, expected_revision, theme, reduced_motion)
+    save_to(
+        &config_path()?,
+        expected_revision,
+        theme,
+        reduced_motion,
+        terminal_font_size,
+    )
 }
 
 pub(crate) fn save_to(
@@ -62,10 +79,12 @@ pub(crate) fn save_to(
     expected_revision: u64,
     theme: Theme,
     reduced_motion: bool,
+    terminal_font_size: u8,
 ) -> Result<Config, String> {
     if expected_revision > MAX_REVISION {
         return Err("appearance revision is out of range".into());
     }
+    validate_terminal_font_size(terminal_font_size)?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -101,6 +120,7 @@ pub(crate) fn save_to(
         revision,
         theme,
         reduced_motion,
+        terminal_font_size,
     };
     let bytes = serde_json::to_vec(&next).map_err(|e| format!("encode appearance config: {e}"))?;
     if bytes.len() as u64 > MAX_BYTES {
@@ -154,7 +174,17 @@ fn read_config(path: &Path) -> Result<Config, String> {
     if config.revision == 0 || config.revision > MAX_REVISION {
         return Err("appearance config revision must be between 1 and i64::MAX".into());
     }
+    validate_terminal_font_size(config.terminal_font_size)?;
     Ok(config)
+}
+
+fn validate_terminal_font_size(font_size: u8) -> Result<(), String> {
+    if !(MIN_TERMINAL_FONT_SIZE..=MAX_TERMINAL_FONT_SIZE).contains(&font_size) {
+        return Err(format!(
+            "terminal font size must be between {MIN_TERMINAL_FONT_SIZE} and {MAX_TERMINAL_FONT_SIZE}"
+        ));
+    }
+    Ok(())
 }
 
 fn open_lock(path: &Path) -> Result<File, String> {
@@ -285,15 +315,32 @@ mod tests {
         let path = dir.config();
         let absent = load_from(&path).unwrap();
         assert_eq!(absent, Config::default());
-        let saved = save_to(&path, 0, Theme::Light, true).unwrap();
+        let saved = save_to(&path, 0, Theme::Light, true, 18).unwrap();
         assert_eq!(saved.revision, 1);
+        assert_eq!(saved.terminal_font_size, 18);
         assert_eq!(load_from(&path).unwrap(), saved);
         assert!(
-            save_to(&path, 0, Theme::Dark, false)
+            save_to(&path, 0, Theme::Dark, false, 12)
                 .unwrap_err()
                 .contains("revision conflict")
         );
+        // A stale writer cannot partially change any preference.
         assert_eq!(load_from(&path).unwrap(), saved);
+    }
+
+    #[test]
+    fn legacy_config_defaults_terminal_font_size() {
+        let dir = TestDir::new();
+        let path = dir.config();
+        fs::write(
+            &path,
+            br#"{"version":1,"revision":3,"theme":"light","reduced_motion":true}"#,
+        )
+        .unwrap();
+        let config = load_from(&path).unwrap();
+        assert_eq!(config.terminal_font_size, DEFAULT_TERMINAL_FONT_SIZE);
+        assert_eq!(config.theme, Theme::Light);
+        assert!(config.reduced_motion);
     }
 
     #[test]
@@ -307,10 +354,48 @@ mod tests {
         .unwrap();
         let original = fs::read(&path).unwrap();
         assert!(load_from(&path).unwrap_err().contains("unsupported"));
-        assert!(save_to(&path, 0, Theme::Light, false).is_err());
+        assert!(save_to(&path, 0, Theme::Light, false, 14).is_err());
         assert_eq!(fs::read(&path).unwrap(), original);
         fs::write(&path, vec![b' '; MAX_BYTES as usize + 1]).unwrap();
         assert!(load_from(&path).unwrap_err().contains("4096"));
+    }
+
+    #[test]
+    fn invalid_font_sizes_are_rejected_without_changing_existing_config() {
+        let dir = TestDir::new();
+        let path = dir.config();
+        let saved = save_to(&path, 0, Theme::Light, true, 16).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        for invalid in [9, 25] {
+            assert!(load_font_size_fixture(&dir, invalid).contains("between 10 and 24"));
+            assert!(save_to(&path, saved.revision, Theme::Dark, false, invalid).is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+        assert!(load_font_size_fraction_fixture(&dir).contains("parse appearance config"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    fn load_font_size_fixture(dir: &TestDir, font_size: u8) -> String {
+        let path = dir.0.join(format!("invalid-{font_size}.json"));
+        fs::write(
+            &path,
+            format!(
+                r#"{{"version":1,"revision":1,"theme":"dark","reduced_motion":false,"terminal_font_size":{font_size}}}"#
+            ),
+        )
+        .unwrap();
+        load_from(&path).unwrap_err()
+    }
+
+    fn load_font_size_fraction_fixture(dir: &TestDir) -> String {
+        let path = dir.0.join("fractional-font-size.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"revision":1,"theme":"dark","reduced_motion":false,"terminal_font_size":14.5}"#,
+        )
+        .unwrap();
+        load_from(&path).unwrap_err()
     }
 
     #[cfg(unix)]
@@ -327,7 +412,7 @@ mod tests {
         symlink(&target, dir.config()).unwrap();
         assert!(load_from(&dir.config()).unwrap_err().contains("symlink"));
         assert!(
-            save_to(&dir.config(), 0, Theme::Light, false)
+            save_to(&dir.config(), 0, Theme::Light, false, 14)
                 .unwrap_err()
                 .contains("symlink")
         );
@@ -344,7 +429,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             threads.push(std::thread::spawn(move || {
                 barrier.wait();
-                save_to(&path, 0, theme, false)
+                save_to(&path, 0, theme, false, 14)
             }));
         }
         barrier.wait();

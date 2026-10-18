@@ -37,6 +37,8 @@ pub(super) enum ProductAction {
     OpenAppearance,
     SetTheme(crate::appearance::Theme),
     ToggleReducedMotion,
+    AdjustTerminalFont(i8),
+    ResetTerminalFont,
     ReloadAppearance,
     OpenCloseTab,
     CloseManagedTab,
@@ -532,6 +534,18 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         (
             "Внешний вид · appearance · тема",
             ProductAction::OpenAppearance,
+        ),
+        (
+            "Увеличить шрифт терминала",
+            ProductAction::AdjustTerminalFont(1),
+        ),
+        (
+            "Уменьшить шрифт терминала",
+            ProductAction::AdjustTerminalFont(-1),
+        ),
+        (
+            "Размер шрифта терминала · сбросить 14 px",
+            ProductAction::ResetTerminalFont,
         ),
         (
             "Клавиша управления панелями / горячие клавиши",

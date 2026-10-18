@@ -3353,3 +3353,35 @@ Integrate durable local Appearance settings and verify Hyprland-style hover/rela
 - Files: crates/app/src/appearance.rs, crates/app/src/appearance_commands.rs, crates/app/src/appearance_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/chrome.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/pointer_layout.rs, crates/app/src/profile_ui.rs, crates/app/src/prompt_ui.rs, crates/app/src/template_ui.rs, crates/app/src/git_status_ui.rs, crates/app/src/session_control_ui.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Final bootstrap test --locked:216 pass; strict all-target app Clippy, first-party fmt, version alignment and locked release build pass. Current harness32 pass. Private native pointer /tmp/pigade-pointer-appearance-20261018-01 and controls /tmp/pigade-appearance-controls-20261018-02 pass with unchanged generation/PIDs; pointer/appearance captures inspected. Initial app integration errors fixed (stateful role, unused items, Hsla conversion); native controls01 failed on sampling scrim-covered header, corrected fixture to unoccluded modal surface.
 - Risks / next: No active-desktop input/config changes. Native Wayland/platform/AT, actual UI-process Appearance restart and full MVP gates remain open; preserve unrelated research/stress/patch dirt and existing stash.
+
+## 2026-10-18T01:31:59+00:00 — /root/appearance_prefs_luna
+
+Add validated terminal font size preference with legacy schema default and stale CAS coverage
+
+- Files: crates/app/src/appearance.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/appearance.rs and git diff --check -- crates/app/src/appearance.rs passed; app Cargo not run per root-owned integration lane.
+- Risks / next: Root integrates the new save argument and imports MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE; app tests/build remain root-owned.
+
+## 2026-10-18T01:34:03+00:00 — /root/appearance_colors_luna
+
+Documented saved terminal font sizing with Appearance preferences
+
+- Files: README.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md
+- Verification: git diff --check on owned documentation: passed; no Cargo commands or acceptance claims
+- Risks / next: Lead owns implementation verification and any native acceptance evidence
+
+## 2026-10-18T01:34:06+00:00 — /root/close_tab_layout_luna
+
+Extend controls fixture for persistent terminal font sizing
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; helper compiled to /tmp/pigade-appearance-font-helper-20261018; git diff --check passed
+- Risks / next: Root owns app build and native controls fixture execution.
+
+## 2026-10-18T01:38:42+00:00 — /root
+
+Ship saved terminal font sizing with coherent metrics, glyphs, IME and process-preserving PTY resize
+
+- Files: crates/app/src/appearance.rs, crates/app/src/appearance_commands.rs, crates/app/src/appearance_ui.rs, crates/app/src/font.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 218 app tests passed; final strict all-target app Clippy, first-party fmt/version/diff checks and locked release build passed;32 harness tests passed. Existing private native controls fixture01 and final02 passed; stty size proves kernel/model13->12->13 rows at14->15->14px for3 real shells, unchanged generation/PIDs and catalog layout/history. Final font14/15 captures inspected. Read-only Luna review identified old-geometry gesture race; root cancels gestures/composition on successful size apply. Final UI-only label/hint changes rebuilt and reverified in02.
+- Risks / next: Broader BridgeMind/runtime and full MVP goal remains active. No system zoom/config changes; Wayland, extreme-size platform/AT and real UI-process preference restart acceptance remain open. Preserve unrelated stress/research/patch dirt and stash0.

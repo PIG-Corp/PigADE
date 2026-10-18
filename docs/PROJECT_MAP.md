@@ -54,7 +54,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/projects.rs, panel_launch.rs | Explicit new-folder Git initialization, repository identity, durable workspace/worktree preparation and prevalidated tab-scoped CLI launch |
 | crates/session-host/tests/project_setup.rs | Real IPC create/reopen, existing-target preservation and bounded provider-version fixture |
 | crates/app/src/chrome.rs, assets/icons | Shared dark/light chrome tokens and embedded original16-icon SVG family; terminal ANSI palette is separate |
-| crates/app/src/appearance.rs, appearance_commands.rs, appearance_ui.rs | Local revision-checked theme/reduced-motion preferences and native Appearance settings dialog; desktop settings and terminal palette are independent |
+| crates/app/src/appearance.rs, appearance_commands.rs, appearance_ui.rs | Schema1 local CAS preferences for theme, reduced motion and 10–24 px terminal font size; legacy files default to14 px and no-op limits/reset do not write |
 | docs/design | Imagegen workspace/welcome reference images and exact prompts; design artifacts, not test screenshots |
 | crates/app/src/product.rs | Appearance/header actions, always-visible open/create project controls, task/worktree sheet, detected CLI chooser, compact toolbar/pane menu, context review and editor |
 | crates/app/src/setup_flow.rs | Exact-request project → first shared workspace/tab setup; stale replies do not advance setup or start a CLI |
@@ -64,7 +64,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/viewport.rs | Pure device-aligned canvas translation/reveal, scrollbars and thumb dragging; per-tab offsets persist independently of layout undo |
 | crates/app/src/tiling.rs | Pure split-boundary resize helpers used by keyboard/mouse previews |
 | crates/app | Actual native GPUI application; cell replica only, pure keyboard encoder and device-rounded grid rendering; separate compatible lockfile |
-| crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; unchanged poll metadata avoids cloning frames/cells |
+| crates/app/src/protocol.rs, main.rs | Client watermark merge and revision-gated UI state replacement; terminal font metrics drive grid geometry and ordinary PTY resize without process relaunch |
 | crates/app/src/command_worker.rs | Explicit token-bound known-rejection acknowledgement, unknown lock, actual dispatch closure, unsent counts and resize cache; gates are exact session/generation targets |
 | crates/app/src/cell_style.rs | Pure bounded device-pixel underline/strike recipes, wide/hidden/spacer policy and decorated-space foreground admission |
 | crates/app/src/block_glyph.rs | Device-pixel solid Unicode block recipes; shades/ordinary text keep font rendering |
