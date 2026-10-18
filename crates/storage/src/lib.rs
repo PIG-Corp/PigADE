@@ -14,6 +14,7 @@ mod launch;
 mod memory;
 mod prepared_launch;
 mod prompt;
+mod tab_order;
 mod template_run;
 
 pub use agent_profile::*;
@@ -26,6 +27,7 @@ pub use journal::*;
 pub use launch::*;
 pub use memory::*;
 pub use prompt::*;
+pub use tab_order::TabOrder;
 pub use template_run::*;
 
 use std::{fs::File, os::fd::AsRawFd};

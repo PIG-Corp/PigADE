@@ -37,6 +37,9 @@ impl CanvasApp {
         if self.product.busy || self.catalog_edit.is_some() || self.picker_request.is_some() {
             pending.push("Ответ session host на отправленную операцию");
         }
+        if self.tab_order_pending.is_some() {
+            pending.push("Порядок вкладок");
+        }
         if self.focus_queue.is_saving()
             || self.focus_queue.pending().is_some()
             || self.deferred_placement.is_some()

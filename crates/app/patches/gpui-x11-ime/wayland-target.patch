@@ -1,0 +1,710 @@
+diff --git i/crates/gpui_linux/src/linux/wayland/client.rs w/crates/gpui_linux/src/linux/wayland/client.rs
+--- i/crates/gpui_linux/src/linux/wayland/client.rs
++++ w/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -20,6 +20,7 @@
+ use calloop_wayland_source::WaylandSource;
+ use collections::HashMap;
+ use filedescriptor::Pipe;
++use gpui::TextInputTargetStatus;
+ use gpui_util::ResultExt as _;
+ use http_client::Url;
+ use smallvec::SmallVec;
+@@ -142,6 +143,80 @@
+     fn commit_ime_state(&self);
+ }
+ 
++#[derive(Clone, Debug)]
++struct TextInputDispatchData {
++    target: Option<TextInputTargetBinding>,
++}
++
++#[derive(Clone, Debug)]
++struct TextInputTargetBinding {
++    epoch: u64,
++    surface: ObjectId,
++}
++
++#[derive(Clone, Debug)]
++struct TextInputTarget {
++    binding: TextInputTargetBinding,
++    status: TextInputTargetStatus,
++}
++
++#[derive(Default)]
++struct TextInputProxyState {
++    composing: bool,
++    preedit: Option<String>,
++    pending_commit: Option<String>,
++    pending_preedit: Option<Option<String>>,
++    commit_count: u32,
++}
++
++fn text_input_callback_matches<S: PartialEq, P: PartialEq>(
++    active: Option<(u64, &S, &P)>,
++    callback: Option<(u64, &S, &P)>,
++    focused_surface: Option<&S>,
++    require_focus: bool,
++) -> bool {
++    let (
++        Some((active_epoch, active_surface, active_proxy)),
++        Some((callback_epoch, callback_surface, callback_proxy)),
++    ) = (active, callback)
++    else {
++        return false;
++    };
++    active_epoch == callback_epoch
++        && active_surface == callback_surface
++        && active_proxy == callback_proxy
++        && (!require_focus || focused_surface.is_some_and(|focused| active_surface == focused))
++}
++
++fn done_serial_matches(commit_count: u32, serial: u32) -> bool {
++    commit_count == serial
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum TargetRequestDecision {
++    Idempotent,
++    Replace,
++    Reject,
++}
++
++fn target_request_decision<S: PartialEq>(
++    last_epoch: u64,
++    current: Option<(u64, &S)>,
++    requested_epoch: u64,
++    requested_surface: &S,
++) -> TargetRequestDecision {
++    if let Some((epoch, surface)) = current {
++        if requested_epoch == epoch && requested_surface == surface {
++            return TargetRequestDecision::Idempotent;
++        }
++    }
++    if requested_epoch == 0 || requested_epoch == u64::MAX || requested_epoch <= last_epoch {
++        TargetRequestDecision::Reject
++    } else {
++        TargetRequestDecision::Replace
++    }
++}
++
+ impl ImeCursorRectangleSink for zwp_text_input_v3::ZwpTextInputV3 {
+     fn set_ime_cursor_rectangle(&self, x: i32, y: i32, width: i32, height: i32) {
+         self.set_cursor_rectangle(x, y, width, height);
+@@ -168,15 +243,16 @@
+     text_input: &impl ImeCursorRectangleSink,
+     last_ime_cursor_rectangle: &mut Option<ImeCursorRectangle>,
+     bounds: Bounds<Pixels>,
+-) {
++) -> bool {
+     let cursor_rectangle = ImeCursorRectangle::from(bounds);
+     if *last_ime_cursor_rectangle == Some(cursor_rectangle) {
+-        return;
++        return false;
+     }
+ 
+     *last_ime_cursor_rectangle = Some(cursor_rectangle);
+     set_ime_cursor_rectangle(text_input, cursor_rectangle);
+     text_input.commit_ime_state();
++    true
+ }
+ 
+ fn set_ime_cursor_rectangle_after_done(
+@@ -184,11 +260,12 @@
+     last_ime_cursor_rectangle: &mut Option<ImeCursorRectangle>,
+     bounds: Bounds<Pixels>,
+     should_commit: bool,
+-) {
++) -> bool {
+     if should_commit {
+-        update_ime_cursor_rectangle(text_input, last_ime_cursor_rectangle, bounds);
++        update_ime_cursor_rectangle(text_input, last_ime_cursor_rectangle, bounds)
+     } else {
+         set_ime_cursor_rectangle(text_input, ImeCursorRectangle::from(bounds));
++        false
+     }
+ }
+ 
+@@ -365,6 +442,10 @@
+     data_device: Option<wl_data_device::WlDataDevice>,
+     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
+     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
++    text_input_target: Option<TextInputTarget>,
++    text_input_target_mode: bool,
++    last_text_input_target_epoch: u64,
++    text_input_proxy_states: HashMap<ObjectId, TextInputProxyState>,
+     pre_edit_text: Option<String>,
+     ime_pre_edit: Option<String>,
+     composing: bool,
+@@ -702,13 +783,108 @@
+             Some(PendingActivation::Window(window));
+     }
+ 
+-    pub fn enable_ime(&self) {
++    pub fn replace_text_input_target(
++        &self,
++        epoch: u64,
++        surface: wl_surface::WlSurface,
++    ) -> TextInputTargetStatus {
++        let client = self.get_client();
++        let mut state = client.borrow_mut();
++        let surface_id = surface.id();
++
++        let current_target = state
++            .text_input_target
++            .as_ref()
++            .map(|target| (target.binding.epoch, &target.binding.surface));
++        match target_request_decision(
++            state.last_text_input_target_epoch,
++            current_target,
++            epoch,
++            &surface_id,
++        ) {
++            TargetRequestDecision::Idempotent => {
++                return state.text_input_target.as_ref().unwrap().status;
++            }
++            TargetRequestDecision::Reject => return TextInputTargetStatus::Failed(epoch),
++            TargetRequestDecision::Replace => {}
++        }
++
++        state.text_input_target_mode = true;
++        state.last_text_input_target_epoch = epoch;
++        state.text_input_target = Some(TextInputTarget {
++            binding: TextInputTargetBinding {
++                epoch,
++                surface: surface_id.clone(),
++            },
++            status: TextInputTargetStatus::Pending(epoch),
++        });
++
++        if let Some(old) = state.text_input.take() {
++            old.disable();
++            old.commit();
++            state.text_input_proxy_states.remove(&old.id());
++            old.destroy();
++        }
++        state.ime_enabled = Some(false);
++        state.ime_pre_edit = None;
++        state.composing = false;
++        state.last_ime_cursor_rectangle = None;
++
++        let Some(manager) = state.globals.text_input_manager.clone() else {
++            state.text_input_target.as_mut().unwrap().status = TextInputTargetStatus::Failed(epoch);
++            return TextInputTargetStatus::Failed(epoch);
++        };
++        if state.wl_keyboard.is_none() {
++            state.text_input_target.as_mut().unwrap().status = TextInputTargetStatus::Failed(epoch);
++            return TextInputTargetStatus::Failed(epoch);
++        }
++        let proxy = manager.get_text_input(
++            &state.wl_seat,
++            &state.globals.qh,
++            TextInputDispatchData {
++                target: Some(TextInputTargetBinding {
++                    epoch,
++                    surface: surface_id,
++                }),
++            },
++        );
++        state
++            .text_input_proxy_states
++            .insert(proxy.id(), TextInputProxyState::default());
++        state.text_input = Some(proxy);
++        TextInputTargetStatus::Pending(epoch)
++    }
++
++    pub fn text_input_target_status(
++        &self,
++        surface: &wl_surface::WlSurface,
++    ) -> TextInputTargetStatus {
++        let state = self.get_client();
++        let state = state.borrow();
++        let Some(target) = state.text_input_target.as_ref() else {
++            return TextInputTargetStatus::Unsupported;
++        };
++        if target.binding.surface != surface.id() {
++            return TextInputTargetStatus::Unsupported;
++        }
++        if matches!(target.status, TextInputTargetStatus::Ready(_))
++            && !state
++                .keyboard_focused_window
++                .as_ref()
++                .is_some_and(|window| window.surface().id() == target.binding.surface)
++        {
++            return TextInputTargetStatus::Pending(target.binding.epoch);
++        }
++        target.status
++    }
++
++    pub fn enable_ime(&self) -> bool {
+         let client = self.get_client();
+         let mut state = client.borrow_mut();
+         state.ime_enabled = Some(true);
+         state.last_ime_cursor_rectangle = None;
+         let Some(text_input) = state.text_input.take() else {
+-            return;
++            return false;
+         };
+ 
+         text_input.enable();
+@@ -724,8 +900,12 @@
+             state = client.borrow_mut();
+         }
+         text_input.commit();
++        if let Some(proxy_state) = state.text_input_proxy_states.get_mut(&text_input.id()) {
++            proxy_state.commit_count = proxy_state.commit_count.wrapping_add(1);
++        }
+         state.last_ime_cursor_rectangle = cursor_rectangle;
+         state.text_input = Some(text_input);
++        true
+     }
+ 
+     pub fn disable_ime(&self) {
+@@ -733,9 +913,12 @@
+         let mut state = client.borrow_mut();
+         state.ime_enabled = Some(false);
+         state.composing = false;
+-        if let Some(text_input) = &state.text_input {
++        if let Some(text_input) = state.text_input.clone() {
+             text_input.disable();
+             text_input.commit();
++            if let Some(proxy_state) = state.text_input_proxy_states.get_mut(&text_input.id()) {
++                proxy_state.commit_count = proxy_state.commit_count.wrapping_add(1);
++            }
+         }
+     }
+ 
+@@ -753,7 +936,11 @@
+         let Some(text_input) = state.text_input.clone() else {
+             return;
+         };
+-        update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds);
++        if update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds) {
++            if let Some(proxy_state) = state.text_input_proxy_states.get_mut(&text_input.id()) {
++                proxy_state.commit_count = proxy_state.commit_count.wrapping_add(1);
++            }
++        }
+     }
+ 
+     pub fn handle_keyboard_layout_change(&self) {
+@@ -1069,6 +1256,10 @@
+             data_device,
+             primary_selection,
+             text_input: None,
++            text_input_target: None,
++            text_input_target_mode: false,
++            last_text_input_target_epoch: 0,
++            text_input_proxy_states: HashMap::default(),
+             pre_edit_text: None,
+             ime_pre_edit: None,
+             composing: false,
+@@ -1988,16 +2179,46 @@
+                 let keyboard = seat.get_keyboard(qh, ());
+ 
+                 if let Some(text_input) = state.text_input.take() {
++                    if state.text_input_target_mode {
++                        text_input.disable();
++                        text_input.commit();
++                    }
++                    state.text_input_proxy_states.remove(&text_input.id());
+                     text_input.destroy();
+                     state.ime_pre_edit = None;
+                     state.composing = false;
+                 }
+ 
++                let dispatch_data = TextInputDispatchData {
++                    target: state
++                        .text_input_target_mode
++                        .then(|| {
++                            state
++                                .text_input_target
++                                .as_ref()
++                                .map(|target| target.binding.clone())
++                        })
++                        .flatten(),
++                };
+                 state.text_input = state
+                     .globals
+                     .text_input_manager
+                     .as_ref()
+-                    .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
++                    .map(|manager| manager.get_text_input(seat, qh, dispatch_data));
++                if let Some(proxy_id) = state.text_input.as_ref().map(Proxy::id) {
++                    state
++                        .text_input_proxy_states
++                        .insert(proxy_id, TextInputProxyState::default());
++                } else if let Some(target) = state.text_input_target.as_mut() {
++                    let epoch = target.binding.epoch;
++                    target.status = TextInputTargetStatus::Failed(epoch);
++                }
++                if let Some(target) = state.text_input_target.as_mut() {
++                    if !matches!(target.status, TextInputTargetStatus::Failed(_)) {
++                        let epoch = target.binding.epoch;
++                        target.status = TextInputTargetStatus::Pending(epoch);
++                    }
++                }
+ 
+                 if let Some(wl_keyboard) = &state.wl_keyboard {
+                     wl_keyboard.release();
+@@ -2097,6 +2318,12 @@
+             wl_keyboard::Event::Leave { surface, .. } => {
+                 let keyboard_focused_window = get_window(&mut state, &surface.id());
+                 state.keyboard_focused_window = None;
++                if let Some(target) = state.text_input_target.as_mut() {
++                    if target.binding.surface == surface.id() {
++                        let epoch = target.binding.epoch;
++                        target.status = TextInputTargetStatus::Pending(epoch);
++                    }
++                }
+                 state.enter_token.take();
+                 // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
+                 state.repeat.current_id += 1;
+@@ -2275,17 +2502,209 @@
+     }
+ }
+ 
+-impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
++impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, TextInputDispatchData> for WaylandClientStatePtr {
+     fn event(
+         this: &mut Self,
+         text_input: &zwp_text_input_v3::ZwpTextInputV3,
+         event: <zwp_text_input_v3::ZwpTextInputV3 as Proxy>::Event,
+-        _: &(),
++        data: &TextInputDispatchData,
+         _: &Connection,
+         _: &QueueHandle<Self>,
+     ) {
+         let client = this.get_client();
+         let mut state = client.borrow_mut();
++
++        if state.text_input_target_mode || data.target.is_some() {
++            let Some(target) = state.text_input_target.as_ref() else {
++                return;
++            };
++            let target_binding = target.binding.clone();
++            let target_status = target.status;
++            let Some(active_proxy) = state.text_input.as_ref() else {
++                return;
++            };
++            let focused_surface = state
++                .keyboard_focused_window
++                .as_ref()
++                .map(|window| window.surface().id());
++            let current_proxy_id = text_input.id();
++            let current_callback = data
++                .target
++                .as_ref()
++                .map(|binding| (binding.epoch, &binding.surface, &current_proxy_id));
++            let active_proxy_id = active_proxy.id();
++            let current_active = Some((
++                target_binding.epoch,
++                &target_binding.surface,
++                &active_proxy_id,
++            ));
++            let same_target = text_input_callback_matches(
++                current_active,
++                current_callback,
++                focused_surface.as_ref(),
++                false,
++            );
++            if !same_target {
++                return;
++            }
++
++            match event {
++                zwp_text_input_v3::Event::Enter { surface } => {
++                    if surface.id() != target_binding.surface
++                        || focused_surface.as_ref() != Some(&target_binding.surface)
++                    {
++                        return;
++                    }
++                    if !matches!(target_status, TextInputTargetStatus::Pending(_)) {
++                        return;
++                    }
++                    let epoch = target_binding.epoch;
++                    drop(state);
++                    let activated = this.enable_ime();
++                    let mut state = client.borrow_mut();
++                    let proxy_still_current = state
++                        .text_input
++                        .as_ref()
++                        .is_some_and(|proxy| proxy.id() == current_proxy_id);
++                    let focus_still_current = state
++                        .keyboard_focused_window
++                        .as_ref()
++                        .is_some_and(|window| window.surface().id() == surface.id());
++                    if let Some(target) = state.text_input_target.as_mut() {
++                        if target.binding.epoch == epoch
++                            && target.binding.surface == surface.id()
++                            && proxy_still_current
++                            && focus_still_current
++                        {
++                            target.status = if activated {
++                                TextInputTargetStatus::Ready(epoch)
++                            } else {
++                                TextInputTargetStatus::Failed(epoch)
++                            };
++                        }
++                    }
++                    return;
++                }
++                zwp_text_input_v3::Event::Leave { surface } => {
++                    if surface.id() != target_binding.surface {
++                        return;
++                    }
++                    let epoch = target_binding.epoch;
++                    drop(state);
++                    this.disable_ime();
++                    let mut state = client.borrow_mut();
++                    if let Some(target) = state.text_input_target.as_mut() {
++                        if target.binding.epoch == epoch {
++                            target.status = TextInputTargetStatus::Pending(epoch);
++                        }
++                    }
++                    if let Some(proxy_state) =
++                        state.text_input_proxy_states.get_mut(&current_proxy_id)
++                    {
++                        proxy_state.composing = false;
++                        proxy_state.preedit = None;
++                        proxy_state.pending_preedit = None;
++                        proxy_state.pending_commit = None;
++                    }
++                    return;
++                }
++                _ => {}
++            }
++
++            if !matches!(target_status, TextInputTargetStatus::Ready(_))
++                || focused_surface.as_ref() != Some(&target_binding.surface)
++            {
++                return;
++            }
++
++            match event {
++                zwp_text_input_v3::Event::CommitString { text } => {
++                    if let Some(proxy_state) =
++                        state.text_input_proxy_states.get_mut(&current_proxy_id)
++                    {
++                        proxy_state.pending_commit = text;
++                    }
++                }
++                zwp_text_input_v3::Event::PreeditString { text, .. } => {
++                    if let Some(proxy_state) =
++                        state.text_input_proxy_states.get_mut(&current_proxy_id)
++                    {
++                        proxy_state.pending_preedit = Some(text);
++                    }
++                }
++                zwp_text_input_v3::Event::Done { serial } => {
++                    let Some(window) = state.keyboard_focused_window.clone() else {
++                        return;
++                    };
++                    let Some(proxy_state) =
++                        state.text_input_proxy_states.get_mut(&current_proxy_id)
++                    else {
++                        return;
++                    };
++                    let pending_commit = proxy_state.pending_commit.take();
++                    let pending_preedit = proxy_state.pending_preedit.take();
++                    let had_composition = proxy_state.composing;
++                    let next_preedit = match pending_preedit {
++                        Some(value) => value,
++                        None if pending_commit.is_some() => None,
++                        None => proxy_state.preedit.clone(),
++                    };
++                    proxy_state.composing =
++                        next_preedit.as_ref().is_some_and(|text| !text.is_empty());
++                    proxy_state.preedit = next_preedit.clone();
++                    let serial_matches = done_serial_matches(proxy_state.commit_count, serial);
++                    drop(state);
++
++                    if had_composition {
++                        window.handle_ime(ImeInput::DeleteText);
++                    }
++                    if let Some(commit_text) = pending_commit {
++                        // Preserve GPUI's existing policy: one-byte ASCII commits are key events,
++                        // while composed text is inserted through the IME path.
++                        if commit_text.len() == 1 {
++                            window.handle_input(PlatformInput::KeyDown(KeyDownEvent {
++                                keystroke: Keystroke {
++                                    modifiers: Modifiers::default(),
++                                    key: commit_text.clone(),
++                                    key_char: Some(commit_text),
++                                },
++                                is_held: false,
++                                prefer_character_input: false,
++                            }));
++                        } else {
++                            window.handle_ime(ImeInput::InsertText(commit_text));
++                        }
++                    }
++                    if let Some(text) = next_preedit.filter(|text| !text.is_empty()) {
++                        window.handle_ime(ImeInput::SetMarkedText(text));
++                    }
++                    if let Some(area) = window.get_ime_area() {
++                        let mut state = client.borrow_mut();
++                        let mut last_rectangle = state.last_ime_cursor_rectangle;
++                        if set_ime_cursor_rectangle_after_done(
++                            text_input,
++                            &mut last_rectangle,
++                            area,
++                            serial_matches,
++                        ) {
++                            if let Some(proxy_state) =
++                                state.text_input_proxy_states.get_mut(&current_proxy_id)
++                            {
++                                proxy_state.commit_count = proxy_state.commit_count.wrapping_add(1);
++                            }
++                        }
++                        state.last_ime_cursor_rectangle = last_rectangle;
++                    }
++                }
++                _ => {}
++            }
++            return;
++        }
++
++        if state.text_input.as_ref().map(Proxy::id) != Some(text_input.id()) {
++            return;
++        }
++
+         match event {
+             zwp_text_input_v3::Event::Enter { .. } => {
+                 drop(state);
+@@ -2520,7 +2939,17 @@
+                 match button_state {
+                     wl_pointer::ButtonState::Pressed => {
+                         if let Some(window) = state.keyboard_focused_window.clone() {
+-                            if state.composing && state.text_input.is_some() {
++                            let text_input_composing = if state.text_input_target_mode {
++                                state.text_input.as_ref().is_some_and(|proxy| {
++                                    state
++                                        .text_input_proxy_states
++                                        .get(&proxy.id())
++                                        .is_some_and(|proxy_state| proxy_state.composing)
++                                })
++                            } else {
++                                state.composing
++                            };
++                            if text_input_composing && state.text_input.is_some() {
+                                 drop(state);
+                                 // text_input_v3 don't have something like a reset function
+                                 this.disable_ime();
+@@ -3192,6 +3621,83 @@
+     use super::*;
+ 
+     #[test]
++    fn target_callback_requires_matching_epoch_surface_and_proxy() {
++        let active_surface = 20_u64;
++        let active_proxy = 42_u64;
++        let focused_surface = 20_u64;
++        assert!(text_input_callback_matches(
++            Some((8, &active_surface, &active_proxy)),
++            Some((8, &active_surface, &active_proxy)),
++            Some(&focused_surface),
++            true,
++        ));
++
++        let stale_proxy = 41_u64;
++        assert!(!text_input_callback_matches(
++            Some((8, &active_surface, &active_proxy)),
++            Some((7, &active_surface, &stale_proxy)),
++            Some(&focused_surface),
++            true,
++        ));
++
++        // Even equal protocol epochs cannot make a retired object current.
++        assert!(!text_input_callback_matches(
++            Some((8, &active_surface, &active_proxy)),
++            Some((8, &active_surface, &stale_proxy)),
++            Some(&focused_surface),
++            true,
++        ));
++
++        let other_surface = 21_u64;
++        assert!(!text_input_callback_matches(
++            Some((8, &active_surface, &active_proxy)),
++            Some((8, &other_surface, &stale_proxy)),
++            Some(&focused_surface),
++            true,
++        ));
++        let other_focus = 21_u64;
++        assert!(!text_input_callback_matches(
++            Some((8, &active_surface, &active_proxy)),
++            Some((8, &active_surface, &active_proxy)),
++            Some(&other_focus),
++            true,
++        ));
++    }
++
++    #[test]
++    fn text_input_done_serial_is_per_proxy_commit_count_not_target_epoch() {
++        assert!(done_serial_matches(3, 3));
++        assert!(!done_serial_matches(3, 4));
++        assert!(!done_serial_matches(3, 9));
++    }
++
++    #[test]
++    fn target_request_is_idempotent_only_for_same_epoch_and_surface() {
++        let current_surface = 20_u64;
++        let other_surface = 21_u64;
++        assert_eq!(
++            target_request_decision(8, Some((8, &current_surface)), 8, &current_surface),
++            TargetRequestDecision::Idempotent
++        );
++        assert_eq!(
++            target_request_decision(8, Some((8, &current_surface)), 8, &other_surface),
++            TargetRequestDecision::Reject
++        );
++        assert_eq!(
++            target_request_decision(8, Some((8, &current_surface)), 7, &current_surface),
++            TargetRequestDecision::Reject
++        );
++        assert_eq!(
++            target_request_decision(8, Some((8, &current_surface)), 9, &other_surface),
++            TargetRequestDecision::Replace
++        );
++        assert_eq!(
++            target_request_decision(8, None, u64::MAX, &current_surface),
++            TargetRequestDecision::Reject
++        );
++    }
++
++    #[test]
+     fn rejects_required_globals_below_supported_versions() {
+         assert!(wl_seat_version(4).is_err());
+         assert!(wl_output_version(1).is_err());
+diff --git i/crates/gpui_linux/src/linux/wayland/window.rs w/crates/gpui_linux/src/linux/wayland/window.rs
+--- i/crates/gpui_linux/src/linux/wayland/window.rs
++++ w/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -37,9 +37,9 @@
+     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, ExternalDragPayload,
+     FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
+-    PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
+-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+-    WindowKind, WindowParams, WindowVisibility,
++    PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, TextInputTargetStatus, Tiling,
++    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
++    WindowDecorations, WindowKind, WindowParams, WindowVisibility,
+     layer_shell::{Anchor, LayerShellNotSupportedError},
+     popup::PopupOptions,
+     px, size,
+@@ -1711,6 +1711,18 @@
+ }
+ 
+ impl PlatformWindow for WaylandWindow {
++    fn replace_text_input_target(&mut self, epoch: u64) -> TextInputTargetStatus {
++        let state = self.borrow();
++        state
++            .client
++            .replace_text_input_target(epoch, state.surface.clone())
++    }
++
++    fn text_input_target_status(&self) -> TextInputTargetStatus {
++        let state = self.borrow();
++        state.client.text_input_target_status(&state.surface)
++    }
++
+     fn bounds(&self) -> Bounds<Pixels> {
+         self.borrow().bounds
+     }

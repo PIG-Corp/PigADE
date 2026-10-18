@@ -152,6 +152,10 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-apply") && strcmp(a.stage, "catalog-undo") &&
         strcmp(a.stage, "catalog-delete") && strcmp(a.stage, "catalog-mutate") &&
         strcmp(a.stage, "catalog-rename-tab") &&
+        strcmp(a.stage, "catalog-tab-order-open") &&
+        strcmp(a.stage, "catalog-tab-order-refresh") &&
+        strcmp(a.stage, "catalog-tab-order-left") &&
+        strcmp(a.stage, "catalog-tab-order-right") &&
         strcmp(a.stage, "catalog-pane-rename-open") &&
         strcmp(a.stage, "catalog-pane-rename-action") &&
         strcmp(a.stage, "catalog-pane-rename-type") &&
@@ -638,7 +642,7 @@ static void control_shift_key(Display *dpy, KeySym sym) {
     XSync(dpy, False);
 }
 
-static void catalog_rename_tab(Display *dpy, Window app) {
+static void catalog_open_tab_menu(Display *dpy, Window app) {
     XWindowAttributes attr;
     if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
         fail("catalog rename requires the fixed private 1280x800 app");
@@ -653,6 +657,10 @@ static void catalog_rename_tab(Display *dpy, Window app) {
     XSync(dpy, False);
     struct timespec menu_settle = { .tv_sec = 0, .tv_nsec = 180000000 };
     nanosleep(&menu_settle, NULL);
+ }
+
+static void catalog_rename_tab(Display *dpy, Window app) {
+    catalog_open_tab_menu(dpy, app);
     key(dpy, XK_Down); key(dpy, XK_Return);
     modified_key(dpy, XK_Control_L, XK_a);
     modified_key(dpy, XK_Shift_L, XK_r);
@@ -1781,6 +1789,14 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Shift_L, XK_Delete); key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "catalog-mutate")) {
             setup_prefix(dpy, XK_r, 0); key(dpy, XK_Right); key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-tab-order-open")) {
+            catalog_open_tab_menu(dpy, app_window);
+        } else if (!strcmp(a.stage, "catalog-tab-order-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "catalog-tab-order-left")) {
+            modified_key(dpy, XK_Alt_L, XK_Left);
+        } else if (!strcmp(a.stage, "catalog-tab-order-right")) {
+            modified_key(dpy, XK_Alt_L, XK_Right);
         } else if (!strcmp(a.stage, "catalog-rename-tab")) {
             catalog_rename_tab(dpy, app_window);
         } else if (!strcmp(a.stage, "catalog-pane-rename-open") ||

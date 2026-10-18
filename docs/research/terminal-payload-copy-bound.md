@@ -45,13 +45,14 @@ same state is reachable from ordinary ANSI output.
 ### `clear_wide`
 
 Before the repair, `clear_wide` used `Arc::make_mut` and then replaced the
-cloned mark vector with an empty vector. Up to two `write_at_cursor` calls occur
-for one input callback (wide glyph plus spacer), so before-repair transient
-mark-copy traffic is conservatively bounded by `8 * I * (L + Z)` bytes. The
+cloned mark vector with an empty vector. Up to three `write_at_cursor` calls
+occur for one input callback: a wide glyph at the final column can first write
+a leading placeholder, wrap, then write its glyph and spacer. Thus before-repair
+transient mark-copy traffic is conservatively bounded by `12 * I * (L + Z)` bytes. The
 current [`Cell::clear_wide`](../../vendor/alacritty_terminal/src/term/cell.rs#L209-L228)
 keeps the unique-Arc fast path and, for shared extras, creates an empty-marks
 extra while preserving underline color and the shared hyperlink Arc. Its mark
-copy term is therefore zero; at most `2 * I` small `CellExtra`/Arc replacements
+copy term is therefore zero; at most `3 * I` small `CellExtra`/Arc replacements
 remain if shared attributes must survive. This repair removes the discarded
 mark-vector copy, not all input-driven COW or other model allocations.
 

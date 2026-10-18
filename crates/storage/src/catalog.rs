@@ -22,6 +22,9 @@ use crate::agent_profile_roster::{
     read as read_agent_profile_roster,
 };
 use crate::prompt::{MAX_PROMPTS, Prompt, PromptDelete, delete_prompt, read_prompts, write_prompt};
+use crate::tab_order::{
+    MAX_TAB_ORDER_BYTES, TAB_ORDER_SCHEMA, TabOrder, parse_order, validate_order,
+};
 
 const MAX_PROJECTS: usize = 256;
 const MAX_WORKSPACES: usize = 4096;
@@ -409,6 +412,9 @@ pub struct Catalog {
     /// Immutable cell-history horizontal span queries.
     #[serde(default)]
     pub history_pan_schema: Option<u16>,
+    /// `None` means the connected host predates durable workspace tab order.
+    #[serde(default)]
+    pub tab_orders: Option<Vec<TabOrder>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabClose {
@@ -558,9 +564,112 @@ pub(crate) fn migrate_agent_profile_roster(connection: &Connection) -> Result<()
     Ok(())
 }
 
+/// Schema 15 adds one ordered ID vector per workspace. Seed from the legacy
+/// per-workspace rowid order without rewriting any existing tab data.
+pub(crate) fn migrate_tab_orders(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE workspace_tab_orders (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+      schema INTEGER NOT NULL CHECK(schema=1),
+      revision INTEGER NOT NULL CHECK(revision>0),
+      ordered_ids TEXT NOT NULL CHECK(length(CAST(ordered_ids AS BLOB))<=1048576)
+    ) WITHOUT ROWID;",
+    )?;
+    let workspaces = {
+        let mut statement = connection.prepare("SELECT id FROM workspaces ORDER BY rowid")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    ensure!(
+        workspaces.len() <= MAX_WORKSPACES,
+        "too many workspaces to seed tab order"
+    );
+    let mut seeded_tabs = 0usize;
+    for workspace in workspaces {
+        let ids = {
+            let mut statement =
+                connection.prepare("SELECT id FROM tabs WHERE workspace_id=?1 ORDER BY rowid")?;
+            statement
+                .query_map([&workspace], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        ensure!(ids.len() <= MAX_TABS, "too many tabs to seed tab order");
+        seeded_tabs = seeded_tabs
+            .checked_add(ids.len())
+            .context("tab count overflow")?;
+        let ordered_ids = serde_json::to_string(&ids)?;
+        ensure!(
+            ordered_ids.len() <= MAX_TAB_ORDER_BYTES,
+            "tab order exceeds byte bound"
+        );
+        connection.execute(
+            "INSERT INTO workspace_tab_orders(workspace_id,schema,revision,ordered_ids) VALUES(?1,1,1,?2)",
+            params![workspace, ordered_ids],
+        )?;
+    }
+    let total_tabs: usize =
+        connection.query_row("SELECT COUNT(*) FROM tabs", [], |row| row.get(0))?;
+    ensure!(
+        seeded_tabs == total_tabs,
+        "tab references missing workspace during tab order migration"
+    );
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
+    }
+
+    /// Compare-and-swap the durable order for one ready workspace.
+    pub fn set_tab_order(
+        &mut self,
+        workspace_id: Uuid,
+        expected_workspace_revision: u64,
+        expected_revision: u64,
+        ordered_ids: Vec<Uuid>,
+    ) -> Result<Catalog> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let workspace = tx
+            .query_row(
+                "SELECT revision,status FROM workspaces WHERE id=?1",
+                [workspace_id.to_string()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .context("workspace not found")?;
+        ensure!(
+            workspace.1 == "ready",
+            "tab order requires a ready workspace"
+        );
+        ensure!(
+            workspace.0 == expected_workspace_revision,
+            "workspace revision conflict"
+        );
+        let current = load_tab_order(&tx, workspace_id)?;
+        ensure!(
+            current.revision == expected_revision,
+            "tab order revision conflict"
+        );
+        let members = workspace_tab_ids(&tx, workspace_id)?;
+        validate_order(&ordered_ids, &members)?;
+        if ordered_ids == current.ordered_ids {
+            let catalog = read_catalog(&tx)?;
+            tx.commit()?;
+            return Ok(catalog);
+        }
+        let next = next_tab_order_revision(current.revision)?;
+        let changed = tx.execute(
+            "UPDATE workspace_tab_orders SET revision=?2,ordered_ids=?3 WHERE workspace_id=?1 AND revision=?4",
+            params![workspace_id.to_string(), next, serde_json::to_string(&ordered_ids)?, current.revision as i64],
+        )?;
+        ensure!(changed == 1, "tab order revision conflict");
+        let catalog = read_catalog(&tx)?;
+        tx.commit()?;
+        Ok(catalog)
     }
     /// All entity writes, selection and global layout are one durable transaction. Parent
     /// ownership cannot change through an update; multi-tab layout transfers
@@ -735,11 +844,20 @@ fn apply_catalog_batch(
         crate::template_run::write_template_run(tx, run)?;
     }
     if let Some(close) = close {
+        let workspace_id = tx
+            .query_row(
+                "SELECT workspace_id FROM tabs WHERE id=?1",
+                [close.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .context("tab to close not found")?;
         let changed = tx.execute(
             "DELETE FROM tabs WHERE id=?1 AND revision=?2",
             params![close.id.to_string(), close.expected_revision as i64],
         )?;
         conflict(changed, "tab", close.id, close.expected_revision)?;
+        remove_tab_order(tx, Uuid::parse_str(&workspace_id)?, close.id)?;
     }
     read_catalog(tx)
 }
@@ -749,6 +867,86 @@ fn unique_ids(ids: impl Iterator<Item = Uuid>) -> Result<()> {
     for id in ids {
         ensure!(seen.insert(id), "duplicate entity ID in catalog batch");
     }
+    Ok(())
+}
+
+fn workspace_tab_ids(connection: &Connection, workspace_id: Uuid) -> Result<Vec<Uuid>> {
+    let mut statement =
+        connection.prepare("SELECT id FROM tabs WHERE workspace_id=?1 ORDER BY rowid")?;
+    statement
+        .query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?
+        .map(|id| Uuid::parse_str(&id?).context("invalid tab ID"))
+        .collect()
+}
+
+fn load_tab_order(connection: &Connection, workspace_id: Uuid) -> Result<TabOrder> {
+    let order = load_tab_order_record(connection, workspace_id)?;
+    validate_order(
+        &order.ordered_ids,
+        &workspace_tab_ids(connection, workspace_id)?,
+    )?;
+    Ok(order)
+}
+
+fn load_tab_order_record(connection: &Connection, workspace_id: Uuid) -> Result<TabOrder> {
+    let (schema, revision, json): (u16, i64, String) = connection
+        .query_row(
+            "SELECT schema,revision,ordered_ids FROM workspace_tab_orders WHERE workspace_id=?1",
+            [workspace_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .context("workspace tab order is missing")?;
+    ensure!(schema == TAB_ORDER_SCHEMA, "unsupported tab order schema");
+    parse_order(&workspace_id.to_string(), revision, &json)
+}
+
+fn next_tab_order_revision(current: u64) -> Result<i64> {
+    ensure!(
+        current > 0 && current < i64::MAX as u64,
+        "tab order revision overflow"
+    );
+    Ok((current + 1) as i64)
+}
+
+fn append_tab_order(tx: &Transaction<'_>, workspace_id: Uuid, tab_id: Uuid) -> Result<()> {
+    let mut order = load_tab_order_record(tx, workspace_id)?;
+    ensure!(
+        !order.ordered_ids.contains(&tab_id),
+        "tab already present in workspace order"
+    );
+    let mut prior_members = workspace_tab_ids(tx, workspace_id)?;
+    prior_members.retain(|id| *id != tab_id);
+    validate_order(&order.ordered_ids, &prior_members)?;
+    let next = next_tab_order_revision(order.revision)?;
+    order.ordered_ids.push(tab_id);
+    validate_order(&order.ordered_ids, &workspace_tab_ids(tx, workspace_id)?)?;
+    let changed = tx.execute(
+        "UPDATE workspace_tab_orders SET revision=?2,ordered_ids=?3 WHERE workspace_id=?1 AND revision=?4",
+        params![workspace_id.to_string(), next, serde_json::to_string(&order.ordered_ids)?, order.revision as i64],
+    )?;
+    ensure!(changed == 1, "tab order revision conflict");
+    Ok(())
+}
+
+fn remove_tab_order(tx: &Transaction<'_>, workspace_id: Uuid, tab_id: Uuid) -> Result<()> {
+    let mut order = load_tab_order_record(tx, workspace_id)?;
+    let mut prior_members = workspace_tab_ids(tx, workspace_id)?;
+    prior_members.push(tab_id);
+    validate_order(&order.ordered_ids, &prior_members)?;
+    let old_len = order.ordered_ids.len();
+    order.ordered_ids.retain(|id| *id != tab_id);
+    ensure!(
+        order.ordered_ids.len() + 1 == old_len,
+        "tab missing from workspace order"
+    );
+    let next = next_tab_order_revision(order.revision)?;
+    validate_order(&order.ordered_ids, &workspace_tab_ids(tx, workspace_id)?)?;
+    let changed = tx.execute(
+        "UPDATE workspace_tab_orders SET revision=?2,ordered_ids=?3 WHERE workspace_id=?1 AND revision=?4",
+        params![workspace_id.to_string(), next, serde_json::to_string(&order.ordered_ids)?, order.revision as i64],
+    )?;
+    ensure!(changed == 1, "tab order revision conflict");
     Ok(())
 }
 fn text(value: &str, maximum: usize, empty: bool) -> Result<()> {
@@ -872,6 +1070,10 @@ fn write_workspace(tx: &Transaction<'_>, write: CatalogWrite<Workspace>) -> Resu
     match write.expected_revision {
         None => {
             tx.execute("INSERT INTO workspaces(id,project_id,task,cwd,mode,status,error,context_revision,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1)",params![w.id.to_string(),w.project_id.to_string(),w.task,cwd,mode,status,w.error,w.context_revision.map(|id|id.to_string())])?;
+            tx.execute(
+                "INSERT INTO workspace_tab_orders(workspace_id,schema,revision,ordered_ids) VALUES(?1,1,1,'[]')",
+                [w.id.to_string()],
+            )?;
         }
         Some(expected) => {
             let owner: Option<String> = tx
@@ -904,6 +1106,7 @@ fn write_tab(tx: &Transaction<'_>, write: CatalogWrite<Tab>) -> Result<()> {
     match write.expected_revision {
         None => {
             tx.execute("INSERT INTO tabs(id,workspace_id,name,layout_json,active_pane,revision) VALUES(?1,?2,?3,?4,?5,1)",params![t.id.to_string(),t.workspace_id.to_string(),t.name,t.layout_json,t.active_pane.map(|id|id.to_string())])?;
+            append_tab_order(tx, t.workspace_id, t.id)?;
         }
         Some(expected) => {
             let owner: Option<String> = tx
@@ -1248,6 +1451,83 @@ fn read_agent_profiles(connection: &Connection, count: usize) -> Result<Vec<Agen
     Ok(profiles)
 }
 
+fn read_tab_orders(
+    connection: &Connection,
+    workspaces: &[Workspace],
+    tabs: &mut [Tab],
+) -> Result<Vec<TabOrder>> {
+    let mut statement = connection.prepare(
+        "SELECT workspace_id,schema,revision,ordered_ids FROM workspace_tab_orders ORDER BY workspace_id",
+    )?;
+    let mut orders = Vec::new();
+    for row in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, u16>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })? {
+        let (workspace, schema, revision, json) = row?;
+        ensure!(schema == TAB_ORDER_SCHEMA, "unsupported tab order schema");
+        orders.push(parse_order(&workspace, revision, &json)?);
+    }
+    ensure!(
+        orders.len() == workspaces.len(),
+        "workspace tab order records missing or extra"
+    );
+    let workspace_ids: HashSet<_> = workspaces.iter().map(|workspace| workspace.id).collect();
+    ensure!(
+        orders
+            .iter()
+            .all(|order| workspace_ids.contains(&order.workspace_id)),
+        "tab order references unknown workspace"
+    );
+    ensure!(
+        orders
+            .iter()
+            .map(|order| order.workspace_id)
+            .collect::<HashSet<_>>()
+            .len()
+            == orders.len(),
+        "duplicate workspace tab order"
+    );
+
+    // Replace tabs at their existing global rowid slots. Thus reordering one
+    // workspace never changes another workspace's relative order or positions.
+    let mut by_id: BTreeMap<Uuid, Tab> = tabs.iter().cloned().map(|tab| (tab.id, tab)).collect();
+    let mut positions: BTreeMap<Uuid, Vec<usize>> = BTreeMap::new();
+    for (index, tab) in tabs.iter().enumerate() {
+        positions.entry(tab.workspace_id).or_default().push(index);
+    }
+    for order in &orders {
+        let members: Vec<_> = tabs
+            .iter()
+            .filter(|tab| tab.workspace_id == order.workspace_id)
+            .map(|tab| tab.id)
+            .collect();
+        validate_order(&order.ordered_ids, &members)?;
+        let Some(slots) = positions.get(&order.workspace_id) else {
+            ensure!(
+                order.ordered_ids.is_empty(),
+                "tab order membership mismatch"
+            );
+            continue;
+        };
+        ensure!(
+            slots.len() == order.ordered_ids.len(),
+            "tab order membership mismatch"
+        );
+        for (slot, id) in slots.iter().zip(&order.ordered_ids) {
+            tabs[*slot] = by_id
+                .remove(id)
+                .context("tab order references missing tab")?;
+        }
+    }
+    ensure!(by_id.is_empty(), "tab order omitted one or more tabs");
+    Ok(orders)
+}
+
 fn read_catalog(connection: &Connection) -> Result<Catalog> {
     let counts:(usize,usize,usize,usize)=connection.query_row("SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM workspaces),(SELECT COUNT(*) FROM tabs),(SELECT COUNT(*) FROM project_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))?;
     ensure!(
@@ -1383,6 +1663,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
             revision,
         });
     }
+    let tab_orders = read_tab_orders(connection, &workspaces, &mut tabs)?;
     let selection=connection.query_row("SELECT project_id,workspace_id,tab_id,window_json,revision FROM catalog_selection WHERE singleton=1",[],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,u64>(4)?)))?;
     let selection = Selection {
         project_id: selection.0.map(|id| Uuid::parse_str(&id)).transpose()?,
@@ -1467,6 +1748,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         custom_cli_schema: Some(1),
         workspace_sessions_schema: Some(1),
         history_pan_schema: Some(1),
+        tab_orders: Some(tab_orders),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1692,6 +1974,9 @@ mod tests {
             store
                 .connection
                 .execute("DROP TABLE agent_profile_roster", [])?;
+            store
+                .connection
+                .execute("DROP TABLE workspace_tab_orders", [])?;
             store.connection.pragma_update(None, "user_version", 13)?;
         }
         let store = MetadataStore::open(&path)?;
@@ -1701,7 +1986,7 @@ mod tests {
             vec![a, b]
         );
         let backup_path = store.migration_backup_path().unwrap();
-        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v15."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1836,7 +2121,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(
-                "DROP TABLE prompt_records; DROP TABLE agent_profile_roster; DROP TABLE agent_profiles; PRAGMA user_version=10;",
+                "DROP TABLE prompt_records; DROP TABLE agent_profile_roster; DROP TABLE agent_profiles; DROP TABLE workspace_tab_orders; PRAGMA user_version=10;",
             )?;
         }
         let store = MetadataStore::open(&path)?;
@@ -1850,12 +2135,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            14
+            15
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-10 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v15."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1891,7 +2176,7 @@ mod tests {
         }
         {
             let connection = Connection::open(&path)?;
-            connection.execute_batch("DROP TABLE prompt_records; DROP TABLE agent_profile_roster; PRAGMA user_version=11;")?;
+            connection.execute_batch("DROP TABLE prompt_records; DROP TABLE agent_profile_roster; DROP TABLE workspace_tab_orders; PRAGMA user_version=11;")?;
         }
         let store = MetadataStore::open(&path)?;
         let catalog = store.catalog()?;
@@ -1901,12 +2186,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            14
+            15
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-11 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v15."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1965,6 +2250,7 @@ mod tests {
                 params![legacy, profile_id.to_string()],
             )?;
             connection.execute("DROP TABLE agent_profile_roster", [])?;
+            connection.execute("DROP TABLE workspace_tab_orders", [])?;
             connection.pragma_update(None, "user_version", 12)?;
             legacy
         };
@@ -1979,13 +2265,13 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            14
+            15
         );
 
         let backup_path = store
             .migration_backup_path()
             .context("schema-12 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v15."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -2606,6 +2892,210 @@ mod tests {
             ..CatalogBatch::default()
         })
     }
+
+    #[test]
+    fn tab_order_cas_membership_and_atomic_create_close_survive_reopen() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let p = project(Uuid::new_v4(), "PigADE");
+        let w = workspace(p.id);
+        let a = tab(w.id);
+        let b = tab(w.id);
+        let initial = store.apply_catalog(CatalogBatch {
+            projects: vec![new(p)],
+            workspaces: vec![new(w.clone())],
+            tabs: vec![new(a.clone()), new(b.clone())],
+            ..CatalogBatch::default()
+        })?;
+        let order = initial
+            .tab_orders
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|o| o.workspace_id == w.id)
+            .unwrap();
+        assert_eq!(order.ordered_ids, vec![a.id, b.id]);
+        let stale = store.set_tab_order(w.id, 1, order.revision - 1, vec![b.id, a.id]);
+        assert!(stale.is_err());
+        assert!(
+            store
+                .set_tab_order(w.id, 1, order.revision, vec![a.id, a.id])
+                .is_err()
+        );
+        assert!(
+            store
+                .set_tab_order(w.id, 1, order.revision, vec![a.id, Uuid::new_v4()])
+                .is_err()
+        );
+        let no_op = store.set_tab_order(w.id, 1, order.revision, vec![a.id, b.id])?;
+        assert_eq!(
+            no_op.tab_orders.as_ref().unwrap()[0].revision,
+            order.revision
+        );
+        let reordered = store.set_tab_order(w.id, 1, order.revision, vec![b.id, a.id])?;
+        assert_eq!(
+            reordered.tab_orders.as_ref().unwrap()[0].revision,
+            order.revision + 1
+        );
+        assert_eq!(
+            reordered.tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![b.id, a.id]
+        );
+
+        let created = tab(w.id);
+        let after_create = store.apply_catalog(CatalogBatch {
+            tabs: vec![new(created.clone())],
+            ..CatalogBatch::default()
+        })?;
+        let order = &after_create.tab_orders.as_ref().unwrap()[0];
+        assert_eq!(order.ordered_ids, vec![b.id, a.id, created.id]);
+        let mut edited = after_create
+            .tabs
+            .iter()
+            .find(|t| t.id == a.id)
+            .unwrap()
+            .clone();
+        edited.name = "Preserved metadata".into();
+        edited.layout_json = "{\"root\":null}".into();
+        let before_close = store.apply_catalog(CatalogBatch {
+            tabs: vec![update(edited.clone(), 1)],
+            ..CatalogBatch::default()
+        })?;
+        let closed = store.apply_catalog_closing_tab(
+            CatalogBatch::default(),
+            TabClose {
+                id: b.id,
+                expected_revision: 1,
+            },
+        )?;
+        assert_eq!(
+            closed.tab_orders.as_ref().unwrap()[0].ordered_ids,
+            vec![a.id, created.id]
+        );
+        assert!(
+            store
+                .apply_catalog_closing_tab(
+                    CatalogBatch::default(),
+                    TabClose {
+                        id: b.id,
+                        expected_revision: 1
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.catalog()?.tabs.iter().find(|t| t.id == a.id),
+            Some(&edited)
+        );
+        let final_order = closed.tab_orders.clone();
+        drop(store);
+        let reopened = MetadataStore::open(path)?.catalog()?;
+        assert_eq!(reopened.tab_orders, final_order);
+        assert_eq!(reopened.tabs.iter().find(|t| t.id == a.id), Some(&edited));
+        assert_eq!(
+            before_close
+                .tabs
+                .iter()
+                .find(|t| t.id == a.id)
+                .unwrap()
+                .layout_json,
+            "{\"root\":null}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schema15_tab_order_migration_seeds_rowid_order_and_preserves_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let (workspace_id, ids, original) = {
+            let mut store = MetadataStore::open(&path)?;
+            let p = project(Uuid::new_v4(), "Migration");
+            let w = workspace(p.id);
+            let a = tab(w.id);
+            let b = tab(w.id);
+            let selection = Selection {
+                project_id: Some(p.id),
+                workspace_id: Some(w.id),
+                tab_id: Some(b.id),
+                window: WindowState {
+                    width: 1366,
+                    height: 768,
+                    ..WindowState::default()
+                },
+                revision: 0,
+            };
+            let catalog = store.apply_catalog(CatalogBatch {
+                projects: vec![new(p)],
+                workspaces: vec![new(w.clone())],
+                tabs: vec![new(a.clone()), new(b.clone())],
+                selection: Some(new(selection)),
+                layout: Some(new(LayoutDocument {
+                    json: "{\"history\":[\"kept\"]}".into(),
+                    revision: 0,
+                })),
+                ..CatalogBatch::default()
+            })?;
+            store
+                .connection
+                .execute("DROP TABLE workspace_tab_orders", [])?;
+            store.connection.pragma_update(None, "user_version", 14)?;
+            (w.id, vec![a.id, b.id], catalog)
+        };
+        let store = MetadataStore::open(&path)?;
+        let migrated = store.catalog()?;
+        assert_eq!(migrated.tab_orders.as_ref().unwrap()[0].ordered_ids, ids);
+        assert_eq!(migrated.tabs, original.tabs);
+        assert_eq!(migrated.workspaces, original.workspaces);
+        assert_eq!(migrated.selection, original.selection);
+        assert_eq!(migrated.layout, original.layout);
+        let backup = store
+            .migration_backup_path()
+            .context("schema 14 backup absent")?;
+        assert!(backup.to_string_lossy().contains(".pre-v15."));
+        let backup =
+            Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            14
+        );
+        assert_eq!(
+            backup.query_row::<usize, _, _>(
+                "SELECT COUNT(*) FROM tabs WHERE workspace_id=?1",
+                [workspace_id.to_string()],
+                |row| row.get(0)
+            )?,
+            2
+        );
+        assert_eq!(backup.query_row::<usize, _, _>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_tab_orders'", [], |row| row.get(0))?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_persisted_tab_order_fails_catalog_read_closed() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let p = project(Uuid::new_v4(), "Malformed order");
+        let w = workspace(p.id);
+        let t = tab(w.id);
+        store.apply_catalog(CatalogBatch {
+            projects: vec![new(p)],
+            workspaces: vec![new(w.clone())],
+            tabs: vec![new(t)],
+            ..CatalogBatch::default()
+        })?;
+        store.connection.execute(
+            "UPDATE workspace_tab_orders SET ordered_ids='[\"not-a-uuid\"]' WHERE workspace_id=?1",
+            [w.id.to_string()],
+        )?;
+        assert!(store.catalog().is_err());
+        Ok(())
+    }
+
     #[test]
     fn hierarchy_selection_and_window_commit_and_reopen_together() -> Result<()> {
         let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
@@ -2880,6 +3370,12 @@ mod tests {
             let mut persisted_added = added.clone();
             persisted_added.revision = 1;
             candidate.workspaces.push(persisted_added);
+            candidate.tab_orders.as_mut().unwrap().push(TabOrder {
+                schema: TAB_ORDER_SCHEMA,
+                workspace_id: added.id,
+                revision: 1,
+                ordered_ids: Vec::new(),
+            });
             candidate.projects[0] = project.clone();
             candidate.projects[0].revision += 1;
             candidate.selection = selection.clone();
@@ -3264,7 +3760,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            14
+            15
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -3333,8 +3829,16 @@ mod tests {
             let tx = legacy.transaction_with_behavior(TransactionBehavior::Immediate)?;
             migrate_catalog(&tx)?;
             write_project(&tx, new(p.clone()))?;
-            write_workspace(&tx, new(w.clone()))?;
-            write_tab(&tx, new(t.clone()))?;
+            tx.execute(
+                "INSERT INTO workspaces(id,project_id,task,cwd,mode,status,error,context_revision,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1)",
+                params![w.id.to_string(), w.project_id.to_string(), w.task, w.cwd.to_str().unwrap(), w.mode.as_str(), w.status.as_str(), w.error, w.context_revision.map(|id| id.to_string())],
+            )?;
+            // Model a pre-schema-15 database directly; the migration will seed
+            // this legacy row from its existing per-workspace rowid position.
+            tx.execute(
+                "INSERT INTO tabs(id,workspace_id,name,layout_json,active_pane,revision) VALUES(?1,?2,?3,?4,?5,1)",
+                params![t.id.to_string(), t.workspace_id.to_string(), t.name, t.layout_json, Option::<String>::None],
+            )?;
             write_selection(&tx, update(selected, 0))?;
             if early_layout {
                 migrate_layout_document(&tx)?;
@@ -3359,7 +3863,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                14
+                15
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

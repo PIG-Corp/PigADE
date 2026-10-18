@@ -275,6 +275,7 @@ mod tests {
                     &layout(&[id(30), id(31)], Some(id(31)), true),
                 ),
             ],
+            tab_orders: None,
             selection: Selection {
                 project_id: Some(id(1)),
                 workspace_id: Some(id(2)),

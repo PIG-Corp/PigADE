@@ -81,6 +81,8 @@ pub(super) enum ProductAction {
     ReloadAppearance,
     OpenCloseTab,
     CloseManagedTab,
+    MoveManagedTab(i32),
+    RefreshTabOrder,
     ConfirmCloseTab,
     InspectCloseTab,
     OpenPrompts,
@@ -538,6 +540,7 @@ pub(super) struct ProductUi {
     pub(super) template_target: Option<pigade_storage::LayoutTemplate>,
     pub(super) template_draft: Option<pigade_layout::GeometryTemplate>,
     pub(super) tab_close_sheet: Option<crate::tab_close::Sheet>,
+    pub(super) tab_order_error: Option<String>,
     pub(super) prompt_editor: Option<crate::prompt_flow::PromptEditor>,
     pub(super) prompt_delete: Option<pigade_storage::Prompt>,
     pub(super) prompt_origin: Option<Dialog>,
@@ -1340,11 +1343,34 @@ impl ProductUi {
                     }
                     rows
                 }
-                Some(crate::catalog_flow::ManagedEntity::Tab(tab)) => vec![
-                    ("Открыть вкладку".into(), ProductAction::SelectTab(tab.id)),
-                    ("Переименовать вкладку".into(), ProductAction::RenameTarget),
-                    ("Закрыть вкладку…".into(), ProductAction::CloseManagedTab),
-                ],
+                Some(crate::catalog_flow::ManagedEntity::Tab(tab)) => {
+                    let mut rows = vec![
+                        ("Открыть вкладку".into(), ProductAction::SelectTab(tab.id)),
+                        ("Переименовать вкладку".into(), ProductAction::RenameTarget),
+                    ];
+                    if self.tab_order_error.is_none()
+                        && let Some(catalog) = &self.catalog
+                    {
+                        if crate::tab_order::can_move(catalog, tab.id, -1) {
+                            rows.push((
+                                "Переместить влево".into(),
+                                ProductAction::MoveManagedTab(-1),
+                            ));
+                        }
+                        if crate::tab_order::can_move(catalog, tab.id, 1) {
+                            rows.push((
+                                "Переместить вправо".into(),
+                                ProductAction::MoveManagedTab(1),
+                            ));
+                        }
+                    }
+                    rows.push((
+                        "Обновить порядок вкладок".into(),
+                        ProductAction::RefreshTabOrder,
+                    ));
+                    rows.push(("Закрыть вкладку…".into(), ProductAction::CloseManagedTab));
+                    rows
+                }
                 None => vec![],
             },
             Some(DialogKind::Layouts) => {
@@ -3321,6 +3347,30 @@ impl ProductUi {
                             .child(
                                 "Проверка восстановления недоступна в этой версии session host.",
                             ),
+                    );
+                }
+            }
+            if let crate::catalog_flow::ManagedEntity::Tab(tab) = target {
+                if let Some(catalog) = &self.catalog
+                    && let Some((position, total)) = crate::tab_order::position(catalog, tab.id)
+                {
+                    fields = fields.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .whitespace_normal()
+                            .child(format!(
+                                "Позиция {position} из {total} · Alt+←/→ — переместить вкладку"
+                            )),
+                    );
+                }
+                if let Some(error) = &self.tab_order_error {
+                    fields = fields.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .whitespace_normal()
+                            .child(error.clone()),
                     );
                 }
             }

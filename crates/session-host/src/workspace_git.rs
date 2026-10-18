@@ -2412,6 +2412,7 @@ mod tests {
             custom_cli_schema: Some(1),
             workspace_sessions_schema: None,
             history_pan_schema: None,
+            tab_orders: None,
         };
         assert!(target(&catalog, workspace_id, 3).is_err());
         assert_eq!(target(&catalog, workspace_id, 4)?.workspace_revision, 4);

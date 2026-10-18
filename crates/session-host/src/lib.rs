@@ -341,6 +341,13 @@ pub enum Command {
         ordered_ids: Vec<Uuid>,
         pinned_ids: Vec<Uuid>,
     },
+    /// Reorder only the exact current tab membership of one Ready workspace.
+    SetTabOrder {
+        workspace: Uuid,
+        expected_workspace_revision: u64,
+        expected_revision: u64,
+        ordered_ids: Vec<Uuid>,
+    },
     SetCanvasOffset {
         tab: Uuid,
         offset: pigade_storage::CanvasOffset,
@@ -1722,6 +1729,20 @@ impl Host {
                     expected_revision,
                     ordered_ids,
                     pinned_ids,
+                )?
+            }
+            Command::SetTabOrder {
+                workspace,
+                expected_workspace_revision,
+                expected_revision,
+                ordered_ids,
+            } => {
+                catalog::read_metadata(&self.metadata)?;
+                self.metadata.set_tab_order(
+                    workspace,
+                    expected_workspace_revision,
+                    expected_revision,
+                    ordered_ids,
                 )?
             }
             Command::CloseTab {

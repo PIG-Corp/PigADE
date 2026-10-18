@@ -1791,6 +1791,7 @@ mod tests {
                 revision: 4,
             }],
             tabs: vec![],
+            tab_orders: None,
             selection: pigade_storage::Selection {
                 workspace_id: Some(workspace),
                 ..Default::default()

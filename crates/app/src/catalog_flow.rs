@@ -178,6 +178,7 @@ mod tests {
             projects: vec![],
             workspaces,
             tabs: vec![],
+            tab_orders: None,
             selection: Selection::default(),
             layout: Default::default(),
             layout_templates: Some(vec![]),

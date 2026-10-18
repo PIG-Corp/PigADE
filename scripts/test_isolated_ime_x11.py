@@ -99,6 +99,21 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'context-prompt-inserted.ppm'", harness)
         self.assertIn("'context-prompt-delete-review.ppm'", harness)
 
+    def test_catalog_tab_order_uses_scoped_native_controls_and_preserves_pty(self):
+        harness = SCRIPT.read_text()
+        helper = SCRIPT.with_name('x11-ime-input.c').read_text()
+        flow = harness.split("report['stage'] = 'catalog-tab-order'", 1)[1].split(
+            "report['stage'] = 'catalog-close-tab-review'", 1)[0]
+        for stage in ('catalog-tab-order-open', 'catalog-tab-order-refresh',
+                      'catalog-tab-order-left', 'catalog-tab-order-right'):
+            self.assertIn(f"helper_call(config, '{stage}')", flow)
+            self.assertIn(f'"{stage}"', helper)
+        self.assertIn('original_roster[\'revision\'] + 2', flow)
+        self.assertIn('close_tab_review_unchanged(', flow)
+        self.assertIn('edge tab movement changed the order revision', flow)
+        self.assertIn('reopening tab management lost durable order', flow)
+        self.assertIn('catalog_open_tab_menu(dpy, app_window)', helper)
+
     def test_history_state_ignores_idle_checkpoint_timing_but_retains_terminal_changes(self):
         import copy
         baseline = {'generation': {'sequence': 5, 'frame': {'geometry': {'rows': 2, 'cols': 3}},

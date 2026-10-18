@@ -47,6 +47,8 @@ mod session_control;
 mod setup_flow;
 mod startup;
 mod tab_close;
+mod tab_order;
+mod tab_order_commands;
 mod template_commands;
 mod template_flow;
 mod terminal_insert;
@@ -1191,6 +1193,7 @@ mod focus_placement_tests {
             custom_cli_schema: Some(1),
             workspace_sessions_schema: None,
             history_pan_schema: None,
+            tab_orders: None,
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1255,6 +1258,7 @@ struct CanvasApp {
     profile_prepare: Option<profile_flow::Pending>,
     profile_reload: Option<profile_flow::RosterReload>,
     profile_roster_pending: Option<profile_flow::RosterPending>,
+    tab_order_pending: Option<tab_order::Pending>,
     transfer_reload: Option<TransferReload>,
     template_flow: template_flow::RunFlow,
     deferred_product_action: Option<product::ProductAction>,
@@ -1450,6 +1454,8 @@ impl CanvasApp {
                             match reply {
                                 Ok(mut reply) => {
                                     let ui_request = reply.ui_request;
+                                    let tab_order_reply = this.tab_order_pending.as_ref().is_some_and(|pending|Some(pending.request)==ui_request);
+                                    let tab_order_catalog = reply.catalog.is_some();
                                     if let Some(pending)=stop_pending { this.receive_stop(pending,reply.process_view,cx); }
                                     if let Some(providers) = reply.providers {
                                         this.product.providers = Some(providers);
@@ -1500,7 +1506,7 @@ impl CanvasApp {
                                         let transfer_refresh = transfer_pending.is_some();
                                         let transfer_source = transfer_pending.map(|pending| pending.source);
                                         let edit = if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==ui_request) {this.catalog_edit.take()} else {None};
-                                        let keep_local = (focus_reply || edit.is_some()) && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
+                                        let keep_local = (focus_reply || edit.is_some() || tab_order_reply) && this.product.catalog.as_ref().is_some_and(|previous| same_focus_placement(previous,&catalog));
                                         let same_dialog=edit.as_ref().is_some_and(|edit|edit.dialog == this.product.dialog.as_ref().map(|dialog|dialog.id));
                                         let current_dialog=this.product.dialog.clone();
                                         let transfer_dialog_live = transfer_pending.is_some_and(|pending| current_dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::Transfer));
@@ -1512,7 +1518,7 @@ impl CanvasApp {
                                         this.product.catalog = Some(catalog);
                                         this.workspace_catalog_changed();
                                         if !keep_local && roster_write.is_none() && profile_reload.is_none() {
-                                            if !transfer_refresh && !preserve_workspace_dialog {
+                                            if !transfer_refresh && !preserve_workspace_dialog && !tab_order_reply {
                                                 this.product.notice = None;
                                                 this.product.dialog = None;
                                             }
@@ -1539,7 +1545,7 @@ impl CanvasApp {
                                             }
                                             this.product.notice=Some(if changed {"Сохранено; новые правки ещё не сохранены".into()} else {edit.notice});
                                             this.product.dialog=if same_dialog && !changed {edit.return_dialog.or_else(||edit.return_to.map(product::Dialog::new))} else {current_dialog};
-                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply || transfer_refresh || roster_write.is_some() {
+                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply || transfer_refresh || roster_write.is_some() || tab_order_reply {
                                             this.product.dialog=current_dialog;
                                             if let Some(pending) = roster_write
                                                 && this.product.dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::AgentProfiles) {
@@ -1576,6 +1582,7 @@ impl CanvasApp {
                                         }
                                         this.receive_tab_close(ui_request);
                                     }
+                                    this.receive_tab_order(ui_request, (!tab_order_catalog).then_some("Host не подтвердил порядок вкладок: в ответе нет каталога"));
                                     if let (Some(run),Some(pending))=(reply.template_run,template_pending) {
                                         this.receive_template_run(run,pending,cx);
                                     }
@@ -1659,6 +1666,9 @@ impl CanvasApp {
                                     if this.fail_scrollback(error.ui_request,&error.message,cx) { continue; }
                                     this.close_flow.fail(format!("Операция session host не подтверждена: {}", error.message));
                                     if let Some(pending)=stop_pending {this.stop_failed(pending,error.message,cx);continue;}
+                                    let tab_order_failed=this.tab_order_pending.as_ref().is_some_and(|pending|Some(pending.request)==error.ui_request);
+                                    this.receive_tab_order(error.ui_request,Some(&error.message));
+                                    if tab_order_failed {cx.notify();continue;}
                                     this.tab_close_failed(error.ui_request);
                                     let transfer_error = this.transfer_reload.is_some_and(|pending| Some(pending.request) == error.ui_request);
                                     let transfer_error_live = if transfer_error {
@@ -1928,6 +1938,7 @@ impl CanvasApp {
             profile_prepare: None,
             profile_reload: None,
             profile_roster_pending: None,
+            tab_order_pending: None,
             transfer_reload: None,
             template_flow: Default::default(),
             deferred_product_action: None,
@@ -4014,6 +4025,7 @@ impl CanvasApp {
             | A::ReloadAppearance
             | A::AdjustTerminalFont(_)
             | A::ResetTerminalFont => self.appearance_action(action, window, cx),
+            A::MoveManagedTab(_) | A::RefreshTabOrder => self.tab_order_action(action, cx),
             A::OpenCloseTab | A::CloseManagedTab | A::ConfirmCloseTab | A::InspectCloseTab => {
                 self.tab_close_action(action, cx)
             }
@@ -6834,6 +6846,26 @@ impl CanvasApp {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.close_key(event, window, cx) {
             return;
+        }
+        if self.product.dialog.as_ref().is_some_and(|dialog| dialog.kind == product::DialogKind::Manage)
+            && matches!(self.product.management_target, Some(catalog_flow::ManagedEntity::Tab(_)))
+            && self.text_input.preedit.is_empty()
+        {
+            let k = &event.keystroke;
+            let action = if k.modifiers.alt && !k.modifiers.control && !k.modifiers.platform && !k.modifiers.shift {
+                match k.key.as_str() {
+                    "left" => Some(product::ProductAction::MoveManagedTab(-1)),
+                    "right" => Some(product::ProductAction::MoveManagedTab(1)),
+                    _ => None,
+                }
+            } else if k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform && !k.modifiers.shift && k.key == "r" {
+                Some(product::ProductAction::RefreshTabOrder)
+            } else {None};
+            if let Some(action) = action {
+                if !event.is_held {self.product_action(action, window, cx);}
+                cx.stop_propagation();
+                return;
+            }
         }
         if self.scrollback_key(event, window, cx) {
             return;

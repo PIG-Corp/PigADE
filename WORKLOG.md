@@ -5477,3 +5477,91 @@ Integrated native terminal word/logical-line selection, bidirectional unit drag,
 - Files: crates/app/src/main.rs, crates/app/src/selection.rs, crates/app/src/scrollback_ui.rs, crates/app/src/handoff_commands.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 470 app tests; 39 harness tests; strict app Clippy; app fmt/version/diff checks; C syntax -Wall -Wextra -Werror; optimized app build pass. Final isolated history run05 passes exact word/line/forward/reverse clipboard and original history/link/pan/resize/input invariants; final captures visually reviewed. Run01/03 clipboard-race failures fixed in fixture; run02 quota interruption retained, never counted as pass.
 - Risks / next: Linux private software-X11 verification only; full platform/a11y/reboot/24h/performance/MVP gates remain open. No desktop settings/input or user host/CLI changes. Preserve unrelated dirt and stash0.
+
+## 2026-10-18T14:29:00+00:00 — /root/tab_order_ui_luna
+
+Added tab order UI model, safe move proposal and host command dispatch
+
+- Files: crates/app/src/product.rs, crates/app/src/tab_order.rs, crates/app/src/tab_order_commands.rs, crates/app/src/git_batch.rs, crates/app/src/workspace_drop.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/app/src/transfer_flow.rs, crates/app/src/activity_ui.rs
+- Verification: rustfmt --edition 2024 on owned Rust files; git diff --check passed; no app build run because root owns main.rs/module wiring
+- Risks / next: Root adds module declarations, pending field, action/reply routing and keyboard integration; run app check after integration
+
+## 2026-10-18T14:30:14+00:00 — tab_order_storage_luna
+
+Add schema-15 durable per-workspace tab ordering with validated CAS writes and atomic tab membership updates
+
+- Files: crates/storage/src/tab_order.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs
+- Verification: rustfmt --edition 2024 on owned Rust files passed; git diff --check passed; Cargo commands not run per assigned lane boundary
+- Risks / next: Root should run storage and integrated checks, including downstream Catalog DTO compile fixes; review 15 migration backup expectations
+
+## 2026-10-18T14:30:21+00:00 — tab_order_ipc_luna
+
+Add real-host IPC coverage for durable per-workspace tab ordering, invalid roster refusals, membership changes, and host reopen
+
+- Files: crates/session-host/tests/tab_order.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/tab_order.rs; git diff --check -- crates/session-host/tests/tab_order.rs passed; Cargo intentionally not run (lead owns Cargo/native verification)
+- Risks / next: Lead should run targeted crates/session-host tab_order integration test after storage and host wiring settle; no reboot/native claim
+
+## 2026-10-18T14:30:23+00:00 — tab_order_storage_luna
+
+Correct tab order read ordering for WITHOUT ROWID storage
+
+- Files: crates/storage/src/catalog.rs
+- Verification: rustfmt and git diff --check passed; Cargo commands not run per assigned lane boundary
+- Risks / next: Root to run storage tests and integrated verification
+
+## 2026-10-18T14:30:34+00:00 — tab_order_storage_luna
+
+Fail closed when legacy tabs lack a workspace during order migration
+
+- Files: crates/storage/src/catalog.rs
+- Verification: rustfmt and git diff --check passed; Cargo commands not run per assigned lane boundary
+- Risks / next: Root to run Cargo checks and integrate cross-lane DTO changes
+
+## 2026-10-18T14:30:44+00:00 — tab_order_storage_luna
+
+Create empty durable tab order rows atomically with new workspaces
+
+- Files: crates/storage/src/catalog.rs
+- Verification: rustfmt and git diff --check passed; Cargo commands not run per assigned lane boundary
+- Risks / next: Root to run storage tests and final integration checks
+
+## 2026-10-18T14:30:52+00:00 — tab_order_storage_luna
+
+Keep v2 migration fixture faithful to pre-order schema
+
+- Files: crates/storage/src/catalog.rs
+- Verification: rustfmt and git diff --check passed; Cargo commands not run per assigned lane boundary
+- Risks / next: Root to execute Cargo verification
+
+## 2026-10-18T14:32:57+00:00 — /root/tab_order_ui_luna
+
+Validated tab-order receipts against frozen revisions and order; refresh now reconciles stale targets
+
+- Files: crates/app/src/product.rs, crates/app/src/tab_order.rs, crates/app/src/tab_order_commands.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; added focused unit coverage but did not run Cargo per root instruction
+- Risks / next: Root integrates CanvasApp state/actions and runs app verification
+
+## 2026-10-18T14:33:43+00:00 — tab_order_storage_luna
+
+Align encoded catalog budget candidate with newly persisted empty workspace order
+
+- Files: crates/storage/src/catalog.rs
+- Verification: rustfmt and git diff --check passed; Cargo intentionally not run per assignment
+- Risks / next: Root reruns full storage tests
+
+## 2026-10-18T16:35:31+00:00 — root
+
+Published requested working-tree snapshot preparation for public PIG-Corp/PigADE, including unfinished tab ordering, stress/research work and unused GPUI draft patches; marked README/handoff as WIP and preserved the paused development goal.
+
+- Files: README.md, docs/AGENT_HANDOFF.md, WORKLOG.md, crates/app/src/main.rs, crates/session-host/src/lib.rs, crates/storage/src/prompt.rs, crates/session-host/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, crates/app/src/close_ui.rs
+- Verification: Current main history and changed files scanned for common private-key/provider/GitHub/AWS token patterns: no matches; no sensitive-named history files or >100MiB blobs. Last verified commit87f40c0. WIP storage/IPC failures and missing app verification retained explicitly in handoff; no release claim.
+- Risks / next: Commit all requested unfinished work as WIP and push main to the public PIG-Corp/PigADE. Development goal remains paused; do not include stash/runtime/auth or silently fix/resume the feature work.
+
+## 2026-10-18T16:35:43+00:00 — root
+
+Preserved exact draft unified-patch context bytes with two narrowly scoped .gitattributes rules so the ordinary pre-commit whitespace guard accepts required single-space context lines.
+
+- Files: .gitattributes, WORKLOG.md
+- Verification: Initial WIP commit correctly rejected structural blank context lines as trailing whitespace; no patch bytes were trimmed and hooks were not bypassed. Re-running normal staged diff/version/pre-commit checks.
+- Risks / next: Push the explicit WIP snapshot to the requested public PIG-Corp repository; keep development paused.

@@ -11,3 +11,7 @@ crates/app/assets/fonts/derived-terminal-v1/LICENSE-JetBrainsMono-OFL.txt -text 
 # Unified-diff blank context lines contain the required leading space.
 # Exact patch/pre/postimage hashes enforce this single immutable profile.
 crates/app/patches/gpui-x11-ime/focus.patch -text whitespace=-blank-at-eol
+
+# Draft unified patches also retain required single-space context lines.
+crates/app/patches/gpui-x11-ime/target-api.patch -text whitespace=-blank-at-eol
+crates/app/patches/gpui-x11-ime/wayland-target.patch -text whitespace=-blank-at-eol

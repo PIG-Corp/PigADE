@@ -643,6 +643,7 @@ mod tests {
                 revision: target.revision,
             }],
             tabs: Vec::new(),
+            tab_orders: None,
             selection: Selection {
                 project_id: Some(target.project),
                 workspace_id: Some(target.workspace),

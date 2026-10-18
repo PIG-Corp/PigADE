@@ -4720,6 +4720,54 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                 close_journals,
                 message)
 
+    report['stage'] = 'catalog-tab-order'
+    save()
+    order_workspace = close_source['workspace_id']
+    original_roster = next(item for item in before_close_catalog.get('tab_orders', [])
+                           if item['workspace_id'] == order_workspace)
+    original_ids = original_roster['ordered_ids']
+    require(original_roster.get('schema') == 1 and original_ids == [tab_id, fallback_tab_id],
+            'tab-order fixture did not retain the exact initial two-tab order')
+    helper_call(config, 'catalog-tab-order-open')
+    helper_call(config, 'catalog-tab-order-refresh')
+    time.sleep(.4)
+    helper_call(config, 'capture', '/artifacts/catalog-tab-order-menu.ppm')
+    close_tab_review_unchanged('opening or refreshing tab order changed terminal or placement state')
+
+    def expected_tab_order(ids, revision):
+        current = host_request({'command': 'catalog'})['catalog']
+        roster = next((item for item in current.get('tab_orders', [])
+                       if item['workspace_id'] == order_workspace), {})
+        workspace_tabs = [item['id'] for item in current['tabs']
+                          if item['workspace_id'] == order_workspace]
+        return current if roster.get('ordered_ids') == ids and workspace_tabs == ids and roster.get('revision') == revision else None
+
+    helper_call(config, 'catalog-tab-order-right')
+    wait_until(lambda: expected_tab_order([fallback_tab_id, tab_id], original_roster['revision'] + 1),
+               time.monotonic() + 5)
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/catalog-tab-order-right.ppm')
+    close_tab_review_unchanged('moving a tab right changed terminal, selection or placement state')
+    helper_call(config, 'catalog-tab-order-left')
+    wait_until(lambda: expected_tab_order(original_ids, original_roster['revision'] + 2),
+               time.monotonic() + 5)
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/catalog-tab-order-restored.ppm')
+    close_tab_review_unchanged('moving a tab left changed terminal, selection or placement state')
+    # The left edge is a no-op, and reopening the sheet retains the persisted order.
+    helper_call(config, 'catalog-tab-order-left')
+    time.sleep(.25)
+    require(expected_tab_order(original_ids, original_roster['revision'] + 2),
+            'edge tab movement changed the order revision')
+    helper_call(config, 'catalog-git-close')
+    helper_call(config, 'catalog-tab-order-open')
+    helper_call(config, 'catalog-tab-order-refresh')
+    time.sleep(.3)
+    require(expected_tab_order(original_ids, original_roster['revision'] + 2),
+            'reopening tab management lost durable order')
+    helper_call(config, 'catalog-git-close')
+    close_tab_review_unchanged('reopening tab management changed terminal or placement state')
+
     report['stage'] = 'catalog-close-tab-review'
     save()
     helper_call(config, 'catalog-close-open')
@@ -4824,6 +4872,7 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'workspace_git_commit_review_left_head_index_worktree_hooks_process_and_catalog_metadata_unchanged': True,
         'workspace_git_commit_confirmed_exact_frozen_tree_once_with_native_hooks': True,
         'workspace_git_ui_preserved_all_five_generation_states_aliases_selection_and_tree': True,
+        'tab_order_move_restore_edge_and_reopen_preserve_terminal_and_layout': True,
         'close_tab_cancel_preserved_selection_layout_process_frames_and_journals': True,
         'close_tab_confirm_removed_tab_and_reselected_adjacent_fallback': True,
         'close_tab_removed_closed_tab_from_all_undo_redo_snapshots': True,
@@ -4888,7 +4937,8 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-git-batch-unstage-review.ppm', 'catalog-git-batch-unstage-result.ppm',
                      'catalog-git-commit-review.ppm',
                      'catalog-git-commit-complete.ppm', 'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm',
-                     'catalog-close-tab-fallback.ppm'],
+                     'catalog-close-tab-fallback.ppm', 'catalog-tab-order-menu.ppm',
+                     'catalog-tab-order-right.ppm', 'catalog-tab-order-restored.ppm'],
     }
     report.update({'status': CATALOG_PASS, 'stage': 'complete'})
     save()

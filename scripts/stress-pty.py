@@ -2,8 +2,9 @@
 """Four real PTYs, durable journal integrity and host-only resource observations.
 
 Reproduce: python3 scripts/stress-pty.py --directory ~/.local/state/pigade/benchmarks \
-  --output benchmarks/results/native-pty-stress.json
+  --output benchmarks/results/native-pty-stress.json --preserve-state
 No provider tasks/authentication. This is not an input-to-present/UI benchmark.
+The generated run directory is mode 0700; failed runs retain state automatically.
 """
 import argparse
 import datetime
@@ -102,6 +103,144 @@ def digest(path):
 def identity(pid):
     fields = Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()
     return (Path('/proc/sys/kernel/random/boot_id').read_text().strip(), pid, int(fields[19]))
+
+
+def identity_if_present(pid):
+    try:
+        return identity(pid)
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def signal_owned_identity(expected, sig):
+    """Signal only a process bound to a pidfd and the captured start identity."""
+    if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+        return False
+    _boot, pid, _started = expected
+    pidfd = None
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+        if identity(pid) != expected:
+            return False
+        signal.pidfd_send_signal(pidfd, sig)
+        return True
+    except (OSError, ValueError, IndexError, TypeError):
+        return False
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
+
+
+def process_state(pid):
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()
+    return fields[0]
+
+
+def wait_owned_exit(expected, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            current = identity_if_present(expected[1])
+        except (OSError, ValueError, IndexError, TypeError):
+            return False
+        if current is None or current != expected:
+            return True
+        try:
+            if process_state(expected[1]) == 'Z':
+                return True
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+        except (OSError, ValueError, IndexError, TypeError):
+            return False
+        time.sleep(.02)
+    return False
+
+
+def cleanup_owned_processes(host, host_identity, owned):
+    """Stop the owned host and its producer PIDs without signaling process groups."""
+    failures = []
+    try:
+        host_running = host is not None and host.poll() is None
+    except (OSError, ValueError):
+        host_running = True
+        failures.append('host_poll_unavailable')
+    if host_running:
+        try:
+            sent = host_identity is not None and signal_owned_identity(host_identity, signal.SIGTERM)
+        except (OSError, ValueError, IndexError, TypeError):
+            sent = False
+        if not sent:
+            failures.append('host_pidfd_sigterm_failed')
+        try:
+            host.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                killed = host_identity is not None and signal_owned_identity(host_identity, signal.SIGKILL)
+            except (OSError, ValueError, IndexError, TypeError):
+                killed = False
+            if not killed:
+                failures.append('host_pidfd_sigkill_failed')
+            try:
+                host.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                failures.append('host_exit_unconfirmed')
+            except OSError:
+                failures.append('host_wait_failed')
+        except (OSError, ValueError):
+            failures.append('host_wait_failed')
+    for expected in owned:
+        try:
+            current = identity_if_present(expected[1])
+        except (OSError, ValueError, IndexError, TypeError):
+            failures.append('producer_identity_unavailable')
+            continue
+        if current is None:
+            continue
+        if current != expected:
+            failures.append('producer_identity_changed_not_signaled')
+            continue
+        try:
+            signaled = signal_owned_identity(expected, signal.SIGKILL)
+        except (OSError, ValueError, IndexError, TypeError):
+            signaled = False
+        if not signaled:
+            # The process may have exited between identity sampling and pidfd
+            # opening; only a positive identity disappearance is accepted.
+            try:
+                still_owned = identity_if_present(expected[1]) == expected
+            except (OSError, ValueError, IndexError, TypeError):
+                failures.append('producer_identity_unavailable')
+                continue
+            if still_owned:
+                failures.append('producer_pidfd_sigkill_failed')
+                continue
+        try:
+            exited = wait_owned_exit(expected, 3)
+        except (OSError, ValueError, IndexError, TypeError):
+            exited = False
+        if not exited:
+            failures.append('producer_exit_unconfirmed')
+    return failures
+
+
+class RetainableTemporaryDirectory:
+    """Keep only this run's directory when requested or evidence is needed."""
+
+    def __init__(self, *, prefix, dir):
+        self.prefix = prefix
+        self.parent = dir
+        self.path = None
+        self.retain = False
+
+    def __enter__(self):
+        self.path = Path(tempfile.mkdtemp(prefix=self.prefix, dir=self.parent))
+        self.path.chmod(0o700)
+        return str(self.path)
+
+    def __exit__(self, exc_type, exc, traceback):
+        if not self.retain and exc_type is None and self.path is not None:
+            shutil.rmtree(self.path)
+        return False
 
 
 class HostRejection(RuntimeError):
@@ -242,16 +381,19 @@ def run(args):
         result['not_measured'].append('input ACK latency (normal-history workload)')
         result['scope'] = 'Actual normal-screen PTY/host/fsync/cold-history workload; no UI/GPU/provider processes; no input latency claim.'
     host = None
+    host_identity = None
     owned = []
     stop = threading.Event()
     threads = []
     ticks = os.sysconf('SC_CLK_TCK')
     page = os.sysconf('SC_PAGE_SIZE')
     started_wall = time.monotonic()
-    # Everything under this temporary directory is created and owned by this run.
-    with tempfile.TemporaryDirectory(prefix='p-', dir=args.directory) as temporary:
+    preserve_requested = bool(getattr(args, 'preserve_state', False))
+    state_directory = RetainableTemporaryDirectory(prefix='p-', dir=args.directory)
+    # This exact fresh directory is owned by this run. Failed or explicitly
+    # preserved runs retain journals and recovery artifacts for inspection.
+    with state_directory as temporary:
         state = Path(temporary)
-        state.chmod(0o700)
         frozen = state / 'host-release'
         shutil.copyfile(args.binary, frozen)
         frozen.chmod(0o700)
@@ -261,7 +403,8 @@ def run(args):
         try:
             host = subprocess.Popen([str(frozen), 'serve', str(state)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
             result['host_pid'] = host.pid
-            result['host_identity'] = identity(host.pid)
+            host_identity = identity(host.pid)
+            result['host_identity'] = host_identity
             endpoint = state / 'host.sock'
             deadline = time.monotonic() + 10
             while True:
@@ -408,18 +551,13 @@ def run(args):
             stop.set()
             for thread in threads:
                 thread.join(timeout=4)
-            if host is not None and host.poll() is None:
-                host.kill()
-                host.wait(timeout=5)
-            for expected in owned:
-                try:
-                    if identity(expected[1]) == expected:
-                        if os.getpgid(expected[1]) == expected[1]:
-                            os.killpg(expected[1], signal.SIGKILL)
-                        else:
-                            os.kill(expected[1], signal.SIGKILL)
-                except (OSError, ValueError):
-                    pass
+            cleanup_failures = cleanup_owned_processes(host, host_identity, owned)
+            if any(thread.is_alive() for thread in threads):
+                cleanup_failures.append('observer_thread_exit_unconfirmed')
+            if cleanup_failures:
+                result['status'] = 'failed'
+                result.setdefault('errors', []).extend(cleanup_failures)
+            result['cleanup_failures'] = cleanup_failures
             log.close()
             result['host_log_tail'] = (state / 'host.log').read_text(errors='replace')[-4000:]
             # Remove internal snapshots from partial/failure evidence: giant frames
@@ -427,6 +565,10 @@ def run(args):
             for record in result['sessions']:
                 record.pop('final_view', None)
             result['runner_wall_seconds_including_replay'] = time.monotonic() - started_wall
+            retain_state = preserve_requested or result.get('status') != 'integrity_pass'
+            state_directory.retain = retain_state
+            result['state_retained'] = retain_state
+            result['state_directory'] = str(state) if retain_state else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps({key: result.get(key) for key in ['status', 'errors', 'ACK_sample_count', 'ACK_percentiles_ms', 'host_peak_sampled_RSS_bytes', 'host_average_logical_CPU_percent', 'target_producer_rate_achieved_all_streams', 'target_host_exit_observed_within_deadline_all_streams']}), flush=True)
@@ -439,6 +581,8 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, default=ROOT / 'benchmarks/results/native-pty-stress.json')
     parser.add_argument('--binary', type=Path, default=ROOT / 'target/release/pigade-session-host')
     parser.add_argument('--seconds', type=int, default=60)
+    parser.add_argument('--preserve-state', action='store_true',
+                        help='retain this fresh private run directory after success or failure')
     parser.add_argument('--normal-history', action='store_true', help='Exercise normal scrollback/cold archive; input latency is not measured in this mode')
     arguments = parser.parse_args()
     check(1 <= arguments.seconds <= 60, 'test duration must be 1..60 seconds')

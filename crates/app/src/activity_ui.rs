@@ -672,6 +672,7 @@ mod tests {
                     revision: 1,
                 },
             ],
+            tab_orders: None,
             selection: Selection::default(),
             layout: LayoutDocument::default(),
             layout_templates: Some(vec![]),

@@ -105,6 +105,7 @@ mod tests {
             }],
             workspaces: vec![],
             tabs: vec![],
+            tab_orders: None,
             selection: Selection {
                 project_id: Some(project),
                 ..Default::default()

@@ -332,6 +332,7 @@ mod tests {
                     5,
                 ),
             ],
+            tab_orders: None,
             selection: Selection {
                 project_id: Some(source_project),
                 workspace_id: Some(source_workspace),

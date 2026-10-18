@@ -1,0 +1,64 @@
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1193,6 +1193,22 @@
+     ContentChanged,
+ }
+ 
++/// Native text-input binding to an opaque, application-owned target epoch.
++///
++/// A logical editor/pane change needs a transport identity distinct from the
++/// previous target. Clearing application preedit alone is not such a boundary.
++#[derive(Debug, Copy, Clone, Eq, PartialEq)]
++pub enum TextInputTargetStatus {
++    /// This backend cannot prove native callback separation for target changes.
++    Unsupported,
++    /// The target is bound but is not yet eligible to receive native text.
++    Pending(u64),
++    /// Native callbacks are separated from retired targets for this epoch.
++    Ready(u64),
++    /// Binding failed. The application must not route native text to this epoch.
++    Failed(u64),
++}
++
+ #[expect(missing_docs)]
+ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn bounds(&self) -> Bounds<Pixels>;
+@@ -1228,6 +1244,17 @@
+     fn capslock(&self) -> Capslock;
+     fn set_input_handler(&mut self, input_handler: PlatformInputHandler);
+     fn take_input_handler(&mut self) -> Option<PlatformInputHandler>;
++    /// Bind a monotonically increasing opaque target epoch to native text input.
++    /// Repeating the current epoch is idempotent. A backend must reject stale
++    /// callbacks before mutating shared composition or dispatching application
++    /// input, and must not report Ready merely after clearing local preedit.
++    fn replace_text_input_target(&mut self, _epoch: u64) -> TextInputTargetStatus {
++        TextInputTargetStatus::Unsupported
++    }
++    /// Observe readiness without retrying or replacing the requested binding.
++    fn text_input_target_status(&self) -> TextInputTargetStatus {
++        TextInputTargetStatus::Unsupported
++    }
+     /// Apply the focused text region's [`TextInputConfiguration`] to the
+     /// platform's text input session (e.g. attributes of the hidden editable
+     /// element on web). Called only when the configuration changes, because
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -6025,6 +6025,18 @@
+         }
+     }
+ 
++    /// Replace the native text input binding with an opaque application target
++    /// epoch. Native callback separation is backend-specific; Unsupported,
++    /// Pending and Failed must not be treated as successful target activation.
++    pub fn replace_text_input_target(&mut self, epoch: u64) -> crate::TextInputTargetStatus {
++        self.platform_window.replace_text_input_target(epoch)
++    }
++
++    /// Observe the current native target binding without initiating a retry.
++    pub fn text_input_target_status(&self) -> crate::TextInputTargetStatus {
++        self.platform_window.text_input_target_status()
++    }
++
+     // If modifiers are not excessive (e.g. AltGr), and the input handler is accepting text input,
+     // we prefer the text input over bindings.
+     fn input_preference(&mut self, event: &dyn Any, cx: &mut App) -> InputPreference {
