@@ -4597,3 +4597,27 @@ Final activity source verification completed before commit
 - Files: WORKLOG.md
 - Verification: Fresh final-source app run363/363 passes (0failed); final controls02 private X11 pass previously recorded, all selected/all/exit/painter-read assertions true. Version0.0.1-dev/diff/format checks pass; app debug/release and strictClippy current. Root visual review finds readable rows, correct unplaced label, empty state and exact exited terminal with cleared badges.
 - Risks / next: Commit this block and leave broad product goal active; preserve unrelated dirt/stash0 and explicit platform/performance/notification limitations.
+
+## 2026-10-18T08:23:39+00:00 — ctrl_enter_review_luna
+
+Add private setup fixture coverage for Ctrl+Enter shell launch from an empty ready tab
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 -v (37 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; compile_helper for scripts/x11-ime-input.c succeeded; git diff --check passed
+- Risks / next: Root to run the private setup fixture; no native app or desktop input was run here
+
+## 2026-10-18T08:26:09+00:00 — /root
+
+Reproduce Ctrl+Enter shell launch in private setup and expose launch rejections in compact UI
+
+- Files: crates/app/src/main.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, docs/AGENT_HANDOFF.md
+- Verification: Private X11 setup01 passes actual Ctrl+Return -> exactly one running shell in empty Ready tab, exact cwd and placement, no bootstrap input; first-terminal capture inspected. This run used pre-feedback-change release. Final app363 tests and strictClippy pass;37 Python/C checks passed in Luna lane. Version check passes; final release build in progress. Original live Wayland report not reproduced; exact screen/action clarification pending.
+- Risks / next: Finish release build, commit bounded feedback/regression block. Keep broad goal active. Do not restart or inject input into user UI/hosts, reset unknown launches or claim original bug resolved. BridgeMind handoff code has not started; preserve unrelated dirt and stash0.
+
+## 2026-10-18T08:26:23+00:00 — /root
+
+Finalize Ctrl+Enter regression and visible refusal feedback
+
+- Files: WORKLOG.md
+- Verification: Final release build exits0 (1m39s); final app363 tests and strictClippy pass, version0.0.1-dev aligned and diff clean. Private X11 setup01 passed actual CtrlReturn single shell on prior release; changed source only adds refusal/notice display, does not change launch dispatch. Original user Wayland symptom remains unconfirmed.
+- Risks / next: Commit coherent block; running user window remains untouched. Continue exact-screen shortcut investigation when clarification arrives and preserve broad BridgeMind product goal.

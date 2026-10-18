@@ -4983,6 +4983,9 @@ impl CanvasApp {
             return;
         };
         if self.product.busy {
+            self.product.notice =
+                Some("Запуск не отправлен: дождитесь завершения текущей операции".into());
+            cx.notify();
             return;
         }
         self.pending_launch_review = true;
@@ -8553,6 +8556,7 @@ impl Render for CanvasApp {
         );
         let status = self.error().or_else(||self.scrollback_status())
             .or_else(|| self.state.poll_backpressured.then(|| "Обновление терминала задержано".into()))
+            .or_else(|| self.product.notice.clone())
             .or_else(|| self.input_notice.clone()).unwrap_or_else(|| {
             if self.prefix {
                 "PigADE: H/J/K/L — фокус · Shift — переместить · W — обмен · R — размер · 1–9 — вкладка · P — команды"

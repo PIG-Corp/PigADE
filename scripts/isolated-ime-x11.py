@@ -4635,7 +4635,7 @@ def run_setup_fixture(config, report, control, app, env, save):
     project = catalog['projects'][0]
     workspace = catalog['workspaces'][0]
     tab = catalog['tabs'][0]
-    helper_call(config, 'setup-shell')
+    helper_call(config, 'setup-ctrl-enter-shell')
 
     def shell_ready():
         generations = fixture_generations()
@@ -4750,6 +4750,7 @@ def run_setup_fixture(config, report, control, app, env, save):
     report['setup'] = {'project': project['canonical_path'], 'workspace_task': workspace['task'],
         'tab': tab['name'], 'shell_session': session, 'shell_generation': generation,
         'no_automatic_cli': True, 'one_shell_generation': True,
+        'ctrl_enter_shell_launch_once': True,
         'bootstrap_pty_received_no_input': True, 'fake_codex_direct_launch_no_context': True, 'four_panes_accept_native_input': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                      'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
@@ -7305,7 +7306,7 @@ def plan(args) -> dict:
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
-                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
+                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',

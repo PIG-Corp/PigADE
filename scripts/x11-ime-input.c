@@ -177,6 +177,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "profile-cancel-delete") && strcmp(a.stage, "profile-confirm-delete") &&
         strcmp(a.stage, "setup-open") &&
         strcmp(a.stage, "setup-create") && strcmp(a.stage, "setup-shell") &&
+        strcmp(a.stage, "setup-ctrl-enter-shell") &&
         strcmp(a.stage, "setup-launcher") && strcmp(a.stage, "setup-codex") &&
         strcmp(a.stage, "custom-open") && strcmp(a.stage, "custom-fields") &&
         strcmp(a.stage, "custom-save") && strcmp(a.stage, "custom-select") &&
@@ -1800,6 +1801,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a.stage, "setup-shell")) {
             wait_workspace_bar(dpy, app_window);
             setup_click(dpy, app_window, 1164, 57);
+        } else if (!strcmp(a.stage, "setup-ctrl-enter-shell")) {
+            wait_workspace_bar(dpy, app_window);
+            modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "setup-launcher")) {
             wait_workspace_bar(dpy, app_window);
             setup_click(dpy, app_window, 1108, 57);

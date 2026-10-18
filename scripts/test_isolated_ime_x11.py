@@ -152,6 +152,8 @@ class IsolatedImePlanTests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             self.assertEqual(IME.main(['--fixture', 'setup']), 0)
         plan = json.loads(output.getvalue())
+        self.assertIn('Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY',
+                      plan['input']['setup'])
         self.assertIn('read-only launch review', plan['input']['setup'])
         self.assertIn('Ctrl+Enter runs the exact argv once', plan['input']['setup'])
         self.assertIn('duplicate it with independent settings, pin it', plan['input']['setup'])
@@ -160,7 +162,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
         stages = ('custom-open', 'custom-fields', 'custom-save', 'custom-select',
                   'custom-review-enter', 'custom-review-cancel', 'custom-reopen-profiles',
-                  'custom-confirm')
+                  'custom-confirm', 'setup-ctrl-enter-shell')
         for stage in stages:
             self.assertIn(f'"{stage}"', helper)
             self.assertIn(f"helper_call(config, '{stage}'", harness)
@@ -509,7 +511,7 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'activity-close', 'activity-mark-all', 'activity-mark-current',
                       'activity-enter-target', 'activity-next',
                       'activity-select-source-tab', 'pointer-create-transfer-tab',
-                      'pointer-select-first-tab', 'setup-shell'):
+                      'pointer-select-first-tab', 'setup-shell', 'setup-ctrl-enter-shell'):
             self.assertIn(f'"{stage}"', source)
         helper_sequences = {
             'appearance-terminal-dark': 'XK_3',
