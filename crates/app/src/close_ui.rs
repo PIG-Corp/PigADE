@@ -50,6 +50,9 @@ impl CanvasApp {
         if self.product.controls_saving {
             pending.push("Клавиша управления");
         }
+        if self.product.maintenance.mutations_frozen() {
+            pending.push("Обновление фоновой службы PigADE");
+        }
         if self.product.appearance_pending.is_some() {
             pending.push("Оформление и размер шрифта");
         }

@@ -19,6 +19,8 @@ mod font;
 mod handoff;
 mod handoff_commands;
 mod history_view;
+mod host_maintenance;
+mod host_maintenance_commands;
 mod input;
 mod memory_choice;
 mod mouse;
@@ -484,6 +486,8 @@ fn catalog_panel_targets_for(
 }
 
 struct WorkerConnection {
+    host_socket: PathBuf,
+    managed_host: bool,
     activity_writer: activity_commands::Writer,
     tx: mpsc::SyncSender<IpcMessage>,
     shared: Arc<Mutex<State>>,
@@ -495,7 +499,8 @@ struct WorkerConnection {
     git_worker: workspace_git::Worker,
 }
 
-fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
+fn ipc(socket: PathBuf, trace: Trace, managed_host: bool) -> WorkerConnection {
+    let host_socket = socket.clone();
     let (tx, rx) = mpsc::sync_channel(32);
     let (receipt_tx, receipt_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Mutex::new(State::default()));
@@ -723,6 +728,8 @@ fn ipc(socket: PathBuf, trace: Trace) -> WorkerConnection {
         trace.clone(),
     );
     WorkerConnection {
+        host_socket,
+        managed_host,
         activity_writer,
         tx,
         shared,
@@ -1204,6 +1211,7 @@ struct TransferReload {
 }
 
 struct CanvasApp {
+    host_socket: PathBuf,
     activity_writer: activity_commands::Writer,
     activity_sample: Option<activity::Snapshot>,
     product: product::ProductUi,
@@ -1307,6 +1315,8 @@ impl CanvasApp {
         diagnostic_selection: bool,
     ) -> Self {
         let WorkerConnection {
+            host_socket,
+            managed_host,
             activity_writer,
             tx,
             shared,
@@ -1815,7 +1825,9 @@ impl CanvasApp {
             .skip(2)
             .any(|arg| arg == "--reduced-motion");
         cx.set_reduce_motion(product.appearance.reduced_motion || product.motion_forced);
+        product.maintenance.managed = managed_host;
         Self {
+            host_socket,
             activity_writer,
             activity_sample: None,
             product,
@@ -1915,6 +1927,11 @@ impl CanvasApp {
         self.try_product_command(command, cx);
     }
     fn try_product_command(&mut self, command: Value, cx: &mut Context<Self>) -> bool {
+        if self.product.maintenance.mutations_frozen() {
+            self.product.notice = Some("Обновление службы ещё не подтверждено".into());
+            cx.notify();
+            return false;
+        }
         if self.product.busy {
             self.product.notice = Some("Дождитесь завершения текущей операции".into());
             cx.notify();
@@ -3640,6 +3657,21 @@ impl CanvasApp {
         if self.close_flow.active() {
             return;
         }
+        if self.product.maintenance.mutations_frozen()
+            && !matches!(
+                action,
+                A::CloseDialog
+                    | A::OpenPalette
+                    | A::OpenHostMaintenance
+                    | A::InspectHost
+                    | A::UpdateHost
+                    | A::ReconcileHost
+            )
+        {
+            self.product.notice = Some("Дождитесь результата обновления службы".into());
+            cx.notify();
+            return;
+        }
         self.focus.focus(window, cx);
         // A real hover may have just queued a focus CAS. Keep one explicit
         // user action and build its metadata batch only after that ACK.
@@ -3722,6 +3754,7 @@ impl CanvasApp {
             action,
             A::CloseDialog
                 | A::OpenActivity
+                | A::OpenHostMaintenance
                 | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
@@ -3759,6 +3792,9 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenHostMaintenance | A::InspectHost | A::UpdateHost | A::ReconcileHost => {
+                self.host_maintenance_action(action, window, cx)
+            }
             A::OpenActivity
             | A::MarkActivityRead(..)
             | A::MarkAllActivityRead
@@ -4958,7 +4994,9 @@ impl CanvasApp {
                         self.handoff_action(action, cx);
                     }
                     DialogKind::History => self.history_search(None, cx),
-                    DialogKind::Launcher | DialogKind::Controls => self.product.dialog = None,
+                    DialogKind::Launcher | DialogKind::Controls | DialogKind::HostMaintenance => {
+                        self.product.dialog = None
+                    }
                     DialogKind::SessionContext
                     | DialogKind::Transfer
                     | DialogKind::Sessions
@@ -6502,6 +6540,39 @@ impl CanvasApp {
                     && !k.modifiers.shift
                 {
                     self.product_action(product::ProductAction::ConfirmTerminalInsert, window, cx);
+                }
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::HostMaintenance)
+        {
+            if !event.is_held && self.text_input.preedit.is_empty() {
+                use product::ProductAction as A;
+                let control = k.modifiers.control || k.modifiers.platform;
+                let action = match k.key.as_str() {
+                    "escape" => Some(A::CloseDialog),
+                    "enter" if control && !k.modifiers.alt && !k.modifiers.shift => {
+                        Some(if self.product.maintenance.uncertain.is_some() {
+                            A::ReconcileHost
+                        } else {
+                            A::UpdateHost
+                        })
+                    }
+                    "r" if control && !k.modifiers.alt && !k.modifiers.shift => {
+                        Some(A::InspectHost)
+                    }
+                    "enter" if !control && !k.modifiers.alt && !k.modifiers.shift => {
+                        Some(A::CloseDialog)
+                    }
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    self.product_action(action, window, cx);
                 }
             }
             cx.stop_propagation();
@@ -9628,6 +9699,7 @@ fn main() {
         );
         return;
     }
+    let managed_host = explicit_socket.is_none();
     let socket = match startup::resolve_socket(explicit_socket.map(PathBuf::from)) {
         Ok(socket) => socket,
         Err(error) => {
@@ -9660,7 +9732,7 @@ fn main() {
     } else {
         Trace::disabled()
     };
-    let connection = ipc(socket, trace);
+    let connection = ipc(socket, trace, managed_host);
     application()
         .with_assets(chrome::Assets)
         .run(move |cx: &mut App| {
@@ -10812,7 +10884,7 @@ mod notification_transport_tests {
             release: Some(release_tx),
             thread: Some(server),
         };
-        let connection = ipc(socket, Trace::disabled());
+        let connection = ipc(socket, Trace::disabled(), false);
         started_rx
             .recv_timeout(Duration::from_secs(2))
             .map_err(|e| format!("wait never started: {e}"))?;

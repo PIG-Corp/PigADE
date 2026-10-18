@@ -24,6 +24,8 @@ mod custom_launch_ui;
 mod git_status_ui;
 #[path = "handoff_ui.rs"]
 mod handoff_ui;
+#[path = "host_maintenance_ui.rs"]
+mod host_maintenance_ui;
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
 #[path = "profile_access_ui.rs"]
@@ -42,6 +44,10 @@ const ROW_HEIGHT: f32 = 30.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProductAction {
+    OpenHostMaintenance,
+    InspectHost,
+    UpdateHost,
+    ReconcileHost,
     OpenActivity,
     MarkActivityRead(Uuid, Uuid, u64),
     MarkAllActivityRead,
@@ -201,6 +207,7 @@ pub(super) enum ProductAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogKind {
+    HostMaintenance,
     Activity,
     Appearance,
     CloseTab,
@@ -254,6 +261,7 @@ impl DialogKind {
     fn title(self) -> &'static str {
         match self {
             Self::Handoff => "Передать контекст",
+            Self::HostMaintenance => "Служба PigADE",
             Self::Activity => "Активность",
             Self::Appearance => "Внешний вид",
             Self::CloseTab => "Закрыть вкладку?",
@@ -309,7 +317,7 @@ impl DialogKind {
                 "Видимый текст · можно отредактировать",
                 "Запрос новому агенту",
             ],
-            Self::Activity => &[],
+            Self::HostMaintenance | Self::Activity => &[],
             Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
@@ -370,7 +378,7 @@ impl DialogKind {
     fn submit_label(self) -> &'static str {
         match self {
             Self::Handoff => "Проверить запуск",
-            Self::Activity => "Закрыть",
+            Self::HostMaintenance | Self::Activity => "Закрыть",
             Self::Appearance => "Готово",
             Self::CloseTab => "Закрыть вкладку",
             Self::Prompts => "Готово",
@@ -437,6 +445,7 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) maintenance: crate::host_maintenance::Model,
     pub(super) activity: crate::activity::Tracker,
     pub(super) activity_error: Option<String>,
     pub(super) activity_feed_error: Option<String>,
@@ -658,6 +667,10 @@ fn capability_label(available: bool) -> &'static str {
 
 fn palette_commands() -> Vec<(&'static str, ProductAction)> {
     vec![
+        (
+            "Служба PigADE · обновление host · version",
+            ProductAction::OpenHostMaintenance,
+        ),
         (
             "Активность фоновых панелей · activity",
             ProductAction::OpenActivity,
@@ -1472,10 +1485,24 @@ impl ProductUi {
             )
             .when(!self.compact, |bar| {
                 bar.child(
-                    div()
-                        .text_color(colors.muted)
-                        .text_size(px(10.))
-                        .child("0.0.1-dev"),
+                    div().text_color(colors.muted).text_size(px(10.)).child(
+                        self.action_control(
+                            "header-host-version".into(),
+                            if self.maintenance.outdated() {
+                                "0.0.1-dev · host ↑"
+                            } else {
+                                "0.0.1-dev"
+                            }
+                            .into(),
+                            ProductAction::OpenHostMaintenance,
+                            ControlStyle {
+                                role: Role::Button,
+                                selected: false,
+                                compact: true,
+                            },
+                            cx,
+                        ),
+                    ),
                 )
             })
             .child(
@@ -3317,6 +3344,9 @@ impl ProductUi {
         if dialog.kind == DialogKind::Appearance {
             fields = self.appearance_fields(fields, cx);
         }
+        if dialog.kind == DialogKind::HostMaintenance {
+            fields = self.host_maintenance_fields(fields, cx);
+        }
         fields = self.template_dialog_fields(dialog, fields, cx);
         fields = self.profile_dialog_fields(dialog, fields, cx);
         fields = self.prompt_dialog_fields(dialog, fields, cx);
@@ -3665,7 +3695,10 @@ impl ProductUi {
                     dialog.kind.submit_label()
                 }
                 .into(),
-                if dialog.kind == DialogKind::Palette {
+                if matches!(
+                    dialog.kind,
+                    DialogKind::Palette | DialogKind::HostMaintenance
+                ) {
                     ProductAction::CloseDialog
                 } else {
                     ProductAction::SubmitDialog

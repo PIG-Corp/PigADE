@@ -19,6 +19,41 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        Some("host-inspect") => {
+            anyhow::ensure!(args.len() == 2, "host-inspect SOCKET");
+            let result =
+                pigade_session_host::maintenance_client::inspect(std::path::Path::new(&args[1]))?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Some("host-shutdown-idle") => {
+            anyhow::ensure!(
+                args.len() == 3,
+                "host-shutdown-idle SOCKET JSON_EXPECTED_INSPECTION"
+            );
+            let expected: pigade_session_host::maintenance_client::Inspection =
+                serde_json::from_str(&args[2]).context("invalid expected host inspection")?;
+            let result = pigade_session_host::maintenance_client::shutdown(
+                std::path::Path::new(&args[1]),
+                &expected,
+            )?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Some("host-reconcile") => {
+            anyhow::ensure!(
+                args.len() == 3,
+                "host-reconcile SOCKET JSON_EXPECTED_INSPECTION"
+            );
+            let expected: pigade_session_host::maintenance_client::Inspection =
+                serde_json::from_str(&args[2]).context("invalid expected host inspection")?;
+            let result = pigade_session_host::maintenance_client::reconcile(
+                std::path::Path::new(&args[1]),
+                &expected,
+            )?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
         Some("serve") => {
             let root = PathBuf::from(
                 args.get(1)
@@ -97,7 +132,7 @@ fn main() -> Result<()> {
             serde_json::from_str(args.get(2).context("request SOCKET JSON_COMMAND")?)?,
         ),
         _ => anyhow::bail!(
-            "PigADE stage-0 host (not MVP)\nserve STATE_DIRECTORY [--runtime PRIVATE_DIRECTORY]\nlist SOCKET\nlaunch SOCKET CWD /absolute/executable [ARGS...]\nrequest SOCKET JSON_COMMAND\nreplay JOURNAL\nverify-recovery JOURNAL"
+            "PigADE stage-0 host (not MVP)\nserve STATE_DIRECTORY [--runtime PRIVATE_DIRECTORY]\nlist SOCKET\nlaunch SOCKET CWD /absolute/executable [ARGS...]\nrequest SOCKET JSON_COMMAND\nhost-inspect SOCKET\nhost-shutdown-idle SOCKET JSON_EXPECTED_INSPECTION\nhost-reconcile SOCKET JSON_EXPECTED_INSPECTION\nreplay JOURNAL\nverify-recovery JOURNAL"
         ),
     }
 }

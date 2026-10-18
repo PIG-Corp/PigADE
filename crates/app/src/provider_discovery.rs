@@ -1,6 +1,7 @@
 //! Bounded local CLI metadata fallback for hosts without the discovery request.
 use crate::protocol::ProviderInfo;
 use std::{
+    ffi::OsStr,
     io::{self, Read},
     os::fd::OwnedFd,
     os::unix::net::UnixStream,
@@ -23,63 +24,88 @@ pub(crate) fn detect() -> Result<Vec<ProviderInfo>, String> {
 }
 
 fn detect_with_binary(binary: &Path, timeout: Duration) -> Result<Vec<ProviderInfo>, String> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| "provider discovery deadline is out of range".to_owned())?;
-    let (mut reader, writer) =
-        UnixStream::pair().map_err(|error| format!("create provider discovery pipe: {error}"))?;
-    let stderr_writer = writer
-        .try_clone()
-        .map_err(|error| format!("clone provider discovery pipe: {error}"))?;
+    run_json(binary, &[OsStr::new("detect-providers")], timeout)
+}
 
-    let mut child = ChildOnFailure(Some(
-        Command::new(binary)
-            .arg("detect-providers")
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(OwnedFd::from(writer)))
-            .stderr(Stdio::from(OwnedFd::from(stderr_writer)))
-            .spawn()
-            .map_err(|error| format!("start local provider discovery: {error}"))?,
-    ));
+/// Bounded one-shot commands on our installed host; never opens its server.
+pub(crate) fn run_json<T: serde::de::DeserializeOwned>(
+    binary: &Path,
+    args: &[&OsStr],
+    timeout: Duration,
+) -> Result<T, String> {
+    run_json_tracked(binary, args, timeout).map_err(|error| error.message)
+}
 
-    let mut output = Vec::with_capacity(4096);
-    let mut chunk = [0_u8; READ_CHUNK_BYTES];
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(deadline_error)?;
-        reader
-            .set_read_timeout(Some(remaining))
-            .map_err(|error| format!("set provider discovery deadline: {error}"))?;
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(count) => {
-                if output.len().saturating_add(count) > MAX_OUTPUT_BYTES {
-                    return Err("local provider discovery exceeded 128 KiB of output".into());
-                }
-                output.extend_from_slice(&chunk[..count]);
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Err(deadline_error());
-            }
-            Err(error) => return Err(format!("read local provider discovery output: {error}")),
-        }
-    }
+pub(crate) struct HelperFailure {
+    pub message: String,
+    pub started: bool,
+}
 
-    let status = wait_until_deadline(&mut child, deadline)?;
-    if !status.success() {
-        return Err(format!(
-            "local provider discovery exited with status {status}"
+pub(crate) fn run_json_tracked<T: serde::de::DeserializeOwned>(
+    binary: &Path,
+    args: &[&OsStr],
+    timeout: Duration,
+) -> Result<T, HelperFailure> {
+    let mut started = false;
+    let result = (|| -> Result<T, String> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| "local host helper deadline is out of range".to_owned())?;
+        let (mut reader, writer) = UnixStream::pair()
+            .map_err(|error| format!("create local host helper pipe: {error}"))?;
+        let stderr_writer = writer
+            .try_clone()
+            .map_err(|error| format!("clone local host helper pipe: {error}"))?;
+
+        let mut child = ChildOnFailure(Some(
+            Command::new(binary)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(OwnedFd::from(writer)))
+                .stderr(Stdio::from(OwnedFd::from(stderr_writer)))
+                .spawn()
+                .map_err(|error| format!("start local host helper: {error}"))?,
         ));
-    }
-    serde_json::from_slice(&output)
-        .map_err(|error| format!("decode local provider discovery output: {error}"))
+
+        started = true;
+        let mut output = Vec::with_capacity(4096);
+        let mut chunk = [0_u8; READ_CHUNK_BYTES];
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(deadline_error)?;
+            reader
+                .set_read_timeout(Some(remaining))
+                .map_err(|error| format!("set local host helper deadline: {error}"))?;
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => {
+                    if output.len().saturating_add(count) > MAX_OUTPUT_BYTES {
+                        return Err("local host helper exceeded 128 KiB of output".into());
+                    }
+                    output.extend_from_slice(&chunk[..count]);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(deadline_error());
+                }
+                Err(error) => return Err(format!("read local host helper output: {error}")),
+            }
+        }
+
+        let status = wait_until_deadline(&mut child, deadline)?;
+        if !status.success() {
+            return Err(format!("local host helper exited with status {status}"));
+        }
+        serde_json::from_slice(&output)
+            .map_err(|error| format!("decode local host helper output: {error}"))
+    })();
+    result.map_err(|message| HelperFailure { message, started })
 }
 
 fn wait_until_deadline(
@@ -94,10 +120,10 @@ fn wait_until_deadline(
         let process = child
             .0
             .as_mut()
-            .expect("provider discovery child is present until successful wait");
+            .expect("local host helper child is present until successful wait");
         if let Some(status) = process
             .try_wait()
-            .map_err(|error| format!("wait for local provider discovery: {error}"))?
+            .map_err(|error| format!("wait for local host helper: {error}"))?
         {
             child.0.take();
             return Ok(status);
@@ -107,7 +133,7 @@ fn wait_until_deadline(
 }
 
 fn deadline_error() -> String {
-    "локальное обнаружение CLI превысило временной лимит".into()
+    "локальная команда host превысила временной лимит".into()
 }
 
 /// Kill and reap the child on every error path. Taking it is reserved for a
@@ -158,6 +184,24 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn helper_failure_distinguishes_not_started_from_lost_result() {
+        let binary = FakeBinary::new("printf '%s' 'invalid-json'");
+        let error =
+            run_json_tracked::<serde_json::Value>(&binary.path, &[], Duration::from_secs(1))
+                .err()
+                .unwrap();
+        assert!(error.started);
+        let error = run_json_tracked::<serde_json::Value>(
+            &binary.directory.join("absent"),
+            &[],
+            Duration::from_secs(1),
+        )
+        .err()
+        .unwrap();
+        assert!(!error.started);
     }
 
     #[test]

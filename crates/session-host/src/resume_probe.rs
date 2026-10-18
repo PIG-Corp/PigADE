@@ -2,7 +2,15 @@
 //! never cross the serialized IPC boundary and cannot authorize another target.
 use crate::{Command, Host, adapters, ipc_server::Job, panel_launch, prepared};
 use anyhow::{Context, Result, ensure};
-use std::{path::PathBuf, sync::mpsc, thread};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
+};
 use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -54,10 +62,26 @@ struct Task {
 
 pub(crate) struct Reader {
     sender: mpsc::SyncSender<Task>,
+    active: Arc<AtomicUsize>,
 }
+
+pub(crate) struct Activity(Arc<AtomicUsize>);
+impl Activity {
+    fn begin(active: Arc<AtomicUsize>) -> Self {
+        active.fetch_add(1, Ordering::AcqRel);
+        Self(active)
+    }
+}
+impl Drop for Activity {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 impl Reader {
     pub(crate) fn new(actor: mpsc::SyncSender<Job>) -> Result<Self> {
         let (sender, receiver) = mpsc::sync_channel::<Task>(1);
+        let active = Arc::new(AtomicUsize::new(0));
         thread::Builder::new()
             .name("pigade-resume-metadata".into())
             .spawn(move || {
@@ -72,9 +96,14 @@ impl Reader {
                     }
                 }
             })?;
-        Ok(Self { sender })
+        Ok(Self { sender, active })
+    }
+    pub(crate) fn busy(&self) -> bool {
+        self.active.load(Ordering::Acquire) != 0
     }
     pub(crate) fn submit(&self, job: Job, target: Target) {
+        let mut job = job;
+        job._resume_activity = Some(Activity::begin(self.active.clone()));
         let task = Task { job, target };
         if let Err(error) = self.sender.try_send(task) {
             let task = match error {

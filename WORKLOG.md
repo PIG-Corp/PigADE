@@ -4749,3 +4749,67 @@ Verify and ship handoff plus old-host CLI discovery compatibility; open the fixe
 - Files: crates/app/src/handoff.rs, crates/app/src/handoff_commands.rs, crates/app/src/handoff_ui.rs, crates/app/src/provider_discovery.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/startup.rs, crates/app/src/dirty_documents.rs, crates/session-host/src/main.rs, crates/session-host/src/lib.rs, crates/session-host/tests/provider_discovery_cli.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Final app377 tests, strictClippy, packagefmt and release pass. Private handoff setup01 passes cancel/no-spawn, exact frozen source+ask/full-context argv, one new session/generation and untouched source frame/journal; captures inspected, existing setup/custom/profile cases pass. Root source-reviewed final bounded helper and final hostmode; targeted host discovery fake-PATH/no-task test and hostClippy passed in Luna lane; release host builds. Actual old host rejects DetectProviders, all3executables exist; standalone new binary reports Claude2.1.259/Codex0.162.1/OpenCode1.19.3. Exact-error fallback integrated and full validated DTO retained; real reason surfaced on failure. Opened final release via installed pigade wrapper as PID88229 and verified mapped1912x1046 window, no startup stderr. Live host/6runningCLI retained. Counted59929 production Rust code lines excluding tests/comments/blanks/vendor/docs/scripts.
 - Risks / next: Commit coherent app/context and legacy-discovery block; broad goal active. No model receipt, auto submit, structured full-dialogue export or universal platform claim. Current independent old-host capabilities remain limited until planned safe update; preserve unrelated dirt/stash0.
+
+## 2026-10-18T09:06:33+00:00 — host_self_exec_luna
+
+Add exact-incarnation host status and an idle-only serialized shutdown barrier
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/maintenance.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/resume_probe.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/launch.rs, crates/session-host/tests/maintenance.rs
+- Verification: cargo test -p pigade-session-host --test maintenance: 4 passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and git diff --check on owned files passed. Separately ran cargo test -p pigade-session-host maintenance_client::tests: 6 passed.
+- Risks / next: Root integrates the UI worker and owns final release build; shutdown remains unavailable on older live hosts, and clients must reconcile lost acknowledgements against the original endpoint.
+
+## 2026-10-18T09:06:39+00:00 — handoff_format_luna
+
+Added authenticated, bounded host inspection, safe idle shutdown and read-only reconciliation CLI commands with stale snapshot checks.
+
+- Files: crates/session-host/src/maintenance_client.rs, crates/session-host/src/main.rs
+- Verification: Own checks: rustfmt --edition 2024 --check crates/session-host/src/maintenance_client.rs crates/session-host/src/main.rs and targeted git diff --check passed. host_self_exec_luna ran cargo test -p pigade-session-host maintenance_client::tests (6/6 passed) and cargo clippy -p pigade-session-host --all-targets -- -D warnings (passed); it also reports lifecycle integration tests 4/4 passed.
+- Risks / next: Root owns final integration/build verification and UI hookup. Live user hosts were not restarted or signaled.
+
+## 2026-10-18T09:08:03+00:00 — host_self_exec_luna
+
+Count only retained live process sessions as active during host maintenance status
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/tests/maintenance.rs
+- Verification: cargo test -p pigade-session-host --test maintenance: 5 passed, including restored LaunchState::Exited journal; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --check and git diff --check passed
+- Risks / next: Root owns final UI/release verification; recovered history without an input handle is idle, while unresolved launch records and degraded storage continue to refuse shutdown.
+
+## 2026-10-18T09:08:30+00:00 — handoff_format_luna
+
+Added process-level CLI coverage for host inspect, guarded shutdown, read-only reconcile, stale preview rejection and active-PTY refusal.
+
+- Files: crates/session-host/src/maintenance_client.rs, crates/session-host/src/main.rs, crates/session-host/tests/maintenance_client_cli.rs
+- Verification: cargo test -p pigade-session-host --test maintenance_client_cli: 3/3 passed; cargo test -p pigade-session-host maintenance_client::tests: 6/6 passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and targeted git diff --check passed.
+- Risks / next: Root to finish app/UI integration and final repository verification. Tests used only private temporary host state and cleaned up their own host/PTy children; no release build or user host action.
+
+## 2026-10-18T09:11:29+00:00 — handoff_format_luna
+
+Allowed read-only host reconciliation across helper rebuilds and made every pre-send shutdown rejection a bounded definitive JSON result.
+
+- Files: crates/session-host/src/maintenance_client.rs, crates/session-host/main.rs, crates/session-host/tests/maintenance_client_cli.rs
+- Verification: cargo test -p pigade-session-host --test maintenance_client_cli: 3/3 passed; cargo test -p pigade-session-host maintenance_client::tests: 6/6 passed; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; rustfmt --edition 2024 --check and targeted git diff --check passed.
+- Risks / next: Root to complete app integration and final repository verification; no user host was touched.
+
+## 2026-10-18T09:11:32+00:00 — handoff_format_luna
+
+WORKLOG path correction: the preceding entry referred to crates/session-host/main.rs; the CLI entry point is crates/session-host/src/main.rs.
+
+- Files: crates/session-host/src/main.rs
+- Verification: No code changed in this correction; validated path exists and rustfmt check already passed.
+- Risks / next: No additional action.
+
+## 2026-10-18T09:15:19+00:00 — host_self_exec_luna
+
+Seal host command admission atomically with idle shutdown and return delivered known refusals for queued work
+
+- Files: crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/maintenance.rs
+- Verification: cargo test -p pigade-session-host --lib ipc_server::tests::sealed_actor_refuses_queued_mutation_and_waits_for_delivery passed; cargo test -p pigade-session-host --test maintenance passed 5/5; cargo clippy -p pigade-session-host --all-targets -- -D warnings passed; cargo fmt --all -- --check and git diff --check passed
+- Risks / next: Root owns integration and app typed-decoder verification; no release build or live-host action performed.
+
+## 2026-10-18T09:21:44+00:00 — root
+
+Expose local host build status and cooperative idle replacement, retain unknown outcomes, and integrate bounded helper execution and native service sheet
+
+- Files: crates/app/src/host_maintenance.rs, crates/app/src/host_maintenance_commands.rs, crates/app/src/host_maintenance_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/provider_discovery.rs, crates/app/src/startup.rs, crates/app/src/close_ui.rs, crates/session-host/src/lib.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0021-cooperative-host-update.md
+- Verification: Root app tests383/383; workspace/app strict Clippy and formatting pass. Root IPC tests8/8, lifecycle5/5 and client CLI3/3 pass; final app and host release builds pass. Existing Python harness37/37 and strict C helper compile pass. Native setup02 authenticates installed helper and proves readonly inspect/refresh/CtrlEnter preserves explicit host and generations; root inspected capture. First native automation pass had a private helper-path error caught visually; fixed isolated app_env, then02 passed actual status. Final copy avoids calling confirmed live CLI an unknown launch. Actual user host readonly inspection: legacy, different binary,9 active sessions, no shutdown sent. Bounded Luna review found/fixed admission race, unknown mutation freeze and helper rebuild/pre-send lock cases.
+- Risks / next: Commit coherent block. Broad goal/release gates remain active; legacy host shutdown unsupported. Follow-up startup race: concurrent fresh UI during sealed host delivery may fail transiently on writer lock; typed host_shutting_down should cause wait/retry. Preserve unrelated resource/soak dirt, patch files and stash0.

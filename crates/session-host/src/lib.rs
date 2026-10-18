@@ -22,6 +22,8 @@ pub use panel_directory::{PanelDirectory, PanelEntry};
 mod ipc_server;
 pub mod journal_policy;
 mod launch_gate;
+pub mod maintenance;
+pub mod maintenance_client;
 pub mod metrics;
 pub mod poll;
 pub mod recovery_diagnostics;
@@ -134,6 +136,10 @@ pub struct Launch {
 pub enum Command {
     List,
     DetectProviders,
+    HostStatus,
+    ShutdownIfIdle {
+        expected_incarnation: Uuid,
+    },
     HistoryRead {
         query: history_read::Query,
     },
@@ -416,6 +422,8 @@ pub struct Response {
     pub workspace_git_commit_plan: Option<WorkspaceGitCommitPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_git_commit: Option<WorkspaceGitCommitResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_status: Option<maintenance::Status>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -433,6 +441,7 @@ pub struct ProviderInfo {
 pub enum CommandRejection {
     QueueFull,
     LaunchPreflight,
+    HostShuttingDown,
 }
 
 impl std::fmt::Display for CommandRejection {
@@ -440,6 +449,7 @@ impl std::fmt::Display for CommandRejection {
         match self {
             Self::QueueFull => f.write_str("command queue full; command was not admitted"),
             Self::LaunchPreflight => f.write_str("launch rejected before process creation"),
+            Self::HostShuttingDown => f.write_str("host is shutting down; command was not applied"),
         }
     }
 }
@@ -782,6 +792,41 @@ fn provider_response(
         workspace_git_index: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        host_status: None,
+    }
+}
+
+fn maintenance_response(status: maintenance::Status, error: Option<String>) -> Response {
+    Response {
+        protocol: PROTOCOL,
+        views: Vec::new(),
+        error,
+        rejected_before_admission: None,
+        catalog: None,
+        selection: None,
+        context: None,
+        launch_preview: None,
+        launch_phase: None,
+        catalog_notice: None,
+        recovery: None,
+        selected: None,
+        history_chunk: None,
+        change_token: None,
+        activity: None,
+        activity_error: None,
+        generations: None,
+        generation_selection: None,
+        history_view: None,
+        providers: None,
+        template_run: None,
+        template_runs: None,
+        panel_directory: None,
+        workspace_git_snapshot: None,
+        workspace_git_diff: None,
+        workspace_git_index: None,
+        workspace_git_commit_plan: None,
+        workspace_git_commit: None,
+        host_status: Some(status),
     }
 }
 
@@ -1124,6 +1169,7 @@ impl Host {
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                host_status: None,
             });
         }
         if matches!(
@@ -1178,6 +1224,7 @@ impl Host {
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                host_status: None,
             });
         }
         if let Command::SetCanvasOffset { tab, offset } = &command {
@@ -1211,6 +1258,7 @@ impl Host {
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                host_status: None,
             });
         }
         match &command {
@@ -1254,6 +1302,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
             Command::SearchPanels { query, after } => {
@@ -1288,6 +1337,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
             Command::ActivatePane {
@@ -1330,6 +1380,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
             Command::Generations { session, before } => {
@@ -1363,6 +1414,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
             Command::SelectGeneration {
@@ -1400,6 +1452,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
             Command::PrepareLaunch { request } => {
@@ -1583,6 +1636,7 @@ impl Host {
                     workspace_git_index: None,
                     workspace_git_commit_plan: None,
                     workspace_git_commit: None,
+                    host_status: None,
                 });
             }
         };
@@ -1615,6 +1669,7 @@ impl Host {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            host_status: None,
         })
     }
     fn launch_response(
@@ -1652,6 +1707,7 @@ impl Host {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            host_status: None,
         }
     }
     fn template_run_response(
@@ -1689,6 +1745,7 @@ impl Host {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            host_status: None,
         }
     }
     fn open(root: PathBuf) -> Result<Self> {
@@ -1807,6 +1864,57 @@ impl Host {
             }
         }
         Ok(())
+    }
+    fn maintenance_status(&self, git_busy: bool, resume_busy: bool) -> Result<maintenance::Status> {
+        let mut active_sessions = 0usize;
+        let mut degraded = self.catalog_notice.is_some() || self.recovery.response().is_some();
+        for session in &self.sessions {
+            let view = session
+                .view
+                .lock()
+                .map_err(|_| anyhow::anyhow!("published session status is unavailable"))?;
+            if session.input.is_some() && view.state != "exited" {
+                active_sessions = active_sessions.saturating_add(1);
+            }
+            degraded |= view.storage_error.is_some()
+                || view.state == "degraded"
+                || !matches!(
+                    view.state.as_str(),
+                    "running" | "degraded" | "exited" | "history" | "launch_outcome_unknown"
+                );
+        }
+        let unresolved_launches = self.metadata.unresolved_launch_count()?;
+        let mut blockers = Vec::new();
+        if active_sessions > 0 {
+            blockers.push(format!("{active_sessions} session(s) are not exited"));
+        }
+        if unresolved_launches > 0 {
+            blockers.push(format!(
+                "{unresolved_launches} launch record(s) have not reached exited"
+            ));
+        }
+        if git_busy {
+            blockers.push("Git work is active or its status is unavailable".into());
+        }
+        if resume_busy {
+            blockers.push("resume verification is queued or active".into());
+        }
+        if degraded {
+            blockers.push("host or session storage is degraded".into());
+        }
+        let incarnation = self.changes.token()?.host_instance;
+        Ok(maintenance::Status {
+            schema: 1,
+            incarnation,
+            version: env!("CARGO_PKG_VERSION").into(),
+            pid: std::process::id(),
+            active_sessions,
+            unresolved_launches,
+            git_busy,
+            resume_busy,
+            can_shutdown: blockers.is_empty(),
+            blockers,
+        })
     }
     fn handle(&mut self, command: Command) -> Result<Vec<View>> {
         self.reconcile_exits()?;
@@ -2825,7 +2933,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     );
     let mut host = Host::open(root.clone())?;
     host.endpoint_root = runtime.clone();
-    let (jobs, internal_jobs) = ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
+    let (jobs, internal_jobs, admission) =
+        ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
     let resume_reader = resume_probe::Reader::new(internal_jobs)?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
@@ -2846,7 +2955,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     {
         eprintln!("Private replay-cache cleanup unavailable: {error}");
     }
-    for mut job in jobs {
+    let mut shutdown = false;
+    while let Ok(mut job) = jobs.recv() {
         let mut resume_error = None;
         if let Some(completion) = job.resume_probe.take() {
             match resume_probe::accept(&mut host, &job.request.command, completion) {
@@ -2869,6 +2979,79 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
         }
         if let Command::DetectProviders = job.request.command {
             provider_detector.submit(job.reply);
+            continue;
+        }
+        if matches!(job.request.command, Command::HostStatus) {
+            let response = host
+                .reconcile_exits()
+                .and_then(|()| {
+                    host.maintenance_status(workspace_git_reader.index_busy(), resume_reader.busy())
+                })
+                .map(|status| maintenance_response(status, None))
+                .unwrap_or_else(|error| {
+                    ipc_server::error_response(format!("host status unavailable: {error:#}"), None)
+                });
+            host.resume_verified = None;
+            let _ = job.reply.try_send(response);
+            continue;
+        }
+        if let Command::ShutdownIfIdle {
+            expected_incarnation,
+        } = job.request.command
+        {
+            let response = host
+                .reconcile_exits()
+                .and_then(|()| {
+                    let mut status = host.maintenance_status(
+                        workspace_git_reader.index_busy(),
+                        resume_reader.busy(),
+                    )?;
+                    if status.incarnation != expected_incarnation {
+                        status.can_shutdown = false;
+                        status.blockers.push("host incarnation changed".into());
+                        let error = "shutdown refused because host incarnation changed".into();
+                        Ok(maintenance_response(status, Some(error)))
+                    } else if status.can_shutdown {
+                        Ok(maintenance_response(status, None))
+                    } else {
+                        let error = format!(
+                            "shutdown refused while host is busy: {}",
+                            status.blockers.join(", ")
+                        );
+                        Ok(maintenance_response(status, Some(error)))
+                    }
+                })
+                .unwrap_or_else(|error| {
+                    ipc_server::error_response(
+                        format!("shutdown status unavailable: {error:#}"),
+                        None,
+                    )
+                });
+            let permitted = response.error.is_none()
+                && response
+                    .host_status
+                    .as_ref()
+                    .is_some_and(|status| status.can_shutdown);
+            host.resume_verified = None;
+            if permitted {
+                // The admission mutex linearizes this barrier with IPC workers' try_send.
+                let deliveries = admission.seal_and_reject_queued(&jobs);
+                // Keep the old endpoint alive long enough for already-admitted callers
+                // to receive a definitive refusal before exiting.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                for delivery in deliveries {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    let _ = delivery.recv_timeout(remaining);
+                }
+            }
+            let _ = job.reply.try_send(response);
+            if permitted {
+                if let Some(delivery) = job.delivery {
+                    let _ = delivery.recv_timeout(std::time::Duration::from_secs(2));
+                }
+                shutdown = true;
+                break;
+            }
             continue;
         }
         if matches!(&job.request.command, Command::CatalogApply { .. })
@@ -3087,9 +3270,17 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                host_status: None,
             },
         };
         let _ = job.reply.try_send(response);
+    }
+    if shutdown {
+        match fs::remove_file(runtime.join("host.sock")) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error).context("remove orderly shutdown endpoint"),
+        }
     }
     Ok(())
 }

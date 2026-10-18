@@ -4592,6 +4592,32 @@ def run_setup_fixture(config, report, control, app, env, save):
     baseline_generations = fixture_generations()
     require((report['fixture']['session'], report['fixture']['generation']) in baseline_generations,
             'unplaced bootstrap PTY disappeared before setup')
+    # Explicit-socket windows expose service status but may not replace their
+    # caller-owned host, even when the update shortcut is pressed.
+    service_before = host_request({'command': 'host_status'})['host_status']
+    helper_status = subprocess.run(['/pigade/host', 'host-inspect', '/artifacts/state/host.sock'],
+                                   env=env, capture_output=True, text=True, timeout=12, check=True)
+    inspection = json.loads(helper_status.stdout)
+    require(inspection['same_binary'] and not inspection['legacy'] and
+            inspection['status']['incarnation'] == service_before['incarnation'],
+            'installed maintenance helper did not authenticate the private host')
+    helper_call(config, 'host-maintenance-open')
+    time.sleep(.8)
+    helper_call(config, 'capture', '/artifacts/host-maintenance.ppm')
+    helper_call(config, 'host-maintenance-refresh')
+    time.sleep(.8)
+    helper_call(config, 'host-maintenance-confirm')
+    time.sleep(.3)
+    service_after = host_request({'command': 'host_status'})['host_status']
+    require(service_after['incarnation'] == service_before['incarnation'] and
+            service_after['active_sessions'] == service_before['active_sessions'] and
+            fixture_generations() == baseline_generations,
+            'read-only host maintenance view replaced its explicit host or launched a CLI')
+    helper_call(config, 'setup-close')
+    report['host_maintenance'] = {'installed_helper_available': True,
+                                  'explicit_socket_readonly': True,
+                                  'host_incarnation_preserved': True,
+                                  'generations_unchanged': True}
     helper_call(config, 'capture', '/artifacts/welcome.ppm')
     helper_call(config, 'setup-compact')
     time.sleep(.6)
@@ -4846,7 +4872,7 @@ def run_setup_fixture(config, report, control, app, env, save):
         'handoff_prepare_then_confirm_once': True,
         'handoff_cancel_and_source_immutable': True,
         'captures': ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
-                     'agent-picker.ppm', 'agent-direct.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
+                     'agent-picker.ppm', 'agent-direct.ppm', 'host-maintenance.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
                      'welcome-compact.ppm', 'workspace-compact.ppm',
                      'four-panels.ppm', 'four-panels-compact.ppm']}
     report['setup']['captures'].extend([
@@ -7112,6 +7138,7 @@ def inside_run() -> int:
         report['stage'] = 'pigade-app'
         save()
         app_env = dict(fcitx_env)
+        app_env['PIGADE_HOST_BINARY'] = '/pigade/host'
         app_env['LP_NUM_THREADS'] = '2'
         app_env['LIBGL_ALWAYS_SOFTWARE'] = 'true'
         app_env['VK_DRIVER_FILES'] = '/pigade/platform-sdk/lavapipe-icd.json'

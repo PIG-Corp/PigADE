@@ -8,7 +8,7 @@ use std::{
     },
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -32,11 +32,65 @@ pub(crate) struct Job {
     pub request: Request,
     pub reply: SyncSender<Response>,
     pub(crate) resume_probe: Option<crate::resume_probe::Completion>,
+    pub(crate) _resume_activity: Option<crate::resume_probe::Activity>,
+    pub(crate) delivery: Option<Receiver<()>>,
+}
+
+/// Serializes command admission with the actor's shutdown barrier.
+#[derive(Clone, Default)]
+pub(crate) struct Admission(Arc<Mutex<bool>>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionError {
+    Full,
+    Sealed,
+    Disconnected,
+}
+
+impl Admission {
+    pub(crate) fn seal(&self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+    }
+
+    fn submit(&self, jobs: &SyncSender<Job>, job: Job) -> std::result::Result<(), AdmissionError> {
+        let sealed = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *sealed {
+            return Err(AdmissionError::Sealed);
+        }
+        jobs.try_send(job).map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => AdmissionError::Full,
+            mpsc::TrySendError::Disconnected(_) => AdmissionError::Disconnected,
+        })
+    }
+
+    pub(crate) fn seal_and_reject_queued(&self, jobs: &Receiver<Job>) -> Vec<Receiver<()>> {
+        self.seal();
+        let mut deliveries = Vec::new();
+        while let Ok(queued) = jobs.try_recv() {
+            let _ = queued.reply.try_send(error_response(
+                "host is shutting down; command was not applied",
+                Some(CommandRejection::HostShuttingDown),
+            ));
+            if let Some(delivery) = queued.delivery {
+                deliveries.push(delivery);
+            }
+        }
+        deliveries
+    }
 }
 
 /// Caller must hold the host ownership lock and have validated its private state
 /// directory. The worker admission count also bounds simultaneous frame buffers.
-pub(crate) fn bind(socket: &Path, changes: ChangeHub) -> Result<(Receiver<Job>, SyncSender<Job>)> {
+pub(crate) fn bind(
+    socket: &Path,
+    changes: ChangeHub,
+) -> Result<(Receiver<Job>, SyncSender<Job>, Admission)> {
     if let Ok(metadata) = fs::symlink_metadata(socket) {
         // A stale socket is safe to unlink only under the caller's ownership lock.
         // SAFETY: geteuid has no preconditions.
@@ -50,6 +104,8 @@ pub(crate) fn bind(socket: &Path, changes: ChangeHub) -> Result<(Receiver<Job>, 
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let (sender, receiver) = mpsc::sync_channel(JOB_LIMIT);
     let internal_sender = sender.clone();
+    let admission = Admission::default();
+    let worker_admission = admission.clone();
     let active = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name("pigade-ipc-accept".into())
@@ -78,16 +134,17 @@ pub(crate) fn bind(socket: &Path, changes: ChangeHub) -> Result<(Receiver<Job>, 
                 let slot = ConnectionSlot(active.clone());
                 let sender = sender.clone();
                 let changes = changes.clone();
+                let admission = worker_admission.clone();
                 // If spawn fails, dropping its closure also releases the slot.
                 let _ = thread::Builder::new()
                     .name("pigade-ipc-client".into())
                     .spawn(move || {
                         let _slot = slot;
-                        let _ = process_connection(stream, sender, changes);
+                        let _ = process_connection(stream, sender, changes, admission);
                     });
             }
         })?;
-    Ok((receiver, internal_sender))
+    Ok((receiver, internal_sender, admission))
 }
 
 struct ConnectionSlot(Arc<AtomicUsize>);
@@ -130,6 +187,7 @@ pub(crate) fn error_response(
         workspace_git_index: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        host_status: None,
     }
 }
 
@@ -166,6 +224,7 @@ fn process_connection(
     mut stream: UnixStream,
     jobs: SyncSender<Job>,
     changes: ChangeHub,
+    admission: Admission,
 ) -> Result<()> {
     // Validate here too so tests and any future caller cannot bypass peer auth.
     peer_pid(&stream)?;
@@ -220,6 +279,7 @@ fn process_connection(
                 workspace_git_index: None,
                 workspace_git_commit_plan: None,
                 workspace_git_commit: None,
+                host_status: None,
             },
             Err(error) => error_response(format!("change wait unavailable: {error:#}"), None),
         };
@@ -227,13 +287,19 @@ fn process_connection(
         return Ok(());
     }
     let (reply, receiver) = mpsc::sync_channel(1);
-    match jobs.try_send(Job {
-        request,
-        reply,
-        resume_probe: None,
-    }) {
+    let (delivered, delivery) = mpsc::sync_channel(1);
+    match admission.submit(
+        &jobs,
+        Job {
+            request,
+            reply,
+            resume_probe: None,
+            _resume_activity: None,
+            delivery: Some(delivery),
+        },
+    ) {
         Ok(()) => (),
-        Err(mpsc::TrySendError::Full(_)) => {
+        Err(AdmissionError::Full) => {
             send(
                 &mut stream,
                 &error_response(
@@ -243,10 +309,13 @@ fn process_connection(
             )?;
             return Ok(());
         }
-        Err(mpsc::TrySendError::Disconnected(_)) => {
+        Err(AdmissionError::Sealed | AdmissionError::Disconnected) => {
             send(
                 &mut stream,
-                &error_response("host command handler unavailable", None),
+                &error_response(
+                    "host is shutting down; command was not applied",
+                    Some(CommandRejection::HostShuttingDown),
+                ),
             )?;
             return Ok(());
         }
@@ -258,6 +327,7 @@ fn process_connection(
     // Encoding fallback occurs before writing the frame header. A partial I/O
     // failure must never append another reply to an already-started frame.
     send_encoded(&mut stream, &bytes)?;
+    let _ = delivered.try_send(());
     Ok(())
 }
 
@@ -271,7 +341,9 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        let worker = thread::spawn(move || {
+            process_connection(server, jobs, ChangeHub::new(), Admission::default())
+        });
         send(
             &mut client,
             &Request {
@@ -310,6 +382,7 @@ mod tests {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            host_status: None,
         })?;
         assert!(receive::<Response>(&mut client)?.error.is_none());
         worker.join().unwrap()?;
@@ -321,7 +394,9 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        let worker = thread::spawn(move || {
+            process_connection(server, jobs, ChangeHub::new(), Admission::default())
+        });
         send(
             &mut client,
             &serde_json::json!({"protocol":PROTOCOL,
@@ -348,7 +423,9 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        let worker = thread::spawn(move || {
+            process_connection(server, jobs, ChangeHub::new(), Admission::default())
+        });
         send(
             &mut client,
             &Request {
@@ -376,10 +453,14 @@ mod tests {
             },
             reply,
             resume_probe: None,
+            _resume_activity: None,
+            delivery: None,
         })
         .ok()
         .unwrap();
-        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        let worker = thread::spawn(move || {
+            process_connection(server, jobs, ChangeHub::new(), Admission::default())
+        });
         send(
             &mut client,
             &Request {
@@ -400,6 +481,69 @@ mod tests {
     }
 
     #[test]
+    fn sealed_actor_refuses_queued_mutation_and_waits_for_delivery() -> Result<()> {
+        let (jobs, receiver) = mpsc::sync_channel(2);
+        let (reply, response) = mpsc::sync_channel(1);
+        let (delivered, delivery) = mpsc::sync_channel(1);
+        jobs.try_send(Job {
+            request: Request {
+                protocol: PROTOCOL,
+                command: Command::Input {
+                    session: uuid::Uuid::new_v4(),
+                    generation: uuid::Uuid::new_v4(),
+                    bytes: b"must not be applied".to_vec(),
+                },
+            },
+            reply,
+            resume_probe: None,
+            _resume_activity: None,
+            delivery: Some(delivery),
+        })
+        .unwrap();
+        let worker = thread::spawn(move || {
+            let response = response.recv_timeout(IO_TIMEOUT)?;
+            assert_eq!(
+                response.rejected_before_admission,
+                Some(CommandRejection::HostShuttingDown)
+            );
+            assert!(
+                response
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("not applied"))
+            );
+            delivered.send(()).unwrap();
+            Ok::<_, mpsc::RecvTimeoutError>(())
+        });
+
+        let admission = Admission::default();
+        let receipts = admission.seal_and_reject_queued(&receiver);
+        assert_eq!(receipts.len(), 1);
+        receipts[0].recv_timeout(IO_TIMEOUT)?;
+        worker.join().unwrap()?;
+        assert!(
+            receiver.try_recv().is_err(),
+            "queued command reached dispatch"
+        );
+        let (reply, _response) = mpsc::sync_channel(1);
+        let result = admission.submit(
+            &jobs,
+            Job {
+                request: Request {
+                    protocol: PROTOCOL,
+                    command: Command::List,
+                },
+                reply,
+                resume_probe: None,
+                _resume_activity: None,
+                delivery: None,
+            },
+        );
+        assert_eq!(result, Err(AdmissionError::Sealed));
+        Ok(())
+    }
+
+    #[test]
     fn ambiguous_reply_timeout_never_claims_pre_admission_rejection() {
         let response = reply_or_unknown(Err(mpsc::RecvTimeoutError::Timeout));
         assert!(response.error.unwrap().contains("outcome may be unknown"));
@@ -411,7 +555,9 @@ mod tests {
         let (mut client, server) = UnixStream::pair()?;
         client.set_read_timeout(Some(IO_TIMEOUT))?;
         let (jobs, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || process_connection(server, jobs, ChangeHub::new()));
+        let worker = thread::spawn(move || {
+            process_connection(server, jobs, ChangeHub::new(), Admission::default())
+        });
         send(
             &mut client,
             &Request {
@@ -452,8 +598,9 @@ mod tests {
         wait_client.set_read_timeout(Some(IO_TIMEOUT))?;
         let wait_jobs = jobs.clone();
         let wait_changes = changes.clone();
-        let wait_worker =
-            thread::spawn(move || process_connection(wait_server, wait_jobs, wait_changes));
+        let wait_worker = thread::spawn(move || {
+            process_connection(wait_server, wait_jobs, wait_changes, Admission::default())
+        });
         send(
             &mut wait_client,
             &Request {
@@ -468,8 +615,9 @@ mod tests {
         let (mut command_client, command_server) = UnixStream::pair()?;
         command_client.set_read_timeout(Some(IO_TIMEOUT))?;
         let command_changes = changes.clone();
-        let command_worker =
-            thread::spawn(move || process_connection(command_server, jobs, command_changes));
+        let command_worker = thread::spawn(move || {
+            process_connection(command_server, jobs, command_changes, Admission::default())
+        });
         send(
             &mut command_client,
             &Request {
@@ -513,6 +661,7 @@ mod tests {
             workspace_git_index: None,
             workspace_git_commit_plan: None,
             workspace_git_commit: None,
+            host_status: None,
         })?;
         assert!(receive::<Response>(&mut command_client)?.error.is_none());
         command_worker.join().unwrap()?;

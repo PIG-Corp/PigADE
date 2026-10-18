@@ -184,6 +184,8 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "custom-reopen-profiles") &&
         strcmp(a.stage, "custom-review-enter") && strcmp(a.stage, "custom-review-cancel") &&
         strcmp(a.stage, "custom-confirm") &&
+        strcmp(a.stage, "host-maintenance-open") && strcmp(a.stage, "host-maintenance-refresh") &&
+        strcmp(a.stage, "host-maintenance-confirm") &&
         strcmp(a.stage, "handoff-open") && strcmp(a.stage, "handoff-type-ask") &&
         strcmp(a.stage, "handoff-prepare") && strcmp(a.stage, "handoff-cancel") &&
         strcmp(a.stage, "handoff-confirm") &&
@@ -1847,6 +1849,16 @@ int main(int argc, char **argv) {
         } else if (!strcmp(a.stage, "custom-review-cancel")) {
             key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "custom-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "host-maintenance-open")) {
+            setup_prefix(dpy, XK_p, 0);
+            custom_ascii(dpy, "host");
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "host-maintenance-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "host-maintenance-confirm")) {
             modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "handoff-open")) {
             setup_prefix(dpy, XK_p, 0);

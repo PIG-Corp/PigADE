@@ -42,6 +42,11 @@ pub(crate) fn resolve_socket(explicit_socket: Option<PathBuf>) -> Result<PathBuf
     Ok(socket)
 }
 
+/// Compare only; explicit-socket ownership is separately retained by the UI.
+pub(crate) fn is_default_socket(socket: &Path) -> Result<bool, String> {
+    Ok(runtime_root(&state_root()?)?.join("host.sock") == socket)
+}
+
 fn resolve_socket_inner(
     explicit_socket: Option<PathBuf>,
     retain_started_child: bool,

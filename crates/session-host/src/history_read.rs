@@ -125,5 +125,6 @@ pub(crate) fn response(
         workspace_git_index: None,
         workspace_git_commit_plan: None,
         workspace_git_commit: None,
+        host_status: None,
     }
 }

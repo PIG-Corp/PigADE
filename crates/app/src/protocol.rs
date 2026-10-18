@@ -1089,7 +1089,10 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             providers_request: false,
             message,
             rejected_before_launch: launch_confirmed
-                && response.rejected_before_admission.as_deref() == Some("launch_preflight"),
+                && matches!(
+                    response.rejected_before_admission.as_deref(),
+                    Some("launch_preflight" | "queue_full" | "host_shutting_down")
+                ),
         });
     }
     if let Some(page) = &response.generations {
@@ -1319,9 +1322,14 @@ pub fn request(socket: &Path, command: Value) -> Result<Vec<View>, CommandFailur
 
 fn command_result(response: Response) -> Result<Vec<View>, CommandFailure> {
     if let Some(message) = response.error {
-        return if response.rejected_before_admission.as_deref() == Some("queue_full") {
+        return if matches!(
+            response.rejected_before_admission.as_deref(),
+            Some("queue_full" | "host_shutting_down")
+        ) {
             Err(CommandFailure::NotAdmitted {
-                code: "queue_full".into(),
+                code: response
+                    .rejected_before_admission
+                    .expect("known rejection code"),
                 message,
             })
         } else {
@@ -1457,7 +1465,12 @@ pub enum PollError {
 }
 
 fn decode_poll(reply: Response) -> Result<(Poll, Option<ChangeToken>), PollError> {
-    if reply.error.is_some() && reply.rejected_before_admission.as_deref() == Some("queue_full") {
+    if reply.error.is_some()
+        && matches!(
+            reply.rejected_before_admission.as_deref(),
+            Some("queue_full" | "host_shutting_down")
+        )
+    {
         return Err(PollError::Busy);
     }
     let token = reply.change_token.clone();
@@ -2305,6 +2318,27 @@ mod tests {
                 message: "queue full".into(),
             })
         );
+    }
+
+    #[test]
+    fn orderly_host_shutdown_is_known_not_applied() {
+        assert_eq!(
+            command_result(error_response(
+                "host is shutting down",
+                Some("host_shutting_down")
+            )),
+            Err(CommandFailure::NotAdmitted {
+                code: "host_shutting_down".into(),
+                message: "host is shutting down".into()
+            })
+        );
+        assert!(matches!(
+            decode_poll(error_response(
+                "host is shutting down",
+                Some("host_shutting_down")
+            )),
+            Err(PollError::Busy)
+        ));
     }
 
     #[test]

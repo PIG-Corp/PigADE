@@ -208,6 +208,15 @@ impl MetadataStore {
         );
         Ok(Some(state))
     }
+    /// Count every launch that is not durably reconciled as exited.
+    pub fn unresolved_launch_count(&self) -> Result<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM launch_intents WHERE state <> 'exited'",
+            [],
+            |row| row.get(0),
+        )?;
+        usize::try_from(count).context("unresolved launch count is out of range")
+    }
     /// Bounded manifest read; exceeding the supported live registry is explicit.
     pub fn list_launches(&self) -> Result<Vec<LaunchRecord>> {
         let count: u64 =
