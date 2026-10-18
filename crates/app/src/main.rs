@@ -1221,7 +1221,7 @@ struct CanvasApp {
     tab_drop_bounds: std::collections::BTreeMap<uuid::Uuid, Bounds<Pixels>>,
     deferred_tab_drop: Option<Arc<TabDropPreview>>,
     focus_queue: pointer_layout::FocusQueue,
-    hover_position: Option<Point<Pixels>>,
+    hover_focus: pointer_layout::HoverFocus,
     navigation: navigation::Navigation,
     stop_control: session_control::StopControl,
     git_flow: workspace_git::Flow,
@@ -1306,9 +1306,12 @@ impl CanvasApp {
                 cx.notify();
             }),
             cx.observe_window_activation(window, |this, window, cx| {
-                // Re-entry may arrive at the last local coordinate. The next
-                // actual motion must be eligible to focus the pane beneath it.
-                this.hover_position = None;
+                if let Some((x, y)) = this
+                    .hover_focus
+                    .activation(window.is_window_active(), window.is_window_hovered())
+                {
+                    this.focus_under_pointer(point(px(x as f32), px(y as f32)), window, cx);
+                }
                 this.reset_cursor_blink(cx);
                 cx.notify();
                 if !window.is_window_active() {
@@ -1780,7 +1783,7 @@ impl CanvasApp {
             tab_drop_bounds: Default::default(),
             deferred_tab_drop: None,
             focus_queue: Default::default(),
-            hover_position: None,
+            hover_focus: Default::default(),
             navigation: Default::default(),
             stop_control: Default::default(),
             deferred_placement: None,
@@ -5654,6 +5657,51 @@ impl CanvasApp {
             );
         }
     }
+    fn focus_under_pointer(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.product.dialog.is_some()
+            || self.external_file_drag
+            || self.pane_drag.is_some()
+            || self.resize_gesture.is_some()
+            || self.canvas_drag.is_some()
+            || self.selection_dragging
+            || self
+                .pointer
+                .as_ref()
+                .is_some_and(|route| route.encoder.has_pressed())
+            || !window.is_window_active()
+            || self.prefix
+            || self.layout_mode.is_some()
+            || !self.text_input.preedit.is_empty()
+        {
+            return;
+        }
+        if self
+            .canvas_bounds
+            .is_some_and(|bounds| bounds.contains(&position))
+            && let Some(index) = self
+                .panes
+                .iter()
+                .position(|pane| pane.bounds.contains(&position))
+            && index != self.selected
+            && self.state.views.get(index).is_some()
+        {
+            self.finish_pointer(cx);
+            self.selected = index;
+            self.selection = None;
+            self.text_input.cancel();
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+            window.notify_text_input_changed(&self.focus);
+            self.focus.focus(window, cx);
+            self.reset_cursor_blink(cx);
+            self.persist_focus(cx);
+        }
+    }
+
     fn pointer_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -5662,7 +5710,14 @@ impl CanvasApp {
     ) {
         // Only real pointer movement changes hover focus. Repaint/layout changes
         // beneath a stationary cursor must not undo a keyboard focus command.
-        let moved = self.hover_position.replace(event.position) != Some(event.position);
+        let moved = self.hover_focus.motion(
+            (
+                f64::from(f32::from(event.position.x)),
+                f64::from(f32::from(event.position.y)),
+            ),
+            window.is_window_active(),
+            event.pressed_button.is_none(),
+        );
         if self.external_file_drag {
             return;
         }
@@ -5739,35 +5794,8 @@ impl CanvasApp {
             // a press in the newly hovered pane.
             self.finish_pointer(cx);
         }
-        if moved
-            && event.pressed_button.is_none()
-            && !self
-                .pointer
-                .as_ref()
-                .is_some_and(|route| route.encoder.has_pressed())
-            && window.is_window_active()
-            && !self.prefix
-            && self.layout_mode.is_none()
-            && self.text_input.preedit.is_empty()
-            && self
-                .canvas_bounds
-                .is_some_and(|bounds| bounds.contains(&event.position))
-            && let Some(index) = self
-                .panes
-                .iter()
-                .position(|pane| pane.bounds.contains(&event.position))
-            && index != self.selected
-            && self.state.views.get(index).is_some()
-        {
-            self.finish_pointer(cx);
-            self.selected = index;
-            self.selection = None;
-            self.text_input.cancel();
-            self.input_epoch = self.input_epoch.wrapping_add(1);
-            window.notify_text_input_changed(&self.focus);
-            self.focus.focus(window, cx);
-            self.reset_cursor_blink(cx);
-            self.persist_focus(cx);
+        if moved && event.pressed_button.is_none() {
+            self.focus_under_pointer(event.position, window, cx);
         }
         // Native file-drop Pending can arrive before its paths, as a move with
         // Left held. Never invent a terminal drag whose press we did not send.
@@ -7930,6 +7958,15 @@ impl Render for CanvasApp {
                                                 paint_revision,
                                                 &sequences[..count],
                                             );
+                                            // Track real motion before hitbox filtering. An
+                                            // inactive window or a just-closed overlay can
+                                            // otherwise swallow entry until another move.
+                                            let pointer_entity = painter.clone();
+                                            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                                                if phase == DispatchPhase::Capture {
+                                                    pointer_entity.update(cx, |this, cx| this.pointer_move(event, window, cx));
+                                                }
+                                            });
                                             let focus = painter.read(cx).focus.clone();
                                             window.handle_input(
                                                 &focus,
@@ -8173,7 +8210,6 @@ impl Render for CanvasApp {
             .on_drag_move::<ExternalPaths>(cx.listener(Self::external_files_over))
             .on_file_drop_exit(cx.listener(|this, _: &FileDropEvent, _, cx| this.clear_external_files(cx)))
             .on_drop::<ExternalPaths>(cx.listener(Self::drop_external_files))
-            .on_mouse_move(cx.listener(Self::pointer_move))
             .on_scroll_wheel(cx.listener(Self::pointer_wheel))
     }
 }

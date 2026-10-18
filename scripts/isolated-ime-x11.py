@@ -1409,6 +1409,23 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     require(live_unchanged(generations, expected_processes),
             'a pointer fixture terminal was not live before hover tests')
 
+    step('pointer-hover-left')
+    time.sleep(0.2)  # let GPUI consume entry before the fixed deactivation sequence
+    before_inactive = catalog_layout()[1]
+    report['stage'] = 'pointer-inactive-hold'
+    save()
+    held_stage('pointer-inactive-hold', 'INACTIVE', 'RESTORE', None,
+               lambda: require(catalog_layout()[1] == before_inactive and
+                               live_unchanged(generations, expected_processes),
+                               'inactive app followed pointer focus'))
+    wait_until(lambda: catalog_layout()[1].get('focused') != before_inactive.get('focused'), time.monotonic() + 5)
+    require(catalog_layout()[1].get('root') == before_inactive.get('root') and
+            live_unchanged(generations, expected_processes),
+            'activation failed to apply deferred hover without a second motion or changed placement/processes')
+    step('pointer-hover-left')
+    wait_until(lambda: catalog_layout()[1] == before_inactive, time.monotonic() + 5)
+
+
     # With the source already selected and the cursor fixed, modifier+LMB must
     # pick up the pane immediately. Releasing without motion must still leave
     # the durable layout/history and live terminal geometry untouched.
@@ -1595,6 +1612,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
             focus_layout.get('root') == before_drag.get('root') and
             live_unchanged(generations, expected_processes),
             'focus mode did not preserve the nonzero-index source pane and process identities')
+    # The catalog acknowledgement precedes the UI's PTY resize acknowledgement.
+    time.sleep(0.35)
     focus_catalog, focus_layout = catalog_layout()
     focus_geometry = frame_geometries(panes)
     helper_call(config, 'capture', '/artifacts/pointer-focus-mode-before.ppm')
@@ -1680,15 +1699,6 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
             'open controls dialog allowed pointer hover to move pane focus')
     helper_call(config, 'capture', '/artifacts/pointer-dialog.ppm')
     step('setup-close')
-    step('pointer-hover-left')
-    before_inactive = catalog_layout()[1]
-    held_stage('pointer-inactive-hold', 'INACTIVE', 'RESTORE', None,
-               lambda: require(catalog_layout()[1] == before_inactive and
-                               live_unchanged(generations, expected_processes),
-                               'inactive app followed pointer focus'))
-    wait_until(lambda: catalog_layout()[1] == before_inactive, time.monotonic() + 5)
-    require(live_unchanged(generations, expected_processes),
-            'inactive pointer probe changed terminal identities')
 
     old_split_ids = split_ids(before_drag.get('root'))
     step('pointer-drop')
@@ -1714,6 +1724,40 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     # not an input-to-present latency measurement.
     time.sleep(0.35)
     helper_call(config, 'capture', '/artifacts/pointer-undo.ppm')
+
+    # Drop just inside the detached gutter before the original right pane.
+    # Hyprland-style nearest-pane targeting should insert the source on its left.
+    before_gap_catalog, before_gap = catalog_layout()
+    before_gap_root = before_gap.get('root')
+    before_gap_history = json.loads(before_gap_catalog['layout']['json'])
+    before_gap_processes = process_snapshot()
+    require(set(pane_ids(before_gap_root)) == original_ids and
+            before_gap_processes == expected_processes and
+            live_unchanged(generations, expected_processes),
+            'gap-drop regression did not start from the restored four-pane tree and process identities')
+    step('pointer-drop-gap')
+    gap_dropped = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('root') != before_gap_root else None),
+        time.monotonic() + 6)
+    gap_siblings = direct_move_sibling_split(gap_dropped.get('root'), right_pane, left_pane)
+    require(gap_siblings == ('Horizontal', [left_pane, right_pane]) and
+            set(pane_ids(gap_dropped.get('root'))) == original_ids and
+            live_unchanged(generations, expected_processes),
+            'drop over the fixed gutter did not insert the source immediately left of the original right pane or changed process identities')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-gap-dropped.ppm')
+    step('pointer-undo')
+    gap_restored = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('root') == before_gap_root and
+                 layout.get('focused') in (before_gap.get('focused'), left_pane) else None),
+        time.monotonic() + 8)
+    require(set(pane_ids(gap_restored.get('root'))) == original_ids and
+            process_snapshot() == before_gap_processes == expected_processes and
+            live_unchanged(generations, expected_processes) and
+            json.loads(catalog_layout()[0]['layout']['json']).get('undo') == before_gap_history.get('undo'),
+            'undo after the gap drop did not restore the exact pane tree/history and stable process identities')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-gap-undo.ppm')
 
     # Add a real, empty destination tab through the native product flow, then
     # exercise a cross-tab pane transfer first as a cancelled preview and then
@@ -2236,6 +2280,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input': True,
         'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
+        'entry_before_activation_focused_hovered_pane_without_second_motion': True,
         'zero_motion_modifier_pickup_was_visible_without_durable_layout_or_pty_changes': True,
         'zero_motion_modifier_release_preserved_exact_layout_history_processes_and_pty_geometry': True,
         'five_pixel_modifier_drag_preview_cancelled_to_exact_layout_without_pty_or_process_changes': True,
@@ -2246,6 +2291,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'selection_ime_dialog_and_inactive_focus_suppressed': True,
         'drop_inserted_source_to_right_of_expected_target_as_horizontal_sibling': True,
         'prefix_undo_restored_exact_pre_drag_layout': True,
+        'gap_drop_inserted_source_left_of_nearest_right_pane_and_undo_restored_exact_tree': True,
         'tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes': True,
         'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination': True,
         'tab_transfer_history_contains_exact_before_and_after_for_both_tabs': True,
@@ -2264,6 +2310,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                      'pointer-focus-mode-drag.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
                      'pointer-dropped.ppm', 'pointer-undo.ppm',
+                     'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
                      'pointer-tab-drop-cancel.ppm', 'pointer-tab-drop-preview.ppm',
                      'pointer-tab-drop-committed.ppm', 'pointer-tab-drop-undo.ppm',
                      'pointer-tab-drop-populated-before.ppm',
@@ -5506,7 +5553,8 @@ def outer_run(args) -> dict:
                   'pointer-focus-mode-before.ppm', 'pointer-focus-mode-drag.ppm',
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
-                  'pointer-undo.ppm', 'pointer-tab-drop-cancel.ppm',
+                  'pointer-undo.ppm', 'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
+                  'pointer-tab-drop-cancel.ppm',
                   'pointer-tab-drop-preview.ppm', 'pointer-tab-drop-committed.ppm',
                   'pointer-tab-drop-undo.ppm', 'pointer-tab-drop-populated-before.ppm',
                   'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
@@ -5564,7 +5612,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI and restore the normalized index, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

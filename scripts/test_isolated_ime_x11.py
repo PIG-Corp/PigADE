@@ -427,7 +427,7 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'pointer-subthreshold-hold', 'pointer-focus-toggle',
                       'pointer-focus-mode-preview',
                       'pointer-hover-source', 'pointer-keyboard-away', 'pointer-move-right-near',
-                      'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
+                      'pointer-hold-preview', 'pointer-drop', 'pointer-drop-gap', 'pointer-undo',
                       'pointer-create-transfer-tab', 'pointer-select-first-tab',
                       'pointer-tab-drop-cancel', 'pointer-tab-drop',
                       'pointer-tab-drop-populated-preview',
@@ -476,6 +476,20 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("ppm_changed_pixels('pointer-subthreshold-before.ppm', 'pointer-small-motion-held.ppm') > 1000", fixture)
         self.assertIn("held_stage('pointer-no-motion-release', 'HELD', 'RELEASE'", fixture)
         self.assertIn("held_stage('pointer-subthreshold-hold', 'HELD', 'CANCEL'", fixture)
+        gap_stage = source.split(
+            '} else if (!strcmp(a.stage, "pointer-drop-gap")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-create-transfer-tab")) {', 1)[0]
+        gap_drag = source.split('static void pointer_gap_drag', 1)[1].split(
+            'static void pointer_tab_drag_begin', 1)[0]
+        self.assertIn('pointer_position(dpy, app, 350, 250)', gap_drag)
+        self.assertIn('pointer_position(dpy, app, 754, 250)', gap_drag)
+        self.assertIn('pointer_drag_release(dpy, 0)', gap_stage)
+        self.assertIn("step('pointer-drop-gap')", fixture)
+        self.assertIn("direct_move_sibling_split(gap_dropped.get('root'), right_pane, left_pane)", fixture)
+        self.assertIn("gap_siblings == ('Horizontal', [left_pane, right_pane])", fixture)
+        self.assertIn("step('pointer-undo')", fixture.split("step('pointer-drop-gap')", 1)[1])
+        self.assertIn('pointer-gap-dropped.ppm', fixture)
+        self.assertIn('pointer-gap-undo.ppm', fixture)
         self.assertIn('five_pixel_modifier_drag_preview_cancelled_to_exact_layout_without_pty_or_process_changes', fixture)
         self.assertIn('hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input',
                       fixture)

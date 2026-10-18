@@ -155,6 +155,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-focus-mode-preview") &&
         strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
+        strcmp(a.stage, "pointer-drop-gap") &&
         strcmp(a.stage, "pointer-create-transfer-tab") && strcmp(a.stage, "pointer-select-first-tab") &&
         strcmp(a.stage, "pointer-hotkey-transfer") && strcmp(a.stage, "pointer-picker-transfer") &&
         strcmp(a.stage, "pointer-picker-confirm") &&
@@ -639,6 +640,21 @@ static void pointer_drag_begin(Display *dpy, Window app) {
     XSync(dpy, False);
 }
 
+static void pointer_gap_drag(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("pointer gap drop requires the fixed private 1280x800 app");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+        fail("pointer gap drop modifier press failed");
+    pointer_position(dpy, app, 350, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+        fail("pointer gap drop button press failed");
+    /* x=754 is the fixed detached gutter immediately before the right target at x=755. */
+    pointer_position(dpy, app, 754, 250);
+    XSync(dpy, False);
+}
+
 static void pointer_tab_drag_begin(Display *dpy, Window app) {
     XWindowAttributes attr;
     if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
@@ -699,15 +715,17 @@ static void pointer_inactive_hold(const Args *a, Display *dpy, xcb_connection_t 
     Window app = verify_app_focus_target(a, dpy, c, 0);
     XSetInputFocus(dpy, DefaultRootWindow(dpy), RevertToParent, CurrentTime);
     XSync(dpy, False);
+    /* XSync drains the server, not GPUI's activation callback. */
+    struct timespec settle = { .tv_sec = 0, .tv_nsec = 200000000 };
+    nanosleep(&settle, NULL);
     pointer_position(dpy, app, 1015, 250);
     XSync(dpy, False);
     puts("INACTIVE"); fflush(stdout);
     char response[32];
     if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RESTORE\n"))
         fail("inactive pointer stage accepts only fixed focus restoration");
+    /* Restore focus without a second motion: deferred hover must be applied. */
     XSetInputFocus(dpy, app, RevertToParent, CurrentTime);
-    XSync(dpy, False);
-    pointer_position(dpy, app, 485, 250);
     XSync(dpy, False);
 }
 
@@ -1736,6 +1754,11 @@ int main(int argc, char **argv) {
             pointer_drag_release(dpy, 1);
         } else if (!strcmp(a.stage, "pointer-drop")) {
             pointer_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            pointer_drag_release(dpy, 0);
+        } else if (!strcmp(a.stage, "pointer-drop-gap")) {
+            pointer_gap_drag(dpy, app_window);
             struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
             nanosleep(&settle, NULL);
             pointer_drag_release(dpy, 0);

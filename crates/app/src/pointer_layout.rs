@@ -5,6 +5,58 @@ use std::collections::BTreeMap;
 use pigade_layout::{Command, Direction, LayoutModel, LayoutState, PaneRect, Rect, TabLayout};
 use uuid::Uuid;
 
+/// Pointer enter can precede keyboard activation on Wayland. Remember that
+/// motion until activation; a repaint or keyboard-only activation is not motion.
+#[derive(Debug, Default)]
+pub(crate) struct HoverFocus {
+    last: Option<(f64, f64)>,
+    pending: Option<(f64, f64)>,
+    inactive: bool,
+}
+
+impl HoverFocus {
+    pub(crate) fn motion(&mut self, position: (f64, f64), active: bool, unpressed: bool) -> bool {
+        if !position.0.is_finite() || !position.1.is_finite() {
+            return false;
+        }
+        if active {
+            self.inactive = false;
+        } else {
+            self.deactivate();
+        }
+        let moved = self.last.replace(position) != Some(position);
+        if active || !unpressed {
+            let entered = self.pending.take().is_some();
+            (moved || entered) && active && unpressed
+        } else {
+            if moved {
+                self.pending = Some(position);
+            }
+            false
+        }
+    }
+
+    pub(crate) fn activation(&mut self, active: bool, hovered: bool) -> Option<(f64, f64)> {
+        if active {
+            self.inactive = false;
+            self.pending.take().filter(|_| hovered)
+        } else {
+            self.deactivate();
+            None
+        }
+    }
+
+    fn deactivate(&mut self) {
+        // GPUI can notify inactive more than once (e.g. a late XIM focus-out).
+        // Only a transition may reset motion; repeated notices must retain entry.
+        if !self.inactive {
+            self.last = None;
+            self.pending = None;
+        }
+        self.inactive = true;
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum GrabOrigin {
     /// Hyprland's default drag_threshold=0: pick up on modifier+button down.
@@ -101,17 +153,20 @@ pub(crate) fn drop_command(
     })
 }
 
-/// Drop on the pane under the pointer, never on an arbitrary nearest pane.
-/// Gaps and positions outside a pane have no target. Half-open bounds avoid
-/// ambiguous ownership when panes share an edge.
+/// Prefer the pane under the pointer, then the closest tiled pane across gaps,
+/// as Dwindle does. The caller must reject positions outside the canvas first.
+/// A stable ID breaks equal-distance ties; the floating source is never a target.
 pub(crate) fn drop_target(panes: &[PaneRect], source: Uuid, x: f64, y: f64) -> Option<PaneRect> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
-    panes
-        .iter()
-        .copied()
-        .filter(|pane| pane.pane != source && valid_rect(pane.rect))
+    let candidates = || {
+        panes
+            .iter()
+            .copied()
+            .filter(|pane| pane.pane != source && valid_rect(pane.rect))
+    };
+    candidates()
         .filter(|pane| {
             x >= pane.rect.x
                 && x < pane.rect.x + pane.rect.width
@@ -119,6 +174,17 @@ pub(crate) fn drop_target(panes: &[PaneRect], source: Uuid, x: f64, y: f64) -> O
                 && y < pane.rect.y + pane.rect.height
         })
         .min_by_key(|pane| pane.pane)
+        .or_else(|| {
+            let distance = |rect: Rect| {
+                (x - x.clamp(rect.x, rect.x + rect.width))
+                    .hypot(y - y.clamp(rect.y, rect.y + rect.height))
+            };
+            candidates().min_by(|left, right| {
+                distance(left.rect)
+                    .total_cmp(&distance(right.rect))
+                    .then_with(|| left.pane.cmp(&right.pane))
+            })
+        })
 }
 
 /// Preview removing a pane for the floating portion of a drag.
@@ -301,6 +367,63 @@ mod tests {
     }
 
     #[test]
+    fn pointer_enter_before_activation_focuses_without_a_second_motion() {
+        let mut hover = super::HoverFocus::default();
+        assert!(!hover.motion((20., 30.), false, true));
+        assert_eq!(hover.activation(true, true), Some((20., 30.)));
+        assert!(!hover.motion((20., 30.), true, true));
+        assert_eq!(hover.activation(true, true), None);
+        assert!(hover.motion((21., 30.), true, true));
+    }
+
+    #[test]
+    fn activation_without_entry_and_stationary_repaints_keep_keyboard_focus() {
+        let mut hover = super::HoverFocus::default();
+        assert!(hover.motion((20., 30.), true, true));
+        assert!(!hover.motion((20., 30.), true, true));
+        assert_eq!(hover.activation(false, true), None);
+        assert_eq!(hover.activation(true, true), None);
+        assert!(!hover.motion((21., 30.), false, true));
+        assert_eq!(hover.activation(true, false), None);
+        assert_eq!(hover.activation(true, true), None);
+        assert!(!hover.motion((f64::NAN, 0.), true, true));
+    }
+
+    #[test]
+    fn repeated_inactive_notification_does_not_erase_pending_entry() {
+        let mut hover = super::HoverFocus::default();
+        assert!(hover.motion((20., 30.), true, true));
+        hover.activation(false, true);
+        assert!(!hover.motion((50., 30.), false, true));
+        hover.activation(false, true);
+        assert_eq!(hover.activation(true, true), Some((50., 30.)));
+        // Motion may also precede the first inactive observer callback.
+        assert!(!hover.motion((50., 30.), false, true));
+        hover.activation(false, true);
+        assert_eq!(hover.activation(true, true), Some((50., 30.)));
+    }
+
+    #[test]
+    fn active_entry_sample_before_activation_callback_is_not_lost() {
+        let mut hover = super::HoverFocus::default();
+        assert!(!hover.motion((20., 30.), false, true));
+        assert!(hover.motion((20., 30.), true, true));
+        assert_eq!(hover.activation(true, true), None);
+        assert!(!hover.motion((20., 30.), true, true));
+    }
+
+    #[test]
+    fn held_motion_updates_position_without_queuing_focus_for_activation() {
+        let mut hover = super::HoverFocus::default();
+        assert!(hover.motion((20., 30.), true, true));
+        assert!(!hover.motion((50., 30.), true, false));
+        assert!(hover.motion((20., 30.), true, true));
+        hover.activation(false, true);
+        assert!(!hover.motion((50., 30.), false, false));
+        assert_eq!(hover.activation(true, true), None);
+    }
+
+    #[test]
     fn modifier_picks_up_immediately_but_stationary_release_cannot_commit() {
         let grab = GrabOrigin::Modifier;
         assert!(grab.picked_up(300., 200., 300., 200.));
@@ -329,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_target_requires_an_actual_pane_under_the_pointer() {
+    fn drop_target_uses_nearest_tiled_pane_across_gaps() {
         let panes = [
             PaneRect {
                 pane: id(1),
@@ -358,10 +481,38 @@ mod tests {
             (150., 100.),
             (50., 50.),
         ] {
-            assert!(drop_target(&panes, id(1), x, y).is_none());
+            assert_eq!(drop_target(&panes, id(1), x, y).unwrap().pane, id(2));
         }
         assert!(drop_target(&panes, id(1), f64::NAN, 50.).is_none());
         assert!(drop_target(&[], id(1), 50., 50.).is_none());
+    }
+
+    #[test]
+    fn gap_fallback_resolves_distance_then_identity_and_clamps_insertion_point() {
+        let pane = |id_value, x| PaneRect {
+            pane: id(id_value),
+            rect: Rect {
+                x,
+                y: 0.,
+                width: 100.,
+                height: 100.,
+            },
+        };
+        let panes = [pane(3, 120.), pane(2, 0.), pane(1, 240.)];
+        assert_eq!(drop_target(&panes, id(1), 119., 50.).unwrap().pane, id(3));
+        assert_eq!(drop_target(&panes, id(1), 110., 50.).unwrap().pane, id(2));
+        // Exactly shared edges belong to the containing half-open rectangle.
+        assert_eq!(
+            drop_target(&[pane(2, 0.), pane(3, 100.)], id(1), 100., 50.)
+                .unwrap()
+                .pane,
+            id(3)
+        );
+        let target = drop_target(&panes, id(1), 110., 50.).unwrap();
+        assert!(matches!(drop_command(id(1), id(9), target,
+            110_f64.clamp(target.rect.x, target.rect.x + target.rect.width), 50.),
+            Some(Command::Move { target, side: Direction::Down, .. }) if target == id(2)));
+        assert!(drop_target(&[pane(1, 0.)], id(1), 50., 50.).is_none());
     }
 
     #[test]
@@ -395,7 +546,7 @@ mod tests {
                 },
             },
         ];
-        assert!(drop_target(&panes, id(3), 5., 5.).is_none());
+        assert_eq!(drop_target(&panes, id(3), 5., 5.).unwrap().pane, id(1));
         assert_eq!(drop_target(&panes, id(3), 25., 5.).unwrap().pane, id(1));
     }
 

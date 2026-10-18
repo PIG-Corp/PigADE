@@ -3869,3 +3869,35 @@ Integrate durable per-file Git Stage/Unstage from reviewed diff tickets, preserv
 - Files: crates/session-host/src/workspace_git_index.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/protocol.rs, crates/app/src/main.rs, crates/app/src/product.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0014-diff-bound-git-index-actions.md
 - Verification: 372 full workspace tests serially passed; final31 Git module tests and5 real IPC tests passed after signature cleanup.266 app tests and34 harness tests passed; strict workspace/app Clippy, formats, version/diff checks, release workspace bins/examples and app debug/release builds passed. Private catalog02 passes four UI Stage/Unstage transitions, exact index/HEAD/worktree preservation, process/metadata invariants and subsequent Close Tab/reattach; captures inspected. Catalog01 passed Git transitions but exposed Tab/Enter interception; repaired with explicit action focus and disabled-page exclusion. Initial Clippy/compile defects were corrected and are not passing evidence.
 - Risks / next: Commit this coherent Git slice. Next Git work is commit with correct native hooks/signing and reviewed-HEAD/index protection, then Stage All/watchers/receipt maintenance. Full platform, power-loss and MVP gates remain open; preserve unrelated dirt and stash0.
+
+## 2026-10-18T04:40:27+00:00 — git_commit_research_luna
+
+Added native Git commit hook guard helpers with wrappers, owner identity checks, and prepared/committed proofs
+
+- Files: crates/session-host/src/workspace_git_commit_hooks.rs
+- Verification: rustfmt --edition 2024 --check crates/session-host/src/workspace_git_commit_hooks.rs (passed); Cargo/native checks intentionally not run per task
+- Risks / next: Root must integrate module and helper entrypoints, then compile and run requested host/CLI integration checks
+
+## 2026-10-18T04:47:12+00:00 — /root/git_commit_ui_luna
+
+Saved partial, unverified app-side Git commit UI/protocol implementation for later integration; root reverse-applied it to restore app before pointer-priority work
+
+- Files: crates/app/src/protocol.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/product.rs, crates/app/src/main.rs, /tmp/pigade-deferred-git-commit-ui-20261018.patch
+- Verification: Not run: stopped at root request before compile/tests; source diff preserved in /tmp/pigade-deferred-git-commit-ui-20261018.patch and reverse-applied by root
+- Risks / next: Root may reapply/review the saved patch after pointer task; integration and app build verification remain outstanding
+
+## 2026-10-18T04:48:08+00:00 — hypr_drag_review_luna
+
+Added a fixed private X11 pane-drop regression for the detached gutter before the right pane, asserting nearest-pane insertion to its left and exact tree/history undo with stable process identities.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py passed; python3 scripts/test_isolated_ime_x11.py ran 34 tests: 33 passed, 1 failed on a static assertion expecting gap_restored.get(root) while implementation uses layout.get(root). Runtime fixture/build not run by this agent.
+- Risks / next: Root is running private release pointer fixture; fix the mismatched static assertion and rerun the harness after that fixture.
+
+## 2026-10-18T04:58:26+00:00 — /root
+
+Repair pointer focus across activation ordering and repeated inactive notifications; use Dwindle nearest tiled target across canvas gaps
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/AGENT_HANDOFF.md
+- Verification: 272 app tests,34 harness tests including strict C compile, strict app Clippy, app debug/release builds, version/diff checks pass. Private release /tmp/pigade-hover-gap-20261018-04 full pointer flow passes; inspected hover/header/gutter screenshots. Earlier01-03/debug probes failed; debug3 proved duplicate inactive callback discarded pending entry; fixed and retested. No active-desktop automation or system config edits.
+- Risks / next: Commit pointer slice only. Native Hyprland/Wayland pointer certification remains open. Incomplete Git commit UI patch preserved at /tmp/pigade-deferred-git-commit-ui-20261018.patch; unregistered hook helper and unrelated research/stress/GPUI changes remain outside this feature.

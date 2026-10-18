@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Fixed hover entry before window activation and matched Dwindle nearest-pane fallback for drops across canvas gaps.
+
 - Bounded per-file Git Stage/Unstage from a frozen diff ticket (Ctrl+S): exact HEAD/index/file validation, private candidate index and native `index.lock` CAS. It never overwrites the worktree or automatically reapplies. Durable receipts survive dialog close and host restart; Ctrl+R inspects Unknown or refreshes, Ctrl+Shift+R explicitly acknowledges viewing Unknown/Unavailable. Limits: file256KiB, index8MiB,8 leases/10min,4096 receipts. Sparse/split index, symlink and conflict entries are unsupported. Normal Git clean/EOL filters may run on explicit Stage. Commit/discard/pull/push/Stage All/live watcher are absent; Git MVP remains incomplete.
 - Dwindle drag now shows the exact resulting layout and insertion side before release; the moved pane is highlighted. Hover focus still follows real cursor motion without clicking.
 - Read-only per-file Git diffs for index, worktree, untracked and conflict text, with bounded background reads, explicit unsupported/binary/truncated states and keyboard paging.
