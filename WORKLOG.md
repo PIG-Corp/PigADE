@@ -5565,3 +5565,11 @@ Preserved exact draft unified-patch context bytes with two narrowly scoped .gita
 - Files: .gitattributes, WORKLOG.md
 - Verification: Initial WIP commit correctly rejected structural blank context lines as trailing whitespace; no patch bytes were trimmed and hooks were not bypassed. Re-running normal staged diff/version/pre-commit checks.
 - Risks / next: Push the explicit WIP snapshot to the requested public PIG-Corp repository; keep development paused.
+
+## 2026-10-18T16:53:50+00:00 — root
+
+Rebuilt the public README as a concise product introduction with a generated PigADE hero, quick start from the last verified snapshot, first-use steps, compact controls and honest dev status. Preserved the former detailed material in docs/USAGE.md with corrected relative links; recorded the built-in imagegen prompt and original asset provenance.
+
+- Files: README.md, docs/USAGE.md, docs/assets/readme-hero.png, docs/design/README.md, WORKLOG.md
+- Verification: Generated hero visually inspected and copied without edits; PNG integrity and dimensions verified. Relative Markdown/image links resolve. GitHub Markdown API renders one hero, seven headings and the controls table. Version and diff checks pass; documentation-only change, no product tests/build claims.
+- Risks / next: Commit and push README/assets to PIG-Corp/PigADE; broad development remains paused and published feature WIP remains explicitly documented.
