@@ -5413,3 +5413,67 @@ Integrate owned PTY process-group Stop with nonblocking HUP/grace/KILL, unreaped
 - Files: crates/session-host/src/lib.rs, crates/session-host/src/process_group_stop.rs, crates/session-host/src/poll.rs, crates/session-host/src/checkpoint.rs, crates/session-host/tests/process_group_stop.rs, crates/session-host/tests/context_launch.rs, crates/session-host/tests/recovery.rs, crates/app/src/session_control.rs, crates/app/src/session_control_ui.rs, crates/app/src/protocol.rs, crates/app/src/product.rs, crates/app/src/scrollback_ui.rs, crates/app/src/selection.rs, crates/app/src/terminal_insert.rs, crates/app/src/terminal_links.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0023-owned-pty-process-group-stop.md
 - Verification: 457 app tests;230 full host lib tests before final policy guard plus4 final helper tests;3 final real-host PTY stop tests;1 slow-input stop/backpressure;26 context/query/recovery integrations pass. Strict root/app Clippy, root/package fmt,0.0.1-dev alignment, diff checks and release root bins/examples/app pass. Final private native catalog03 passes confirmation/cancel/complete, hidden Stop and existing Git/index/commit/hooks/tab-close/reattach flows; final review/complete captures visually inspected. App7d515aa7..., host3ebf34b8.... Initial ActorConfig/PollChanges fixture compile errors fixed. Root corrected identity NotFound handling, disarmed success, inherited SIGCHLD auto-reaping/unknown-handler assumptions and late-error downgrade of Complete; no first-party warning waived. Native01/02 pass earlier exact builds;03 verifies final binaries.
 - Risks / next: Commit coherent block preserving unrelated stress/research/unused GPUI dirt and stash0. One original process group only: escaped/different job-control groups and host death during grace are not full-tree guarantees. No cgroup/cross-platform/MVP completion claim; full recovery/platform/performance/a11y/soak gates and broad goal remain active.
+
+## 2026-10-18T14:10:31+00:00 — selection_units_model_luna
+
+Added typed character/word/line selection APIs, drag expansion, page-scoped history identity, and cell-based history extraction in selection module.
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; git diff --check -- crates/app/src/selection.rs (passed). Cargo/native validation intentionally not run per assigned lane constraints.
+- Risks / next: Root owns integration and app-wide verification; history fixtures and UI wiring remain in their assigned lanes.
+
+## 2026-10-18T14:11:19+00:00 — selection_units_model_luna
+
+Fixed per-row history text indexing and expanded regressions to cover multi-row soft-wrap history and page-origin staleness.
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; git diff --check -- crates/app/src/selection.rs (passed). No Cargo/native run per assigned lane constraints.
+- Risks / next: Root owns integration and runtime validation; history pan/partial-width interaction is validated by root fixture lane.
+
+## 2026-10-18T14:12:56+00:00 — /root/selection_native_luna
+
+Add fixed private X11 history selection gestures for word, logical line, and forward/reverse word drags
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 scripts/test_isolated_ime_x11.py (39 tests passed); cc -fsyntax-only $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c (passed); git diff --check (passed). No native/private Xvfb fixture run per assignment.
+- Risks / next: Root runs the bounded private bwrap/Xvfb history fixture and checks selection behavior and exact clipboard payloads.
+
+## 2026-10-18T14:13:07+00:00 — selection_units_model_luna
+
+Aligned history selections with display_page dimensions and projected view cells; fixed punctuation, boundary marker, clipped wide glyph, and per-row history copy behavior.
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; git diff --check -- crates/app/src/selection.rs (passed). Cargo/native tests intentionally not run in this lane.
+- Risks / next: Root owns targeted compile/test and final integration verification.
+
+## 2026-10-18T14:13:54+00:00 — /root/selection_native_luna
+
+Correct history word-drag stages to expand complete word units in both directions and retain a triple-click review capture
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 scripts/test_isolated_ime_x11.py (39 tests passed); cc -fsyntax-only $(pkg-config --cflags x11 xtst xcb xcb-res) scripts/x11-ime-input.c (passed); git diff --check (passed). No private Xvfb fixture run.
+- Risks / next: Root runs the bounded private history fixture and reviews scrollback-selection-line.ppm plus exact clipboard output.
+
+## 2026-10-18T14:17:07+00:00 — selection_units_model_luna
+
+Added bounded word token traversal across complete soft-wrapped rows, kept orphan wide spacers unhighlighted, and preserved whitespace word selections.
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; git diff --check -- crates/app/src/selection.rs (passed). Cargo/native validation not run; root owns tests.
+- Risks / next: Root to run app selection tests and final integration verification.
+
+## 2026-10-18T14:17:37+00:00 — selection_units_model_luna
+
+Prevented word traversal into historical boundary rows and added a boundary-stop regression.
+
+- Files: crates/app/src/selection.rs
+- Verification: rustfmt --edition 2024 crates/app/src/selection.rs; git diff --check -- crates/app/src/selection.rs (passed). Cargo/native validation not run; root owns tests.
+- Risks / next: Root to run final targeted app tests.
+
+## 2026-10-18T14:24:36+00:00 — root
+
+Integrated native terminal word/logical-line selection, bidirectional unit drag, exact history page binding and shared copy/handoff extraction; fixed wrapped whitespace, wide-wrap padding and saved-boundary continuation. Added asynchronous exact-clipboard native coverage and updated product docs.
+
+- Files: crates/app/src/main.rs, crates/app/src/selection.rs, crates/app/src/scrollback_ui.rs, crates/app/src/handoff_commands.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 470 app tests; 39 harness tests; strict app Clippy; app fmt/version/diff checks; C syntax -Wall -Wextra -Werror; optimized app build pass. Final isolated history run05 passes exact word/line/forward/reverse clipboard and original history/link/pan/resize/input invariants; final captures visually reviewed. Run01/03 clipboard-race failures fixed in fixture; run02 quota interruption retained, never counted as pass.
+- Risks / next: Linux private software-X11 verification only; full platform/a11y/reboot/24h/performance/MVP gates remain open. No desktop settings/input or user host/CLI changes. Preserve unrelated dirt and stash0.

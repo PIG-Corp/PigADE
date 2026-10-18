@@ -1,5 +1,8 @@
 # Project map — 0.0.1-dev
 
+Terminal unit selection: `crates/app/src/selection.rs` owns pure cell ranges, word/line expansion, exact geometry/page binding and text extraction; `main.rs` routes native click counts after pane-management/CLI mouse priority, and `handoff_commands.rs` uses the same history-aware extractor. `scrollback_ui.rs` installs the masked typed-cell replica and resets selection on page changes. The existing private `history` fixture covers exact native gesture clipboard results without CLI/model/layout mutations.
+
+
 Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and the [handoff](AGENT_HANDOFF.md). New subagents must explicitly use gpt-6-luna. Read current git status and WORKLOG before editing.
 
 | Location | Responsibility |

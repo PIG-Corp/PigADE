@@ -5963,29 +5963,45 @@ impl CanvasApp {
             return;
         };
         if let Some(position) = pane.pointer_position(point, &view.frame.geometry, true) {
-            let _ = selection.set_focus(
+            let _ = selection.set_focus_in(
                 view,
                 selection::CellPosition {
                     row: position.row,
                     column: position.column,
                 },
+                None,
             );
             cx.notify();
+        }
+    }
+    fn extend_scrollback_selection(&mut self, point: Point<Pixels>) {
+        if let (Some(view), Some(selection)) =
+            (&self.scrollback_display, &mut self.scrollback_selection)
+            && let Some(index) =
+                self.state.views.iter().position(|live| {
+                    live.session == view.session && live.generation == view.generation
+                })
+            && let Some(pane) = self.panes.get(index)
+            && let Some(position) = pane.pointer_position(point, &view.frame.geometry, true)
+        {
+            let _ = selection.set_focus_in(
+                view,
+                selection::CellPosition {
+                    row: position.row,
+                    column: position.column,
+                },
+                self.scrollback.displayed_page(),
+            );
         }
     }
     fn copy_selection(&mut self, cx: &mut Context<Self>) {
         if self.selected_history() {
             if let (Some(selection), Some(view)) =
                 (&self.scrollback_selection, &self.scrollback_display)
+                && let Some(page) = self.scrollback.displayed_page()
+                && let Ok(text) = selection.text_with_history(view, page)
             {
-                let spans = self.scrollback_copy_spans();
-                let text = spans.as_ref().map_or_else(
-                    || selection.text(view),
-                    |(widths, start)| selection.text_with_row_spans(view, widths, *start),
-                );
-                if let Ok(text) = text {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
             return;
         }
@@ -6013,14 +6029,17 @@ impl CanvasApp {
     }
     fn select_visible(&mut self, cx: &mut Context<Self>) {
         if self.selected_history() {
-            if let Some(view) = &self.scrollback_display {
-                self.scrollback_selection = selection::CellSelection::new(
+            if let Some(view) = &self.scrollback_display
+                && let Some(page) = self.scrollback.displayed_page()
+            {
+                self.scrollback_selection = selection::CellSelection::new_with_history(
                     view,
                     selection::CellPosition { row: 0, column: 0 },
                     selection::CellPosition {
                         row: usize::from(view.frame.geometry.rows) - 1,
                         column: usize::from(view.frame.geometry.cols) - 1,
                     },
+                    page,
                 )
                 .ok();
             }
@@ -6251,7 +6270,13 @@ impl CanvasApp {
                             row: position.row,
                             column: position.column,
                         };
-                        selection::CellSelection::new(view, position, position).ok()
+                        selection::CellSelection::begin(
+                            view,
+                            position,
+                            selection_unit(event.click_count),
+                            self.scrollback.displayed_page(),
+                        )
+                        .ok()
                     });
                     self.scrollback_dragging = self.scrollback_selection.is_some();
                 }
@@ -6279,7 +6304,13 @@ impl CanvasApp {
                         row: position.row,
                         column: position.column,
                     };
-                    self.selection = selection::CellSelection::new(view, position, position).ok();
+                    self.selection = selection::CellSelection::begin(
+                        view,
+                        position,
+                        selection_unit(event.click_count),
+                        None,
+                    )
+                    .ok();
                     self.selection_dragging = self.selection.is_some();
                     self.text_input.cancel();
                     window.notify_text_input_changed(&self.focus);
@@ -6304,9 +6335,11 @@ impl CanvasApp {
         if self.close_flow.active() {
             return;
         }
-        if self.scrollback_dragging {
+        if self.scrollback_dragging && event.button == MouseButton::Left {
+            self.extend_scrollback_selection(event.position);
             self.scrollback_dragging = false;
             cx.stop_propagation();
+            cx.notify();
             return;
         }
         if self.external_file_drag {
@@ -6438,23 +6471,7 @@ impl CanvasApp {
         }
         if self.scrollback_dragging {
             if event.pressed_button == Some(MouseButton::Left) {
-                if let (Some(view), Some(selection)) =
-                    (&self.scrollback_display, &mut self.scrollback_selection)
-                    && let Some(index) = self.state.views.iter().position(|live| {
-                        live.session == view.session && live.generation == view.generation
-                    })
-                    && let Some(pane) = self.panes.get(index)
-                    && let Some(position) =
-                        pane.pointer_position(event.position, &view.frame.geometry, true)
-                {
-                    let _ = selection.set_focus(
-                        view,
-                        selection::CellPosition {
-                            row: position.row,
-                            column: position.column,
-                        },
-                    );
-                }
+                self.extend_scrollback_selection(event.position);
             } else {
                 self.scrollback_dragging = false;
             }
@@ -10393,6 +10410,14 @@ fn main() {
             cx.activate(true);
         });
 }
+fn selection_unit(click_count: usize) -> selection::SelectionUnit {
+    match click_count {
+        2 => selection::SelectionUnit::Word,
+        3.. => selection::SelectionUnit::Line,
+        _ => selection::SelectionUnit::Character,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::command_worker::{CommandNotice, CommandTarget};

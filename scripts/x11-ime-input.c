@@ -140,6 +140,10 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "links-confirm") && strcmp(a.stage, "links-clipboard-report") &&
         strcmp(a.stage, "scrollback-wheel") && strcmp(a.stage, "scrollback-top") &&
         strcmp(a.stage, "scrollback-newer") &&
+        strcmp(a.stage, "scrollback-select-word") &&
+        strcmp(a.stage, "scrollback-select-line") &&
+        strcmp(a.stage, "scrollback-drag-word-forward") &&
+        strcmp(a.stage, "scrollback-drag-word-reverse") &&
         strcmp(a.stage, "scrollback-end") && strcmp(a.stage, "scrollback-close") &&
         strcmp(a.stage, "scrollback-probe-input") && strcmp(a.stage, "scrollback-live-input") &&
         strcmp(a.stage, "catalog-open-library") &&
@@ -736,6 +740,62 @@ static void pointer_position(Display *dpy, Window app, int x, int y) {
         !XTestFakeMotionEvent(dpy, DefaultScreen(dpy), root_x, root_y, CurrentTime))
         fail("fixed pointer motion failed");
     XFlush(dpy);
+}
+
+static void fixed_click_at(Display *dpy, Window app, int x, int y) {
+    pointer_position(dpy, app, x, y);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime) ||
+        !XTestFakeButtonEvent(dpy, 1, False, CurrentTime))
+        fail("fixed selection click failed");
+    XSync(dpy, False);
+}
+
+static void fixed_history_selection(Display *dpy, Window app, const char *stage) {
+    /* The only accepted coordinates target the seeded row in the private
+     * 1280x800 history fixture. Its path token begins after 15 fixed cells. */
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("history selection requires the fixed private 1280x800 app");
+    const int word_y = 128;
+    if (!strcmp(stage, "scrollback-select-word")) {
+        pointer_position(dpy, app, 420, word_y);
+        fixed_click_at(dpy, app, 420, word_y);
+        struct timespec gap = {.tv_sec=0, .tv_nsec=80000000}; nanosleep(&gap, NULL);
+        fixed_click_at(dpy, app, 420, word_y);
+    } else if (!strcmp(stage, "scrollback-select-line")) {
+        pointer_position(dpy, app, 420, word_y);
+        fixed_click_at(dpy, app, 420, word_y);
+        struct timespec gap = {.tv_sec=0, .tv_nsec=80000000}; nanosleep(&gap, NULL);
+        fixed_click_at(dpy, app, 420, word_y);
+        nanosleep(&gap, NULL);
+        fixed_click_at(dpy, app, 420, word_y);
+    } else {
+        int reverse = !strcmp(stage, "scrollback-drag-word-reverse");
+        int start = reverse ? 280 : 420;
+        int end = reverse ? 420 : 280;
+        fixed_click_at(dpy, app, start, word_y);
+        struct timespec gap = {.tv_sec=0, .tv_nsec=80000000}; nanosleep(&gap, NULL);
+        pointer_position(dpy, app, start, word_y);
+        if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+            fail("fixed word drag press failed");
+        pointer_position(dpy, app, end, word_y);
+        if (!XTestFakeButtonEvent(dpy, 1, False, CurrentTime))
+            fail("fixed word drag release failed");
+        XSync(dpy, False);
+    }
+    struct timespec settle = {.tv_sec=0, .tv_nsec=80000000}; nanosleep(&settle, NULL);
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    KeyCode shift = XKeysymToKeycode(dpy, XK_Shift_L);
+    KeyCode copy = XKeysymToKeycode(dpy, XK_c);
+    if (!control || !shift || !copy ||
+        !XTestFakeKeyEvent(dpy, control, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, copy, True, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, copy, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, shift, False, CurrentTime) ||
+        !XTestFakeKeyEvent(dpy, control, False, CurrentTime))
+        fail("fixed history copy shortcut failed");
+    XSync(dpy, False);
 }
 
 static void scrollback_wheel(Display *dpy, Window app) {
@@ -1687,6 +1747,11 @@ int main(int argc, char **argv) {
             key(dpy, XK_Home);
         } else if (!strcmp(a.stage, "scrollback-newer")) {
             modified_key(dpy, XK_Shift_L, XK_Page_Down);
+        } else if (!strcmp(a.stage, "scrollback-select-word") ||
+                   !strcmp(a.stage, "scrollback-select-line") ||
+                   !strcmp(a.stage, "scrollback-drag-word-forward") ||
+                   !strcmp(a.stage, "scrollback-drag-word-reverse")) {
+            fixed_history_selection(dpy, app_window, a.stage);
         } else if (!strcmp(a.stage, "scrollback-end")) {
             key(dpy, XK_End);
         } else if (!strcmp(a.stage, "scrollback-close")) {
@@ -2369,6 +2434,10 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "scrollback-pan-end") ? "1" :
                             !strcmp(a.stage, "scrollback-probe-input") ? "3" :
                             !strcmp(a.stage, "scrollback-live-input") ? "3" :
+                            !strcmp(a.stage, "scrollback-select-word") ? "1" :
+                            !strcmp(a.stage, "scrollback-select-line") ? "1" :
+                            !strcmp(a.stage, "scrollback-drag-word-forward") ? "1" :
+                            !strcmp(a.stage, "scrollback-drag-word-reverse") ? "1" :
                             !strcmp(a.stage, "links-open") ? "6" :
                             !strcmp(a.stage, "links-list-ctrl-enter") ? "2" :
                             !strcmp(a.stage, "links-enter-review") ? "1" :

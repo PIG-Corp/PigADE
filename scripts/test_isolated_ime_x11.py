@@ -134,6 +134,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('reaches the live PTY exactly once after return', plan['input']['history'])
         self.assertIn('96-column far-right marker/link', plan['input']['history'])
         self.assertIn('Alt+Left/Right/Home/End horizontal panning', plan['input']['history'])
+        self.assertIn('double-click the path token, triple-click the logical line', plan['input']['history'])
+        self.assertIn('spaced over 600 ms apart', plan['input']['history'])
 
         harness = SCRIPT.read_text()
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
@@ -146,6 +148,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("b'xyz' if config.get('fixture') == 'history'", harness)
         self.assertIn("'256' if config.get('fixture') == 'history' else '0'", harness)
         self.assertIn("'SCROLLBACK_255' in screen_text", harness)
+        self.assertIn('line = "SCROLLBACK_000 path/to-file.rs\\r\\n"', harness)
         self.assertIn("'Named(Red)' in foregrounds", harness)
         self.assertIn("'r: 231' in fg and 'g: 72' in fg and 'b: 86' in fg", harness)
 
@@ -160,6 +163,30 @@ class IsolatedImePlanTests(unittest.TestCase):
         for stage in stages:
             self.assertIn(f'helper_call(config, \'{stage}\')', history_flow)
             self.assertIn(f'"{stage}"', helper)
+        selection_flow = history_flow.split("helper_call(config, 'scrollback-top')", 1)[1].split(
+            "helper_call(config, 'scrollback-end')", 1)[0]
+        for stage in ('scrollback-select-word', 'scrollback-select-line',
+                      'scrollback-drag-word-forward', 'scrollback-drag-word-reverse'):
+            self.assertIn(f"helper_call(config, '{stage}')", selection_flow)
+            self.assertIn(f'"{stage}"', helper)
+        for expected in ("b'path/to-file.rs'", "b'SCROLLBACK_000 path/to-file.rs'"):
+            self.assertIn(expected, selection_flow)
+        self.assertIn("'/artifacts/scrollback-selection-line.ppm'", selection_flow)
+        self.assertIn('scrollback-selection-line.ppm', harness)
+        self.assertIn('time.sleep(.7)', selection_flow)
+        self.assertIn('def wait_selection_clipboard(expected, gesture):', selection_flow)
+        self.assertIn('time.monotonic() + 3', selection_flow)
+        self.assertIn('before forward word drag', selection_flow)
+        self.assertIn('before reverse word drag', selection_flow)
+        self.assertIn('fixed_history_selection(dpy, app_window, a.stage)', helper)
+        self.assertIn('pointer_position(dpy, app, x, y)', helper)
+        gesture = helper.split('static void fixed_history_selection(', 1)[1].split(
+            '\nstatic void scrollback_wheel(', 1)[0]
+        self.assertIn('attr.width != 1280 || attr.height != 800', gesture)
+        self.assertIn('fixed_click_at(dpy, app, start, word_y)', gesture)
+        self.assertIn('int start = reverse ? 280 : 420;', gesture)
+        self.assertIn('int end = reverse ? 420 : 280;', gesture)
+        self.assertIn("b'SCROLLBACK_000 path/to-file.rs'", selection_flow)
         self.assertLess(history_flow.index("helper_call(config, 'scrollback-wheel')"),
                         history_flow.index("helper_call(config, 'scrollback-open')"))
         probe_at = history_flow.index("helper_call(config, 'scrollback-probe-input')")

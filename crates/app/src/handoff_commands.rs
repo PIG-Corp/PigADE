@@ -221,25 +221,28 @@ impl CanvasApp {
                 })
                 .as_ref()
                 .filter(|selection| selection.is_current(view));
+                let history = historical
+                    .then(|| self.scrollback.displayed_page())
+                    .flatten();
                 let selection = selected.cloned().or_else(|| {
-                    selection::CellSelection::new(
-                        view,
-                        selection::CellPosition { row: 0, column: 0 },
-                        selection::CellPosition {
-                            row: usize::from(view.frame.geometry.rows).checked_sub(1)?,
-                            column: usize::from(view.frame.geometry.cols).checked_sub(1)?,
-                        },
-                    )
+                    let anchor = selection::CellPosition { row: 0, column: 0 };
+                    let focus = selection::CellPosition {
+                        row: usize::from(view.frame.geometry.rows).checked_sub(1)?,
+                        column: usize::from(view.frame.geometry.cols).checked_sub(1)?,
+                    };
+                    if historical {
+                        selection::CellSelection::new_with_history(view, anchor, focus, history?)
+                    } else {
+                        selection::CellSelection::new(view, anchor, focus)
+                    }
                     .ok()
                 })?;
-                let spans = historical.then(|| self.scrollback_copy_spans()).flatten();
-                let text = spans
-                    .as_ref()
-                    .map_or_else(
-                        || selection.text(view),
-                        |(widths, start)| selection.text_with_row_spans(view, widths, *start),
-                    )
-                    .ok()?;
+                let text = if historical {
+                    selection.text_with_history(view, history?)
+                } else {
+                    selection.text(view)
+                }
+                .ok()?;
                 Some((
                     handoff::Source {
                         session,

@@ -82,6 +82,8 @@ try:
         for row in range(history_rows):
             line = (f"\x1b[38;2;231;72;86mSCROLLBACK_{row:03d}\x1b[0m "
                     f"\x1b[31mANSI_RED\x1b[0m Привет 界 e\u0301\r\n")
+            if row == 0:
+                line = "SCROLLBACK_000 path/to-file.rs\r\n"
             if row == 200 and len(sys.argv) > 4 and sys.argv[4] == "links":
                 line = ("\x1b]8;id=history-only;https://example.test/history-only\x1b\\" +
                         line.removesuffix("\r\n") + "\x1b]8;;\x1b\\\r\n")
@@ -1072,6 +1074,45 @@ def run_history_fixture(config, report, control, env, save):
     time.sleep(.35)
     invariant_snapshot(screen_models, screen_generations, screen_journals)
     helper_call(config, 'scrollback-top')
+    time.sleep(.35)
+    # Each copy is observed through the native asynchronous clipboard. Server
+    # XSync alone does not prove the UI has dispatched its queued Copy event.
+    def wait_selection_clipboard(expected, gesture):
+        deadline = time.monotonic() + 3
+        actual = b''
+        while time.monotonic() < deadline:
+            selected = helper_call(config, 'links-clipboard-report')
+            actual = bytes.fromhex(selected.get('hex', ''))
+            if actual == expected:
+                return
+            time.sleep(.05)
+        require(False, f'{gesture} clipboard mismatch: {actual.hex()}')
+
+    # The top row is fixed ASCII at the verified private app cell origin
+    # (230,128). Separate click sequences are spaced over 600 ms apart.
+    helper_call(config, 'scrollback-select-word')
+    helper_call(config, 'capture', '/artifacts/scrollback-selection-word.ppm')
+    wait_selection_clipboard(b'path/to-file.rs', 'history double-click')
+    time.sleep(.7)
+    helper_call(config, 'scrollback-select-line')
+    helper_call(config, 'capture', '/artifacts/scrollback-selection-line.ppm')
+    wait_selection_clipboard(b'SCROLLBACK_000 path/to-file.rs', 'history triple-click')
+    time.sleep(.7)
+    # Reset the clipboard to a different exact token before each drag, so a
+    # stale successful triple-click copy cannot falsely satisfy either drag.
+    helper_call(config, 'scrollback-select-word')
+    wait_selection_clipboard(b'path/to-file.rs', 'before forward word drag')
+    time.sleep(.7)
+    helper_call(config, 'scrollback-drag-word-forward')
+    wait_selection_clipboard(b'SCROLLBACK_000 path/to-file.rs', 'forward word drag')
+    time.sleep(.7)
+    helper_call(config, 'scrollback-select-word')
+    wait_selection_clipboard(b'path/to-file.rs', 'before reverse word drag')
+    time.sleep(.7)
+    helper_call(config, 'scrollback-drag-word-reverse')
+    helper_call(config, 'capture', '/artifacts/scrollback-selection-reverse.ppm')
+    wait_selection_clipboard(b'SCROLLBACK_000 path/to-file.rs', 'reverse word drag')
+    check_cli_input_absent()
     invariant_snapshot(screen_models, screen_generations, screen_journals)
     helper_call(config, 'scrollback-end')
     time.sleep(.35)
@@ -1134,6 +1175,7 @@ def run_history_fixture(config, report, control, env, save):
         'scrollback_rows': frame.get('history_lines'), 'colored_live_cells': len(colored),
         'truecolor_rgb_verified': truecolor, 'named_red_verified': named_red,
         'scrollback_input_blocked': True, 'unmodified_wheel_and_history_navigation_verified': True,
+        'native_text_selection_gestures_verified': True,
         'live_input_after_return_exactly_once': True,
         'horizontal_pan_keys_and_frozen_far_right_link_verified': True,
         'pan_source_columns': original_columns,
@@ -1146,6 +1188,8 @@ def run_history_fixture(config, report, control, env, save):
         'new_processes': False,
         'captures': ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                      'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
+                     'scrollback-selection-word.ppm', 'scrollback-selection-line.ppm',
+                     'scrollback-selection-reverse.ppm',
                      'scrollback-live.ppm', 'scrollback-pan-left-edge.ppm',
                      'scrollback-pan-right-8.ppm', 'scrollback-pan-return-left.ppm',
                      'scrollback-pan-end.ppm', 'scrollback-pan-home.ppm',
@@ -8431,7 +8475,7 @@ def plan(args) -> dict:
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space,U opens workspace session overview; Up/Down selects UUID-sorted rows, Enter opens exact pane, Ctrl+R refreshes, Ctrl+Enter prepares only; Escape cancels; a bounded fixed Down sequence selects the readonly-queried Codex row before the existing native resume confirmation',
-                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows plus live and history-only OSC 8 links, with a 96-column far-right marker/link; freeze the history snapshot, resize the verified private X11 app to 900x800, exercise Alt+Left/Right/Home/End horizontal panning and widen to 1280x800; capture left/right/end/home/wide states and prove panning preserves the post-resize model, frame, journal, layout, process and CLI input; existing fixed link review/copy/open and scrollback read-only checks remain, and fixed xyz reaches the live PTY exactly once after return',
+                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows plus live and history-only OSC 8 links, with a 96-column far-right marker/link; freeze the history snapshot, resize the verified private X11 app to 900x800, exercise Alt+Left/Right/Home/End horizontal panning and widen to 1280x800; at the fixed top row, double-click the path token, triple-click the logical line and drag the token forward and backward, copying exact UTF-8 text; click sequences are spaced over 600 ms apart; prove selection preserves the model, frame, journal, layout, process and CLI input; existing fixed link review/copy/open and scrollback read-only checks remain, and fixed xyz reaches the live PTY exactly once after return',
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',

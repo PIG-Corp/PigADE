@@ -2,6 +2,9 @@
 
 ## 0.0.1-dev — in development
 
+- Terminal double-click selects words/paths and triple-click selects visible logical lines; dragging expands whole units in either direction. History selection binds the exact page, respects clipped/wide cells, and copies only after an explicit command.
+
+
 - Linux Stop now signals the exact owned original PTY process group with nonblocking HUP/grace/KILL, retains child identity through EOF, and reports scope/failures separately from storage. Detached/new groups remain outside that scope.
 
 - Frozen terminal history now supports horizontal column navigation with Alt+Left/Right/Home/End and footer controls. Copy/handoff preserve visible physical spans; wide edge glyphs and old-host capability fallback are handled explicitly.

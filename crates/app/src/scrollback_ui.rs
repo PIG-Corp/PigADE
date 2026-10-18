@@ -161,22 +161,6 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
 }
 
 impl CanvasApp {
-    pub(super) fn scrollback_copy_spans(&self) -> Option<(Vec<u16>, u16)> {
-        let page = self.scrollback.displayed_page()?;
-        Some((
-            page.rows
-                .iter()
-                .map(|row| {
-                    if row.boundary.is_some() {
-                        page.cols.saturating_add(page.column_start)
-                    } else {
-                        row.source_columns
-                    }
-                })
-                .collect(),
-            page.column_start,
-        ))
-    }
     pub(super) fn pan_scrollback(
         &mut self,
         delta: i16,
