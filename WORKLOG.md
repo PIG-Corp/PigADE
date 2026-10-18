@@ -5117,3 +5117,51 @@ Ship guarded sidebar workspace pane drops with exact preview, atomic activation 
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/workspace_drop.rs, crates/app/src/activity_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_git.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 416 app tests,19 catalog tests,89 storage tests,37 Python harness tests pass; strict workspace/app Clippy, format/version/diff checks, fixed C helper compilation and release app/host binaries/examples builds pass. Final private native pointer fixture /tmp/pigade-workspace-drop-20261018-02 passes real Git worktree cancel/drop/Undo, exact unchanged generations/PIDs/all process cwd/frozen context, preview PTY sizes and existing Dwindle/tab/keyboard/IME/file-drop/clipboard flows. Root inspected final preview and run01 committed/restored captures; binaries identical in both passes. Independent Luna source review found no blocker. Initial four test expectation/fixture-owner errors were corrected before passing, not waived.
 - Risks / next: Commit coherent feature. Old hosts remain running without this capability; full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open. Preserve unrelated stress/research/unused GPUI patch dirt and stash0. Broader product goal remains active.
+
+## 2026-10-18T11:26:58+00:00 — workspace_recovery_host_luna
+
+Add explicit read-only recovery for interrupted workspaces with bounded Git identity checks and CAS status updates
+
+- Files: crates/session-host/src/workspace_recovery.rs, crates/session-host/src/workspace_git.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_recovery.rs; git diff --check -- crates/session-host/src/workspace_git.rs crates/session-host/src/workspace_recovery.rs (passed); Cargo tests not run per task instruction
+- Risks / next: Parent must wire module/API and run focused tests plus workspace checks; inline recovery tests cover success, dirty-file preservation, missing path, shared checkout, stale CAS, and repeat refusal.
+
+## 2026-10-18T11:29:19+00:00 — workspace_recovery_host_luna
+
+Tighten recovery eligibility and linked-worktree back-reference validation; expand inline recovery fixtures
+
+- Files: crates/session-host/src/workspace_recovery.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_recovery.rs; git diff --check -- crates/session-host/src/workspace_git.rs crates/session-host/src/workspace_recovery.rs WORKLOG.md (passed); Cargo tests not run per task instruction
+- Risks / next: Root has wired the recovery command and UI. Root to run focused tests/workspace checks; inline fixtures now cover MissingPath, foreign path, symlink path, copied .git pointer/back-reference, existing nonempty Development tab, Archived/Ready rejection, reopen and no duplicates.
+
+## 2026-10-18T11:33:36+00:00 — workspace_recovery_host_luna
+
+Move explicit workspace recovery Git checks to a single-flight background reader with exact metadata revalidation
+
+- Files: crates/session-host/src/workspace_recovery.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_recovery.rs (passed); git diff --check -- crates/session-host/src/workspace_recovery.rs WORKLOG.md (passed); Cargo tests not run per task instruction
+- Risks / next: Root must complete ipc_server Job fields and lib command routing, then run the six recovery tests including the new stale workspace/project capture-to-finish CAS regression.
+
+## 2026-10-18T11:36:40+00:00 — workspace_recovery_ipc_test_luna
+
+Add bounded real-IPC recovery reader concurrency and shutdown test
+
+- Files: crates/session-host/tests/project_setup.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/project_setup.rs (passed); git diff --check -- crates/session-host/tests/project_setup.rs (passed); Cargo not run per parent instruction
+- Risks / next: Root to run focused project_setup integration test and resolve any compile/runtime feedback.
+
+## 2026-10-18T11:37:10+00:00 — workspace_recovery_ipc_test_luna
+
+Seed the private recovery integration repository before worktree setup
+
+- Files: crates/session-host/tests/project_setup.rs
+- Verification: rustfmt --edition 2024 crates/session-host/tests/project_setup.rs (passed); git diff --check -- crates/session-host/tests/project_setup.rs (passed); Cargo not run per parent instruction
+- Risks / next: Root to run the focused project_setup integration test.
+
+## 2026-10-18T11:45:32+00:00 — root
+
+Ship explicit asynchronous recovery for interrupted workspaces with safe management flow and preserved running sessions
+
+- Files: crates/session-host/src/workspace_recovery.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/catalog_flow.rs, crates/app/src/activity_ui.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_drop.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 418 app tests,7 backend recovery tests,1 actual-host held-Git single-flight/idle-block/reopen test and37 harness tests pass. Strict workspace/app Clippy, formatting/version/diff, fixed C helper compile and release app/host binaries/examples builds pass. Final private pointer /tmp/pigade-workspace-recovery-20261018-04 passes missing-folder Failed then existing-worktree Ready via native management, preserves tabs/layout/selection/process/generations/all cwd/context/PTY geometry/dirty file and original pointer/IME/transfer/paste checks. Root inspected final Ready and run03 Failed/Ready captures. Corrected unused-mut, renamed-tab admission bug, fixture framing and sidebar non-Ready selection bug before final passes; archived Open loop removed and notices shortened. Independent Luna review before async refactor plus root integration review completed. Separately at explicit user desktop request, observed Hyprsunset4000K/gamma100/no shader and disabled runtime night filter at6500K; later status remains enabled=false. No config/theme/monitor changes or active-desktop input automation; cause of4000K unknown.
+- Risks / next: Commit coherent block, preserve unrelated stress/research/unused GPUI patch dirt and stash0. Primary project checkout must exist; no lost-file/worktree/process reconstruction, old-host auto-restart, full Wayland/GPU/a11y/performance/reboot/soak/MVP certification. Broad product goal remains active.

@@ -394,6 +394,9 @@ pub struct Catalog {
     /// `None` means the connected host predates cross-workspace pane drops.
     #[serde(default)]
     pub pane_workspace_drop_schema: Option<u16>,
+    /// Explicit reconciliation of interrupted workspace setup; no Git mutation.
+    #[serde(default)]
+    pub workspace_recovery_schema: Option<u16>,
     /// Host-owned, immutable colored scrollback pages. No database migration.
     #[serde(default)]
     pub history_grid_schema: Option<u16>,
@@ -1453,6 +1456,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         engine_options_schema: Some(1),
         pane_tab_drop_schema: Some(1),
         pane_workspace_drop_schema: Some(1),
+        workspace_recovery_schema: Some(1),
         history_grid_schema: Some(1),
         custom_cli_schema: Some(1),
     };

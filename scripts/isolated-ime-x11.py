@@ -2884,6 +2884,73 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     time.sleep(.35)
     helper_call(config, 'capture', '/artifacts/pointer-workspace-drop-undo.ppm')
 
+    # Reconcile only this private, empty worktree through the native menu.
+    recovery_before = host_request({'command': 'catalog'})['catalog']
+    recovery_workspace = next(workspace for workspace in recovery_before['workspaces']
+                              if workspace['id'] == ws_destination['id'])
+    recovery_path = Path(recovery_workspace['cwd'])
+    require(recovery_path.is_dir() and recovery_path.parent == Path('/artifacts/state/worktrees') and
+            recovery_path.name == recovery_workspace['id'], 'recovery fixture left its managed private path')
+    recovery_marker = recovery_path / 'recovery-user.txt'
+    recovery_marker.write_text('keep user work exactly\n')
+    recovery_held = recovery_path.with_name('held-' + recovery_workspace['id'])
+    require(not recovery_held.exists(), 'private recovery hold path already exists')
+    recovery_workspace = {**recovery_workspace, 'status': 'preparing', 'error': None}
+    report['stage'] = 'workspace-recovery-seed'
+    save()
+    recovery_seed = host_request({'command': 'catalog_apply', 'batch': {'projects': [], 'tabs': [],
+        'selection': None, 'layout': None, 'workspaces': [
+        {'value': recovery_workspace, 'expected_revision': recovery_workspace['revision']} ]}})['catalog']
+    recovery_revision = next(workspace['revision'] for workspace in recovery_seed['workspaces']
+                             if workspace['id'] == recovery_workspace['id'])
+    recovery_path.rename(recovery_held)
+    step('workspace-switcher-open')
+    step('workspace-switcher-refresh')
+    time.sleep(.4)
+    step('custom-review-cancel')
+    step('workspace-recovery-open')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/workspace-recovery-interrupted.ppm')
+    recovery_geometry = frame_geometries(panes)
+    step('workspace-recovery-confirm')
+    recovery_failed = wait_until(lambda: (catalog if any(workspace['id'] == recovery_workspace['id']
+        and workspace['status'] == 'failed' and workspace['revision'] == recovery_revision + 1
+        and workspace.get('error') for workspace in catalog['workspaces']) else None)
+        if (catalog := host_request({'command': 'catalog'})['catalog']) else None, time.monotonic() + 8)
+    require(recovery_failed['selection'] == recovery_seed['selection'] and
+            recovery_failed['layout'] == recovery_seed['layout'] and
+            recovery_failed['tabs'] == recovery_seed['tabs'] and not recovery_path.exists() and
+            (recovery_held / 'recovery-user.txt').read_text() == 'keep user work exactly\n' and
+            live_unchanged(ws_generations, ws_processes) and cwd_snapshot(ws_processes) == ws_cwds and
+            session_context() == ws_context and frame_geometries(panes) == recovery_geometry,
+            'failed recovery created a directory/tab/process or changed existing work')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/workspace-recovery-failed.ppm')
+    recovery_held.rename(recovery_path)
+    step('workspace-recovery-confirm')
+    recovery_ready = wait_until(lambda: (catalog if any(workspace['id'] == recovery_workspace['id']
+        and workspace['status'] == 'ready' and workspace['revision'] == recovery_revision + 2
+        and workspace.get('error') is None for workspace in catalog['workspaces']) else None)
+        if (catalog := host_request({'command': 'catalog'})['catalog']) else None, time.monotonic() + 8)
+    require(recovery_ready['selection'] == recovery_seed['selection'] and
+            recovery_ready['layout'] == recovery_seed['layout'] and
+            recovery_ready['tabs'] == recovery_seed['tabs'] and
+            recovery_marker.read_text() == 'keep user work exactly\n' and
+            live_unchanged(ws_generations, ws_processes) and cwd_snapshot(ws_processes) == ws_cwds and
+            session_context() == ws_context and frame_geometries(panes) == recovery_geometry,
+            'successful recovery changed existing layout/tab/process/cwd/context or user files')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/workspace-recovery-ready.ppm')
+    # The matching receipt must replace the frozen target. Enter now opens
+    # the Ready workspace rather than retrying recovery.
+    step('workspace-recovery-confirm')
+    wait_until(lambda: host_request({'command': 'catalog'})['catalog']['selection']['tab_id'] == ws_to_tab,
+               time.monotonic() + 6)
+    step('pointer-select-first-workspace')
+    step('pointer-select-first-tab')
+    wait_until(lambda: host_request({'command': 'catalog'})['catalog']['selection']['tab_id'] == tab_id,
+               time.monotonic() + 6)
+
     def pointer_chrome_pixel(name):
         raw = (Path('/artifacts') / name).read_bytes()
         match = re.match(rb'P6\n([0-9]+) ([0-9]+)\n255\n', raw)
@@ -3095,6 +3162,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'prefix_undo_restored_exact_pre_drag_layout': True,
         'gap_drop_inserted_source_left_of_nearest_right_pane_and_undo_restored_exact_tree': True,
         'workspace_sidebar_drop_preserved_real_worktree_cwd_and_context_and_one_step_undo': True,
+        'workspace_recovery_missing_then_ready_preserved_processes_cwd_context_layout_tabs_and_dirty_file': True,
         'tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes': True,
         'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination': True,
         'tab_transfer_history_contains_exact_before_and_after_for_both_tabs': True,
@@ -3116,6 +3184,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
                      'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
                      'pointer-workspace-drop-cancel.ppm', 'pointer-workspace-drop-preview.ppm',
                      'pointer-workspace-drop-committed.ppm', 'pointer-workspace-drop-undo.ppm',
+                     'workspace-recovery-interrupted.ppm', 'workspace-recovery-failed.ppm',
+                     'workspace-recovery-ready.ppm',
                      'pointer-tab-drop-cancel.ppm', 'pointer-tab-drop-preview.ppm',
                      'pointer-tab-drop-committed.ppm', 'pointer-tab-drop-undo.ppm',
                      'pointer-tab-drop-populated-before.ppm',
@@ -7695,6 +7765,8 @@ def outer_run(args) -> dict:
                   'pointer-undo.ppm', 'pointer-gap-dropped.ppm', 'pointer-gap-undo.ppm',
                   'pointer-workspace-drop-cancel.ppm', 'pointer-workspace-drop-preview.ppm',
                   'pointer-workspace-drop-committed.ppm', 'pointer-workspace-drop-undo.ppm',
+                  'workspace-recovery-interrupted.ppm', 'workspace-recovery-failed.ppm',
+                  'workspace-recovery-ready.ppm',
                   'pointer-tab-drop-cancel.ppm',
                   'pointer-tab-drop-preview.ppm', 'pointer-tab-drop-committed.ppm',
                   'pointer-tab-drop-undo.ppm', 'pointer-tab-drop-populated-before.ppm',

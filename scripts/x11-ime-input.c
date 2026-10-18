@@ -238,6 +238,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-picker-confirm") &&
         strcmp(a.stage, "pointer-tab-drop-cancel") && strcmp(a.stage, "pointer-tab-drop") &&
         strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
+        strcmp(a.stage, "workspace-recovery-open") && strcmp(a.stage, "workspace-recovery-confirm") &&
         strcmp(a.stage, "pointer-workspace-drop-cancel") && strcmp(a.stage, "pointer-workspace-drop") &&
         strcmp(a.stage, "pointer-select-first-workspace") &&
         strcmp(a.stage, "pointer-file-drop") &&
@@ -2163,6 +2164,10 @@ int main(int argc, char **argv) {
             key(dpy, XK_Up);
             modified_key(dpy, XK_Control_L, XK_r);
         } else if (!strcmp(a.stage, "pointer-picker-confirm")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "workspace-recovery-open")) {
+            setup_click(dpy, app_window, 100, 300);
+        } else if (!strcmp(a.stage, "workspace-recovery-confirm")) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "pointer-select-first-workspace")) {
             setup_click(dpy, app_window, 90, 135);

@@ -101,6 +101,23 @@ impl Drop for HostFixture {
     }
 }
 
+struct FileHold(PathBuf);
+
+impl FileHold {
+    fn release(&self) -> Result<()> {
+        if self.0.exists() {
+            fs::remove_file(&self.0)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FileHold {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
 #[test]
 fn profile_roster_edits_are_atomic_metadata_and_survive_host_restart() -> Result<()> {
     use pigade_storage::{AgentProfile, CatalogBatch, CatalogWrite, LaunchSettings};
@@ -205,6 +222,14 @@ fn profile_roster_edits_are_atomic_metadata_and_survive_host_restart() -> Result
 }
 
 fn exchange(socket: &Path, command: Command) -> Result<Response> {
+    let response = exchange_allow_error(socket, command)?;
+    if let Some(error) = response.error.as_deref() {
+        bail!("host command failed: {error}");
+    }
+    Ok(response)
+}
+
+fn exchange_allow_error(socket: &Path, command: Command) -> Result<Response> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -217,9 +242,6 @@ fn exchange(socket: &Path, command: Command) -> Result<Response> {
     )?;
     let response: Response = receive(&mut stream)?;
     ensure!(response.protocol == PROTOCOL, "host protocol mismatch");
-    if let Some(error) = response.error.as_deref() {
-        bail!("host command failed: {error}");
-    }
     Ok(response)
 }
 
@@ -558,6 +580,246 @@ fn workspace_git_snapshot_isolated_from_host_commands_and_read_only() -> Result<
         host.child.as_ref().context("host process missing")?.id() == host_pid,
         "Git read changed the host process"
     );
+    Ok(())
+}
+
+#[test]
+fn workspace_recovery_git_probe_is_off_actor_single_flight_and_idle_blocking() -> Result<()> {
+    use pigade_storage::{CatalogBatch, CatalogWrite, WorkspaceStatus};
+
+    let mut host = HostFixture::new()?;
+    let parent = host.state().join("recovery-parent");
+    fs::create_dir(&parent)?;
+    let project = exchange(
+        &host.socket(),
+        Command::CreateProject {
+            parent,
+            name: "RecoveryRepo".into(),
+        },
+    )?
+    .catalog
+    .context("project catalog missing")?
+    .projects
+    .into_iter()
+    .next()
+    .context("project missing")?;
+    let seeded_commit = ProcessCommand::new("/usr/bin/git")
+        .arg("-C")
+        .arg(&project.canonical_path)
+        .args([
+            "-c",
+            "user.name=Recovery Fixture",
+            "-c",
+            "user.email=recovery@example.invalid",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            "base",
+        ])
+        .status()?;
+    ensure!(
+        seeded_commit.success(),
+        "could not seed private recovery repo"
+    );
+    let created = exchange(
+        &host.socket(),
+        Command::CreateWorkspace {
+            project: project.id,
+            task: "recovery fixture".into(),
+            worktree: true,
+        },
+    )?
+    .catalog
+    .context("workspace catalog missing")?;
+    let ready = created
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.project_id == project.id)
+        .context("workspace missing")?
+        .clone();
+    ensure!(ready.status == WorkspaceStatus::Ready);
+    let dirty = ready.cwd.join("user-owned.txt");
+    fs::write(&dirty, b"preserve this file\n")?;
+    let mut preparing = ready.clone();
+    preparing.status = WorkspaceStatus::Preparing;
+    let before = exchange(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: Box::new(CatalogBatch {
+                workspaces: vec![CatalogWrite {
+                    value: preparing,
+                    expected_revision: Some(ready.revision),
+                }],
+                ..CatalogBatch::default()
+            }),
+        },
+    )?
+    .catalog
+    .context("Preparing catalog missing")?;
+    let preparing = before
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == ready.id)
+        .context("Preparing workspace missing")?;
+    ensure!(preparing.status == WorkspaceStatus::Preparing);
+    let tab_before = before
+        .tabs
+        .iter()
+        .find(|tab| tab.workspace_id == ready.id)
+        .context("existing development tab missing")?;
+    let expected_revision = preparing.revision;
+
+    let hold = host.state().join("recovery-git-hold");
+    let hold_guard = FileHold(hold.clone());
+    let started = host.state().join("recovery-git-started");
+    let wrapper = host.bin.path().join("git");
+    let quote =
+        |path: &Path| -> String { format!("'{}'", path.to_string_lossy().replace('\'', "'\\''")) };
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ -e {hold} ]; then printf '%s\\n' \"$$\" >> {started}; while [ -e {hold} ]; do sleep 0.01; done; fi\nexec /usr/bin/git \"$@\"\n",
+            hold = quote(&hold),
+            started = quote(&started),
+        ),
+    )?;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+    fs::write(&hold, b"hold\n")?;
+
+    let socket = host.socket();
+    let workspace_id = ready.id;
+    let recovery = thread::spawn(move || {
+        exchange(
+            &socket,
+            Command::RecoverWorkspace {
+                workspace: workspace_id,
+                expected_revision,
+            },
+        )
+    });
+    let start_deadline = Instant::now() + Duration::from_secs(2);
+    while !started.exists() {
+        ensure!(
+            Instant::now() < start_deadline,
+            "workspace recovery Git reader did not enter the hold"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let recorded_pid = fs::read_to_string(&started)?;
+    ensure!(
+        recorded_pid.lines().count() == 1,
+        "more than one Git probe started"
+    );
+    let git_pid: i32 = recorded_pid.trim().parse()?;
+    let git_alive = || unsafe { libc::kill(git_pid, 0) == 0 };
+    ensure!(
+        hold.exists() && git_alive(),
+        "Git inspection did not remain held"
+    );
+
+    ensure!(exchange(&host.socket(), Command::List)?.views.is_empty());
+    ensure!(
+        exchange(&host.socket(), Command::Catalog)?.catalog.as_ref() == Some(&before),
+        "metadata request stalled or changed while Git inspection was held"
+    );
+    let status = exchange(&host.socket(), Command::HostStatus)?
+        .host_status
+        .context("host status missing while recovery is held")?;
+    ensure!(status.git_busy && !status.can_shutdown);
+    let shutdown = exchange_allow_error(
+        &host.socket(),
+        Command::ShutdownIfIdle {
+            expected_incarnation: status.incarnation,
+        },
+    )?;
+    ensure!(
+        shutdown.error.is_some(),
+        "idle shutdown ignored active recovery"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::RecoverWorkspace {
+                workspace: ready.id,
+                expected_revision,
+            },
+        )
+        .is_err(),
+        "concurrent workspace recovery was not rejected"
+    );
+    ensure!(
+        fs::read_to_string(&started)?.lines().count() == 1,
+        "a second Git inspection worker was started"
+    );
+    ensure!(
+        hold.exists() && git_alive(),
+        "Git inspection ended before release"
+    );
+    hold_guard.release()?;
+
+    let recovered = recovery
+        .join()
+        .map_err(|_| anyhow::anyhow!("recovery IPC thread panicked"))??
+        .catalog
+        .context("recovery catalog missing")?;
+    let workspace = recovered
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == ready.id)
+        .context("recovered workspace missing")?;
+    ensure!(workspace.status == WorkspaceStatus::Ready);
+    ensure!(recovered.selection == before.selection);
+    ensure!(recovered.layout == before.layout);
+    ensure!(recovered.tabs.len() == before.tabs.len());
+    let tab_after = recovered
+        .tabs
+        .iter()
+        .find(|tab| tab.id == tab_before.id)
+        .context("existing development tab was replaced")?;
+    ensure!(
+        tab_after == tab_before,
+        "existing tab changed during recovery"
+    );
+    ensure!(fs::read(&dirty)? == b"preserve this file\n");
+    ensure!(exchange(&host.socket(), Command::List)?.views.is_empty());
+
+    host.restart()?;
+    let after_restart = exchange(&host.socket(), Command::Catalog)?
+        .catalog
+        .context("catalog missing after recovery restart")?;
+    ensure!(
+        after_restart == recovered,
+        "recovered catalog changed on restart"
+    );
+    ensure!(
+        exchange(
+            &host.socket(),
+            Command::RecoverWorkspace {
+                workspace: ready.id,
+                expected_revision: workspace.revision,
+            },
+        )
+        .is_err(),
+        "Ready workspace was recoverable again"
+    );
+    ensure!(
+        exchange(&host.socket(), Command::List)?.views.is_empty(),
+        "workspace recovery launched a CLI"
+    );
+    ensure!(
+        exchange(&host.socket(), Command::Catalog)?.catalog.as_ref() == Some(&recovered),
+        "repeat recovery changed tabs or metadata"
+    );
+    ensure!(
+        fs::read_to_string(&started)?.lines().count() == 1,
+        "repeated recovery launched another Git inspection"
+    );
+    drop(hold_guard);
     Ok(())
 }
 

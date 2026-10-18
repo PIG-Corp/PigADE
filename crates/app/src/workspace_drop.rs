@@ -352,6 +352,7 @@ mod tests {
             engine_options_schema: None,
             pane_tab_drop_schema: Some(1),
             pane_workspace_drop_schema: Some(1),
+            workspace_recovery_schema: Some(1),
             history_grid_schema: None,
             custom_cli_schema: None,
         }

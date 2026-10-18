@@ -1181,6 +1181,7 @@ mod focus_placement_tests {
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
             pane_workspace_drop_schema: Some(1),
+            workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
         };
@@ -1209,6 +1210,7 @@ mod focus_placement_tests {
 
 struct CatalogEdit {
     return_dialog: Option<product::Dialog>,
+    refresh_workspace: Option<uuid::Uuid>,
     field_values: Option<Vec<String>>,
     request: uuid::Uuid,
     dialog: Option<uuid::Uuid>,
@@ -1492,7 +1494,17 @@ impl CanvasApp {
                                             }
                                             this.sync_product_selection(window, cx);
                                         }
-                                        if let Some(edit)=edit {
+                                        if let Some(mut edit)=edit {
+                                            if let Some(id) = edit.refresh_workspace {
+                                                let refreshed = this.product.catalog.as_ref().and_then(|catalog| catalog.workspaces.iter().find(|workspace| workspace.id == id)).cloned();
+                                                if same_dialog && let Some(workspace) = refreshed {
+                                                    edit.notice = match workspace.status {
+                                                        pigade_storage::WorkspaceStatus::Ready => "Воркспейс готов".into(),
+                                                        _ => "Папка пока недоступна".into(),
+                                                    };
+                                                    this.product.management_target = Some(catalog_flow::ManagedEntity::Workspace(workspace));
+                                                }
+                                            }
                                             let is_prompt=current_dialog.as_ref().is_some_and(|dialog|dialog.kind==product::DialogKind::Prompt);
                                             let changed = same_dialog && edit.field_values.as_ref().is_some_and(|saved|current_dialog.as_ref().is_some_and(|dialog|dialog.fields.iter().map(|buffer|buffer.text().to_owned()).collect::<Vec<_>>()!=*saved));
                                             if same_dialog && is_prompt && let Some(editor)=&mut this.product.prompt_editor {
@@ -2007,6 +2019,7 @@ impl CanvasApp {
             cx,
         ) {
             self.catalog_edit = Some(CatalogEdit {
+                refresh_workspace: None,
                 return_dialog: self
                     .product
                     .dialog
@@ -4084,6 +4097,43 @@ impl CanvasApp {
                     self.product.dialog = Some(dialog);
                 }
             }
+            A::RecoverWorkspace | A::RefreshManagedWorkspace => {
+                let Some(catalog_flow::ManagedEntity::Workspace(workspace)) =
+                    &self.product.management_target
+                else {
+                    return;
+                };
+                let workspace_id = workspace.id;
+                let command = if action == A::RecoverWorkspace {
+                    let Some(catalog) = &self.product.catalog else {
+                        return;
+                    };
+                    match catalog_flow::recovery_request(catalog, workspace) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            self.product.notice = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                } else {
+                    json!({"command":"catalog"})
+                };
+                let request = uuid::Uuid::new_v4();
+                let mut command = command;
+                command["_ui_request"] = json!(request);
+                if self.try_product_command(command, cx) {
+                    self.catalog_edit = Some(CatalogEdit {
+                        refresh_workspace: Some(workspace_id),
+                        return_dialog: self.product.dialog.clone(),
+                        field_values: None,
+                        request,
+                        dialog: self.product.dialog.as_ref().map(|dialog| dialog.id),
+                        return_to: None,
+                        notice: "Состояние воркспейса обновлено".into(),
+                    });
+                }
+            }
             A::ArchiveTarget => {
                 if let (Some(target), Some(catalog)) =
                     (&self.product.management_target, &self.product.catalog)
@@ -4902,6 +4952,10 @@ impl CanvasApp {
                 if let Some(catalog) = &self.product.catalog
                     && let Some(workspace) = catalog.workspaces.iter().find(|w| w.id == id)
                 {
+                    if workspace.status != pigade_storage::WorkspaceStatus::Ready {
+                        self.product_action(A::ManageWorkspace(id), window, cx);
+                        return;
+                    }
                     let mut selection = catalog.selection.clone();
                     selection.project_id = Some(workspace.project_id);
                     selection.workspace_id = Some(id);

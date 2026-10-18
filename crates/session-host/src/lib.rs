@@ -17,6 +17,7 @@ mod projects;
 mod resume_probe;
 mod template_run;
 mod workspace_git;
+mod workspace_recovery;
 pub use catalog::LayoutAction;
 pub use panel_directory::{PanelDirectory, PanelEntry};
 mod ipc_server;
@@ -254,6 +255,10 @@ pub enum Command {
         project: Uuid,
         task: String,
         worktree: bool,
+    },
+    RecoverWorkspace {
+        workspace: Uuid,
+        expected_revision: u64,
     },
     WorkspaceGitWatch {
         workspace: Uuid,
@@ -1593,6 +1598,15 @@ impl Host {
             } => {
                 projects::create_workspace(&mut self.metadata, &self.root, project, task, worktree)?
             }
+            Command::RecoverWorkspace {
+                workspace,
+                expected_revision,
+            } => workspace_recovery::recover(
+                &mut self.metadata,
+                &self.root,
+                workspace,
+                expected_revision,
+            )?,
             Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, *batch)?,
             Command::SetAgentProfileRoster {
                 expected_revision,
@@ -2956,7 +2970,8 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
     host.endpoint_root = runtime.clone();
     let (jobs, internal_jobs, admission) =
         ipc_server::bind(&runtime.join("host.sock"), host.changes.clone())?;
-    let resume_reader = resume_probe::Reader::new(internal_jobs)?;
+    let resume_reader = resume_probe::Reader::new(internal_jobs.clone())?;
+    let workspace_recovery_reader = workspace_recovery::Reader::new(internal_jobs)?;
     let history_reader = history_read::Reader::new()?;
     let history_view_reader = history_view::Reader::new()?;
     let workspace_git_reader = workspace_git::Reader::new(root.clone())?;
@@ -3003,11 +3018,52 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
             provider_detector.submit(job.reply);
             continue;
         }
+        if let Command::RecoverWorkspace {
+            workspace,
+            expected_revision,
+        } = job.request.command
+        {
+            if let Some(completion) = job.workspace_recovery.take() {
+                let result = workspace_recovery::finish(
+                    &mut host.metadata,
+                    workspace,
+                    expected_revision,
+                    completion,
+                );
+                let mut response = workspace_git::response(None, None);
+                match result {
+                    Ok(catalog) => response.catalog = Some(catalog),
+                    Err(error) => {
+                        response.error = Some(format!("workspace recovery unavailable: {error:#}"))
+                    }
+                }
+                let _ = job.reply.try_send(response);
+            } else {
+                match workspace_recovery::capture(
+                    &host.metadata,
+                    &host.root,
+                    workspace,
+                    expected_revision,
+                ) {
+                    Ok(target) => workspace_recovery_reader.submit(job, target),
+                    Err(error) => {
+                        let _ = job.reply.try_send(ipc_server::error_response(
+                            format!("workspace recovery unavailable: {error:#}"),
+                            None,
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
         if matches!(job.request.command, Command::HostStatus) {
             let response = host
                 .reconcile_exits()
                 .and_then(|()| {
-                    host.maintenance_status(workspace_git_reader.index_busy(), resume_reader.busy())
+                    host.maintenance_status(
+                        workspace_git_reader.index_busy() || workspace_recovery_reader.busy(),
+                        resume_reader.busy(),
+                    )
                 })
                 .map(|status| maintenance_response(status, None))
                 .unwrap_or_else(|error| {
@@ -3025,7 +3081,7 @@ pub fn serve_with_runtime(root: PathBuf, runtime: PathBuf) -> Result<()> {
                 .reconcile_exits()
                 .and_then(|()| {
                     let mut status = host.maintenance_status(
-                        workspace_git_reader.index_busy(),
+                        workspace_git_reader.index_busy() || workspace_recovery_reader.busy(),
                         resume_reader.busy(),
                     )?;
                     if status.incarnation != expected_incarnation {

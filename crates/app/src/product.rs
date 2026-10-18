@@ -153,6 +153,8 @@ pub(super) enum ProductAction {
     ManageTab(Uuid),
     RenameTarget,
     ArchiveTarget,
+    RecoverWorkspace,
+    RefreshManagedWorkspace,
     ToggleArchived,
     OpenLayouts,
     SaveLayout,
@@ -1223,16 +1225,53 @@ impl ProductUi {
                     ),
                 ],
                 Some(crate::catalog_flow::ManagedEntity::Workspace(workspace)) => {
-                    let mut rows = vec![
-                        (
-                            "Открыть воркспейс".into(),
-                            ProductAction::SelectWorkspace(workspace.id),
-                        ),
-                        (
+                    let mut rows = if matches!(
+                        workspace.status,
+                        WorkspaceStatus::Ready | WorkspaceStatus::Archived
+                    ) {
+                        vec![
+                            (
+                                "Открыть воркспейс".into(),
+                                ProductAction::SelectWorkspace(workspace.id),
+                            ),
+                            (
+                                "Переименовать воркспейс".into(),
+                                ProductAction::RenameTarget,
+                            ),
+                        ]
+                    } else {
+                        Vec::new()
+                    };
+                    if workspace.status == WorkspaceStatus::Archived {
+                        rows.retain(|(_, action)| {
+                            !matches!(action, ProductAction::SelectWorkspace(_))
+                        });
+                    }
+                    if matches!(
+                        workspace.status,
+                        WorkspaceStatus::Preparing
+                            | WorkspaceStatus::Failed
+                            | WorkspaceStatus::MissingPath
+                    ) {
+                        if self
+                            .catalog
+                            .as_ref()
+                            .is_some_and(|catalog| catalog.workspace_recovery_schema == Some(1))
+                        {
+                            rows.push((
+                                "Проверить и восстановить".into(),
+                                ProductAction::RecoverWorkspace,
+                            ));
+                        }
+                        rows.push((
+                            "Обновить состояние".into(),
+                            ProductAction::RefreshManagedWorkspace,
+                        ));
+                        rows.push((
                             "Переименовать воркспейс".into(),
                             ProductAction::RenameTarget,
-                        ),
-                    ];
+                        ));
+                    }
                     if matches!(
                         workspace.status,
                         WorkspaceStatus::Ready | WorkspaceStatus::Archived
@@ -3154,13 +3193,57 @@ impl ProductUi {
                         .child(detail),
                 );
             if let crate::catalog_flow::ManagedEntity::Workspace(value) = target {
-                fields = fields.child(div().text_size(px(11.)).text_color(colors.muted).child(
-                    if value.status == WorkspaceStatus::Archived {
-                        "В архиве. CLI и файлы сохранены."
-                    } else {
-                        "Архив скрывает воркспейс. CLI продолжат работу в фоне."
-                    },
-                ));
+                let status = match value.status {
+                    WorkspaceStatus::Preparing => {
+                        "Создание прервано или ещё не подтверждено. Проверка использует только существующую папку; новая ветка или CLI не создаются."
+                    }
+                    WorkspaceStatus::Failed => {
+                        "Рабочая папка недоступна. После исправления причины проверьте её снова. Проверка не создаёт и не удаляет файлы."
+                    }
+                    WorkspaceStatus::MissingPath => {
+                        "Рабочая папка не найдена. После её возвращения проверьте воркспейс; новая папка и CLI не создаются."
+                    }
+                    WorkspaceStatus::Archived => "В архиве. CLI и файлы сохранены.",
+                    WorkspaceStatus::Ready => {
+                        "Готов к работе. Архив скрывает воркспейс; CLI продолжат работу в фоне."
+                    }
+                };
+                fields = fields.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .whitespace_normal()
+                        .child(status),
+                );
+                if let Some(error) = &value.error {
+                    fields = fields.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.status_amber)
+                            .whitespace_normal()
+                            .child(error.clone()),
+                    );
+                }
+                if matches!(
+                    value.status,
+                    WorkspaceStatus::Preparing
+                        | WorkspaceStatus::Failed
+                        | WorkspaceStatus::MissingPath
+                ) && self
+                    .catalog
+                    .as_ref()
+                    .is_none_or(|catalog| catalog.workspace_recovery_schema != Some(1))
+                {
+                    fields = fields.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .whitespace_normal()
+                            .child(
+                                "Проверка восстановления недоступна в этой версии session host.",
+                            ),
+                    );
+                }
             }
         }
         if dialog.kind == DialogKind::Manage {
@@ -6645,5 +6728,34 @@ mod context_edit_tests {
         ui.replace_sessions(vec![]);
         assert_eq!(ui.dialog.as_ref().unwrap().kind, DialogKind::StopSession);
         assert_eq!(ui.dialog.as_ref().unwrap().id, id);
+    }
+    #[test]
+    fn archived_workspace_menu_offers_restore_without_an_open_loop() {
+        let workspace = pigade_storage::Workspace {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            task: "Archived".into(),
+            cwd: "/repo".into(),
+            mode: pigade_storage::WorkspaceMode::SharedCheckout,
+            status: WorkspaceStatus::Archived,
+            error: None,
+            context_revision: None,
+            revision: 1,
+        };
+        let ui = ProductUi {
+            dialog: Some(Dialog::new(DialogKind::Manage)),
+            management_target: Some(crate::catalog_flow::ManagedEntity::Workspace(workspace)),
+            ..ProductUi::default()
+        };
+        let entries = ui.menu_entries();
+        assert!(
+            entries
+                .iter()
+                .any(|(_, action)| *action == ProductAction::ArchiveTarget)
+        );
+        assert!(entries.iter().all(|(_, action)| !matches!(
+            action,
+            ProductAction::SelectWorkspace(_) | ProductAction::RecoverWorkspace
+        )));
     }
 }

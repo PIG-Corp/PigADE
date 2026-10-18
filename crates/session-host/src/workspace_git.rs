@@ -1288,7 +1288,7 @@ fn clean_git_environment(command: &mut ProcessCommand) {
     command.env("GIT_NO_LAZY_FETCH", "1");
 }
 
-fn git_root_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
+pub(super) fn git_root_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
     let (bytes, incomplete) = run_git_capture(
         path,
         &["rev-parse", "--show-toplevel"],
@@ -1302,7 +1302,7 @@ fn git_root_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
     fs::canonicalize(value).context("cannot resolve Git worktree root")
 }
 
-fn git_common_dir_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
+pub(super) fn git_common_dir_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
     let (bytes, incomplete) = run_git_capture(
         path,
         &["rev-parse", "--git-common-dir"],
@@ -1349,7 +1349,7 @@ fn run_status(cwd: &Path, deadline: Instant) -> Result<(Vec<u8>, bool)> {
     )
 }
 
-fn run_git_capture(
+pub(super) fn run_git_capture(
     cwd: &Path,
     args: &[&str],
     output_limit: usize,
@@ -2301,6 +2301,7 @@ mod tests {
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
             pane_workspace_drop_schema: Some(1),
+            workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
         };

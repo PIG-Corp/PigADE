@@ -33,6 +33,8 @@ pub(crate) struct Job {
     pub reply: SyncSender<Response>,
     pub(crate) resume_probe: Option<crate::resume_probe::Completion>,
     pub(crate) _resume_activity: Option<crate::resume_probe::Activity>,
+    pub(crate) workspace_recovery: Option<crate::workspace_recovery::Completion>,
+    pub(crate) _workspace_recovery_activity: Option<crate::workspace_recovery::Activity>,
     pub(crate) delivery: Option<Receiver<()>>,
 }
 
@@ -297,6 +299,8 @@ fn process_connection(
             reply,
             resume_probe: None,
             _resume_activity: None,
+            workspace_recovery: None,
+            _workspace_recovery_activity: None,
             delivery: Some(delivery),
         },
     ) {
@@ -457,6 +461,8 @@ mod tests {
             reply,
             resume_probe: None,
             _resume_activity: None,
+            workspace_recovery: None,
+            _workspace_recovery_activity: None,
             delivery: None,
         })
         .ok()
@@ -500,6 +506,8 @@ mod tests {
             reply,
             resume_probe: None,
             _resume_activity: None,
+            workspace_recovery: None,
+            _workspace_recovery_activity: None,
             delivery: Some(delivery),
         })
         .unwrap();
@@ -539,6 +547,8 @@ mod tests {
                 reply,
                 resume_probe: None,
                 _resume_activity: None,
+                workspace_recovery: None,
+                _workspace_recovery_activity: None,
                 delivery: None,
             },
         );

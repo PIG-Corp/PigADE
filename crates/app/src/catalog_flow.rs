@@ -121,6 +121,33 @@ impl ManagedEntity {
     }
 }
 
+/// Reconciliation is explicitly scoped to the unchanged management target.
+pub(crate) fn recovery_request(
+    catalog: &Catalog,
+    target: &Workspace,
+) -> Result<serde_json::Value, String> {
+    if catalog.workspace_recovery_schema != Some(1) {
+        return Err("Проверка восстановления недоступна в текущем session host".into());
+    }
+    if !matches!(
+        target.status,
+        WorkspaceStatus::Preparing | WorkspaceStatus::Failed | WorkspaceStatus::MissingPath
+    ) || !catalog
+        .workspaces
+        .iter()
+        .any(|workspace| workspace == target)
+        || !catalog
+            .projects
+            .iter()
+            .any(|project| project.id == target.project_id)
+    {
+        return Err("Состояние воркспейса изменилось. Обновите его перед проверкой.".into());
+    }
+    Ok(
+        serde_json::json!({"command":"recover_workspace", "workspace":target.id, "expected_revision":target.revision}),
+    )
+}
+
 pub(crate) fn first_active_workspace(catalog: &Catalog, project: Uuid) -> Option<&Workspace> {
     catalog
         .workspaces
@@ -163,6 +190,7 @@ mod tests {
             engine_options_schema: Some(1),
             pane_tab_drop_schema: Some(1),
             pane_workspace_drop_schema: Some(1),
+            workspace_recovery_schema: Some(1),
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
         }
@@ -231,5 +259,45 @@ mod tests {
         assert_eq!(batch.workspaces[0].value.status, WorkspaceStatus::Ready);
         value.status = WorkspaceStatus::MissingPath;
         assert!(ManagedEntity::Workspace(value).archive(&catalog).is_err());
+    }
+    #[test]
+    fn recovery_request_is_capability_revision_and_status_bound() {
+        let mut value = workspace(Uuid::new_v4(), Uuid::new_v4());
+        let mut current = catalog(vec![value.clone()]);
+        current.projects.push(Project {
+            id: value.project_id,
+            canonical_path: "/repo".into(),
+            git_common_dir: "/repo/.git".into(),
+            name: "Project".into(),
+            roots: vec![],
+            revision: 1,
+        });
+        for status in [
+            WorkspaceStatus::Preparing,
+            WorkspaceStatus::Failed,
+            WorkspaceStatus::MissingPath,
+        ] {
+            value.status = status;
+            current.workspaces[0] = value.clone();
+            let request = recovery_request(&current, &value).unwrap();
+            assert_eq!(request["workspace"], value.id.to_string());
+            assert_eq!(request["expected_revision"], value.revision);
+            assert_eq!(request["command"], "recover_workspace");
+        }
+        let mut stale = value.clone();
+        stale.revision += 1;
+        assert!(recovery_request(&current, &stale).is_err());
+        current.workspace_recovery_schema = None;
+        assert!(recovery_request(&current, &value).is_err());
+        current.workspace_recovery_schema = Some(1);
+        for status in [WorkspaceStatus::Ready, WorkspaceStatus::Archived] {
+            value.status = status;
+            current.workspaces[0] = value.clone();
+            assert!(recovery_request(&current, &value).is_err());
+        }
+        value.status = WorkspaceStatus::Preparing;
+        current.workspaces[0] = value.clone();
+        current.projects.clear();
+        assert!(recovery_request(&current, &value).is_err());
     }
 }
