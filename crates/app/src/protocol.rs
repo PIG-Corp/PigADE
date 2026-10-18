@@ -209,6 +209,8 @@ struct Response {
     panel_directory: Option<PanelDirectory>,
     #[serde(default)]
     workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
+    #[serde(default)]
+    workspace_git_diff: Option<WorkspaceGitDiff>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -258,6 +260,114 @@ impl WorkspaceGitSnapshot {
             })
         {
             return Err("Ответ Git не соответствует выбранному воркспейсу".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitDiffSide {
+    Index,
+    Worktree,
+    Untracked,
+    Conflict,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitDiff {
+    pub workspace_id: uuid::Uuid,
+    pub workspace_revision: u64,
+    pub project_id: uuid::Uuid,
+    pub cwd: std::path::PathBuf,
+    pub path: String,
+    pub side: GitDiffSide,
+    pub text: String,
+    pub truncated: bool,
+    pub binary: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceGitDiffTarget {
+    workspace_id: uuid::Uuid,
+    workspace_revision: u64,
+    path: String,
+    side: GitDiffSide,
+}
+
+fn validate_git_diff_path(path: &str) -> Result<(), String> {
+    let bytes = path.as_bytes();
+    let has_drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if path.is_empty()
+        || path.len() > 4096
+        || path.starts_with('-')
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\\')
+        || has_drive_prefix
+        || std::path::Path::new(path).is_absolute()
+        || path.chars().any(char::is_control)
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err("Недопустимый относительный путь файла Git".into());
+    }
+    Ok(())
+}
+
+fn workspace_git_diff_target(command: &Value) -> Result<Option<WorkspaceGitDiffTarget>, String> {
+    if command.get("command").and_then(Value::as_str) != Some("workspace_git_diff") {
+        return Ok(None);
+    }
+    let workspace_id = command
+        .get("workspace")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| "Не указан воркспейс Git diff".to_owned())?;
+    let workspace_revision = command
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Не указана ревизия воркспейса Git diff".to_owned())?;
+    let path = command
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Не указан путь файла Git diff".to_owned())?
+        .to_owned();
+    validate_git_diff_path(&path)?;
+    let side = command
+        .get("side")
+        .cloned()
+        .ok_or_else(|| "Не указана сторона Git diff".to_owned())
+        .and_then(|value| {
+            serde_json::from_value::<GitDiffSide>(value)
+                .map_err(|_| "Недопустимая сторона Git diff".to_owned())
+        })?;
+    Ok(Some(WorkspaceGitDiffTarget {
+        workspace_id,
+        workspace_revision,
+        path,
+        side,
+    }))
+}
+
+impl WorkspaceGitDiff {
+    fn validate(&self, target: Option<&WorkspaceGitDiffTarget>) -> Result<(), String> {
+        if target.is_none_or(|target| {
+            self.workspace_id != target.workspace_id
+                || self.workspace_revision != target.workspace_revision
+                || self.path != target.path
+                || self.side != target.side
+        }) || self.workspace_id.is_nil()
+            || self.project_id.is_nil()
+            || !self.cwd.is_absolute()
+            || validate_git_diff_path(&self.path).is_err()
+            || self.text.len() > 128 * 1024
+            || self.text.lines().count() > 2000
+            || self.binary && !self.text.is_empty()
+        {
+            return Err("Ответ Git diff не соответствует выбранному файлу".into());
         }
         Ok(())
     }
@@ -495,6 +605,7 @@ pub struct ProductReply {
     pub template_runs: Option<pigade_storage::TemplateRunPage>,
     pub panel_directory: Option<PanelDirectory>,
     pub workspace_git_snapshot: Option<WorkspaceGitSnapshot>,
+    pub workspace_git_diff: Option<WorkspaceGitDiff>,
 }
 
 pub struct ProductError {
@@ -531,6 +642,12 @@ pub fn product_request(socket: &Path, mut command: Value) -> Result<ProductReply
 
 fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, ProductError> {
     let command_name = command.get("command").and_then(Value::as_str);
+    let git_diff_target = workspace_git_diff_target(&command).map_err(|message| ProductError {
+        ui_request: None,
+        providers_request: false,
+        message,
+        rejected_before_launch: false,
+    })?;
     let git_request = command_name == Some("workspace_git_snapshot");
     let git_target = git_request
         .then(|| {
@@ -546,6 +663,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         .flatten();
     let launch_confirmed = matches!(command_name, Some("launch_in_tab" | "start_prepared"));
     let list_sessions = command_name == Some("list");
+    let git_diff_request = command_name == Some("workspace_git_diff");
     let context_saved = command_name == Some("save_context");
     let generation_selected = command_name == Some("select_generation");
     let history_view_request = command_name == Some("history_view");
@@ -639,6 +757,22 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
             .and_then(|snapshot| snapshot.validate(git_target))
             .map_err(|message| ProductError { ui_request:None, providers_request:false, message, rejected_before_launch:false })?;
     }
+    if git_diff_request || response.workspace_git_diff.is_some() {
+        response
+            .workspace_git_diff
+            .as_ref()
+            .ok_or_else(|| {
+                "Эта версия session host не вернула Git diff. Обновите приложение при следующем запуске."
+                    .to_owned()
+            })
+            .and_then(|diff| diff.validate(git_diff_target.as_ref()))
+            .map_err(|message| ProductError {
+                ui_request: None,
+                providers_request: false,
+                message,
+                rejected_before_launch: false,
+            })?;
+    }
     let process_view = if let Some((session, generation)) = process_target {
         if response.views.len() != 1
             || session.is_none()
@@ -679,6 +813,7 @@ fn product_request_inner(socket: &Path, command: Value) -> Result<ProductReply, 
         template_runs: response.template_runs,
         panel_directory: response.panel_directory,
         workspace_git_snapshot: response.workspace_git_snapshot,
+        workspace_git_diff: response.workspace_git_diff,
     })
 }
 
@@ -1094,6 +1229,173 @@ mod tests {
     }
 
     #[test]
+    fn git_diff_reply_is_bound_to_the_exact_request_and_bounded() {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        for variant in 0..12 {
+            let workspace = uuid::Uuid::from_u128(401);
+            let request_id = uuid::Uuid::new_v4();
+            let path =
+                std::env::temp_dir().join(format!("pigade-git-diff-{}.sock", uuid::Uuid::new_v4()));
+            let listener = UnixListener::bind(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                let command: Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(command["command"]["command"], "workspace_git_diff");
+                assert_eq!(command["command"]["workspace"], workspace.to_string());
+                assert_eq!(command["command"]["expected_revision"], 7);
+                assert_eq!(command["command"]["path"], "src/main.rs");
+                assert_eq!(command["command"]["side"], "worktree");
+                assert!(command["command"].get("_ui_request").is_none());
+                let mut diff = json!({
+                    "workspace_id": workspace,
+                    "workspace_revision": 7,
+                    "project_id": uuid::Uuid::from_u128(402),
+                    "cwd": "/worktree",
+                    "path": "src/main.rs",
+                    "side": "worktree",
+                    "text": "",
+                    "truncated": false,
+                    "binary": false
+                });
+                match variant {
+                    1 => diff["workspace_id"] = json!(uuid::Uuid::from_u128(499)),
+                    2 => diff["workspace_revision"] = json!(8),
+                    3 => diff["path"] = json!("src/lib.rs"),
+                    4 => diff["side"] = json!("index"),
+                    5 => diff["project_id"] = json!(uuid::Uuid::nil()),
+                    6 => diff["cwd"] = json!("relative/worktree"),
+                    7 => diff["text"] = json!("x".repeat(128 * 1024 + 1)),
+                    8 => diff["text"] = json!("x\n".repeat(2001)),
+                    9 => {
+                        diff["binary"] = json!(true);
+                        diff["text"] = json!("binary diff must not carry text");
+                    }
+                    10 => diff["side"] = json!("unrecognized"),
+                    11 => diff = Value::Null,
+                    _ => {}
+                }
+                let response = json!({
+                    "protocol": 2,
+                    "views": [],
+                    "error": null,
+                    "workspace_git_diff": diff
+                });
+                let bytes = serde_json::to_vec(&response).unwrap();
+                stream
+                    .write_all(&(bytes.len() as u32).to_le_bytes())
+                    .unwrap();
+                stream.write_all(&bytes).unwrap();
+            });
+            let result = product_request(
+                &path,
+                json!({"command":"workspace_git_diff","workspace":workspace,
+                    "expected_revision":7,"path":"src/main.rs","side":"worktree",
+                    "_ui_request":request_id}),
+            );
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            if variant == 0 {
+                let reply = result.unwrap_or_else(|error| panic!("{}", error.message));
+                assert_eq!(reply.ui_request, Some(request_id));
+                let diff = reply.workspace_git_diff.unwrap();
+                assert_eq!(diff.side, GitDiffSide::Worktree);
+                assert_eq!(diff.path, "src/main.rs");
+                assert!(!diff.binary);
+                assert!(diff.text.is_empty());
+            } else {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("accepted malformed or mismatched Git diff"),
+                };
+                assert_eq!(error.ui_request, Some(request_id));
+            }
+        }
+    }
+
+    #[test]
+    fn git_diff_request_rejects_unsafe_path_before_socket_access() {
+        let request_id = uuid::Uuid::new_v4();
+        let result = product_request(
+            Path::new("/no/such/pigade.sock"),
+            json!({"command":"workspace_git_diff","workspace":uuid::Uuid::from_u128(401),
+                "expected_revision":7,"path":"../outside","side":"worktree",
+                "_ui_request":request_id}),
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("accepted unsafe Git path"),
+        };
+        assert_eq!(error.ui_request, Some(request_id));
+    }
+
+    #[test]
+    fn git_diff_path_validator_rejects_ambiguous_or_unsafe_paths() {
+        for path in [
+            "",
+            "-option",
+            "/absolute/file",
+            "\\\\server\\share\\file",
+            "C:\\work\\file",
+            "src/../outside",
+            "src/./main.rs",
+            "src//main.rs",
+            "src/line\nfeed",
+        ] {
+            assert!(validate_git_diff_path(path).is_err(), "accepted {path:?}");
+        }
+        assert!(validate_git_diff_path(&"a".repeat(4097)).is_err());
+        assert!(validate_git_diff_path("src/main.rs").is_ok());
+    }
+
+    #[test]
+    fn unsolicited_git_diff_response_is_rejected() {
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        let path = std::env::temp_dir().join(format!(
+            "pigade-git-unsolicited-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut payload = vec![0; u32::from_le_bytes(length) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            let response = json!({
+                "protocol": 2,
+                "views": [],
+                "error": null,
+                "workspace_git_diff": {
+                    "workspace_id": uuid::Uuid::from_u128(401),
+                    "workspace_revision": 7,
+                    "project_id": uuid::Uuid::from_u128(402),
+                    "cwd": "/worktree",
+                    "path": "src/main.rs",
+                    "side": "worktree",
+                    "text": "",
+                    "truncated": false,
+                    "binary": false
+                }
+            });
+            let bytes = serde_json::to_vec(&response).unwrap();
+            stream
+                .write_all(&(bytes.len() as u32).to_le_bytes())
+                .unwrap();
+            stream.write_all(&bytes).unwrap();
+        });
+        let result = product_request(&path, json!({"command":"list"}));
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn stop_receipt_is_bound_to_the_frozen_generation_and_does_not_open_sessions() {
         use std::os::unix::{fs::PermissionsExt, net::UnixListener};
         for correct_generation in [true, false] {
@@ -1160,6 +1462,7 @@ mod tests {
             template_runs: None,
             panel_directory: None,
             workspace_git_snapshot: None,
+            workspace_git_diff: None,
             generations: None,
             generation_selection: None,
             history_view: None,

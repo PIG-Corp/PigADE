@@ -1,6 +1,9 @@
 //! Read-only workspace Git snapshot overlay.
 use super::*;
 
+const DIFF_PAGE_LINES: usize = 200;
+const MAX_DIFF_LINES: usize = 2000;
+
 fn safe_path(value: &str, limit: usize) -> String {
     let mut result = String::new();
     let mut chars = value.chars();
@@ -59,11 +62,97 @@ fn grouped_entries(
     groups
 }
 
+pub(super) fn ordered_entries(
+    snapshot: &protocol::WorkspaceGitSnapshot,
+) -> Vec<(protocol::GitDiffSide, &protocol::WorkspaceGitEntry)> {
+    let [staged, unstaged, untracked, conflicts] = grouped_entries(&snapshot.entries);
+    staged
+        .into_iter()
+        .map(|entry| (protocol::GitDiffSide::Index, entry))
+        .chain(
+            unstaged
+                .into_iter()
+                .map(|entry| (protocol::GitDiffSide::Worktree, entry)),
+        )
+        .chain(
+            untracked
+                .into_iter()
+                .map(|entry| (protocol::GitDiffSide::Untracked, entry)),
+        )
+        .chain(
+            conflicts
+                .into_iter()
+                .map(|entry| (protocol::GitDiffSide::Conflict, entry)),
+        )
+        .collect()
+}
+
+fn diff_side_label(side: protocol::GitDiffSide) -> &'static str {
+    match side {
+        protocol::GitDiffSide::Index => "Индекс",
+        protocol::GitDiffSide::Worktree => "Рабочая папка",
+        protocol::GitDiffSide::Untracked => "Новый файл",
+        protocol::GitDiffSide::Conflict => "Конфликт",
+    }
+}
+
+fn diff_comparison_label(side: protocol::GitDiffSide) -> &'static str {
+    match side {
+        protocol::GitDiffSide::Index => "HEAD → индекс",
+        protocol::GitDiffSide::Worktree => "Индекс → рабочая папка",
+        protocol::GitDiffSide::Untracked => "Пустой текст → файл",
+        protocol::GitDiffSide::Conflict => "Пустой текст → рабочая копия конфликта",
+    }
+}
+
+fn safe_diff_line(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_control() && ch != '\t' {
+            escaped.extend(ch.escape_default());
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped
+}
+
+fn visible_diff_line(value: &str) -> String {
+    let mut visible = String::with_capacity(value.len());
+    for ch in safe_diff_line(value).chars() {
+        match ch {
+            ' ' => visible.push('\u{00a0}'),
+            '\t' => visible.push_str("\u{00a0}\u{00a0}\u{00a0}\u{00a0}"),
+            _ => visible.push(ch),
+        }
+    }
+    visible
+}
+
+fn diff_line_count(text: &str) -> usize {
+    text.lines()
+        .take(MAX_DIFF_LINES + 1)
+        .count()
+        .min(MAX_DIFF_LINES)
+}
+
+fn diff_page(text: &str, page: usize) -> Vec<String> {
+    text.lines()
+        .skip(page.saturating_mul(DIFF_PAGE_LINES))
+        .take(DIFF_PAGE_LINES)
+        .map(safe_diff_line)
+        .collect()
+}
+
 fn git_entry_row(
     entry: &protocol::WorkspaceGitEntry,
+    side: protocol::GitDiffSide,
     colors: ProductColors,
     ordinal: usize,
+    selected: bool,
+    cx: &mut Context<CanvasApp>,
 ) -> Stateful<Div> {
+    let path = entry.path.clone();
     let mut title = safe_path(&entry.path, 180);
     if let Some(original) = &entry.original_path {
         title.push_str("  ←  ");
@@ -82,15 +171,20 @@ fn git_entry_row(
     };
     div()
         .id(format!("workspace-git-entry-{ordinal}"))
-        .role(Role::ListItem)
+        .role(Role::Button)
         .aria_label(format!("{title}; {status}"))
+        .aria_selected(selected)
         .w_full()
         .flex()
         .items_center()
         .justify_between()
         .gap_3()
         .rounded(px(5.))
-        .bg(colors.base)
+        .bg(if selected {
+            colors.selected
+        } else {
+            colors.base
+        })
         .px(px(9.))
         .py(px(6.))
         .child(
@@ -107,9 +201,63 @@ fn git_entry_row(
                 .truncate()
                 .child(status),
         )
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.product_action(ProductAction::GitSelect(ordinal), window, cx);
+            this.product_action(ProductAction::GitOpen(path.clone(), side), window, cx);
+        }))
 }
 
 impl ProductUi {
+    pub(crate) fn git_entry_count(&self) -> usize {
+        self.git_sheet
+            .as_ref()
+            .and_then(|sheet| sheet.snapshot.as_ref())
+            .map_or(0, |snapshot| ordered_entries(snapshot).len())
+    }
+
+    pub(crate) fn git_selected_target(&self) -> Option<(String, protocol::GitDiffSide)> {
+        let sheet = self.git_sheet.as_ref()?;
+        let snapshot = sheet.snapshot.as_ref()?;
+        ordered_entries(snapshot)
+            .get(sheet.selected)
+            .map(|(side, entry)| (entry.path.clone(), *side))
+    }
+
+    pub(crate) fn git_selected_scroll_index(&self) -> usize {
+        let Some(sheet) = self.git_sheet.as_ref() else {
+            return 0;
+        };
+        let Some(snapshot) = sheet.snapshot.as_ref() else {
+            return if sheet.loading || sheet.error.is_some() {
+                1
+            } else {
+                0
+            };
+        };
+        let [staged, unstaged, untracked, conflicts] = grouped_entries(&snapshot.entries);
+        let groups = [staged, unstaged, untracked, conflicts];
+        let mut offset = 1; // snapshot branch heading
+        if sheet.loading {
+            offset += 1;
+        }
+        if sheet.error.is_some() {
+            offset += 1;
+        }
+        let mut selected = sheet.selected;
+        for group in groups {
+            if group.is_empty() {
+                continue;
+            }
+            offset += 1; // group heading
+            if selected < group.len() {
+                return offset + selected;
+            }
+            selected -= group.len();
+            offset += group.len();
+        }
+        offset
+    }
+
     pub(super) fn git_overlay(&self, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = self.colors();
         let Some(sheet) = &self.git_sheet else {
@@ -127,6 +275,9 @@ impl ProductUi {
                 .role(Role::Dialog)
                 .child("Этот снимок Git уже не относится к открытому окну. Закройте его и откройте снова.")
                 .into_any_element();
+        }
+        if let Some(diff) = &sheet.diff {
+            return self.git_diff_overlay(sheet, diff, cx);
         }
 
         let selected = |index| {
@@ -240,7 +391,6 @@ impl ProductUi {
             );
 
             let [staged, unstaged, untracked, conflicts] = grouped_entries(&snapshot.entries);
-            let has_untracked = !untracked.is_empty();
             let has_changes = !(staged.is_empty()
                 && unstaged.is_empty()
                 && untracked.is_empty()
@@ -271,7 +421,21 @@ impl ProductUi {
                         .child(format!("{label} · {}", group.len())),
                 );
                 for entry in group {
-                    body = body.child(git_entry_row(entry, colors, ordinal));
+                    let side = match group_index {
+                        0 => protocol::GitDiffSide::Index,
+                        1 => protocol::GitDiffSide::Worktree,
+                        2 => protocol::GitDiffSide::Untracked,
+                        _ => protocol::GitDiffSide::Conflict,
+                    };
+                    let row_index = ordinal;
+                    body = body.child(git_entry_row(
+                        entry,
+                        side,
+                        colors,
+                        row_index,
+                        row_index == sheet.selected,
+                        cx,
+                    ));
                     ordinal += 1;
                 }
             }
@@ -298,16 +462,6 @@ impl ProductUi {
                         .text_size(px(12.))
                         .text_color(colors.muted)
                         .child("Нет обнаруженных изменений в этом снимке."),
-                );
-            }
-            if has_untracked {
-                body = body.child(
-                    div()
-                        .id("workspace-git-untracked-note")
-                        .role(Role::Status)
-                        .text_size(px(10.))
-                        .text_color(colors.muted)
-                        .child("Неотслеживаемые каталоги могут отображаться одной записью."),
                 );
             }
         } else if !sheet.loading && sheet.error.is_none() {
@@ -406,6 +560,338 @@ impl ProductUi {
             )
             .into_any_element()
     }
+
+    fn git_diff_overlay(
+        &self,
+        sheet: &crate::workspace_git::GitSheet,
+        diff_sheet: &crate::workspace_git::DiffSheet,
+        cx: &mut Context<CanvasApp>,
+    ) -> AnyElement {
+        let colors = self.colors();
+        let mut body = div()
+            .id("workspace-git-diff-body")
+            .role(Role::Document)
+            .aria_label("Текстовое сравнение снимка Git")
+            .w_full()
+            .max_h(px(420.))
+            .min_h(px(100.))
+            .overflow_y_scroll()
+            .overflow_x_scroll()
+            .track_scroll(&self.git_scroll)
+            .font_family(crate::font::PRIMARY_FAMILY)
+            .flex()
+            .items_start()
+            .flex_col()
+            .gap(px(1.))
+            .bg(colors.base)
+            .border_1()
+            .border_color(colors.border)
+            .rounded(px(6.))
+            .p(px(8.));
+
+        if diff_sheet.loading {
+            body = body.child(
+                div()
+                    .id("workspace-git-diff-loading")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.accent)
+                    .child(if diff_sheet.result.is_some() {
+                        "Обновляем сравнение. Ниже показан предыдущий ответ."
+                    } else {
+                        "Читаем сравнение снимка…"
+                    }),
+            );
+        }
+        if let Some(error) = &diff_sheet.error {
+            body = body.child(
+                div()
+                    .id("workspace-git-diff-error")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.accent)
+                    .whitespace_normal()
+                    .child(format!(
+                        "{}{}",
+                        if diff_sheet.result.is_some() {
+                            "Не удалось обновить; показан предыдущий ответ. "
+                        } else {
+                            "Не удалось получить сравнение. "
+                        },
+                        safe_path(error, 300)
+                    )),
+            );
+        }
+
+        if let Some(result) = &diff_sheet.result {
+            let total_lines = diff_line_count(&result.text);
+            let pages = total_lines.div_ceil(DIFF_PAGE_LINES).max(1);
+            let page = diff_sheet.page.min(pages - 1);
+            if result.binary {
+                body = body.child(
+                    div()
+                        .id("workspace-git-diff-binary")
+                        .role(Role::Status)
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child("Двоичный файл или текст не в UTF-8. Сравнение недоступно."),
+                );
+            } else if result.text.is_empty() {
+                body = body.child(
+                    div()
+                        .id("workspace-git-diff-empty")
+                        .role(Role::Status)
+                        .text_size(px(12.))
+                        .text_color(colors.muted)
+                        .child("В этом снимке нет текстового сравнения для файла."),
+                );
+            } else {
+                if result.truncated
+                    || result.text.lines().take(MAX_DIFF_LINES + 1).count() > MAX_DIFF_LINES
+                {
+                    body = body.child(
+                        div()
+                            .id("workspace-git-diff-truncated")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.accent)
+                            .child("Ответ сравнения ограничен; показан только доступный текст."),
+                    );
+                }
+                let start = page.saturating_mul(DIFF_PAGE_LINES);
+                for (index, line) in diff_page(&result.text, page).into_iter().enumerate() {
+                    let color = if line.starts_with("+++") || line.starts_with("---") {
+                        colors.muted
+                    } else if line.starts_with('+') {
+                        rgb(chrome::Colors::for_theme(self.appearance.theme).status_green).into()
+                    } else if line.starts_with('-') {
+                        rgb(match self.appearance.theme {
+                            crate::appearance::Theme::Dark => 0xf28b82,
+                            crate::appearance::Theme::Light => 0xa03232,
+                        })
+                        .into()
+                    } else if line.starts_with("@@") || line.starts_with("diff ") {
+                        colors.accent
+                    } else {
+                        colors.text
+                    };
+                    body = body.child(
+                        div()
+                            .id(format!("workspace-git-diff-line-{}", start + index))
+                            .role(Role::ListItem)
+                            .aria_label(line.clone())
+                            .min_w_full()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(color)
+                            .whitespace_nowrap()
+                            .child(visible_diff_line(&line)),
+                    );
+                }
+            }
+        } else if !diff_sheet.loading && diff_sheet.error.is_none() {
+            body = body.child(
+                div()
+                    .id("workspace-git-diff-empty-response")
+                    .role(Role::Status)
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("Сравнение ещё не получено."),
+            );
+        }
+
+        let path = diff_sheet
+            .result
+            .as_ref()
+            .map(|result| result.path.as_str())
+            .unwrap_or(diff_sheet.path.as_str());
+        let side = diff_sheet
+            .result
+            .as_ref()
+            .map(|result| result.side)
+            .unwrap_or(diff_sheet.side);
+        let header = format!("{} · {}", diff_side_label(side), safe_path(path, 300));
+        let comparison = diff_comparison_label(side);
+        let conflict_note = (side == protocol::GitDiffSide::Conflict).then_some(
+            "Рабочая копия конфликта; сравнение с пустым текстом, не трёхсторонний merge.",
+        );
+        let back = self.action_control(
+            "workspace-git-diff-back".into(),
+            "К списку".into(),
+            ProductAction::GitBack,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let refresh = self.action_control(
+            "workspace-git-diff-refresh".into(),
+            "Обновить сравнение".into(),
+            ProductAction::GitRefreshDiff,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let copy = self.action_control(
+            "workspace-git-diff-copy".into(),
+            "Копировать снимок".into(),
+            ProductAction::GitCopyDiff,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let close = self.action_control(
+            "workspace-git-diff-close".into(),
+            "Закрыть".into(),
+            ProductAction::CloseDialog,
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let lines = diff_sheet
+            .result
+            .as_ref()
+            .map(|result| diff_line_count(&result.text))
+            .unwrap_or(0);
+        let pages = lines.div_ceil(DIFF_PAGE_LINES).max(1);
+        let page = diff_sheet.page.min(pages - 1);
+        let previous = self.action_control(
+            "workspace-git-diff-previous".into(),
+            "Назад".into(),
+            ProductAction::GitDiffPage(false),
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        let next = self.action_control(
+            "workspace-git-diff-next".into(),
+            "Дальше".into(),
+            ProductAction::GitDiffPage(true),
+            ControlStyle {
+                role: Role::Button,
+                selected: false,
+                compact: true,
+            },
+            cx,
+        );
+        div()
+            .id("workspace-git-diff-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .overflow_y_scroll()
+            .py(px(20.))
+            .bg(rgb(0x090b0e).opacity(0.72))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.product_action(ProductAction::CloseDialog, window, cx);
+            }))
+            .child(
+                div()
+                    .id("workspace-git-diff-dialog")
+                    .role(Role::Dialog)
+                    .aria_label("Сравнение снимка Git")
+                    .w_full()
+                    .max_w(px(760.))
+                    .max_h(gpui::relative(1.))
+                    .mx(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.raised)
+                    .p(px(16.))
+                    .text_color(colors.text)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                    .child(
+                        div()
+                            .id("workspace-git-diff-heading")
+                            .role(Role::Heading)
+                            .aria_level(2)
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("Git · {}", safe_path(&sheet.target.name, 100))),
+                    )
+                    .child(
+                        div()
+                            .id("workspace-git-diff-caption")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.muted)
+                            .child("Сравнение относится к последнему полученному снимку, а не к живому содержимому."),
+                    )
+                    .child(
+                        div()
+                            .id("workspace-git-diff-path")
+                            .role(Role::Status)
+                            .text_size(px(12.))
+                            .text_color(colors.text)
+                            .child(header),
+                    )
+                    .child(
+                        div()
+                            .id("workspace-git-diff-comparison")
+                            .role(Role::Status)
+                            .text_size(px(10.))
+                            .text_color(colors.muted)
+                            .child(comparison),
+                    )
+                    .when_some(conflict_note, |view, text| {
+                        view.child(
+                            div()
+                                .id("workspace-git-conflict-note")
+                                .role(Role::Status)
+                                .text_size(px(11.))
+                                .text_color(colors.accent)
+                                .whitespace_normal()
+                                .child(text),
+                        )
+                    })
+                    .child(body)
+                    .child(div().id("workspace-git-diff-pages").flex().items_center().justify_between()
+                        .child(if page > 0 && !diff_sheet.loading {
+                            previous
+                        } else {
+                            div().id("workspace-git-diff-previous-disabled").role(Role::Status)
+                                .text_size(px(11.)).text_color(colors.muted).child("Назад").into_any_element()
+                        })
+                        .child(div().id("workspace-git-diff-page-number").role(Role::Status).text_size(px(11.)).text_color(colors.muted)
+                            .child(format!("Страница {} из {}", page + 1, pages)))
+                        .child(if page + 1 < pages && !diff_sheet.loading {
+                            next
+                        } else {
+                            div().id("workspace-git-diff-next-disabled").role(Role::Status)
+                                .text_size(px(11.)).text_color(colors.muted).child("Дальше").into_any_element()
+                        }))
+                    .child(
+                        div()
+                            .id("workspace-git-diff-actions")
+                            .flex()
+                            .flex_wrap()
+                            .justify_end()
+                            .gap_2()
+                            .children([back, refresh, copy, close]),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +938,66 @@ mod tests {
         assert_eq!(paths(conflicts), vec!["conflict.rs"]);
         assert_eq!(status_word('.'), "без изменений");
         assert_eq!(status_word('T'), "тип изменён");
+    }
+
+    #[test]
+    fn ordered_targets_keep_working_tree_versions_and_exclusive_groups() {
+        let snapshot = protocol::WorkspaceGitSnapshot {
+            workspace_id: uuid::Uuid::from_u128(1),
+            workspace_revision: 2,
+            project_id: uuid::Uuid::from_u128(3),
+            cwd: "/tmp/project".into(),
+            branch: Some("main".into()),
+            head: None,
+            detached: false,
+            entries: vec![
+                entry("both.rs", 'M', 'M', false, false),
+                entry("staged.rs", 'A', ' ', false, false),
+                entry("new.txt", '?', '?', true, false),
+                entry("conflict.rs", 'U', 'U', false, true),
+            ],
+            truncated: false,
+        };
+        let rows = ordered_entries(&snapshot);
+        assert_eq!(
+            rows.iter()
+                .map(|(side, entry)| (*side, entry.path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (protocol::GitDiffSide::Index, "both.rs"),
+                (protocol::GitDiffSide::Index, "staged.rs"),
+                (protocol::GitDiffSide::Worktree, "both.rs"),
+                (protocol::GitDiffSide::Untracked, "new.txt"),
+                (protocol::GitDiffSide::Conflict, "conflict.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_view_pages_are_bounded_and_escape_terminal_controls() {
+        let text = (0..401)
+            .map(|line| {
+                if line == 7 {
+                    "\u{1b}[31mred".to_owned()
+                } else {
+                    format!("line-{line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(diff_line_count(&text), 401);
+        assert_eq!(diff_page(&text, 0).len(), DIFF_PAGE_LINES);
+        assert_eq!(diff_page(&text, 1).len(), DIFF_PAGE_LINES);
+        assert_eq!(diff_page(&text, 2), vec!["line-400"]);
+        assert!(diff_page(&text, 3).is_empty());
+        assert_eq!(diff_page(&text, 0)[7], "\\u{1b}[31mred");
+        assert_eq!(
+            visible_diff_line("  \tvalue"),
+            "\u{00a0}\u{00a0}\u{00a0}\u{00a0}\u{00a0}\u{00a0}value"
+        );
+        assert_eq!(
+            diff_line_count(&"x\n".repeat(MAX_DIFF_LINES + 4)),
+            MAX_DIFF_LINES
+        );
     }
 }

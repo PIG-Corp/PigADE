@@ -143,6 +143,7 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "appearance-font-reset") &&
         strcmp(a.stage, "appearance-reload") && strcmp(a.stage, "appearance-close") &&
         strcmp(a.stage, "controls-move") && strcmp(a.stage, "pointer-hover-left") &&
+        strcmp(a.stage, "pointer-hover-header") &&
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
         strcmp(a.stage, "pointer-no-motion-release") &&
         strcmp(a.stage, "pointer-hover-source") &&
@@ -175,6 +176,9 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-hold-preview") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-drag.ppm")))
         fail("pointer preview capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-hover-header") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-hover-header.ppm")))
+        fail("pointer header hover capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-selection-hold") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-selection.ppm")))
         fail("pointer selection capture path must be the fixed artifact");
@@ -1631,6 +1635,9 @@ int main(int argc, char **argv) {
             key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "pointer-hover-left")) {
             pointer_hover(dpy, app_window, 485, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-hover-header")) {
+            pointer_hover(dpy, app_window, 485, 90, 0);
+            capture(dpy, a.output);
         } else if (!strcmp(a.stage, "pointer-hover-right")) {
             pointer_hover(dpy, app_window, 1015, 250, 0);
         } else if (!strcmp(a.stage, "pointer-hover-input")) {

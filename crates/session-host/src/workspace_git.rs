@@ -1,11 +1,17 @@
 //! Bounded, read-only Git snapshot requests for one catalog workspace.
-use std::fs;
+use std::ffi::CString;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::{
+    os::fd::{AsRawFd, FromRawFd},
+    os::unix::fs::MetadataExt,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use pigade_storage::{Catalog, WorkspaceStatus};
@@ -19,6 +25,9 @@ const OUTPUT_LIMIT: usize = 256 * 1024;
 const COMMAND_DEADLINE: Duration = Duration::from_secs(3);
 const OUTPUT_POLL: Duration = Duration::from_millis(10);
 const MAX_ENTRIES: usize = 128;
+const DIFF_OUTPUT_LIMIT: usize = 128 * 1024;
+const DIFF_LINE_LIMIT: usize = 2000;
+const MAX_DIFF_PATH_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceGitSnapshot {
@@ -43,6 +52,28 @@ pub struct WorkspaceGitEntry {
     pub unmerged: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitDiffSide {
+    Index,
+    Worktree,
+    Untracked,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceGitDiff {
+    pub workspace_id: Uuid,
+    pub workspace_revision: u64,
+    pub project_id: Uuid,
+    pub cwd: PathBuf,
+    pub path: String,
+    pub side: GitDiffSide,
+    pub text: String,
+    pub truncated: bool,
+    pub binary: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
     pub workspace_id: Uuid,
@@ -54,9 +85,17 @@ pub(crate) struct Target {
 }
 
 #[derive(Debug)]
-struct Task {
-    target: Target,
-    reply: mpsc::SyncSender<crate::Response>,
+enum Task {
+    Snapshot {
+        target: Target,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
+    Diff {
+        target: Target,
+        path: String,
+        side: GitDiffSide,
+        reply: mpsc::SyncSender<crate::Response>,
+    },
 }
 
 pub(crate) struct Reader {
@@ -77,33 +116,94 @@ impl Reader {
                         .expect("workspace Git worker queue")
                         .recv();
                     let Ok(task) = task else { break };
-                    let result = snapshot(task.target);
-                    let response = match result {
-                        Ok(snapshot) => response(Some(snapshot), None),
-                        Err(error) => response(
-                            None,
-                            Some(format!("workspace Git status unavailable: {error:#}")),
-                        ),
-                    };
-                    let _ = task.reply.try_send(response);
+                    match task {
+                        Task::Snapshot { target, reply } => {
+                            let response = match snapshot(target) {
+                                Ok(snapshot) => response(Some(snapshot), None),
+                                Err(error) => response(
+                                    None,
+                                    Some(format!("workspace Git status unavailable: {error:#}")),
+                                ),
+                            };
+                            let _ = reply.try_send(response);
+                        }
+                        Task::Diff {
+                            target,
+                            path,
+                            side,
+                            reply,
+                        } => {
+                            let response = match diff(target, path, side) {
+                                Ok(diff) => diff_response(Some(diff), None),
+                                Err(error) => diff_response(
+                                    None,
+                                    Some(format!("workspace Git diff unavailable: {error:#}")),
+                                ),
+                            };
+                            let _ = reply.try_send(response);
+                        }
+                    }
                 }
             })?;
         Ok(Self { sender })
     }
 
     pub(crate) fn submit(&self, target: Target, reply: mpsc::SyncSender<crate::Response>) {
-        match self.sender.try_send(Task { target, reply }) {
+        match self.sender.try_send(Task::Snapshot { target, reply }) {
             Ok(()) => (),
-            Err(mpsc::TrySendError::Full(task)) => {
-                let _ = task.reply.try_send(response(
+            Err(mpsc::TrySendError::Full(Task::Snapshot { reply, .. })) => {
+                let _ = reply.try_send(response(
                     None,
                     Some("workspace Git status queue is full".into()),
                 ));
             }
-            Err(mpsc::TrySendError::Disconnected(task)) => {
-                let _ = task.reply.try_send(response(
+            Err(mpsc::TrySendError::Full(Task::Diff { reply, .. })) => {
+                let _ = reply.try_send(response(
+                    None,
+                    Some("workspace Git status queue is full".into()),
+                ));
+            }
+            Err(mpsc::TrySendError::Disconnected(Task::Snapshot { reply, .. })) => {
+                let _ = reply.try_send(response(
                     None,
                     Some("workspace Git status worker unavailable".into()),
+                ));
+            }
+            Err(mpsc::TrySendError::Disconnected(Task::Diff { reply, .. })) => {
+                let _ = reply.try_send(response(
+                    None,
+                    Some("workspace Git status worker unavailable".into()),
+                ));
+            }
+        }
+    }
+
+    pub(crate) fn submit_diff(
+        &self,
+        target: Target,
+        path: String,
+        side: GitDiffSide,
+        reply: mpsc::SyncSender<crate::Response>,
+    ) {
+        match self.sender.try_send(Task::Diff {
+            target,
+            path,
+            side,
+            reply,
+        }) {
+            Ok(()) => (),
+            Err(mpsc::TrySendError::Full(Task::Snapshot { reply, .. }))
+            | Err(mpsc::TrySendError::Full(Task::Diff { reply, .. })) => {
+                let _ = reply.try_send(diff_response(
+                    None,
+                    Some("workspace Git diff queue is full".into()),
+                ));
+            }
+            Err(mpsc::TrySendError::Disconnected(Task::Snapshot { reply, .. }))
+            | Err(mpsc::TrySendError::Disconnected(Task::Diff { reply, .. })) => {
+                let _ = reply.try_send(diff_response(
+                    None,
+                    Some("workspace Git diff worker unavailable".into()),
                 ));
             }
         }
@@ -174,6 +274,495 @@ fn snapshot(target: Target) -> Result<WorkspaceGitSnapshot> {
         entries: parsed.entries,
         truncated: truncated || parsed.truncated,
     })
+}
+
+fn diff(target: Target, path: String, side: GitDiffSide) -> Result<WorkspaceGitDiff> {
+    validate_diff_path(&path)?;
+    ensure!(
+        !path.contains('\u{fffd}'),
+        "Git diff does not support paths that cannot be represented exactly as UTF-8"
+    );
+    let identity = validate_git_identity(&target, Instant::now() + COMMAND_DEADLINE)?;
+    let before = status_for_diff(&identity.cwd)?;
+    let entry = before
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .with_context(|| format!("path is not present in the current Git status: {path}"))?;
+    ensure!(
+        diff_side_present(entry, side),
+        "requested diff side is no longer present"
+    );
+    match side {
+        GitDiffSide::Index => {
+            if entry.index_status != 'D' {
+                ensure_index_file_mode(&identity.cwd, &path)?;
+            }
+            if before.head.is_some() && entry.index_status != 'A' {
+                ensure_tree_file_mode(
+                    &identity.cwd,
+                    "HEAD",
+                    entry.original_path.as_deref().unwrap_or(&path),
+                )?;
+            }
+        }
+        GitDiffSide::Worktree if entry.index_status != 'D' => {
+            ensure_index_file_mode(&identity.cwd, &path)?;
+        }
+        GitDiffSide::Worktree | GitDiffSide::Untracked | GitDiffSide::Conflict => (),
+    }
+
+    let (old, new) = diff_contents(&identity.cwd, &path, side, &before)?;
+    let binary = is_binary(&old) || is_binary(&new);
+    let (text, truncated) = if binary {
+        (String::new(), false)
+    } else {
+        render_diff(&old, &new)?
+    };
+
+    ensure!(
+        validate_git_identity(&target, Instant::now() + COMMAND_DEADLINE)? == identity,
+        "workspace Git identity changed during diff"
+    );
+    let after = status_for_diff(&identity.cwd)?;
+    let after_entry = after.entries.iter().find(|entry| entry.path == path);
+    ensure!(
+        after_entry.is_some_and(|entry| diff_side_present(entry, side)),
+        "Git status changed during diff; refresh and retry"
+    );
+    let (after_old, after_new) = diff_contents(&identity.cwd, &path, side, &after)?;
+    ensure!(
+        after_old == old && after_new == new,
+        "workspace diff inputs changed during diff; refresh and retry"
+    );
+    Ok(WorkspaceGitDiff {
+        workspace_id: target.workspace_id,
+        workspace_revision: target.workspace_revision,
+        project_id: target.project_id,
+        cwd: identity.cwd,
+        path,
+        side,
+        text,
+        truncated,
+        binary,
+    })
+}
+
+fn status_for_diff(cwd: &Path) -> Result<Parsed> {
+    let (bytes, truncated) = run_status(cwd, Instant::now() + COMMAND_DEADLINE)?;
+    ensure!(
+        !truncated,
+        "Git status exceeded its bound during diff validation"
+    );
+    let parsed = parse_porcelain_v2(&bytes, MAX_ENTRIES)?;
+    ensure!(
+        !parsed.truncated,
+        "Git status entry limit exceeded during diff validation"
+    );
+    Ok(parsed)
+}
+
+fn diff_side_present(entry: &WorkspaceGitEntry, side: GitDiffSide) -> bool {
+    match side {
+        GitDiffSide::Index => !entry.untracked && !entry.unmerged && entry.index_status != '.',
+        GitDiffSide::Worktree => {
+            !entry.untracked && !entry.unmerged && entry.worktree_status != '.'
+        }
+        GitDiffSide::Untracked => entry.untracked,
+        GitDiffSide::Conflict => entry.unmerged,
+    }
+}
+
+fn validate_diff_path(path: &str) -> Result<()> {
+    ensure!(!path.is_empty(), "Git diff path is empty");
+    ensure!(
+        path.len() <= MAX_DIFF_PATH_BYTES,
+        "Git diff path exceeds 4096 bytes"
+    );
+    ensure!(
+        !path.starts_with('/') && !path.starts_with('\\'),
+        "Git diff path must be relative"
+    );
+    ensure!(
+        !path.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+            || !path.as_bytes()[0].is_ascii_alphabetic(),
+        "Git diff path must not use a drive prefix"
+    );
+    ensure!(
+        !path.chars().any(|character| character.is_control()),
+        "Git diff path contains a control character"
+    );
+    ensure!(
+        !path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == ".."),
+        "Git diff path contains an unsafe component"
+    );
+    ensure!(
+        !path
+            .split('/')
+            .next()
+            .is_some_and(|component| component.starts_with('-')),
+        "Git diff path must not begin with a dash"
+    );
+    Ok(())
+}
+
+fn diff_contents(
+    cwd: &Path,
+    path: &str,
+    side: GitDiffSide,
+    status: &Parsed,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let entry = status
+        .entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .context("Git status entry disappeared")?;
+    match side {
+        GitDiffSide::Index => {
+            let old_path = entry.original_path.as_deref().unwrap_or(path);
+            ensure!(
+                !old_path.contains('\u{fffd}'),
+                "Git diff does not support renamed paths that cannot be represented exactly as UTF-8"
+            );
+            validate_diff_path(old_path)?;
+            let old = if status.head.is_some() && entry.index_status != 'A' {
+                git_blob(cwd, &format!("HEAD:{old_path}"))?
+            } else {
+                Vec::new()
+            };
+            let new = if entry.index_status == 'D' {
+                Vec::new()
+            } else {
+                git_blob(cwd, &format!(":{path}"))?
+            };
+            Ok((old, new))
+        }
+        GitDiffSide::Worktree => {
+            let old = if entry.index_status == 'D' {
+                Vec::new()
+            } else {
+                git_blob(cwd, &format!(":{path}"))?
+            };
+            let new = read_worktree_file(cwd, path)?;
+            Ok((old, new.unwrap_or_default()))
+        }
+        GitDiffSide::Untracked => {
+            let new = read_worktree_file(cwd, path)?;
+            Ok((
+                Vec::new(),
+                new.context("untracked path is not a regular file")?,
+            ))
+        }
+        GitDiffSide::Conflict => {
+            let new = read_worktree_file(cwd, path)?;
+            Ok((Vec::new(), new.unwrap_or_default()))
+        }
+    }
+}
+
+fn git_blob(cwd: &Path, revision_path: &str) -> Result<Vec<u8>> {
+    let (bytes, truncated) = run_git_capture(
+        cwd,
+        &[
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--format=",
+            revision_path,
+        ],
+        OUTPUT_LIMIT,
+        Instant::now() + COMMAND_DEADLINE,
+        "git show blob",
+    )?;
+    ensure!(!truncated, "Git blob exceeds 256 KiB");
+    Ok(bytes)
+}
+
+fn ensure_index_file_mode(cwd: &Path, path: &str) -> Result<()> {
+    let (bytes, truncated) = run_git_capture(
+        cwd,
+        &[
+            "--literal-pathspecs",
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            path,
+        ],
+        16 * 1024,
+        Instant::now() + COMMAND_DEADLINE,
+        "git ls-files stage",
+    )?;
+    ensure!(!truncated, "Git index mode query exceeded its bound");
+    for record in bytes
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let mode = record
+            .split(|byte| *byte == b' ')
+            .next()
+            .context("malformed Git index mode")?;
+        if matches!(mode, b"100644" | b"100755") {
+            return Ok(());
+        }
+    }
+    bail!("Git diff preview supports regular files only; symlinks and submodules are unavailable")
+}
+
+fn ensure_tree_file_mode(cwd: &Path, tree: &str, path: &str) -> Result<()> {
+    validate_diff_path(path)?;
+    let (bytes, truncated) = run_git_capture(
+        cwd,
+        &["--literal-pathspecs", "ls-tree", "-z", tree, "--", path],
+        16 * 1024,
+        Instant::now() + COMMAND_DEADLINE,
+        "git ls-tree mode",
+    )?;
+    ensure!(!truncated, "Git tree mode query exceeded its bound");
+    for record in bytes
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let mode = record
+            .split(|byte| *byte == b' ')
+            .next()
+            .context("malformed Git tree mode")?;
+        if matches!(mode, b"100644" | b"100755") {
+            return Ok(());
+        }
+    }
+    bail!("Git diff preview supports regular files only; symlinks and submodules are unavailable")
+}
+
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
+}
+
+fn render_diff(old: &[u8], new: &[u8]) -> Result<(String, bool)> {
+    let temp = tempfile::Builder::new()
+        .prefix("pigade-git-diff-")
+        .tempdir()
+        .context("cannot create private diff directory")?;
+    let old_path = temp.path().join("old");
+    let new_path = temp.path().join("new");
+    fs::write(&old_path, old).context("cannot write private diff baseline")?;
+    fs::write(&new_path, new).context("cannot write private diff target")?;
+    let (mut bytes, mut truncated) = run_git_diff(temp.path())?;
+    if let Err(error) = std::str::from_utf8(&bytes) {
+        bytes.truncate(error.valid_up_to());
+        truncated = true;
+    }
+    let mut text = String::from_utf8(bytes).context("Git diff output was not UTF-8")?;
+    if let Some(body_start) = text.find("\n@@") {
+        let (headers, body) = text.split_at(body_start + 1);
+        let headers = headers
+            .replace("diff --git a/old b/new\n", "diff --git a/file b/file\n")
+            .replace("diff --git 1/old 2/new\n", "diff --git a/file b/file\n")
+            .replace("--- a/old\n", "--- a/file\n")
+            .replace("--- 1/old\n", "--- a/file\n")
+            .replace("+++ b/new\n", "+++ b/file\n")
+            .replace("+++ 2/new\n", "+++ b/file\n");
+        text = format!("{headers}{body}");
+    }
+    if let Some(line_end) = text
+        .match_indices('\n')
+        .nth(DIFF_LINE_LIMIT - 1)
+        .map(|(i, _)| i + 1)
+        .filter(|line_end| *line_end < text.len())
+    {
+        text.truncate(line_end);
+        truncated = true;
+    }
+    if text.len() > DIFF_OUTPUT_LIMIT {
+        let mut end = DIFF_OUTPUT_LIMIT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if let Some(line_end) = text[..end].rfind('\n') {
+            end = line_end + 1;
+        }
+        text.truncate(end);
+        truncated = true;
+    }
+    Ok((text, truncated))
+}
+
+#[cfg(unix)]
+fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>> {
+    let components = path.split('/').collect::<Vec<_>>();
+    let root_fd = open_path(root, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .context("cannot open workspace root for safe file read")?;
+    let mut parent = root_fd;
+    for component in &components[..components.len() - 1] {
+        let component = CString::new(*component)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                component.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(error).context("cannot safely open a workspace path component");
+        }
+        parent = unsafe { File::from_raw_fd(fd) };
+    }
+    let leaf = CString::new(*components.last().context("empty validated path")?)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            bail!("symbolic-link files are not supported in Git diff previews");
+        }
+        return Err(error).context("cannot safely open workspace file");
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let before = FileStamp::from_metadata(&file.metadata()?);
+    ensure!(
+        before.regular,
+        "Git diff preview supports regular files only"
+    );
+    ensure!(
+        before.size <= OUTPUT_LIMIT as u64,
+        "workspace file exceeds 256 KiB"
+    );
+    let mut bytes = Vec::with_capacity(before.size as usize);
+    (&mut file)
+        .take((OUTPUT_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("cannot read workspace file")?;
+    ensure!(
+        bytes.len() <= OUTPUT_LIMIT,
+        "workspace file exceeds 256 KiB"
+    );
+    let after = FileStamp::from_metadata(&file.metadata()?);
+    ensure!(before == after, "workspace file changed while being read");
+    ensure!(
+        bytes.len() as u64 == after.size,
+        "workspace file changed while being read"
+    );
+    // Re-open the exact path under the held directory descriptors. Comparing
+    // the fd identity with the current directory entry detects a replacement
+    // while the bytes were being read.
+    let current_stamp = stat_at(parent.as_raw_fd(), &leaf)?;
+    ensure!(current_stamp == after, "workspace file changed during diff");
+    Ok(Some(bytes))
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
+    regular: bool,
+}
+
+#[cfg(unix)]
+impl FileStamp {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        let file_type = metadata.file_type();
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            mtime: metadata.mtime(),
+            mtime_nsec: metadata.mtime_nsec(),
+            ctime: metadata.ctime(),
+            ctime_nsec: metadata.ctime_nsec(),
+            regular: file_type.is_file(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn open_path(path: &Path, flags: libc::c_int) -> Result<File> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(path.as_os_str().as_bytes())?;
+    let fd = unsafe { libc::open(path.as_ptr(), flags | libc::O_NOFOLLOW) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot open path");
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn stat_at(parent_fd: libc::c_int, leaf: &CString) -> Result<FileStamp> {
+    let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::fstatat(
+            parent_fd,
+            leaf.as_ptr(),
+            &mut metadata,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot recheck workspace file");
+    }
+    Ok(FileStamp {
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+        size: metadata.st_size as u64,
+        mtime: metadata.st_mtime,
+        mtime_nsec: metadata.st_mtime_nsec,
+        ctime: metadata.st_ctime,
+        ctime_nsec: metadata.st_ctime_nsec,
+        regular: (metadata.st_mode & libc::S_IFMT) == libc::S_IFREG,
+    })
+}
+
+fn run_git_diff(cwd: &Path) -> Result<(Vec<u8>, bool)> {
+    run_capture_program_allow_diff_exit(
+        Path::new("git"),
+        cwd,
+        &[
+            "diff",
+            "--no-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--text",
+            "--",
+            "old",
+            "new",
+        ],
+        DIFF_OUTPUT_LIMIT,
+        Instant::now() + COMMAND_DEADLINE,
+        "git diff",
+    )
+}
+
+fn run_capture_program_allow_diff_exit(
+    program: &Path,
+    cwd: &Path,
+    args: &[&str],
+    output_limit: usize,
+    deadline: Instant,
+    label: &'static str,
+) -> Result<(Vec<u8>, bool)> {
+    // Reuse the same bounded process-group reader, accepting Git's documented
+    // status 1 for a nonempty `diff --no-index` result.
+    run_capture_program_inner(program, cwd, args, output_limit, deadline, label, true)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +850,7 @@ fn clean_git_environment(command: &mut ProcessCommand) {
     // related identity settings even when GIT_DIR itself is absent.
     command.env("GIT_CONFIG_COUNT", "0");
     command.env("GIT_OPTIONAL_LOCKS", "0");
+    command.env("GIT_NO_LAZY_FETCH", "1");
 }
 
 fn git_root_bounded(path: &Path, deadline: Instant) -> Result<PathBuf> {
@@ -314,7 +904,7 @@ fn run_status(cwd: &Path, deadline: Instant) -> Result<(Vec<u8>, bool)> {
             "--porcelain=v2",
             "-z",
             "--branch",
-            "--untracked-files=normal",
+            "--untracked-files=all",
             "--ignore-submodules=none",
             "--no-renames",
             "--no-ahead-behind",
@@ -342,6 +932,18 @@ fn run_capture_program(
     output_limit: usize,
     deadline: Instant,
     label: &'static str,
+) -> Result<(Vec<u8>, bool)> {
+    run_capture_program_inner(program, cwd, args, output_limit, deadline, label, false)
+}
+
+fn run_capture_program_inner(
+    program: &Path,
+    cwd: &Path,
+    args: &[&str],
+    output_limit: usize,
+    deadline: Instant,
+    label: &'static str,
+    allow_diff_exit: bool,
 ) -> Result<(Vec<u8>, bool)> {
     use std::os::unix::process::CommandExt;
     let mut command = ProcessCommand::new(program);
@@ -485,7 +1087,10 @@ fn run_capture_program(
         return Ok((bytes, true));
     }
     let exit = status.context("Git command exited without an exit status")?;
-    ensure!(exit.success(), "{label} exited with {exit}");
+    ensure!(
+        exit.success() || (allow_diff_exit && exit.code() == Some(1)),
+        "{label} exited with {exit}"
+    );
     Ok((bytes, false))
 }
 
@@ -510,7 +1115,7 @@ fn run_status_bounded(
             "--porcelain=v2",
             "-z",
             "--branch",
-            "--untracked-files=normal",
+            "--untracked-files=all",
             "--ignore-submodules=none",
             "--no-renames",
             "--no-ahead-behind",
@@ -667,7 +1272,14 @@ pub(crate) fn response(
         template_runs: None,
         panel_directory: None,
         workspace_git_snapshot: snapshot,
+        workspace_git_diff: None,
     }
+}
+
+fn diff_response(diff: Option<WorkspaceGitDiff>, error: Option<String>) -> crate::Response {
+    let mut response = response(None, error);
+    response.workspace_git_diff = diff;
+    response
 }
 
 #[cfg(test)]
@@ -719,6 +1331,25 @@ mod tests {
             project_root: repo.clone(),
             git_common_dir: crate::projects::git_common_dir(&repo)?,
         })
+    }
+
+    fn git_diff(repo: &Path, path: &str, side: GitDiffSide) -> Result<WorkspaceGitDiff> {
+        diff(target_for(repo, repo)?, path.to_owned(), side)
+    }
+
+    fn assert_patch(diff: &WorkspaceGitDiff, removed: &str, added: &str) {
+        assert!(!diff.binary);
+        assert!(!diff.truncated);
+        assert!(
+            diff.text.contains(removed),
+            "missing {removed:?}: {}",
+            diff.text
+        );
+        assert!(
+            diff.text.contains(added),
+            "missing {added:?}: {}",
+            diff.text
+        );
     }
 
     #[test]
@@ -808,8 +1439,195 @@ mod tests {
             result
                 .entries
                 .iter()
-                .any(|entry| { entry.untracked && entry.path == "untracked dir/" })
+                .any(|entry| { entry.untracked && entry.path == "untracked dir/line\nbreak.txt" })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn diff_reads_index_worktree_untracked_and_deleted_sides() -> Result<()> {
+        let root = TempDir::new()?;
+        let repo = root.path().join("repo with spaces");
+        init_repo(&repo)?;
+
+        fs::write(repo.join("tracked.txt"), "staged version\n")?;
+        parse_git_fixture(&repo, &["add", "tracked.txt"])?;
+        fs::write(repo.join("tracked.txt"), "worktree version\n")?;
+        let staged = git_diff(&repo, "tracked.txt", GitDiffSide::Index)?;
+        assert_patch(&staged, "-base", "+staged version");
+        assert_eq!(staged.side, GitDiffSide::Index);
+        assert_eq!(staged.path, "tracked.txt");
+        let worktree = git_diff(&repo, "tracked.txt", GitDiffSide::Worktree)?;
+        assert_patch(&worktree, "-staged version", "+worktree version");
+
+        fs::write(repo.join("untracked file.txt"), "new content\n")?;
+        let untracked = git_diff(&repo, "untracked file.txt", GitDiffSide::Untracked)?;
+        assert!(!untracked.binary && !untracked.truncated);
+        assert!(untracked.text.contains("+new content"));
+        assert!(untracked.text.contains("a/file"));
+
+        fs::write(repo.join("deleted.txt"), "remove me\n")?;
+        parse_git_fixture(&repo, &["add", "deleted.txt"])?;
+        parse_git_fixture(&repo, &["commit", "-m", "add deletion fixture"])?;
+        fs::remove_file(repo.join("deleted.txt"))?;
+        let worktree_delete = git_diff(&repo, "deleted.txt", GitDiffSide::Worktree)?;
+        assert!(worktree_delete.text.contains("-remove me"));
+        assert!(worktree_delete.text.contains("@@ -1 +0,0 @@"));
+        parse_git_fixture(&repo, &["add", "-u", "deleted.txt"])?;
+        let staged_delete = git_diff(&repo, "deleted.txt", GitDiffSide::Index)?;
+        assert!(staged_delete.text.contains("-remove me"));
+        assert!(staged_delete.text.contains("@@ -1 +0,0 @@"));
+        Ok(())
+    }
+
+    #[test]
+    fn diff_supports_unborn_index_and_reports_binary_without_bytes() -> Result<()> {
+        let root = TempDir::new()?;
+        let repo = root.path().join("unborn");
+        fs::create_dir_all(&repo)?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "--initial-branch=main"])
+            .output()?;
+        ensure!(output.status.success(), "git init fixture failed");
+        parse_git_fixture(&repo, &["config", "user.name", "Fixture"])?;
+        parse_git_fixture(&repo, &["config", "user.email", "fixture@example.test"])?;
+        fs::write(repo.join("first.txt"), "first\n")?;
+        parse_git_fixture(&repo, &["add", "first.txt"])?;
+        let first = git_diff(&repo, "first.txt", GitDiffSide::Index)?;
+        assert!(first.text.contains("+first"));
+
+        parse_git_fixture(&repo, &["commit", "-m", "first"])?;
+        fs::write(repo.join("first.txt"), b"binary\0payload")?;
+        let binary = git_diff(&repo, "first.txt", GitDiffSide::Worktree)?;
+        assert!(binary.binary);
+        assert!(binary.text.is_empty());
+        assert!(!binary.text.contains("payload"));
+        Ok(())
+    }
+
+    #[test]
+    fn conflict_preview_uses_worktree_against_empty_and_rejects_unsafe_paths() -> Result<()> {
+        let root = TempDir::new()?;
+        let repo = root.path().join("repo");
+        init_repo(&repo)?;
+        parse_git_fixture(&repo, &["checkout", "-b", "other"])?;
+        fs::write(repo.join("tracked.txt"), "other change\n")?;
+        parse_git_fixture(&repo, &["commit", "-am", "other"])?;
+        parse_git_fixture(&repo, &["checkout", "main"])?;
+        fs::write(repo.join("tracked.txt"), "main change\n")?;
+        parse_git_fixture(&repo, &["commit", "-am", "main"])?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["merge", "other"])
+            .output()?;
+        assert!(!output.status.success(), "fixture merge should conflict");
+        let conflict = git_diff(&repo, "tracked.txt", GitDiffSide::Conflict)?;
+        assert!(conflict.text.contains("+<<<<<<<"));
+        assert!(conflict.text.contains("+>>>>>>>"));
+
+        for invalid in [
+            "",
+            "/etc/passwd",
+            "../escape",
+            "dir/../escape",
+            "a//b",
+            "-option",
+            "C:/file",
+            "\\\\host\\share",
+            "bad\npath",
+        ] {
+            assert!(validate_diff_path(invalid).is_err(), "{invalid:?}");
+        }
+        assert!(git_diff(&repo, "not-in-current-status.txt", GitDiffSide::Worktree).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diff_rejects_symlinked_parent_and_oversized_worktree_file() -> Result<()> {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new()?;
+        let repo = root.path().join("repo");
+        fs::create_dir_all(repo.join("nested"))?;
+        parse_git_fixture(&repo, &["init", "--initial-branch=main"])?;
+        parse_git_fixture(&repo, &["config", "user.name", "Fixture"])?;
+        parse_git_fixture(&repo, &["config", "user.email", "fixture@example.test"])?;
+        fs::write(repo.join("nested/tracked.txt"), "tracked\n")?;
+        parse_git_fixture(&repo, &["add", "."])?;
+        parse_git_fixture(&repo, &["commit", "-m", "base"])?;
+
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside)?;
+        fs::write(outside.join("tracked.txt"), "secret\n")?;
+        fs::remove_file(repo.join("nested/tracked.txt"))?;
+        fs::remove_dir(repo.join("nested"))?;
+        symlink(&outside, repo.join("nested"))?;
+        let symlink_result = git_diff(&repo, "nested/tracked.txt", GitDiffSide::Worktree);
+        assert!(
+            symlink_result
+                .unwrap_err()
+                .to_string()
+                .contains("safely open a workspace path component")
+        );
+
+        fs::remove_file(repo.join("nested"))?;
+        fs::create_dir(repo.join("nested"))?;
+        fs::write(
+            repo.join("nested/tracked.txt"),
+            vec![b'x'; OUTPUT_LIMIT + 1],
+        )?;
+        let oversized = git_diff(&repo, "nested/tracked.txt", GitDiffSide::Worktree);
+        assert!(oversized.unwrap_err().to_string().contains("256 KiB"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diff_ignores_external_diff_and_textconv_configuration_and_caps_lines() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempDir::new()?;
+        let repo = root.path().join("repo");
+        init_repo(&repo)?;
+        let marker = root.path().join("driver-ran");
+        let driver = root.path().join("trap.sh");
+        fs::write(
+            &driver,
+            format!("#!/bin/sh\nprintf ran >> '{}'\nexit 99\n", marker.display()),
+        )?;
+        fs::set_permissions(&driver, fs::Permissions::from_mode(0o755))?;
+        parse_git_fixture(
+            &repo,
+            &["config", "diff.external", driver.to_str().unwrap()],
+        )?;
+        parse_git_fixture(
+            &repo,
+            &[
+                "config",
+                "diff.pigade-spy.textconv",
+                driver.to_str().unwrap(),
+            ],
+        )?;
+        fs::write(repo.join(".gitattributes"), "*.txt diff=pigade-spy\n")?;
+        parse_git_fixture(&repo, &["add", ".gitattributes"])?;
+        parse_git_fixture(&repo, &["commit", "-m", "attributes"])?;
+
+        fs::write(repo.join("tracked.txt"), "new\n".repeat(3000))?;
+        let preview = git_diff(&repo, "tracked.txt", GitDiffSide::Worktree)?;
+        assert!(preview.truncated);
+        assert!(preview.text.lines().count() <= DIFF_LINE_LIMIT);
+        assert!(preview.text.len() <= DIFF_OUTPUT_LIMIT);
+
+        fs::write(
+            repo.join("tracked.txt"),
+            vec![b'y'; OUTPUT_LIMIT.saturating_sub(1)],
+        )?;
+        let byte_capped = git_diff(&repo, "tracked.txt", GitDiffSide::Worktree)?;
+        assert!(byte_capped.truncated);
+        assert!(byte_capped.text.len() <= DIFF_OUTPUT_LIMIT);
+        assert!(!marker.exists(), "external diff/textconv command executed");
         Ok(())
     }
 

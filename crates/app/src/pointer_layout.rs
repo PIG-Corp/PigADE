@@ -135,6 +135,23 @@ pub(crate) fn detached_layout(base: &TabLayout, pane: Uuid) -> Option<TabLayout>
     Some(preview)
 }
 
+/// The exact tree that a drop will commit. Keep hit testing on the detached
+/// remainder: targeting this result again would oscillate across split halves.
+pub(crate) fn move_preview(base: &TabLayout, command: &Command) -> Option<TabLayout> {
+    if !matches!(command, Command::Move { .. }) {
+        return None;
+    }
+    let tab = Uuid::nil();
+    LayoutModel::new(LayoutState {
+        tabs: BTreeMap::from([(tab, base.clone())]),
+    })
+    .ok()?
+    .preview(command.clone())
+    .ok()?
+    .tabs
+    .remove(&tab)
+}
+
 /// Preview moving one placed pane to another existing tab, beside that tab's
 /// focused pane (or as its root pane when the destination is empty).
 pub(crate) fn tab_transfer_preview(
@@ -255,7 +272,7 @@ mod tests {
 
     use super::{
         FocusIntent, FocusQueue, detached_layout, drop_command, drop_target, floating_rect,
-        tab_transfer_preview, travelled,
+        move_preview, tab_transfer_preview, travelled,
     };
 
     fn id(value: u128) -> Uuid {
@@ -508,6 +525,50 @@ mod tests {
             .is_none()
         );
         assert!(detached_layout(&original, id(99)).is_none());
+    }
+
+    #[test]
+    fn drop_preview_is_the_exact_committed_tree_without_changing_the_base() {
+        for focus_mode in [false, true] {
+            let base = two_panes(focus_mode);
+            let original = base.clone();
+            for side in [
+                Direction::Left,
+                Direction::Right,
+                Direction::Up,
+                Direction::Down,
+            ] {
+                let command = Command::Move {
+                    pane: id(1),
+                    target: id(2),
+                    side,
+                    split: id(4),
+                };
+                let preview = move_preview(&base, &command).unwrap();
+                let mut model = LayoutModel::new(LayoutState {
+                    tabs: BTreeMap::from([(id(9), base.clone())]),
+                })
+                .unwrap();
+                model.apply(command).unwrap();
+                assert_eq!(preview, model.state().tabs[&id(9)]);
+                assert_eq!(preview.focus_mode, focus_mode);
+                assert_eq!(preview.focused, Some(id(1)));
+                assert_eq!(base, original);
+            }
+            assert!(
+                move_preview(
+                    &base,
+                    &Command::Move {
+                        pane: id(1),
+                        target: id(99),
+                        side: Direction::Right,
+                        split: id(4),
+                    }
+                )
+                .is_none()
+            );
+            assert!(move_preview(&base, &Command::Focus { pane: id(2) }).is_none());
+        }
     }
 
     #[test]

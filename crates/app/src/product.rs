@@ -64,6 +64,12 @@ pub(super) enum ProductAction {
     OpenControls,
     OpenWorkspaceGit,
     RefreshWorkspaceGit,
+    GitSelect(usize),
+    GitOpen(String, protocol::GitDiffSide),
+    GitBack,
+    GitRefreshDiff,
+    GitCopyDiff,
+    GitDiffPage(bool),
     SetCommandModifier(crate::controls::Modifier),
     AddProject,
     ToggleSidebar,
@@ -2431,23 +2437,73 @@ impl ProductUi {
         name: &str,
         preview: &pigade_layout::TabLayout,
     ) -> AnyElement {
+        self.layout_drop_card(
+            name,
+            preview,
+            if preview.panes().len() == 1 {
+                "Первая панель во вкладке"
+            } else {
+                "Справа от выбранной панели"
+            },
+        )
+    }
+
+    pub(super) fn layout_drop_card(
+        &self,
+        name: &str,
+        preview: &pigade_layout::TabLayout,
+        detail: &str,
+    ) -> AnyElement {
         let colors = self.colors();
-        let thumbnail = pigade_layout::GeometryTemplate::from_tab(preview)
-            .ok()
-            .and_then(|template| template.root)
-            .map(|root| template_thumbnail(&root, chrome::colors(self.appearance.theme)))
-            .unwrap_or_else(|| {
-                div()
-                    .w_full()
-                    .h(px(54.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(11.))
-                    .text_color(colors.muted)
-                    .child("Пустая раскладка")
-            });
+        let mut miniature = preview.clone();
+        // Show the saved tree even when the canvas is temporarily in focus
+        // mode. Only this diagram is scaled; terminal cells never are.
+        miniature.focus_mode = false;
+        let focused = miniature.focused;
+        let layout = pigade_layout::LayoutState {
+            tabs: [(Uuid::nil(), miniature)].into_iter().collect(),
+        };
+        let paint_colors = chrome::colors(self.appearance.theme);
+        let thumbnail = canvas(
+            move |bounds, _, _| {
+                layout
+                    .project(
+                        Uuid::nil(),
+                        pigade_layout::Rect {
+                            x: f64::from(f32::from(bounds.left())),
+                            y: f64::from(f32::from(bounds.top())),
+                            width: f64::from(f32::from(bounds.size.width)).max(1.),
+                            height: f64::from(f32::from(bounds.size.height)).max(1.),
+                        },
+                        pigade_layout::Size {
+                            width: 1.,
+                            height: 1.,
+                        },
+                        1.,
+                    )
+                    .ok()
+            },
+            move |bounds, geometry, window, _| {
+                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                    if let Some(geometry) = geometry {
+                        for pane in geometry.panes {
+                            let color = if Some(pane.pane) == focused {
+                                rgb(paint_colors.accent).opacity(0.8)
+                            } else {
+                                rgb(paint_colors.muted).opacity(0.28)
+                            };
+                            window.paint_quad(gpui::fill(super::layout_bounds(pane.rect), color));
+                        }
+                    }
+                });
+            },
+        )
+        .w_full()
+        .h_full();
         div()
+            .id("layout-drop-preview")
+            .role(Role::Status)
+            .aria_label(format!("{name}. {detail}"))
             .absolute()
             .top(px(86.))
             .right(px(16.))
@@ -2469,13 +2525,12 @@ impl ProductUi {
                     .child(name.to_owned()),
             )
             .child(div().w_full().h(px(66.)).flex().child(thumbnail))
-            .child(div().text_size(px(11.)).text_color(colors.muted).child(
-                if preview.panes().len() == 1 {
-                    "Первая панель во вкладке"
-                } else {
-                    "Справа от выбранной панели"
-                },
-            ))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(detail.to_owned()),
+            )
             .child(
                 div()
                     .text_size(px(11.))

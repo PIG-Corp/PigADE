@@ -19,8 +19,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |
 | crates/session-host | Independent Linux PTY actors, bounded input/output/IPC, durable helper launch, checkpoint/replay, indexed cold-history archive, catalog/layout/template-run routes and exact-generation asynchronous Stop |
-| crates/session-host/src/workspace_git.rs | Dedicated bounded read-only Git snapshot worker, frozen workspace revision/identity, porcelain-v2/NUL parser and explicit truncation |
-| crates/app/src/workspace_git.rs, git_status_ui.rs | Independent read-only request lane, dialog/workspace-bound replies and grouped native snapshot with keyboard scroll/refresh |
+| crates/session-host/src/workspace_git.rs | Dedicated bounded read-only Git snapshot worker, frozen workspace revision/identity, porcelain-v2/NUL parser, safe bounded per-file side diffs and explicit truncation |
+| crates/app/src/workspace_git.rs, git_status_ui.rs | Independent read-only request lane, dialog/workspace-bound replies and grouped native snapshot, exact file/side diff paging and keyboard scroll/refresh |
 | crates/session-host/src/template_run.rs | Durable explicit template runs: freeze reviewed plans without launching, advance one CLI per command, reconcile existing plan/launch records without retry, and atomically commit final placement with completion |
 | crates/app/src/template_flow.rs, template_ui.rs, template_commands.rs | Four optional launch presets, per-slot model/effort configuration and context/count/cwd review; user-driven prepare/advance/history/cancel flow |
 | crates/session-host/src/panel_directory.rs | Bounded64-entry search pages over placed panes, matching alias, provider, frozen role/state and project/workspace/tab metadata without returning terminal frames |
@@ -30,7 +30,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
 | crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |
 | crates/app/src/transfer_flow.rs | Frozen source validation and bounded searchable Ready project/workspace/tab destination pages; shared exact empty/populated transfer construction, preserving no-follow selection |
-| crates/app/src/pointer_layout.rs | Pure 10px Dwindle drag threshold, nearest gutter target, relative grab retention and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots, temporarily polls the focus-mode remainder, and provides clipped cross-tab drop previews with atomic TransferAndActivate |
+| crates/app/src/pointer_layout.rs | Pure 10px Dwindle drag threshold, nearest gutter target, relative grab retention, exact Move-tree preview and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots, temporarily polls the focus-mode remainder, and provides clipped cross-tab drop previews with atomic TransferAndActivate |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |
 | crates/session-host/src/history_read.rs | Bounded asynchronous canonical-record reads; exact generation/sequence, no ANSI parsing or host-command-thread cold I/O |

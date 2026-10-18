@@ -1,6 +1,6 @@
 //! Real-host coverage for project creation and bounded provider detection.
 use anyhow::{Context, Result, bail, ensure};
-use pigade_session_host::{Command, PROTOCOL, Request, Response, receive, send};
+use pigade_session_host::{Command, GitDiffSide, PROTOCOL, Request, Response, receive, send};
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, process::CommandExt},
@@ -354,17 +354,102 @@ fn workspace_git_snapshot_isolated_from_host_commands_and_read_only() -> Result<
         "snapshot response started a terminal"
     );
 
+    let host_pid = host.child.as_ref().context("host process missing")?.id();
+    let before_diff_views = exchange(&host.socket(), Command::List)?.views;
+    ensure!(
+        before_diff_views.is_empty(),
+        "Git snapshot left a process view"
+    );
+    let diff_response = exchange(
+        &host.socket(),
+        Command::WorkspaceGitDiff {
+            workspace: workspace.id,
+            expected_revision,
+            path: "untracked snapshot.txt".into(),
+            side: GitDiffSide::Untracked,
+        },
+    )?;
+    let diff = diff_response
+        .workspace_git_diff
+        .context("untracked Git diff response missing its additive DTO")?;
+    ensure!(diff.workspace_id == workspace.id);
+    ensure!(diff.workspace_revision == expected_revision);
+    ensure!(diff.project_id == project.id);
+    ensure!(diff.cwd == workspace.cwd);
+    ensure!(diff.path == "untracked snapshot.txt");
+    ensure!(diff.side == GitDiffSide::Untracked);
+    ensure!(!diff.binary && !diff.truncated);
+    ensure!(
+        diff.text.lines().any(|line| line == "--- a/file")
+            && diff.text.lines().any(|line| line == "+++ b/file")
+            && diff.text.contains("@@ -0,0 +1 @@")
+            && diff.text.lines().any(|line| line == "+untracked"),
+        "untracked diff did not contain the expected empty-to-file patch: {:?}",
+        diff.text
+    );
+    ensure!(diff_response.catalog.is_none());
+    ensure!(
+        diff_response.views.is_empty(),
+        "Git diff started a terminal"
+    );
+
+    for (path, side, revision) in [
+        (
+            "untracked snapshot.txt",
+            GitDiffSide::Untracked,
+            expected_revision + 1,
+        ),
+        (
+            "untracked snapshot.txt",
+            GitDiffSide::Index,
+            expected_revision,
+        ),
+        (
+            "../untracked snapshot.txt",
+            GitDiffSide::Untracked,
+            expected_revision,
+        ),
+        (
+            "missing snapshot.txt",
+            GitDiffSide::Untracked,
+            expected_revision,
+        ),
+    ] {
+        let rejected = exchange(
+            &host.socket(),
+            Command::WorkspaceGitDiff {
+                workspace: workspace.id,
+                expected_revision: revision,
+                path: path.into(),
+                side,
+            },
+        );
+        ensure!(
+            rejected.is_err(),
+            "invalid diff request was accepted: {path} {side:?}"
+        );
+    }
+
     let after = exchange(&host.socket(), Command::Catalog)?
         .catalog
         .context("catalog missing after snapshot")?;
     ensure!(
         after == before,
-        "read-only Git snapshot changed catalog metadata"
+        "read-only Git snapshot/diff changed catalog metadata"
     );
     ensure!(
         fs::read(&index_path).ok() == index_before,
-        "snapshot wrote Git index"
+        "read-only Git snapshot/diff wrote Git index"
     );
-    ensure!(fs::read(&untracked)? == untracked_contents);
+    ensure!(
+        fs::read(&untracked)? == untracked_contents,
+        "read-only Git snapshot/diff changed fixture file"
+    );
+    let after_diff_views = exchange(&host.socket(), Command::List)?.views;
+    ensure!(after_diff_views.is_empty(), "Git diff started a terminal");
+    ensure!(
+        host.child.as_ref().context("host process missing")?.id() == host_pid,
+        "Git read changed the host process"
+    );
     Ok(())
 }

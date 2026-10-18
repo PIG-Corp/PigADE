@@ -1420,6 +1420,42 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     right_pane = right_layout.get('focused')
     require(right_pane in original_ids and right_pane != left_pane,
             'hover right did not follow the cursor to a different pane')
+    _, header_before_layout = catalog_layout()
+    header_before_views = {
+        (view.get('session'), view.get('generation')):
+            (view.get('pid'), view.get('sequence'), view.get('frame'), view_text(view))
+        for view in host_request({'command': 'list'}).get('views', [])
+    }
+    header_before_processes = process_snapshot()
+    report['stage'] = 'pointer-hover-header'
+    save()
+    helper_call(config, 'pointer-hover-header', '/artifacts/pointer-hover-header.ppm')
+    header_layout = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('focused') == left_pane else None),
+        time.monotonic() + 5)
+    header_after_views = {
+        (view.get('session'), view.get('generation')):
+            (view.get('pid'), view.get('sequence'), view.get('frame'), view_text(view))
+        for view in host_request({'command': 'list'}).get('views', [])
+    }
+    require(header_layout.get('root') == header_before_layout.get('root') == original_root and
+            header_after_views == header_before_views and
+            process_snapshot() == header_before_processes == expected_processes and
+            live_unchanged(generations, expected_processes) and
+            0 < Path('/artifacts/pointer-hover-header.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+            'hovering the top-left pane header changed terminal input, root placement, processes, or capture')
+    # The motion helper capture can precede GPUI's paint after the pointer event.
+    # Replace it with a post-focus capture after bounded normal UI settling;
+    # this is fixture pacing, not a latency measurement.
+    time.sleep(0.25)
+    header_capture = Path('/artifacts/pointer-hover-header.ppm')
+    header_capture.unlink()
+    helper_call(config, 'capture', str(header_capture))
+    require(0 < header_capture.stat().st_size <= MAX_CAPTURE_BYTES,
+            'post-focus pointer header capture is missing or oversized')
+    step('pointer-hover-right')
+    wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == right_pane else None),
+               time.monotonic() + 5)
     step('pointer-keyboard-away')
     keyboard_focus = wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == left_pane
                                         else None), time.monotonic() + 5)
@@ -2139,6 +2175,7 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'four_pane_ids_preserved': sorted(original_ids),
         'process_generations_and_pids_unchanged': True,
         'hover_left_right_left_followed_without_click': True,
+        'hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input': True,
         'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
         'modifier_button_release_without_pointer_travel_preserved_root_weights_and_history_lengths': True,
@@ -2161,7 +2198,8 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'xdnd_nonfile_and_over_64k_uri_lists_rejected_atomically_without_review_or_input': True,
         'multiline_clipboard_review_ignored_enter_cancelled_without_input_and_confirmed_only_with_bracketed_mode': True,
         'one_fixture_shell_was_explicitly_added_before_populated_transfer': destination_pair,
-        'captures': ['pointer-hover.ppm', 'pointer-subthreshold-before.ppm',
+        'captures': ['pointer-hover.ppm', 'pointer-hover-header.ppm',
+                     'pointer-subthreshold-before.ppm',
                      'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
                      'pointer-focus-mode-drag.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
@@ -5308,6 +5346,7 @@ def outer_run(args) -> dict:
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
+                  'pointer-hover-header.ppm',
                   'pointer-subthreshold-before.ppm', 'pointer-subthreshold-held.ppm',
                   'pointer-focus-mode-before.ppm', 'pointer-focus-mode-drag.ppm',
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
@@ -5368,7 +5407,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',

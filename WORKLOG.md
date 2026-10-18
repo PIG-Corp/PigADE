@@ -3604,6 +3604,24 @@ Add an explicit terminal insertion review card for clipboard and file-path paylo
 - Behavior: review shows destination label plus shortened session/generation, full untruncated read-only text in a bounded scroll area, the multiline shell warning or file-path-only notice, current notice, and explicit Cancel/Insert actions with Ctrl+Enter/Escape guidance. The card does not label insertion as model or CLI context acceptance.
 - Risks / next: Root owns modal lifecycle, Ctrl+Enter confirmation, and delivery validation.
 
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Extend the read-only workspace Git snapshot with grouped file comparison pages
+
+- Files: crates/app/src/git_status_ui.rs
+- Verification: `rustfmt --edition 2024 --check crates/app/src/git_status_ui.rs` and scoped `git diff --check` passed. No app Cargo/native run per task boundary.
+- Behavior: grouped Index/Worktree/Untracked/Conflict rows open exact path/side comparisons; root keyboard integration receives shared ordered-target and scroll-index helpers. The viewer caps rendering at 200 patch lines per page, colors additions/deletions/hunks without interpreting ANSI, escapes control characters, and exposes binary, empty, truncated, loading, and stale-error states. Full-text copy remains an explicit root action.
+- Risks / next: Root owns Git diff request lifecycle, compile/tests, keyboard review, and confirming API field integration.
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Cover read-only untracked Git diff requests over real session-host IPC
+
+- Files: crates/session-host/tests/project_setup.rs
+- Verification: `cargo test -p pigade-session-host --test project_setup workspace_git_snapshot_isolated_from_host_commands_and_read_only -- --nocapture` passed (1 test); targeted rustfmt and scoped diff checks passed.
+- Behavior: existing isolated-host fixture now verifies additive diff identity/path/side/content for an untracked file, and rejects stale revision, absent side, unsafe path, and missing path. It checks catalog equality, unchanged index and file bytes, no terminal views, and stable host PID across reads and failures.
+- Risks / next: no broader workspace, app, or native run in this lane.
+
 ## 2026-10-18T02:38:36+00:00 — /root/appearance_colors_luna
 
 Extend the private pointer fixture with fixed native XDND file-drop review, cancellation, and explicit confirmation checks.
@@ -3715,3 +3733,51 @@ Ship generation-bound terminal file and multiline paste review; repair native XD
 - Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/controls.rs, crates/app/src/terminal_insert.rs, crates/app/src/terminal_insert_commands.rs, crates/app/patches/gpui-x11-ime/manifest.json, crates/app/patches/gpui-x11-ime/focus.patch, crates/app/patches/gpui-x11-ime/README.md, scripts/test_gpui_xim_focus.py, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0010-gpui-x11-ime-focus-lifecycle.md
 - Verification: 242 app tests, strict app Clippy, locked release build,34 harness tests including strict C compile,12 GPUI state tests with exact hashes/static guards,15 applier tests, fmt/version/diff checks passed. Private native09 passes full pointer/transfer/IME plus actual first/repeat file review and insertion, CShiftV multiline Enter/cancel/confirm, malformed/truncated URI rejection; fresh captures inspected. Retained01-08 are failures, not acceptance. Temporary event probes removed; exact derived caches migrated only through hash-verifying applier.
 - Risks / next: Commit coherent block. Native Wayland, synchronous Linux clipboard latency, typed OS file clipboard, non-POSIX/image attachment and full MVP gates remain explicit. Preserve unrelated dirt and stash0; do not mark broad goal complete.
+
+## 2026-10-18T03:26:59+00:00 — /root/appearance_colors_luna
+
+Added app protocol DTOs and scope/size/path validation for read-only workspace_git_diff responses, plus malformed and wrong-scope socket-fixture tests.
+
+- Files: crates/app/src/protocol.rs
+- Verification: rustfmt --check crates/app/src/protocol.rs passed; git diff --check passed. App Cargo tests/build were not run because root owns the app Cargo lane.
+- Risks / next: Root owns app integration/build/tests; host peer should use GitDiffSide and WorkspaceGitDiff with matching snake_case fields.
+
+## 2026-10-18T03:32:19+00:00 — pointer_review_luna
+
+Add bounded per-file Git diff reads for exact current status sides, with safe path validation, identity/status rechecks, no-follow regular-file access, and capped text output.
+
+- Files: crates/session-host/src/workspace_git.rs
+- Verification: rustfmt --edition 2024 crates/session-host/src/workspace_git.rs; cargo test -p pigade-session-host workspace_git::tests:: --lib (15 passed on final rerun; one earlier rerun encountered pre-existing fake-git Text file busy, then passed); cargo clippy -p pigade-session-host --lib -- -D warnings passed; git diff --check passed.
+- Risks / next: Root owns host/app RPC integration and broader workspace verification; preview intentionally rejects symlinks, submodules, non-UTF8 paths, oversized blobs/files, stale status, and ambiguous changed inputs.
+
+## 2026-10-18T03:32:56+00:00 — /root/appearance_colors_luna
+
+Corrected the Git diff binary-mismatch fixture to include nonempty text, matching the validator contract while preserving valid empty binary diffs.
+
+- Files: crates/app/src/protocol.rs
+- Verification: rustfmt --check crates/app/src/protocol.rs passed; git diff --check passed. App Cargo test was not run because root owns the app Cargo lane.
+- Risks / next: Root should rerun the focused protocol test; the malformed case now sets binary=true and nonempty text.
+
+## 2026-10-18T03:39:09+00:00 — /root/appearance_colors_luna
+
+Added a fixed pointer-only hover onto the top-left pane header from right-pane focus and asserted focus follows without input, root-layout, or process changes.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed (34 tests, strict helper C compilation included); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns private native pointer fixture run and app-level verification.
+
+## 2026-10-18T03:40:37+00:00 — /root/appearance_colors_luna
+
+Replaced the early motion-stage header screenshot with a final screenshot captured after focus confirmation and a bounded 250 ms paint settle.
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed (34 tests, strict helper C compile included); git diff --check passed. No native/Cargo run.
+- Risks / next: Root owns pointer fixture rerun to inspect the settled header capture.
+
+## 2026-10-18T03:41:50+00:00 — /root
+
+Verify body/header focus follows cursor; show exact Dwindle post-drop tree and insertion side; integrate the pending read-only per-file Git diff block
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/pointer_layout.rs, crates/app/src/workspace_git.rs, crates/session-host/src/lib.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 251 app tests,355 workspace tests on final full rerun, strict app/workspace Clippy, release builds and app debug build, formats/version/diff checks passed; child34 harness tests include strictC compile. Private release pointer02 passes full existing flow plus no-click header focus; settled focus and normal/focus-mode drop captures visually inspected. Pointer01 behavior passed but header image preceded paint; fixture timing repaired before02. Initial metadata writer-lock collision and initial Clippy/test fixture errors are not acceptance results.
+- Risks / next: Commit integration. Current native proof is private softwareX11 only; actualHyprland/Wayland pointer and dedicated nativeGitdiff UI acceptance remain open alongside broadMVP gates. Preserve unrelated dirt/stash0; no desktop configuration was modified.

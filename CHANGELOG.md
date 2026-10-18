@@ -2,6 +2,9 @@
 
 ## 0.0.1-dev — in development
 
+- Dwindle drag now shows the exact resulting layout and insertion side before release; the moved pane is highlighted. Hover focus still follows real cursor motion without clicking.
+- Read-only per-file Git diffs for index, worktree, untracked and conflict text, with bounded background reads, explicit unsupported/binary/truncated states and keyboard paging.
+
 - Native terminal file drop and clipboard file-path insertion now preview exact POSIX-quoted paths for one live generation before explicit confirmation. Multiline clipboard paste shares the review, with cancellation, mode checks and no automatically appended Enter.
 
 - Linux GPUI shifted US digit symbols now reach explicit panel-transfer bindings instead of falling through to the CLI.

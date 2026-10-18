@@ -422,6 +422,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
+                      'pointer-hover-header',
                       'pointer-no-motion-release',
                       'pointer-subthreshold-hold', 'pointer-focus-toggle',
                       'pointer-focus-mode-preview',
@@ -435,6 +436,13 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
+        header_stage = source.split(
+            '} else if (!strcmp(a.stage, "pointer-hover-header")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-hover-right")) {', 1)[0]
+        self.assertIn('pointer_hover(dpy, app_window, 485, 90, 0)', header_stage)
+        self.assertNotIn('XTestFakeButtonEvent', header_stage)
+        self.assertIn('capture(dpy, a.output)', header_stage)
+        self.assertIn('"/artifacts/pointer-hover-header.ppm"', source)
         subthreshold_stage = source.split(
             '} else if (!strcmp(a.stage, "pointer-subthreshold-hold")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "pointer-focus-toggle")) {', 1)[0]
@@ -460,6 +468,18 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('pointer_position', no_motion_begin[press_end:])
         fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         self.assertIn("step('pointer-no-motion-release')", fixture)
+        self.assertIn('hovering_top_left_pane_header_from_right_focus_changed_focus_without_click_or_input',
+                      fixture)
+        self.assertIn("helper_call(config, 'pointer-hover-header', '/artifacts/pointer-hover-header.ppm')",
+                      fixture)
+        self.assertIn('header_after_views == header_before_views', fixture)
+        header_flow = fixture.split("report['stage'] = 'pointer-hover-header'", 1)[1].split(
+            "step('pointer-hover-right')", 1)[0]
+        self.assertLess(header_flow.index('header_layout.get(\'root\')'),
+                        header_flow.index('time.sleep(0.25)'))
+        self.assertLess(header_flow.index('time.sleep(0.25)'),
+                        header_flow.index("helper_call(config, 'capture', str(header_capture))"))
+        self.assertIn('header_capture.unlink()', header_flow)
         for evidence in ('tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes',
                          'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination',
                          'tab_transfer_history_contains_exact_before_and_after_for_both_tabs',

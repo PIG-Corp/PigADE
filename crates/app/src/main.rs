@@ -979,8 +979,14 @@ struct PaneDrag {
     start: Point<Pixels>,
     moved: bool,
     travelled: bool,
-    drop: Option<(pigade_layout::Command, pigade_layout::Rect)>,
+    drop: Option<Arc<PaneDropPreview>>,
     tab_drop: Option<Arc<TabDropPreview>>,
+}
+
+struct PaneDropPreview {
+    command: pigade_layout::Command,
+    hint: pigade_layout::Rect,
+    layout: pigade_layout::TabLayout,
 }
 
 #[derive(Clone)]
@@ -3084,7 +3090,7 @@ impl CanvasApp {
         self.product.tab_drop_target = tab_drop.as_ref().map(|preview| preview.to_tab);
         let drag = self.pane_drag.as_mut().expect("active pane drag");
         drag.tab_drop = tab_drop;
-        drag.drop = None;
+        let previous = drag.drop.take();
         if drag.moved
             && drag.tab_drop.is_none()
             && self
@@ -3118,7 +3124,19 @@ impl CanvasApp {
                         }
                     }
                 }
-                drag.drop = Some((command, hint));
+                drag.drop = if let Some(previous) =
+                    previous.filter(|previous| previous.command == command && previous.hint == hint)
+                {
+                    Some(previous)
+                } else {
+                    pointer_layout::move_preview(&drag.base, &command).map(|layout| {
+                        Arc::new(PaneDropPreview {
+                            command,
+                            hint,
+                            layout,
+                        })
+                    })
+                };
             }
         }
         cx.stop_propagation();
@@ -3455,6 +3473,12 @@ impl CanvasApp {
             action,
             A::CloseDialog
                 | A::ConfirmTerminalInsert
+                | A::GitSelect(_)
+                | A::GitOpen(..)
+                | A::GitBack
+                | A::GitRefreshDiff
+                | A::GitCopyDiff
+                | A::GitDiffPage(_)
                 | A::FocusPane(_)
                 | A::ToggleSidebar
                 | A::ToggleArchived
@@ -3569,7 +3593,14 @@ impl CanvasApp {
             | A::SetProfileProvider(_)
             | A::ToggleProfileContext
             | A::SaveLaunchAsProfile => self.profile_action(action, cx),
-            A::OpenWorkspaceGit | A::RefreshWorkspaceGit => self.workspace_git_action(action, cx),
+            A::OpenWorkspaceGit
+            | A::RefreshWorkspaceGit
+            | A::GitSelect(_)
+            | A::GitOpen(..)
+            | A::GitBack
+            | A::GitRefreshDiff
+            | A::GitCopyDiff
+            | A::GitDiffPage(_) => self.workspace_git_action(action, cx),
             A::OpenStop | A::StopSession { .. } | A::ConfirmStop | A::InspectStop => {
                 self.session_control_action(action, cx)
             }
@@ -5565,8 +5596,8 @@ impl CanvasApp {
             self.filter_product_views();
             if let Some(preview) = drag.tab_drop.filter(|_| drag.travelled) {
                 self.commit_tab_drop(preview, cx);
-            } else if let Some((command, _)) = drag.drop.filter(|_| drag.travelled) {
-                self.layout_command(command, cx);
+            } else if let Some(preview) = drag.drop.filter(|_| drag.travelled) {
+                self.layout_command(preview.command.clone(), cx);
             } else {
                 self.persist_focus(cx);
             }
@@ -6103,19 +6134,63 @@ impl CanvasApp {
             .dialog
             .as_ref()
             .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceGit)
-            && matches!(k.key.as_str(), "pageup" | "pagedown" | "home" | "end")
         {
-            let handle = &self.product.git_scroll;
-            let mut offset = handle.offset();
-            let end = -handle.max_offset().y;
-            offset.y = match k.key.as_str() {
-                "home" => px(0.),
-                "end" => end,
-                "pageup" => (offset.y + px(280.)).min(px(0.)),
-                _ => (offset.y - px(280.)).max(end),
+            use product::ProductAction as A;
+            let diff = self
+                .product
+                .git_sheet
+                .as_ref()
+                .is_some_and(|sheet| sheet.diff.is_some());
+            let control = k.modifiers.control || k.modifiers.platform;
+            let action = match k.key.as_str() {
+                "escape" if !event.is_held => Some(if diff { A::GitBack } else { A::CloseDialog }),
+                "r" if control && !event.is_held => Some(if diff {
+                    A::GitRefreshDiff
+                } else {
+                    A::RefreshWorkspaceGit
+                }),
+                "c" if control && diff && !event.is_held => Some(A::GitCopyDiff),
+                "enter" if !diff && !event.is_held => self
+                    .product
+                    .git_selected_target()
+                    .map(|(path, side)| A::GitOpen(path, side)),
+                "up" | "down" if !diff => {
+                    let index = self
+                        .product
+                        .git_sheet
+                        .as_ref()
+                        .map_or(0, |sheet| sheet.selected);
+                    Some(A::GitSelect(if k.key == "up" {
+                        index.saturating_sub(1)
+                    } else {
+                        index.saturating_add(1)
+                    }))
+                }
+                "pageup" | "pagedown" if diff && !event.is_held => {
+                    Some(A::GitDiffPage(k.key == "pagedown"))
+                }
+                _ => None,
             };
-            handle.set_offset(offset);
-            cx.notify();
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+            } else if matches!(
+                k.key.as_str(),
+                "pageup" | "pagedown" | "home" | "end" | "up" | "down"
+            ) {
+                let handle = &self.product.git_scroll;
+                let mut offset = handle.offset();
+                let end = -handle.max_offset().y;
+                offset.y = match k.key.as_str() {
+                    "home" => px(0.),
+                    "end" => end,
+                    "pageup" => (offset.y + px(280.)).min(px(0.)),
+                    "up" => (offset.y + px(24.)).min(px(0.)),
+                    "down" => (offset.y - px(24.)).max(end),
+                    _ => (offset.y - px(280.)).max(end),
+                };
+                handle.set_offset(offset);
+                cx.notify();
+            }
             cx.stop_propagation();
             return;
         }
@@ -7586,7 +7661,23 @@ impl Render for CanvasApp {
             .pane_drag
             .as_ref()
             .and_then(|drag| drag.tab_drop.as_ref())
-            .map(|preview| self.product.tab_drop_card(&preview.name, &preview.layout));
+            .map(|preview| self.product.tab_drop_card(&preview.name, &preview.layout))
+            .or_else(|| {
+                let preview = self.pane_drag.as_ref()?.drop.as_ref()?;
+                let pigade_layout::Command::Move { side, .. } = preview.command else {
+                    return None;
+                };
+                let detail = match side {
+                    pigade_layout::Direction::Left => "Слева от целевой панели",
+                    pigade_layout::Direction::Right => "Справа от целевой панели",
+                    pigade_layout::Direction::Up => "Сверху от целевой панели",
+                    pigade_layout::Direction::Down => "Снизу от целевой панели",
+                };
+                Some(
+                    self.product
+                        .layout_drop_card("После переноса", &preview.layout, detail),
+                )
+            });
         let empty_state = self
             .state
             .views
@@ -7613,7 +7704,7 @@ impl Render for CanvasApp {
         let drop_preview = self
             .pane_drag
             .as_ref()
-            .and_then(|drag| drag.drop.as_ref().map(|(_, rect)| *rect));
+            .and_then(|drag| drag.drop.as_ref().map(|preview| preview.hint));
         let dragged_index = self
             .pane_drag
             .as_ref()
