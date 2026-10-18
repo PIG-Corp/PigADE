@@ -117,6 +117,7 @@ mod tests {
             prompts: None,
             tab_close_schema: None,
             engine_options_schema: Some(1),
+            pane_tab_drop_schema: Some(1),
         }
     }
 

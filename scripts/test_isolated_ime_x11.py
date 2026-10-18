@@ -417,6 +417,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('no-motion Ctrl+LMB release preserves placement/history', plan['input']['pointer'])
         self.assertIn('subthreshold modifier drag preserves placement', plan['input']['pointer'])
         self.assertIn('focus-mode drag preview/cancel from nonzero pane index', plan['input']['pointer'])
+        self.assertIn('cross-tab pane drag preview/cancel and atomic transfer undo', plan['input']['pointer'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
@@ -425,6 +426,9 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'pointer-focus-mode-preview',
                       'pointer-hover-source', 'pointer-keyboard-away', 'pointer-move-right-near',
                       'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
+                      'pointer-create-transfer-tab', 'pointer-select-first-tab',
+                      'pointer-tab-drop-cancel', 'pointer-tab-drop',
+                      'pointer-tab-drop-populated-preview',
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
@@ -453,6 +457,16 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertNotIn('pointer_position', no_motion_begin[press_end:])
         fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
         self.assertIn("step('pointer-no-motion-release')", fixture)
+        for evidence in ('tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes',
+                         'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination',
+                         'tab_transfer_history_contains_exact_before_and_after_for_both_tabs',
+                         'tab_transfer_undo_restored_both_trees_and_kept_destination_selected'):
+            self.assertIn(evidence, fixture)
+        self.assertIn("pointer_position(dpy, app, 405, 57)", source)
+        tab_drag = source.split('static void pointer_tab_drag_begin', 1)[1].split(
+            'static void pointer_no_motion_begin', 1)[0]
+        self.assertIn('pointer_position(dpy, app, 350, 250)', tab_drag)
+        self.assertIn('pointer_position(dpy, app, 405, 57)', tab_drag)
         self.assertIn("no_motion_layout.get('root') == placement_before", fixture)
         self.assertIn('history_lengths_before', fixture)
         self.assertIn('strcmp(response, "CANCEL\\n")', source)

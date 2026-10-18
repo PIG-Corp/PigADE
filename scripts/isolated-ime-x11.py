@@ -1611,6 +1611,222 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     # not an input-to-present latency measurement.
     time.sleep(0.35)
     helper_call(config, 'capture', '/artifacts/pointer-undo.ppm')
+
+    # Add a real, empty destination tab through the native product flow, then
+    # exercise a cross-tab pane transfer first as a cancelled preview and then
+    # as one host transaction. The source remains on the original tab.
+    tabs_before = {item['id'] for item in catalog_layout()[0]['tabs']}
+    step('pointer-create-transfer-tab')
+    transfer_catalog = wait_until(
+        lambda: (catalog if len(catalog['tabs']) == len(tabs_before) + 1 and
+                 catalog['selection'].get('tab_id') not in tabs_before
+                 else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 6)
+    destination_id = transfer_catalog['selection']['tab_id']
+    require(destination_id in {item['id'] for item in transfer_catalog['tabs']} and
+            next(item for item in transfer_catalog['tabs'] if item['id'] == destination_id)['name'] == 'Transfer',
+            'native new-tab flow did not create/select the fixed Transfer destination')
+    step('pointer-select-first-tab')
+    wait_until(lambda: (catalog if catalog['selection'].get('tab_id') == tab_id else None)
+               if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+               time.monotonic() + 5)
+    transfer_catalog = host_request({'command': 'catalog'})['catalog']
+    source_layout = catalog_layout()[1]
+    source_root = source_layout.get('root')
+    source_panes = set(pane_ids(source_root))
+    moved_pane = source_layout.get('focused')
+    require(moved_pane in source_panes and source_panes == original_ids,
+            'new-tab flow changed the original source tree or focus')
+    empty_layout = json.loads(next(item for item in transfer_catalog['tabs']
+                                   if item['id'] == destination_id)['layout_json'])
+    require(empty_layout.get('root') is None and not pane_ids(empty_layout.get('root')),
+            'native Transfer destination was not empty')
+    transfer_history_before = json.loads(transfer_catalog['layout']['json'])
+    transfer_selection_before = transfer_catalog['selection']
+    transfer_generations = fixture_generations()
+    transfer_processes = process_snapshot()
+    transfer_geometries = frame_geometries(panes)
+
+    def destination_layout(catalog=None):
+        catalog = catalog or host_request({'command': 'catalog'})['catalog']
+        destination = next(item for item in catalog['tabs'] if item['id'] == destination_id)
+        return catalog, json.loads(destination['layout_json'])
+
+    def check_tab_drop_cancel():
+        current_catalog = host_request({'command': 'catalog'})['catalog']
+        current_source = next(item for item in current_catalog['tabs'] if item['id'] == tab_id)
+        current_destination = next(item for item in current_catalog['tabs'] if item['id'] == destination_id)
+        require(json.loads(current_source['layout_json']) == source_layout and
+                json.loads(current_destination['layout_json']) == empty_layout and
+                current_catalog.get('layout') == transfer_catalog.get('layout') and
+                current_catalog.get('selection') == transfer_selection_before and
+                frame_geometries(panes) == transfer_geometries and
+                live_unchanged(transfer_generations, transfer_processes) and
+                0 < Path('/artifacts/pointer-tab-drop-cancel.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'cancelled tab-drop preview changed host snapshots, selection, PTYs, processes, or capture')
+
+    report['stage'] = 'pointer-tab-drop-cancel'
+    save()
+    held_stage('pointer-tab-drop-cancel', 'HELD', 'CANCEL',
+               '/artifacts/pointer-tab-drop-cancel.ppm', check_tab_drop_cancel)
+    wait_until(lambda: catalog_layout()[1] == source_layout and
+               destination_layout()[1] == empty_layout, time.monotonic() + 5)
+    require(live_unchanged(transfer_generations, transfer_processes),
+            'cancelled tab-drop changed a process identity')
+
+    def check_tab_drop_preview():
+        check_tab_drop_cancel()
+        require(0 < Path('/artifacts/pointer-tab-drop-preview.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'held tab-drop preview capture is missing or oversized')
+
+    report['stage'] = 'pointer-tab-drop'
+    save()
+    held_stage('pointer-tab-drop', 'HELD', 'RELEASE',
+               '/artifacts/pointer-tab-drop-preview.ppm', check_tab_drop_preview)
+
+    def tab_layout(catalog, target_id):
+        item = next(item for item in catalog['tabs'] if item['id'] == target_id)
+        return json.loads(item['layout_json'])
+
+    committed_catalog = wait_until(
+        lambda: (catalog if catalog.get('selection', {}).get('tab_id') == destination_id and
+                 moved_pane in pane_ids(tab_layout(catalog, destination_id).get('root'))
+                 else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    committed_source_item = next(item for item in committed_catalog['tabs'] if item['id'] == tab_id)
+    committed_destination_item = next(item for item in committed_catalog['tabs'] if item['id'] == destination_id)
+    committed_source = json.loads(committed_source_item['layout_json'])
+    committed_destination = json.loads(committed_destination_item['layout_json'])
+    transfer_history = json.loads(committed_catalog['layout']['json'])
+    require(moved_pane not in set(pane_ids(committed_source.get('root'))) and
+            set(pane_ids(committed_source.get('root'))) == source_panes - {moved_pane} and
+            set(pane_ids(committed_destination.get('root'))) == {moved_pane} and
+            committed_catalog['selection'].get('tab_id') == destination_id and
+            committed_catalog['layout']['revision'] == transfer_catalog['layout']['revision'] + 1 and
+            len(transfer_history.get('undo', [])) == len(transfer_history_before.get('undo', [])) + 1 and
+            transfer_history.get('redo', []) == [] and
+            transfer_history['undo'][-1]['before']['tabs'][tab_id]['root'] == source_root and
+            transfer_history['undo'][-1]['before']['tabs'][destination_id]['root'] is None and
+            set(pane_ids(transfer_history['undo'][-1]['after']['tabs'][tab_id]['root'])) == source_panes - {moved_pane} and
+            set(pane_ids(transfer_history['undo'][-1]['after']['tabs'][destination_id]['root'])) == {moved_pane} and
+            live_unchanged(transfer_generations, transfer_processes),
+            'tab drop was not one atomic transfer with exact two-tab snapshots and unchanged processes')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-tab-drop-committed.ppm')
+    step('pointer-undo')
+    undone_transfer = wait_until(
+        lambda: (catalog if tab_layout(catalog, tab_id) == source_layout and
+                 tab_layout(catalog, destination_id) == empty_layout
+                 else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    require(undone_transfer['selection'].get('tab_id') == destination_id and
+            live_unchanged(transfer_generations, transfer_processes),
+            'transfer undo did not preserve destination selection or changed process identities')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-tab-drop-undo.ppm')
+
+    # Repeat against a populated destination. Launch the one allowed fixture
+    # shell explicitly through the existing UI control, then prove the pane
+    # transfer itself preserves every process identity.
+    populated_baseline = fixture_generations()
+    original_processes = process_snapshot()
+    report['stage'] = 'pointer-populated-shell'
+    save()
+    helper_call(config, 'setup-shell')
+    def destination_shell_ready():
+        current_generations = fixture_generations()
+        added = [pair for pair in current_generations if pair not in populated_baseline]
+        if len(added) != 1 or len(current_generations) != len(populated_baseline) + 1:
+            return None
+        session, generation = added[0]
+        view = fixture_session_models(session).get(generation)
+        if not view or view.get('state') != 'running':
+            return None
+        catalog = host_request({'command': 'catalog'})['catalog']
+        destination = json.loads(next(item for item in catalog['tabs']
+                                      if item['id'] == destination_id)['layout_json'])
+        if set(pane_ids(destination.get('root'))) != {session}:
+            return None
+        return catalog, session, generation, destination
+
+    populated_catalog, destination_session, destination_generation, populated_layout = wait_until(
+        destination_shell_ready, time.monotonic() + 10)
+    destination_pair = (destination_session, destination_generation)
+    populated_generations = fixture_generations()
+    populated_processes = process_snapshot()
+    require(set(populated_generations) - set(populated_baseline) == {destination_pair} and
+            [item for item in populated_processes if (item[0], item[1]) in populated_baseline] == original_processes and
+            live_unchanged(populated_generations, populated_processes),
+            'explicit populated-destination fixture shell was not live')
+    helper_call(config, 'capture', '/artifacts/pointer-tab-drop-populated-before.ppm')
+    step('pointer-select-first-tab')
+    source_layout = wait_until(
+        lambda: (layout if layout.get('root') == source_root else None)
+        if (layout := catalog_layout()[1]) else None,
+        time.monotonic() + 5)
+    populated_source_ids = set(pane_ids(source_layout.get('root')))
+    populated_moved_pane = source_layout.get('focused')
+    require(populated_source_ids == source_panes and populated_moved_pane in populated_source_ids,
+            'returning to the source tab changed its pane placement')
+    populated_catalog = host_request({'command': 'catalog'})['catalog']
+    populated_layout = tab_layout(populated_catalog, destination_id)
+    destination_ids = set(pane_ids(populated_layout.get('root')))
+    require(destination_ids == {destination_session},
+            'destination did not contain exactly its explicitly added shell')
+    populated_history_before = json.loads(populated_catalog['layout']['json'])
+    populated_selection_before = populated_catalog['selection']
+    populated_geometries = frame_geometries(panes)
+
+    def check_populated_tab_drop_hold():
+        current_catalog = host_request({'command': 'catalog'})['catalog']
+        require(tab_layout(current_catalog, tab_id) == source_layout and
+                tab_layout(current_catalog, destination_id) == populated_layout and
+                current_catalog.get('layout') == populated_catalog.get('layout') and
+                current_catalog.get('selection') == populated_selection_before and
+                frame_geometries(panes) == populated_geometries and
+                live_unchanged(populated_generations, populated_processes) and
+                0 < Path('/artifacts/pointer-tab-drop-populated-preview.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'populated tab-drop preview changed host layouts, selection, PTYs, or process identities')
+
+    report['stage'] = 'pointer-tab-drop-populated-preview'
+    save()
+    held_stage('pointer-tab-drop-populated-preview', 'HELD', 'RELEASE',
+               '/artifacts/pointer-tab-drop-populated-preview.ppm', check_populated_tab_drop_hold)
+    committed_populated = wait_until(
+        lambda: (catalog if catalog.get('selection', {}).get('tab_id') == destination_id and
+                 populated_moved_pane in pane_ids(tab_layout(catalog, destination_id).get('root')) and
+                 populated_moved_pane not in pane_ids(tab_layout(catalog, tab_id).get('root'))
+                 else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    populated_source_after = tab_layout(committed_populated, tab_id)
+    populated_destination_after = tab_layout(committed_populated, destination_id)
+    populated_history = json.loads(committed_populated['layout']['json'])
+    siblings = direct_move_sibling_split(populated_destination_after.get('root'),
+                                         source=populated_moved_pane, target=destination_session)
+    require(siblings == ('Horizontal', [destination_session, populated_moved_pane]) and
+            set(pane_ids(populated_source_after.get('root'))) == populated_source_ids - {populated_moved_pane} and
+            set(pane_ids(populated_destination_after.get('root'))) ==
+            {destination_session, populated_moved_pane} and
+            len(populated_history.get('undo', [])) == len(populated_history_before.get('undo', [])) + 1 and
+            populated_history.get('redo', []) == [] and
+            populated_history['undo'][-1]['before']['tabs'][tab_id]['root'] == source_layout.get('root') and
+            populated_history['undo'][-1]['before']['tabs'][destination_id]['root'] == populated_layout.get('root') and
+            live_unchanged(populated_generations, populated_processes),
+            'populated destination did not receive the pane as a right sibling in one atomic step')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-tab-drop-populated.ppm')
+    step('pointer-undo')
+    restored_populated = wait_until(
+        lambda: (catalog if tab_layout(catalog, tab_id) == source_layout and
+                 tab_layout(catalog, destination_id) == populated_layout
+                 else None) if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+        time.monotonic() + 8)
+    require(restored_populated['selection'].get('tab_id') == destination_id and
+            live_unchanged(populated_generations, populated_processes),
+            'populated-transfer undo changed selection or a process identity')
+    time.sleep(0.35)
+    helper_call(config, 'capture', '/artifacts/pointer-tab-drop-populated-undo.ppm')
+
     report['pointer'] = {
         'four_pane_ids_preserved': sorted(original_ids),
         'process_generations_and_pids_unchanged': True,
@@ -1626,11 +1842,22 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'selection_ime_dialog_and_inactive_focus_suppressed': True,
         'drop_inserted_source_to_right_of_expected_target_as_horizontal_sibling': True,
         'prefix_undo_restored_exact_pre_drag_layout': True,
+        'tab_drop_cancel_preserved_both_tab_snapshots_selection_and_live_processes': True,
+        'tab_drop_committed_one_atomic_history_step_and_activated_empty_destination': True,
+        'tab_transfer_history_contains_exact_before_and_after_for_both_tabs': True,
+        'tab_transfer_undo_restored_both_trees_and_kept_destination_selected': True,
+        'populated_destination_received_source_as_right_sibling_and_undo_restored_it': True,
+        'one_fixture_shell_was_explicitly_added_before_populated_transfer': destination_pair,
         'captures': ['pointer-hover.ppm', 'pointer-subthreshold-before.ppm',
                      'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
                      'pointer-focus-mode-drag.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
-                     'pointer-dropped.ppm', 'pointer-undo.ppm']}
+                     'pointer-dropped.ppm', 'pointer-undo.ppm',
+                     'pointer-tab-drop-cancel.ppm', 'pointer-tab-drop-preview.ppm',
+                     'pointer-tab-drop-committed.ppm', 'pointer-tab-drop-undo.ppm',
+                     'pointer-tab-drop-populated-before.ppm',
+                     'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
+                     'pointer-tab-drop-populated-undo.ppm']}
     report.update({'status': POINTER_PASS, 'stage': 'complete'})
     save()
 
@@ -4765,7 +4992,11 @@ def outer_run(args) -> dict:
                   'pointer-focus-mode-before.ppm', 'pointer-focus-mode-drag.ppm',
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
-                  'pointer-undo.ppm'] if args.fixture == 'pointer' else
+                  'pointer-undo.ppm', 'pointer-tab-drop-cancel.ppm',
+                  'pointer-tab-drop-preview.ppm', 'pointer-tab-drop-committed.ppm',
+                  'pointer-tab-drop-undo.ppm', 'pointer-tab-drop-populated-before.ppm',
+                  'pointer-tab-drop-populated-preview.ppm', 'pointer-tab-drop-populated.ppm',
+                  'pointer-tab-drop-populated-undo.ppm'] if args.fixture == 'pointer' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'catalog-library-empty.ppm',
                   'catalog-library-saved.ppm', 'catalog-library-reopened.ppm',
@@ -4809,7 +5040,7 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
@@ -4855,7 +5086,7 @@ def parse_args(argv=None):
     modes.add_argument('--compile-helper', metavar='PATH', type=Path,
                        help='compile the fixed-sequence XTEST helper only; does not start a display')
     parser.add_argument('--fixture', choices=['pinyin', 'keyboard', 'latency', 'context', 'memory', 'generations', 'resume', 'history', 'setup', 'opencode', 'controls', 'pointer', 'catalog', 'recipes'], default='pinyin',
-                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pointer layout fixture')
+                        help='fixed Pinyin, keyboard, latency, context, memory, generation, resume, history, setup, OpenCode, panel controls, or pane pointer and cross-tab transfer fixture')
     parser.add_argument('--publication-trace', action='store_true',
                         help='enable finite numeric-only app publication tracing')
     parser.add_argument('--app', type=Path, default=DEFAULT_APP)

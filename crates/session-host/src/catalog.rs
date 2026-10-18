@@ -13,7 +13,19 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum LayoutAction {
-    Apply { command: Command },
+    Apply {
+        command: Command,
+    },
+    /// Move an existing pane to another tab and select that tab atomically.
+    TransferAndActivate {
+        pane: Uuid,
+        from_tab: Uuid,
+        to_tab: Uuid,
+        target: Option<Uuid>,
+        side: pigade_layout::Direction,
+        split: Uuid,
+        expected_selection_revision: u64,
+    },
     Undo,
     Redo,
 }
@@ -321,6 +333,7 @@ pub(crate) fn layout_edit(
     let current = store.catalog()?;
     ensure_revision(&current.layout, expected_revision)?;
     let mut model = load_layout(&current)?;
+    let mut transfer_selection = None;
     let changed = match action {
         LayoutAction::Apply { command } => {
             ensure!(
@@ -328,6 +341,86 @@ pub(crate) fn layout_edit(
                 "create tabs through catalog metadata"
             );
             model.apply(command)?
+        }
+        LayoutAction::TransferAndActivate {
+            pane,
+            from_tab,
+            to_tab,
+            target,
+            side,
+            split,
+            expected_selection_revision,
+        } => {
+            let selection = &current.selection;
+            ensure!(
+                selection.revision == expected_selection_revision,
+                "selection changed before pane drop"
+            );
+            ensure!(
+                selection.tab_id == Some(from_tab),
+                "pane drop source is no longer the selected tab"
+            );
+            ensure!(
+                from_tab != to_tab,
+                "source and destination tabs must differ"
+            );
+            let source = current
+                .tabs
+                .iter()
+                .find(|tab| tab.id == from_tab)
+                .context("pane drop source tab is missing")?;
+            let destination = current
+                .tabs
+                .iter()
+                .find(|tab| tab.id == to_tab)
+                .context("pane drop destination tab is missing")?;
+            ensure!(
+                model.state().pane_tab(pane) == Some(from_tab),
+                "pane is no longer in the requested source tab"
+            );
+            ensure!(
+                source.workspace_id == destination.workspace_id,
+                "pane drops must stay within one workspace"
+            );
+            let workspace = current
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == source.workspace_id)
+                .context("pane drop workspace is missing")?;
+            ensure!(
+                workspace.status == pigade_storage::WorkspaceStatus::Ready,
+                "pane drop workspace is unavailable"
+            );
+            ensure!(
+                selection.workspace_id == Some(workspace.id)
+                    && selection.project_id == Some(workspace.project_id),
+                "selected source tab workspace is inconsistent"
+            );
+            let destination_layout = &model.state().tabs[&to_tab];
+            ensure!(
+                match (&destination_layout.root, target) {
+                    (None, None) => true,
+                    (Some(_), Some(target)) => destination_layout.panes().contains(&target),
+                    _ => false,
+                },
+                "pane drop target no longer matches destination layout"
+            );
+            let changed = model.apply(Command::Transfer {
+                pane,
+                to_tab,
+                target,
+                side,
+                split,
+            })?;
+            let mut next_selection = selection.clone();
+            next_selection.project_id = Some(workspace.project_id);
+            next_selection.workspace_id = Some(workspace.id);
+            next_selection.tab_id = Some(to_tab);
+            transfer_selection = Some(CatalogWrite {
+                value: next_selection,
+                expected_revision: Some(expected_selection_revision),
+            });
+            changed
         }
         LayoutAction::Undo => model.undo(),
         LayoutAction::Redo => model.redo(),
@@ -338,6 +431,7 @@ pub(crate) fn layout_edit(
     ensure_membership(&current, &model)?;
     let mut batch = CatalogBatch {
         layout: Some(history_write(&model, &current.layout)?),
+        selection: transfer_selection,
         ..CatalogBatch::default()
     };
     for tab in &current.tabs {
@@ -766,6 +860,200 @@ mod tests {
             .iter()
             .find(|tab| tab.id == id(number))
             .unwrap()
+    }
+
+    fn prepare_drop(store: &mut MetadataStore, populated: bool, focus: bool) -> Result<Catalog> {
+        seed(store)?;
+        let mut catalog = apply_metadata(
+            store,
+            CatalogBatch {
+                tabs: vec![new(tab(6, 2))],
+                ..CatalogBatch::default()
+            },
+        )?;
+        let mut source_selection = catalog.selection.clone();
+        source_selection.project_id = Some(id(1));
+        source_selection.workspace_id = Some(id(2));
+        source_selection.tab_id = Some(id(4));
+        catalog = store.apply_catalog(CatalogBatch {
+            selection: Some(CatalogWrite {
+                value: source_selection,
+                expected_revision: Some(catalog.selection.revision),
+            }),
+            ..CatalogBatch::default()
+        })?;
+        catalog = layout_edit(
+            store,
+            catalog.layout.revision,
+            LayoutAction::Apply {
+                command: Command::Insert {
+                    tab: id(4),
+                    pane: id(20),
+                    target: None,
+                    side: Direction::Right,
+                    split: id(30),
+                },
+            },
+        )?;
+        if populated {
+            catalog = layout_edit(
+                store,
+                catalog.layout.revision,
+                LayoutAction::Apply {
+                    command: Command::Insert {
+                        tab: id(6),
+                        pane: id(21),
+                        target: None,
+                        side: Direction::Right,
+                        split: id(31),
+                    },
+                },
+            )?;
+        }
+        if focus {
+            catalog = layout_edit(
+                store,
+                catalog.layout.revision,
+                LayoutAction::Apply {
+                    command: Command::ToggleFocusMode { tab: id(6) },
+                },
+            )?;
+        }
+        Ok(catalog)
+    }
+
+    #[test]
+    fn transfer_and_activate_is_atomic_reopenable_and_one_undo_step() -> Result<()> {
+        for (populated, focus) in [(false, false), (true, false), (true, true)] {
+            let directory = tempfile::tempdir()?;
+            let database = directory.path().join("state.sqlite");
+            let mut store = MetadataStore::open(&database)?;
+            let before = prepare_drop(&mut store, populated, focus)?;
+            let target = if populated { Some(id(21)) } else { None };
+            let committed = layout_edit(
+                &mut store,
+                before.layout.revision,
+                LayoutAction::TransferAndActivate {
+                    pane: id(20),
+                    from_tab: id(4),
+                    to_tab: id(6),
+                    target,
+                    side: Direction::Right,
+                    split: id(32),
+                    expected_selection_revision: before.selection.revision,
+                },
+            )?;
+            assert_eq!(committed.selection.tab_id, Some(id(6)));
+            assert_eq!(
+                load_layout(&committed)?.state().pane_tab(id(20)),
+                Some(id(6))
+            );
+            drop(store);
+            let mut store = MetadataStore::open(&database)?;
+            let reopened = store.catalog()?;
+            assert_eq!(
+                load_layout(&reopened)?.state().pane_tab(id(20)),
+                Some(id(6))
+            );
+            let undone = layout_edit(&mut store, reopened.layout.revision, LayoutAction::Undo)?;
+            let restored = load_layout(&undone)?;
+            assert_eq!(restored.state().pane_tab(id(20)), Some(id(4)));
+            assert_eq!(
+                restored.state().pane_tab(id(21)),
+                populated.then_some(id(6))
+            );
+            assert_eq!(undone.selection.tab_id, Some(id(6)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stale_selection_wrong_source_cross_workspace_and_moved_target_fail_closed() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(directory.path().join("state.sqlite"))?;
+        let before = prepare_drop(&mut store, true, false)?;
+        let attempt = |store: &mut MetadataStore, from_tab, to_tab, target, selection_revision| {
+            layout_edit(
+                store,
+                before.layout.revision,
+                LayoutAction::TransferAndActivate {
+                    pane: id(20),
+                    from_tab,
+                    to_tab,
+                    target,
+                    side: Direction::Right,
+                    split: id(33),
+                    expected_selection_revision: selection_revision,
+                },
+            )
+        };
+        for (from, to, target, selection_rev) in [
+            (
+                id(4),
+                id(6),
+                Some(id(21)),
+                before.selection.revision.saturating_sub(1),
+            ),
+            (id(5), id(6), Some(id(21)), before.selection.revision),
+            (id(4), id(5), Some(id(21)), before.selection.revision),
+            (id(4), id(6), Some(id(999)), before.selection.revision),
+        ] {
+            assert!(attempt(&mut store, from, to, target, selection_rev).is_err());
+            let current = store.catalog()?;
+            assert_eq!(current.layout.revision, before.layout.revision);
+            assert_eq!(current.selection, before.selection);
+            assert_eq!(load_layout(&current)?.state().pane_tab(id(20)), Some(id(4)));
+        }
+        assert!(
+            layout_edit(
+                &mut store,
+                before.layout.revision.saturating_sub(1),
+                LayoutAction::TransferAndActivate {
+                    pane: id(20),
+                    from_tab: id(4),
+                    to_tab: id(6),
+                    target: Some(id(21)),
+                    side: Direction::Right,
+                    split: id(34),
+                    expected_selection_revision: before.selection.revision,
+                },
+            )
+            .is_err()
+        );
+        let mut workspace = store
+            .catalog()?
+            .workspaces
+            .into_iter()
+            .find(|w| w.id == id(2))
+            .unwrap();
+        workspace.status = WorkspaceStatus::Archived;
+        let archived = apply_metadata(
+            &mut store,
+            CatalogBatch {
+                workspaces: vec![CatalogWrite {
+                    value: workspace.clone(),
+                    expected_revision: Some(workspace.revision),
+                }],
+                ..CatalogBatch::default()
+            },
+        )?;
+        assert!(
+            layout_edit(
+                &mut store,
+                archived.layout.revision,
+                LayoutAction::TransferAndActivate {
+                    pane: id(20),
+                    from_tab: id(4),
+                    to_tab: id(6),
+                    target: Some(id(21)),
+                    side: Direction::Right,
+                    split: id(35),
+                    expected_selection_revision: archived.selection.revision,
+                },
+            )
+            .is_err()
+        );
+        Ok(())
     }
 
     #[test]

@@ -148,6 +148,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-focus-mode-preview") &&
         strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
+        strcmp(a.stage, "pointer-create-transfer-tab") && strcmp(a.stage, "pointer-select-first-tab") &&
+        strcmp(a.stage, "pointer-tab-drop-cancel") && strcmp(a.stage, "pointer-tab-drop") &&
+        strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
         strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
         strcmp(a.stage, "pointer-ime-input") && strcmp(a.stage, "pointer-ime-cancel") &&
         strcmp(a.stage, "pointer-dialog-hover") && strcmp(a.stage, "pointer-inactive-hold"))
@@ -167,6 +170,15 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-focus-mode-preview") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-focus-mode-drag.ppm")))
         fail("focus-mode pointer capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-tab-drop-cancel") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-tab-drop-cancel.ppm")))
+        fail("tab-drop cancel capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-tab-drop") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-tab-drop-preview.ppm")))
+        fail("tab-drop preview capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-tab-drop-populated-preview") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-tab-drop-populated-preview.ppm")))
+        fail("populated tab-drop preview capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-ime-input") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-ime-preedit.ppm")))
         fail("pointer IME preedit capture path must be the fixed artifact");
@@ -577,6 +589,21 @@ static void pointer_drag_begin(Display *dpy, Window app) {
         fail("pointer drag button press failed");
     /* The detached target spans x755..1280; stay clearly in its right half. */
     pointer_position(dpy, app, 1100, 250);
+    XSync(dpy, False);
+}
+
+static void pointer_tab_drag_begin(Display *dpy, Window app) {
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, app, &attr) || attr.width != 1280 || attr.height != 800)
+        fail("tab drop requires the fixed private 1280x800 app");
+    KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+    if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+        fail("tab drop modifier press failed");
+    pointer_position(dpy, app, 350, 250);
+    if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+        fail("tab drop button press failed");
+    /* Fixed center of the second visible tab in the private four-shell fixture. */
+    pointer_position(dpy, app, 405, 57);
     XSync(dpy, False);
 }
 
@@ -1290,6 +1317,31 @@ int main(int argc, char **argv) {
             struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
             nanosleep(&settle, NULL);
             pointer_drag_release(dpy, 0);
+        } else if (!strcmp(a.stage, "pointer-create-transfer-tab")) {
+            setup_prefix(dpy, XK_t, 0);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 150000000 };
+            nanosleep(&settle, NULL);
+            modified_key(dpy, XK_Shift_L, XK_t);
+            const KeySym name[] = { XK_r, XK_a, XK_n, XK_s, XK_f, XK_e, XK_r };
+            for (size_t i = 0; i < sizeof(name) / sizeof(name[0]); ++i) key(dpy, name[i]);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "pointer-select-first-tab")) {
+            modified_key(dpy, XK_Control_L, XK_1);
+        } else if (!strcmp(a.stage, "pointer-tab-drop-cancel") ||
+                   !strcmp(a.stage, "pointer-tab-drop") ||
+                   !strcmp(a.stage, "pointer-tab-drop-populated-preview")) {
+            int cancel = !strcmp(a.stage, "pointer-tab-drop-cancel");
+            pointer_tab_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 300000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            const char *expected = cancel ? "CANCEL\n" : "RELEASE\n";
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, expected))
+                fail("tab-drop probe accepts only its fixed release response");
+            pointer_drag_release(dpy, cancel);
         } else if (!strcmp(a.stage, "pointer-undo")) {
             setup_prefix(dpy, XK_z, 0);
         } else if (!strcmp(a.stage, "pointer-selection-hold")) {

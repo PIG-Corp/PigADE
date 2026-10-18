@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Direct pane drop onto another visible tab: destination layout preview, atomic transfer and selection, empty/populated targets, exact placement undo and unchanged CLI processes.
+
 - Pointer controls:10px drag activation without click tear-out; nearest gutter target, focus-mode drag reveal/cancel, and stable per-session geometry prevent focus-mode input/resize misrouting.
 
 - Pointer: modifier-click without travel no longer changes placement or undo; invalid drops show explicit text and an amber outline. Hover focus and relative-grab Dwindle insertion remain available without clicking the destination.

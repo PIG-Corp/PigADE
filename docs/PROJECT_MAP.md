@@ -29,7 +29,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/history.rs | Generation-bound PIGROW02 archive segments and fixed-slot index; data fsync → index fsync → PIGCP002 root; recovery tail uses a private derived cache |
 | crates/session-host/src/history_view.rs | Immutable exact-watermark cold+hot normal history snapshots, bounded worker/LRU/TTL, Unicode text paging and incremental literal search |
 | crates/app/src/catalog_flow.rs | Frozen-revision metadata rename/archive batches; archive never stops processes or edits placement |
-| crates/app/src/pointer_layout.rs | Pure 10px Dwindle drag threshold, nearest gutter target, relative grab retention and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots and temporarily polls the focus-mode remainder during drag |
+| crates/app/src/pointer_layout.rs | Pure 10px Dwindle drag threshold, nearest gutter target, relative grab retention and bounded latest-intent hover focus helpers; main.rs keeps per-session geometry slots, temporarily polls the focus-mode remainder, and provides clipped cross-tab drop previews with atomic TransferAndActivate |
 | crates/app/src/history_view.rs | Snapshot identity, bounded page navigation and plain-text soft-wrap copy helpers; native readonly field UI is in product/main |
 | crates/terminal/src/history_text.rs | Read-only UTF8-safe text projection from typed cold rows and the normal grid; no ANSI parser |
 | crates/session-host/src/history_read.rs | Bounded asynchronous canonical-record reads; exact generation/sequence, no ANSI parsing or host-command-thread cold I/O |
@@ -40,7 +40,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/session-host/src/generations.rs | Indexed launch-order pages, explicit historical pins and follow-head selection; metadata-only catalog CAS, no spawn |
 | crates/session-host/src/recovery_diagnostics.rs | Bounded unavailable-artifact notices with escaped display basenames; no fabricated sessions or source changes |
 | crates/session-host/src/request_decode.rs | Streaming Input-array preflight before internally tagged Serde buffering; bounded raw IPC frame remains a separate limit |
-| crates/session-host/src/catalog.rs | Authoritative layout/projection validation and atomic persistence; explicit legacy projection import |
+| crates/session-host/src/catalog.rs | Authoritative layout/projection validation and atomic persistence, including same-workspace pane TransferAndActivate with layout/selection CAS; explicit legacy projection import |
 | crates/session-host/tests | Real PTY/reconnect/resize/kill/Stop/query-burst and durable placement scenarios |
 | crates/storage/src/context.rs | Immutable scoped instructions/role/memory revisions with CAS, SHA-256/time/author and validated ordered effective snapshots; updates to running CLI remain separate |
 | crates/storage/src/memory.rs | Lossless #/## source sections outside fenced code, bounded review metadata and explicit revision/hash-bound 32KiB UTF-8 selection |

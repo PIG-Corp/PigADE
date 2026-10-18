@@ -3465,3 +3465,58 @@ Refine hover focus and Hyprland-style pane gestures, reveal focus-mode remainder
 - Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, crates/app/README.md, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, DESIGN.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 224 app tests passed; final extended blocked-wait/input/prefetch transport test passed separately. Strict app Clippy, release build, fmt,32 harness tests, version/diff checks passed. Final private pointer03 passed real4shell hover/input,5px pending grab, focus-mode cancel, unchanged preview PTYs/PIDs, protected IME/dialog/selection, drop and exact undo; screenshots inspected.01/02 metadata passed but missing remainder frames corrected by prompt readonly refresh.
 - Risks / next: No desktop configuration/input changes. Native Wayland, formal latency/accessibility and complete MVP gates remain open. Preserve unrelated dirty research/stress/GPUI files and stash0.
+
+## 2026-10-18T02:05:36+00:00 — /root/pointer_review_luna
+
+Add a pure preview for transferring a pane to another tab
+
+- Files: crates/app/src/pointer_layout.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/pointer_layout.rs passed; git diff --check -- crates/app/src/pointer_layout.rs passed; Cargo tests not run per task boundary
+- Risks / next: Root wraps the preview command in host transfer/selection-CAS integration and owns app verification
+
+## 2026-10-18T02:06:04+00:00 — /root/appearance_colors_luna
+
+Add atomic same-workspace pane transfer and destination activation with selection/layout CAS and one undo step.
+
+- Files: crates/session-host/src/catalog.rs, crates/storage/src/catalog.rs
+- Verification: cargo fmt completed; targeted host/storage test builds reached compile but were blocked by Catalog literals missing pane_tab_drop_schema in session-host/src/workspace_git.rs:985 and storage/src/prompt.rs:410, outside assigned ownership.
+- Risks / next: Root should update the two external Catalog literals, then rerun the focused host transfer tests.
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Render clipped tab drop targets and a compact pane transfer preview card
+
+- Files: crates/app/src/product.rs
+- Verification: `rustfmt --edition 2024 --check crates/app/src/product.rs` passed after formatting. Pinned GPUI source confirms `canvas` prepaint receives final bounds; observer intersects these with `Window::content_mask()` before recording, excluding clipped tab portions. No Cargo/native run per task boundary; root owns app build and native lane.
+- Risks / next: Root is adding `CanvasApp.tab_drop_bounds` and clears it per render. Parent should run app compile after integration. The thumbnail uses validated `GeometryTemplate::from_tab`; malformed layouts show an empty-layout preview.
+
+## 2026-10-18T02:06:51+00:00 — /root/appearance_colors_luna
+
+Fixed pane-drop reopen test to reopen the SQLite writer after releasing its lock.
+
+- Files: crates/session-host/src/catalog.rs
+- Verification: cargo test -p pigade-session-host transfer_and_activate -- --nocapture: passed (1 test); cargo test -p pigade-session-host stale_selection_wrong_source -- --nocapture: passed (1 test); cargo fmt completed.
+- Risks / next: Root owns app integration and workspace-wide verification.
+
+## 2026-10-18 — /root/close_tab_layout_luna
+
+Exercise cancelled and committed cross-tab pane drops in the private pointer fixture
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: `python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py` passed; all32 harness tests passed, including fixed-stage/plan checks and isolated C helper compilation/self-tests; `git diff --check` passed. No native/app Cargo run per task boundary.
+- Evidence added: native creation of an empty `Transfer` tab; preview held over the second tab with exact host/history/selection/frame/process assertions; Escape cancellation; committed atomic one-step transfer with full two-tab before/after history assertions; undo retaining the empty destination selection; then one explicitly UI-launched fixture shell and a second transfer/undo asserting the destination pane remains the left sibling. Captures: `pointer-tab-drop-cancel.ppm`, `pointer-tab-drop-preview.ppm`, `pointer-tab-drop-committed.ppm`, `pointer-tab-drop-undo.ppm`, `pointer-tab-drop-populated-before.ppm`, `pointer-tab-drop-populated.ppm`, `pointer-tab-drop-populated-undo.ppm`.
+- Risks / next: Root should run the native pointer fixture to validate final coordinates and host receipts; this lane did not access a desktop or start the app.
+
+### Native pointer review follow-up — hidden destination geometry after undo
+
+- Removed only the post-undo PTY geometry restoration assertions: native evidence showed placement and selected destination are restored, while the now-hidden source PTY correctly retains its last visible size until reselected. Preview/cancel still requires exact frame geometry; undo still checks exact snapshots, selection, and process identities.
+- Added a separate fixed helper stage and capture path for the populated destination preview, and added all populated captures to both report and outer artifact-copy allowlists.
+- Verification: `python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py`, all32 harness tests including isolated helper compilation/self-tests, and `git diff --check` passed. Native rerun remains root-owned.
+
+## 2026-10-18T02:16:10+00:00 — /root
+
+Integrate direct pane-to-tab drag preview and atomic destination activation without relaunching CLI
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/pointer_layout.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 348 workspace and227 app tests pass; final12 pointer helper tests and32 harness tests pass. Strict workspace/appClippy, locked release builds, fmt/version/diff checks pass. Native private pointer04 passes empty/populated destination preview/cancel/transfer/activation/exactundo with unchanged process generations/PIDs; captures inspected. Root repaired helper import/test UUID collision, thumbnail colors/height, removed width-shifting target badge and Arc-cached preview. Native01-03 fixture-only observer errors are retained and explained in handoff; no weakened preview/model/process checks.
+- Risks / next: Full MVP/Wayland/performance/accessibility gates open. Next: fix legacy TransferTo targetNone for occupied tabs while preserving keyboard no-follow semantics. Preserve unrelated dirty files and stash0.

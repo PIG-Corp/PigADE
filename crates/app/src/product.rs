@@ -4,7 +4,7 @@
 use crate::edit_field::FieldLayout;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Hsla, IntoElement, ParentElement, Role,
-    Stateful, StatefulInteractiveElement, Styled, Toggled, div,
+    Stateful, StatefulInteractiveElement, Styled, Toggled, canvas, div,
     prelude::{FluentBuilder, InteractiveElement},
     px, rgb,
 };
@@ -367,6 +367,7 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ProductUi {
+    pub(super) tab_drop_target: Option<Uuid>,
     pub(super) panel_directory: Option<protocol::PanelDirectory>,
     pub(super) palette_index: usize,
     pub(super) palette_after: Option<Uuid>,
@@ -1805,7 +1806,9 @@ impl ProductUi {
                 chrome::Colors::for_theme(self.appearance.theme).muted,
             ))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.product_action(action.clone(), window, cx);
+                if this.pane_drag.is_none() {
+                    this.product_action(action.clone(), window, cx);
+                }
                 cx.stop_propagation();
             }))
             .into_any_element()
@@ -2323,11 +2326,35 @@ impl ProductUi {
     fn tab_control(&self, tab: &Tab, selected: bool, cx: &mut Context<CanvasApp>) -> AnyElement {
         let colors = self.colors();
         let id = tab.id;
+        let drop_target = self.tab_drop_target == Some(id);
+        let app = cx.entity();
+        let bounds_observer = canvas(
+            move |bounds, window, cx| {
+                let clipped = bounds.intersect(&window.content_mask().bounds);
+                app.update(cx, |this, _| {
+                    if clipped.is_empty() {
+                        this.tab_drop_bounds.remove(&id);
+                    } else {
+                        this.tab_drop_bounds.insert(id, clipped);
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         div()
             .id(format!("tab-{id}"))
             .role(Role::Tab)
-            .aria_label(tab.name.clone())
+            .aria_label(if drop_target {
+                format!("Цель переноса панели: {}", tab.name)
+            } else {
+                tab.name.clone()
+            })
             .aria_selected(selected)
+            .relative()
             .h_full()
             .max_w(px(180.))
             .px(px(12.))
@@ -2335,8 +2362,18 @@ impl ProductUi {
             .flex()
             .items_center()
             .border_b_2()
-            .border_color(if selected { colors.accent } else { colors.base })
-            .bg(if selected { colors.raised } else { colors.base })
+            .border_color(if drop_target || selected {
+                colors.accent
+            } else {
+                colors.base
+            })
+            .bg(if drop_target {
+                colors.selected
+            } else if selected {
+                colors.raised
+            } else {
+                colors.base
+            })
             .rounded_t(px(5.))
             .text_size(px(12.))
             .text_color(if selected {
@@ -2347,6 +2384,8 @@ impl ProductUi {
             .hover(|style| style.bg(colors.hover))
             .gap_1()
             .child(div().min_w_0().truncate().child(tab.name.clone()))
+            // The target style must not change tab width beneath the pointer.
+            .child(bounds_observer)
             .when(selected, |row| {
                 row.child(self.icon_control(
                     &format!("manage-tab-{id}"),
@@ -2357,15 +2396,78 @@ impl ProductUi {
                 ))
             })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.product_action(ProductAction::SelectTab(id), window, cx);
+                if this.pane_drag.is_none() {
+                    this.product_action(ProductAction::SelectTab(id), window, cx);
+                }
                 cx.stop_propagation();
             }))
             .on_mouse_down(
                 gpui::MouseButton::Right,
                 cx.listener(move |this, _, window, cx| {
-                    this.product_action(ProductAction::ManageTab(id), window, cx);
+                    if this.pane_drag.is_none() {
+                        this.product_action(ProductAction::ManageTab(id), window, cx);
+                    }
                     cx.stop_propagation();
                 }),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn tab_drop_card(
+        &self,
+        name: &str,
+        preview: &pigade_layout::TabLayout,
+    ) -> AnyElement {
+        let colors = self.colors();
+        let thumbnail = pigade_layout::GeometryTemplate::from_tab(preview)
+            .ok()
+            .and_then(|template| template.root)
+            .map(|root| template_thumbnail(&root, chrome::colors(self.appearance.theme)))
+            .unwrap_or_else(|| {
+                div()
+                    .w_full()
+                    .h(px(54.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("Пустая раскладка")
+            });
+        div()
+            .absolute()
+            .top(px(86.))
+            .right(px(16.))
+            .w(px(260.))
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .rounded(px(9.))
+            .border_1()
+            .border_color(colors.accent)
+            .bg(colors.raised)
+            .text_color(colors.text)
+            .shadow_lg()
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(name.to_owned()),
+            )
+            .child(div().w_full().h(px(66.)).flex().child(thumbnail))
+            .child(div().text_size(px(11.)).text_color(colors.muted).child(
+                if preview.panes().len() == 1 {
+                    "Первая панель во вкладке"
+                } else {
+                    "Справа от выбранной панели"
+                },
+            ))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child("Отпустите, чтобы перенести · Esc — отмена"),
             )
             .into_any_element()
     }

@@ -135,6 +135,35 @@ pub(crate) fn detached_layout(base: &TabLayout, pane: Uuid) -> Option<TabLayout>
     Some(preview)
 }
 
+/// Preview moving one placed pane to another existing tab, beside that tab's
+/// focused pane (or as its root pane when the destination is empty).
+pub(crate) fn tab_transfer_preview(
+    state: &LayoutState,
+    from_tab: Uuid,
+    pane: Uuid,
+    to_tab: Uuid,
+    split: Uuid,
+) -> Option<(Command, TabLayout)> {
+    let model = LayoutModel::new(state.clone()).ok()?;
+    if from_tab == to_tab || state.pane_tab(pane) != Some(from_tab) {
+        return None;
+    }
+    let destination = state.tabs.get(&to_tab)?;
+    let target = destination.focused;
+    if (destination.root.is_none()) != target.is_none() {
+        return None;
+    }
+    let command = Command::Transfer {
+        pane,
+        to_tab,
+        target,
+        side: Direction::Right,
+        split,
+    };
+    let preview = model.preview(command.clone()).ok()?;
+    Some((command, preview.tabs.get(&to_tab)?.clone()))
+}
+
 fn valid_rect(rect: Rect) -> bool {
     [
         rect.x,
@@ -218,14 +247,15 @@ impl FocusQueue {
 #[cfg(test)]
 mod tests {
     use pigade_layout::{
-        Axis, Command, Direction, LayoutState, Node, PaneRect, Rect, SplitId, TabLayout,
+        Axis, Command, Direction, LayoutModel, LayoutState, Node, PaneRect, Rect, SplitId,
+        TabLayout,
     };
     use std::collections::BTreeMap;
     use uuid::Uuid;
 
     use super::{
         FocusIntent, FocusQueue, detached_layout, drop_command, drop_target, floating_rect,
-        travelled,
+        tab_transfer_preview, travelled,
     };
 
     fn id(value: u128) -> Uuid {
@@ -506,6 +536,112 @@ mod tests {
         assert!(model.apply(command).unwrap());
         assert!(model.undo());
         assert_eq!(model.state(), &before);
+    }
+
+    fn transfer_state(source: TabLayout, destination: TabLayout) -> LayoutState {
+        LayoutState {
+            tabs: BTreeMap::from([(id(10), source), (id(20), destination)]),
+        }
+    }
+
+    #[test]
+    fn tab_transfer_previews_empty_destination_without_mutating_source() {
+        let state = transfer_state(two_panes(true), TabLayout::default());
+        let before = state.clone();
+        let (command, preview) =
+            tab_transfer_preview(&state, id(10), id(1), id(20), id(30)).unwrap();
+
+        assert!(matches!(
+            &command,
+            Command::Transfer {
+                pane,
+                to_tab,
+                target: None,
+                side: Direction::Right,
+                split,
+            } if *pane == id(1) && *to_tab == id(20) && *split == id(30)
+        ));
+        assert_eq!(preview.root, Some(Node::pane(id(1))));
+        assert_eq!(preview.focused, Some(id(1)));
+        assert!(!preview.focus_mode);
+        assert_eq!(state, before);
+
+        let mut model = LayoutModel::new(state.clone()).unwrap();
+        assert!(model.apply(command).unwrap());
+        assert_eq!(model.state().tabs[&id(20)], preview);
+        assert!(model.undo());
+        assert_eq!(model.state(), &state);
+    }
+
+    #[test]
+    fn tab_transfer_targets_destination_focus_and_preserves_modes_and_identities() {
+        let source = two_panes(true);
+        let destination = TabLayout {
+            root: Some(Node::Split {
+                id: id(21),
+                axis: Axis::Vertical,
+                weights: vec![0.4, 0.6],
+                children: vec![Node::pane(id(6)), Node::pane(id(7))],
+            }),
+            focused: Some(id(7)),
+            focus_mode: true,
+        };
+        let state = transfer_state(source, destination);
+        let (command, preview) =
+            tab_transfer_preview(&state, id(10), id(1), id(20), id(31)).unwrap();
+
+        assert!(matches!(
+            &command,
+            Command::Transfer {
+                pane,
+                to_tab,
+                target: Some(target),
+                side: Direction::Right,
+                split,
+            } if *pane == id(1) && *to_tab == id(20) && *target == id(7) && *split == id(31)
+        ));
+        assert_eq!(preview.focused, Some(id(1)));
+        assert!(preview.focus_mode);
+        assert_eq!(preview.panes(), vec![id(6), id(7), id(1)]);
+
+        let mut model = LayoutModel::new(state.clone()).unwrap();
+        assert!(model.apply(command).unwrap());
+        assert_eq!(model.state().pane_tab(id(1)), Some(id(20)));
+        assert_eq!(model.state().tabs[&id(10)].focused, Some(id(2)));
+        assert!(model.undo());
+        assert_eq!(model.state(), &state);
+    }
+
+    #[test]
+    fn tab_transfer_rejects_same_missing_wrong_and_duplicate_sources() {
+        let state = transfer_state(two_panes(false), TabLayout::default());
+        assert!(tab_transfer_preview(&state, id(10), id(1), id(10), id(30)).is_none());
+        assert!(tab_transfer_preview(&state, id(99), id(1), id(20), id(30)).is_none());
+        assert!(tab_transfer_preview(&state, id(20), id(1), id(20), id(30)).is_none());
+        assert!(tab_transfer_preview(&state, id(10), id(99), id(20), id(30)).is_none());
+        assert!(tab_transfer_preview(&state, id(10), id(1), id(99), id(30)).is_none());
+
+        let duplicate = LayoutState {
+            tabs: BTreeMap::from([
+                (
+                    id(10),
+                    TabLayout {
+                        root: Some(Node::pane(id(1))),
+                        focused: Some(id(1)),
+                        focus_mode: false,
+                    },
+                ),
+                (
+                    id(20),
+                    TabLayout {
+                        root: Some(Node::pane(id(1))),
+                        focused: Some(id(1)),
+                        focus_mode: false,
+                    },
+                ),
+            ]),
+        };
+        assert!(tab_transfer_preview(&duplicate, id(10), id(1), id(20), id(30)).is_none());
     }
 
     #[test]

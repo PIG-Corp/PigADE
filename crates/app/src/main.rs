@@ -977,6 +977,62 @@ struct PaneDrag {
     moved: bool,
     travelled: bool,
     drop: Option<(pigade_layout::Command, pigade_layout::Rect)>,
+    tab_drop: Option<Arc<TabDropPreview>>,
+}
+
+#[derive(Clone)]
+struct TabDropPreview {
+    from_tab: uuid::Uuid,
+    to_tab: uuid::Uuid,
+    layout_revision: u64,
+    name: String,
+    command: pigade_layout::Command,
+    layout: pigade_layout::TabLayout,
+}
+
+/// Read only the two trees involved in a tab drop; full history stays in the
+/// authoritative host. The exact target in the preview is also used at commit.
+fn tab_drop_preview(
+    catalog: &pigade_storage::Catalog,
+    from_tab: uuid::Uuid,
+    pane: uuid::Uuid,
+    to_tab: uuid::Uuid,
+    split: uuid::Uuid,
+) -> Option<TabDropPreview> {
+    if catalog.pane_tab_drop_schema != Some(1)
+        || catalog.selection.tab_id != Some(from_tab)
+        || from_tab == to_tab
+    {
+        return None;
+    }
+    let source = catalog.tabs.iter().find(|tab| tab.id == from_tab)?;
+    let destination = catalog.tabs.iter().find(|tab| tab.id == to_tab)?;
+    if source.workspace_id != destination.workspace_id
+        || !catalog.workspaces.iter().any(|workspace| {
+            workspace.id == source.workspace_id
+                && workspace.status == pigade_storage::WorkspaceStatus::Ready
+        })
+    {
+        return None;
+    }
+    let state = pigade_layout::LayoutState {
+        tabs: [
+            (from_tab, serde_json::from_str(&source.layout_json).ok()?),
+            (to_tab, serde_json::from_str(&destination.layout_json).ok()?),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let (command, layout) =
+        pointer_layout::tab_transfer_preview(&state, from_tab, pane, to_tab, split)?;
+    Some(TabDropPreview {
+        from_tab,
+        to_tab,
+        layout_revision: catalog.layout.revision,
+        name: destination.name.clone(),
+        command,
+        layout,
+    })
 }
 
 struct DirectLaunch {
@@ -1063,6 +1119,7 @@ mod focus_placement_tests {
             prompts: None,
             tab_close_schema: None,
             engine_options_schema: Some(1),
+            pane_tab_drop_schema: Some(1),
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -1143,6 +1200,8 @@ struct CanvasApp {
     resize_pending: Option<pigade_layout::Command>,
     resize_gesture: Option<ResizeGesture>,
     pane_drag: Option<PaneDrag>,
+    tab_drop_bounds: std::collections::BTreeMap<uuid::Uuid, Bounds<Pixels>>,
+    deferred_tab_drop: Option<Arc<TabDropPreview>>,
     focus_queue: pointer_layout::FocusQueue,
     hover_position: Option<Point<Pixels>>,
     navigation: navigation::Navigation,
@@ -1418,6 +1477,7 @@ impl CanvasApp {
                                         this.focus_queue.cancel();
                                         this.focus_queue.complete(error.ui_request.expect("matching focus error"),None);
                                         this.deferred_placement=None;
+                                        this.deferred_tab_drop=None;
                                         this.deferred_product_action=None;
                                     }
                                     if this.prompt_reload.is_some_and(|request|Some(request)==error.ui_request) {this.prompt_reload=None;}
@@ -1667,6 +1727,8 @@ impl CanvasApp {
             resize_pending: None,
             resize_gesture: None,
             pane_drag: None,
+            tab_drop_bounds: Default::default(),
+            deferred_tab_drop: None,
             focus_queue: Default::default(),
             hover_position: None,
             navigation: Default::default(),
@@ -2859,12 +2921,14 @@ impl CanvasApp {
             moved: false,
             travelled: false,
             drop: None,
+            tab_drop: None,
         });
         self.update_pane_drag_at(position, cx);
     }
 
     fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
         if self.pane_drag.take().is_some() {
+            self.product.tab_drop_target = None;
             self.layout_preview = None;
             self.sync_panel_visibility();
             self.filter_product_views();
@@ -2906,9 +2970,30 @@ impl CanvasApp {
                 self.geometry(bounds, cell, scale, cx);
             }
         }
+        let tab_drop = self.pane_drag.as_ref().and_then(|drag| {
+            if !drag.moved {
+                return None;
+            }
+            let destination = self
+                .tab_drop_bounds
+                .iter()
+                .find(|(tab, bounds)| **tab != drag.tab && bounds.contains(&position))
+                .map(|(tab, _)| *tab)?;
+            let catalog = self.product.catalog.as_ref()?;
+            if let Some(previous) = &drag.tab_drop
+                && previous.to_tab == destination
+                && previous.layout_revision == catalog.layout.revision
+            {
+                return Some(previous.clone());
+            }
+            tab_drop_preview(catalog, drag.tab, drag.pane, destination, drag.split).map(Arc::new)
+        });
+        self.product.tab_drop_target = tab_drop.as_ref().map(|preview| preview.to_tab);
         let drag = self.pane_drag.as_mut().expect("active pane drag");
+        drag.tab_drop = tab_drop;
         drag.drop = None;
         if drag.moved
+            && drag.tab_drop.is_none()
             && self
                 .canvas_bounds
                 .is_some_and(|bounds| bounds.contains(&position))
@@ -3091,6 +3176,8 @@ impl CanvasApp {
     fn sync_product_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_queue.cancel();
         self.deferred_placement = None;
+        self.deferred_tab_drop = None;
+        self.product.tab_drop_target = None;
         self.layout_preview = None;
         self.resize_pending = None;
         self.resize_gesture = None;
@@ -3164,7 +3251,9 @@ impl CanvasApp {
             return;
         }
         let Some(intent) = self.focus_queue.pending() else {
-            if let Some(command) = self.deferred_placement.take() {
+            if let Some(preview) = self.deferred_tab_drop.take() {
+                self.commit_tab_drop(preview, cx);
+            } else if let Some(command) = self.deferred_placement.take() {
                 self.layout_command(command, cx);
             }
             return;
@@ -3192,7 +3281,7 @@ impl CanvasApp {
         // Placement (especially focus-mode toggle) must observe the latest
         // hovered focus, including one not yet dispatched to the host.
         if self.focus_queue.is_saving() || self.focus_queue.pending().is_some() {
-            if self.deferred_placement.is_none() {
+            if self.deferred_placement.is_none() && self.deferred_tab_drop.is_none() {
                 self.deferred_placement = Some(command);
             } else {
                 self.product.notice =
@@ -3207,6 +3296,54 @@ impl CanvasApp {
         self.product_command(
             json!({"command":"layout_edit","expected_revision":catalog.layout.revision,
             "action":{"action":"apply","command":command}}),
+            cx,
+        );
+    }
+
+    fn commit_tab_drop(&mut self, preview: Arc<TabDropPreview>, cx: &mut Context<Self>) {
+        if self.focus_queue.is_saving() || self.focus_queue.pending().is_some() {
+            if self.deferred_placement.is_none() && self.deferred_tab_drop.is_none() {
+                self.deferred_tab_drop = Some(preview);
+            } else {
+                self.product.notice =
+                    Some("Операция размещения уже ожидает сохранения фокуса".into());
+            }
+            cx.notify();
+            return;
+        }
+        let Some(catalog) = &self.product.catalog else {
+            return;
+        };
+        if catalog.pane_tab_drop_schema != Some(1)
+            || catalog.selection.tab_id != Some(preview.from_tab)
+        {
+            self.product.notice = Some(
+                "Перенос отменён: исходная вкладка изменилась или host не поддерживает этот жест"
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let pigade_layout::Command::Transfer {
+            pane,
+            to_tab,
+            target,
+            side,
+            split,
+        } = preview.command.clone()
+        else {
+            return;
+        };
+        // Focus-only ACKs may advance the layout revision while the gesture is
+        // held. Retain the exact preview target; never choose a different pane.
+        self.product_command(
+            json!({
+                "command":"layout_edit", "expected_revision":catalog.layout.revision,
+                "action": {"action":"transfer_and_activate", "pane":pane,
+                    "from_tab":preview.from_tab, "to_tab":to_tab, "target":target,
+                    "side":side, "split":split,
+                    "expected_selection_revision":catalog.selection.revision}
+            }),
             cx,
         );
     }
@@ -5192,9 +5329,12 @@ impl CanvasApp {
             && let Some(drag) = self.pane_drag.take()
         {
             self.layout_preview = None;
+            self.product.tab_drop_target = None;
             self.sync_panel_visibility();
             self.filter_product_views();
-            if let Some((command, _)) = drag.drop.filter(|_| drag.travelled) {
+            if let Some(preview) = drag.tab_drop.filter(|_| drag.travelled) {
+                self.commit_tab_drop(preview, cx);
+            } else if let Some((command, _)) = drag.drop.filter(|_| drag.travelled) {
                 self.layout_command(command, cx);
             } else {
                 self.persist_focus(cx);
@@ -5757,6 +5897,12 @@ impl CanvasApp {
             && let Some(drag) = self.canvas_drag.take()
         {
             self.set_canvas_offset(drag.initial);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if k.key == "escape" && self.deferred_tab_drop.take().is_some() {
+            self.product.notice = Some("Перенос панели отменён".into());
             cx.notify();
             cx.stop_propagation();
             return;
@@ -7012,6 +7158,7 @@ impl EntityInputHandler for CanvasApp {
 }
 impl Render for CanvasApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.tab_drop_bounds.clear();
         let width = f32::from(window.viewport_size().width);
         self.product.compact = width < 900.;
         self.product.sidebar_compact = self.product.sidebar_override.unwrap_or(width < 1100.);
@@ -7026,6 +7173,11 @@ impl Render for CanvasApp {
         let tabbar = self.product.tabbar(cx).into_any_element();
         let toolbar = self.product.toolbar(cx).into_any_element();
         let overlay = self.product.overlay(&self.editor_layouts, cx);
+        let tab_drop_card = self
+            .pane_drag
+            .as_ref()
+            .and_then(|drag| drag.tab_drop.as_ref())
+            .map(|preview| self.product.tab_drop_card(&preview.name, &preview.layout));
         let empty_state = self
             .state
             .views
@@ -7085,13 +7237,18 @@ impl Render for CanvasApp {
                 )
             }
         });
-        let invalid_drop = self
-            .pane_drag
-            .as_ref()
-            .is_some_and(|drag| drag.moved && drag.travelled && drag.drop.is_none());
+        let invalid_drop = self.pane_drag.as_ref().is_some_and(|drag| {
+            drag.moved && drag.travelled && drag.drop.is_none() && drag.tab_drop.is_none()
+        });
         let status = match self.pane_drag.as_ref().filter(|drag| drag.moved) {
             Some(drag) if !drag.travelled => {
                 "Перетащите панель в нужное место · Escape — отменить".to_owned()
+            }
+            Some(drag) if drag.tab_drop.is_some() => {
+                format!(
+                    "Отпустите для переноса во вкладку «{}» · Escape — отменить",
+                    drag.tab_drop.as_ref().expect("tab drop").name
+                )
             }
             Some(drag) if drag.drop.is_some() => {
                 "Отпустите для перемещения панели · Escape — отменить".to_owned()
@@ -7443,6 +7600,7 @@ impl Render for CanvasApp {
                 ),
             )
             .children(overlay)
+            .children(tab_drop_card)
             .when(
                 self.pane_drag.as_ref().is_some_and(|drag| drag.moved),
                 |element| element.cursor(CursorStyle::ClosedHand),
