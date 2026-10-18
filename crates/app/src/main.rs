@@ -30,6 +30,7 @@ mod prompt_commands;
 mod prompt_flow;
 mod protocol;
 mod publication_trace;
+mod recipe_profiles;
 mod scrollback;
 mod scrollback_ui;
 mod selection;
@@ -2761,6 +2762,14 @@ impl CanvasApp {
             self.product.insert_review = None;
             self.insert_return_target = None;
         }
+        if !self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::RecipeProfiles)
+        {
+            self.product.recipe_profiles = None;
+        }
         if scope != self.editor_dialog {
             let transfer_dialog = self
                 .product
@@ -2908,6 +2917,25 @@ impl CanvasApp {
                 self.product.transfer_offset = 0;
                 self.product.transfer_scroll.scroll_to_item(0);
             }
+        }
+        if let Some(dialog) = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == product::DialogKind::RecipeProfiles)
+            && let Some(picker) = &self.product.recipe_profiles
+        {
+            let query = dialog
+                .fields
+                .first()
+                .map_or("", text_edit::EditBuffer::text);
+            let selected = picker.selected(query).map(|profile| profile.id);
+            let index = picker
+                .profiles(query)
+                .iter()
+                .position(|profile| Some(profile.id) == selected)
+                .unwrap_or(0);
+            self.product.recipe_profile_scroll.scroll_to_item(index);
         }
         let query = self.product.dialog.as_ref().and_then(|dialog| {
             (dialog.kind == product::DialogKind::History)
@@ -3619,6 +3647,9 @@ impl CanvasApp {
                 | A::SetProfileProvider(_)
                 | A::ToggleProfileContext
                 | A::SetTemplateRole(_)
+                | A::OpenRecipeProfiles
+                | A::ApplyRecipeProfile(_)
+                | A::SetTemplateProvider(_)
                 | A::EditTemplateSlot(_)
                 | A::EditRecipe
         ) && self
@@ -3731,6 +3762,9 @@ impl CanvasApp {
             | A::NewTabFromTemplate(_)
             | A::EditRecipe
             | A::EditTemplateSlot(_)
+            | A::OpenRecipeProfiles
+            | A::ApplyRecipeProfile(_)
+            | A::CancelRecipeProfiles
             | A::SetTemplateProvider(_)
             | A::SetTemplateRole(_)
             | A::ToggleTemplateContext
@@ -4289,6 +4323,17 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::RecipeProfiles)
+                {
+                    self.template_action(A::CancelRecipeProfiles, window, cx);
+                    self.sync_editor_scope(window, cx);
+                    cx.notify();
+                    return;
+                }
                 if let Some((workspace, draft)) =
                     self.product.git_sheet.as_ref().and_then(|sheet| {
                         self.product
@@ -4665,6 +4710,7 @@ impl CanvasApp {
                     }
                     DialogKind::Recipe
                     | DialogKind::RecipeSlot
+                    | DialogKind::RecipeProfiles
                     | DialogKind::NewTemplateTab
                     | DialogKind::TemplateRun
                     | DialogKind::TemplateRunContext
@@ -6365,6 +6411,92 @@ impl CanvasApp {
             }
             cx.stop_propagation();
             return;
+        }
+        if event.is_held
+            && self.product.dialog.as_ref().is_some_and(|dialog| {
+                matches!(
+                    dialog.kind,
+                    product::DialogKind::RecipeSlot
+                        | product::DialogKind::RecipeProfiles
+                        | product::DialogKind::Recipe
+                        | product::DialogKind::NewTemplateTab
+                        | product::DialogKind::TemplateRun
+                        | product::DialogKind::TemplateRunContext
+                        | product::DialogKind::TemplateRuns
+                )
+            })
+            && (k.key == "escape"
+                || k.key == "enter"
+                    && ((k.modifiers.control || k.modifiers.platform)
+                        || !self.product.active_multiline())
+                || k.key == "s" && (k.modifiers.control || k.modifiers.platform))
+        {
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::RecipeSlot)
+            && (k.modifiers.control || k.modifiers.platform)
+            && !k.modifiers.alt
+            && !k.modifiers.shift
+            && k.key == "p"
+        {
+            if !event.is_held && self.text_input.preedit.is_empty() {
+                self.product_action(product::ProductAction::OpenRecipeProfiles, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if let Some(dialog) = self.product.dialog.as_ref().filter(|dialog| {
+            dialog.kind == product::DialogKind::RecipeProfiles
+                && self.text_input.preedit.is_empty()
+                && dialog.fields.iter().all(|field| field.marked().is_none())
+        }) {
+            let plain = !k.modifiers.control
+                && !k.modifiers.platform
+                && !k.modifiers.alt
+                && !k.modifiers.shift;
+            let query = dialog
+                .fields
+                .first()
+                .map_or("", text_edit::EditBuffer::text);
+            if plain && matches!(k.key.as_str(), "up" | "down" | "pageup" | "pagedown") {
+                if let Some(picker) = &mut self.product.recipe_profiles {
+                    let delta = match k.key.as_str() {
+                        "up" => -1,
+                        "down" => 1,
+                        "pageup" => -8,
+                        _ => 8,
+                    };
+                    if let Some(index) = picker.navigate(query, delta) {
+                        self.product.recipe_profile_scroll.scroll_to_item(index);
+                    }
+                    cx.notify();
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if k.key == "enter" || k.key == "escape" {
+                if plain && !event.is_held {
+                    let action = if k.key == "escape" {
+                        Some(product::ProductAction::CancelRecipeProfiles)
+                    } else {
+                        self.product
+                            .recipe_profiles
+                            .as_ref()
+                            .and_then(|picker| picker.selected(query))
+                            .map(|profile| product::ProductAction::ApplyRecipeProfile(profile.id))
+                    };
+                    if let Some(action) = action {
+                        self.product_action(action, window, cx);
+                    }
+                }
+                cx.stop_propagation();
+                return;
+            }
         }
         if let Some(dialog) = self.product.dialog.as_ref().filter(|dialog| {
             dialog.kind == product::DialogKind::Transfer

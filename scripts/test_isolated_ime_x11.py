@@ -1120,8 +1120,21 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('set(original_identities).issubset(set(final_identities))', source)
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('recipe-select-first', 'recipe-open-editor', 'recipe-save-editor', 'recipe-new-tab',
-                      'recipe-name-tab', 'recipe-submit-name', 'recipe-confirm-run'):
+                      'recipe-name-tab', 'recipe-submit-name', 'recipe-confirm-run',
+                      'recipe-slot-open', 'recipe-slot-dirty', 'recipe-profile-open',
+                      'recipe-profile-no-match', 'recipe-profile-cancel', 'recipe-profile-select',
+                      'recipe-slot-save', 'recipe-name-custom-tab', 'recipe-custom-confirm'):
             self.assertIn(f'"{stage}"', helper)
+        for proof in ('dirty_slot_survives_picker_cancel', 'source_profile_deleted_after_copy',
+                      'no_process_or_plan_advance_before_confirm', 'custom_cli_invocations'):
+            self.assertIn(proof, source)
+        self.assertIn("config.get('fixture') in ('setup', 'recipes')", source)
+        self.assertIn("'recipe-custom-run-preview.ppm'", source)
+        self.assertIn("'projects': [], 'workspaces': [], 'tabs': [], 'selection': None, 'layout': None", source)
+        dirty_stage = helper.split('} else if (!strcmp(a.stage, "recipe-slot-dirty")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "recipe-profile-open")) {', 1)[0]
+        self.assertIn('XK_Shift_L, XK_d', dirty_stage)
+        self.assertIn('XK_Shift_L, XK_k', dirty_stage)
         self.assertNotIn('--text', helper)
         self.assertNotIn('--coordinates', helper)
 

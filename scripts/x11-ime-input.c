@@ -157,7 +157,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "recipe-open-editor") &&
         strcmp(a.stage, "recipe-save-editor") && strcmp(a.stage, "recipe-new-tab") &&
         strcmp(a.stage, "recipe-name-tab") && strcmp(a.stage, "recipe-submit-name") &&
-        strcmp(a.stage, "recipe-confirm-run") && strcmp(a.stage, "profile-open") &&
+        strcmp(a.stage, "recipe-confirm-run") && strcmp(a.stage, "recipe-slot-open") &&
+        strcmp(a.stage, "recipe-slot-dirty") && strcmp(a.stage, "recipe-profile-open") &&
+        strcmp(a.stage, "recipe-profile-no-match") && strcmp(a.stage, "recipe-profile-cancel") &&
+        strcmp(a.stage, "recipe-profile-select") && strcmp(a.stage, "recipe-slot-save") &&
+        strcmp(a.stage, "recipe-name-custom-tab") && strcmp(a.stage, "recipe-custom-confirm") &&
+        strcmp(a.stage, "profile-open") &&
         strcmp(a.stage, "profile-new") && strcmp(a.stage, "profile-create-fields") &&
         strcmp(a.stage, "profile-context-off") &&
         strcmp(a.stage, "profile-save") && strcmp(a.stage, "profile-select-first") &&
@@ -1653,6 +1658,40 @@ int main(int argc, char **argv) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "recipe-confirm-run")) {
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-slot-open")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-slot-dirty")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_d);
+            const KeySym first[] = { XK_r, XK_a, XK_f, XK_t };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_k);
+            const KeySym last[] = { XK_e, XK_e, XK_p, XK_s };
+            for (size_t i = 0; i < sizeof(last) / sizeof(last[0]); ++i) key(dpy, last[i]);
+        } else if (!strcmp(a.stage, "recipe-profile-open")) {
+            modified_key(dpy, XK_Control_L, XK_p);
+        } else if (!strcmp(a.stage, "recipe-profile-no-match")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            const KeySym query[] = { XK_n, XK_o, XK_s, XK_u, XK_c, XK_h, XK_r, XK_e,
+                                     XK_c, XK_i, XK_p, XK_e, XK_p, XK_r, XK_o, XK_f,
+                                     XK_i, XK_l, XK_e };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+        } else if (!strcmp(a.stage, "recipe-profile-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "recipe-profile-select")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-slot-save")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "recipe-name-custom-tab")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_r);
+            const KeySym first[] = { XK_e, XK_c, XK_i, XK_p, XK_e };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_c);
+            const KeySym last[] = { XK_u, XK_s, XK_t, XK_o, XK_m };
+            for (size_t i = 0; i < sizeof(last) / sizeof(last[0]); ++i) key(dpy, last[i]);
+        } else if (!strcmp(a.stage, "recipe-custom-confirm")) {
+            key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "profile-open")) {
             setup_prefix(dpy, XK_p, 0);
             const KeySym query[] = { XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_s };
@@ -2101,6 +2140,15 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "recipe-name-tab") ? "7" :
                             !strcmp(a.stage, "recipe-submit-name") ? "1" :
                             !strcmp(a.stage, "recipe-confirm-run") ? "1" :
+                            !strcmp(a.stage, "recipe-slot-open") ? "1" :
+                            !strcmp(a.stage, "recipe-slot-dirty") ? "14" :
+                            !strcmp(a.stage, "recipe-profile-open") ? "2" :
+                            !strcmp(a.stage, "recipe-profile-no-match") ? "21" :
+                            !strcmp(a.stage, "recipe-profile-cancel") ? "1" :
+                            !strcmp(a.stage, "recipe-profile-select") ? "1" :
+                            !strcmp(a.stage, "recipe-slot-save") ? "2" :
+                            !strcmp(a.stage, "recipe-name-custom-tab") ? "16" :
+                            !strcmp(a.stage, "recipe-custom-confirm") ? "1" :
                             !strcmp(a.stage, "profile-open") ? "11" :
                             !strcmp(a.stage, "profile-new") ? "1" :
                             !strcmp(a.stage, "profile-create-fields") ? "87" :

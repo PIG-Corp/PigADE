@@ -208,6 +208,9 @@ fn recipe_slot_changed(product: &ProductUi, dialog: &Dialog) -> bool {
     let Some(config) = editor.launches.get(editor.slot) else {
         return false;
     };
+    if config.provider == "custom" {
+        return recipe_changed(product);
+    }
     field(dialog, 0) != config.role
         || field(dialog, 1) != config.instructions
         || field(dialog, 2).trim() != config.engine.model.as_deref().unwrap_or("")
@@ -230,7 +233,12 @@ fn recipe_changed(product: &ProductUi) -> bool {
         editor.origin == crate::template_flow::Origin::NewTab
             && matches!(
                 product.dialog.as_ref().map(|dialog| dialog.kind),
-                Some(DialogKind::Recipe | DialogKind::NewTemplateTab | DialogKind::RecipeSlot)
+                Some(
+                    DialogKind::Recipe
+                        | DialogKind::NewTemplateTab
+                        | DialogKind::RecipeSlot
+                        | DialogKind::RecipeProfiles
+                )
             )
     }
 }
@@ -280,6 +288,21 @@ pub(crate) fn collect(
         add_dialog(
             product,
             dialog,
+            rename_pane_baseline,
+            create_project_initial_parent,
+            &mut seen_dialogs,
+            &mut notices,
+        );
+    }
+    if product
+        .dialog
+        .as_ref()
+        .is_some_and(|dialog| dialog.kind == DialogKind::RecipeProfiles)
+        && let Some(picker) = &product.recipe_profiles
+    {
+        add_dialog(
+            product,
+            &picker.origin,
             rename_pane_baseline,
             create_project_initial_parent,
             &mut seen_dialogs,
@@ -590,5 +613,43 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+    #[test]
+    fn profile_picker_protects_suspended_recipe_draft_but_not_its_query() {
+        use crate::template_flow::{Origin, Preset};
+        let mut editor = Preset::Solo.draft("codex");
+        editor.origin = Origin::Saved;
+        editor.saved = Some(pigade_storage::LayoutTemplate {
+            id: Uuid::from_u128(110),
+            name: editor.name.clone(),
+            geometry: editor.geometry.clone(),
+            launches: Some(editor.launches.clone()),
+            revision: 1,
+        });
+        let mut origin = Dialog::new(DialogKind::RecipeSlot);
+        origin.fields[0] = "private unsaved role".into();
+        let picker =
+            crate::recipe_profiles::Picker::new(origin, 0, editor.launches[0].clone(), &[], None)
+                .unwrap();
+        let mut search = Dialog::new(DialogKind::RecipeProfiles);
+        search.fields[0] = "private query".into();
+        let mut product = ProductUi {
+            dialog: Some(search),
+            recipe_editor: Some(editor),
+            recipe_profiles: Some(picker),
+            ..Default::default()
+        };
+        let notices = collect(&product, &GitFlow::default(), None, None);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].label, "Черновик настроек агента");
+        assert!(!notices[0].label.contains("private"));
+        let editor = product.recipe_editor.as_ref().unwrap();
+        product.recipe_profiles.as_mut().unwrap().origin.fields[0] =
+            editor.launches[0].role.clone().into();
+        assert!(collect(&product, &GitFlow::default(), None, None).is_empty());
+        // A canceled selector is not a hidden dirty document.
+        product.dialog = None;
+        product.recipe_profiles.as_mut().unwrap().origin.fields[0] = "stale abandoned role".into();
+        assert!(collect(&product, &GitFlow::default(), None, None).is_empty());
     }
 }

@@ -3653,6 +3653,15 @@ def recipe_key_action(config, action):
         'name-tab': 'recipe-name-tab',
         'submit-name': 'recipe-submit-name',
         'confirm-run': 'recipe-confirm-run',
+        'slot-open': 'recipe-slot-open',
+        'slot-dirty': 'recipe-slot-dirty',
+        'profile-open': 'recipe-profile-open',
+        'profile-no-match': 'recipe-profile-no-match',
+        'profile-cancel': 'recipe-profile-cancel',
+        'profile-select': 'recipe-profile-select',
+        'slot-save': 'recipe-slot-save',
+        'name-custom-tab': 'recipe-name-custom-tab',
+        'custom-confirm': 'recipe-custom-confirm',
     }
     require(action in stages, 'recipe fixture requested an unknown fixed helper stage')
     helper_call(config, stages[action])
@@ -3903,8 +3912,271 @@ def run_recipes_fixture(config, report, env, save, tab_id):
         'active_run_list_empty_after_completion': True,
         'captures': ['recipe-editor.ppm', 'recipe-run-preview.ppm', 'recipe-final-tab.ppm'],
     }
+    report['stage'] = 'recipe-profile-copy-and-frozen-run'
+    save()
+    custom_recipe = run_recipe_profile_copy_fixture(config, report, save, tab_id, template,
+                                                    fixture_generations(), final_identities)
+    report['recipes']['profile_copy'] = custom_recipe
+    report['recipes']['captures'].extend(custom_recipe['captures'])
     report.update({'status': RECIPES_PASS, 'stage': 'complete'})
     save()
+
+
+def run_recipe_profile_copy_fixture(config, report, save, tab_id, source_template,
+                                    original_generations, original_identities):
+    """Copy a saved custom profile into a recipe slot and prove its frozen run."""
+    command = {'executable': '/artifacts/tools/custom-cli',
+               'args': ['--label', 'two words', '$(literal);']}
+    log = Path('/artifacts/custom-cli-runs.jsonl')
+    require(not log.exists(), 'recipe custom CLI recorder already contains executions')
+    catalog_now = lambda: host_request({'command': 'catalog'})['catalog']
+    def template_now(catalog, template_id):
+        items = catalog.get('layout_templates')
+        require(isinstance(items, list) and len(items) <= 64,
+                'recipe template catalog is invalid or oversized')
+        matches = [item for item in items if item.get('id') == template_id]
+        require(len(matches) == 1, 'recipe template disappeared or duplicated')
+        return matches[0]
+    def identities():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'recipe process snapshot exceeds bounds')
+        return sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                      for view in views)
+    original_journals = fixture_journal_hashes([generation for _, generation in original_generations])
+    original_journal_prefixes = fixture_journal_prefixes(
+        [generation for _, generation in original_generations])
+    original_states = {}
+    for session, generation in original_generations:
+        view = fixture_session_models(session).get(generation)
+        require(view is not None, 'recipe baseline generation is missing from the host')
+        original_states[(session, generation)] = (view.get('pid'), view.get('state'))
+    def baseline_unchanged(full_journals, allow_new=False):
+        current = identities()
+        generation_snapshot = fixture_generations()
+        states_unchanged = True
+        for session, generation in original_generations:
+            view = fixture_session_models(session).get(generation)
+            if view is None or (view.get('pid'), view.get('state')) != original_states[(session, generation)]:
+                states_unchanged = False
+                break
+        identities_unchanged = (set(original_identities).issubset(set(current)) if allow_new
+                                else current == original_identities)
+        generations_unchanged = (set(original_generations).issubset(set(generation_snapshot)) if allow_new
+                                 else generation_snapshot == original_generations)
+        return (generations_unchanged and identities_unchanged and
+                states_unchanged and
+                (fixture_journal_hashes([generation for _, generation in original_generations]) ==
+                 original_journals if full_journals else
+                 fixture_journal_prefixes_preserved(original_journal_prefixes)))
+    profile_id = str(uuid.uuid4())
+    profile_settings = {'provider': 'custom', 'role': '', 'instructions': '',
+                        'deliver_context': False,
+                        'engine': {'model': None, 'reasoning_effort': None},
+                        'custom_command': command}
+    seeded = host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [], 'workspaces': [], 'tabs': [], 'selection': None, 'layout': None,
+        'agent_profiles': [{'expected_revision': None, 'value': {
+            'id': profile_id, 'name': 'RecipeCustom', 'settings': profile_settings,
+            'revision': 0}}]}})['catalog']
+    profiles = seeded.get('agent_profiles')
+    require(isinstance(profiles, list) and len(profiles) == 1 and
+            profiles[0] == {'id': profile_id, 'name': 'RecipeCustom',
+                            'revision': 1, 'settings': profile_settings} and
+            seeded.get('custom_cli_schema') == 1 and
+            baseline_unchanged(True),
+            'metadata-only recipe profile seed changed processes or stored different settings')
+    # The host publishes catalog snapshots asynchronously to the UI. Return to
+    # the library from the completed first run, then allow that snapshot to land.
+    time.sleep(.35)
+    catalog_key_action(config, 'open-library')
+    time.sleep(.35)
+
+    # First dirty a slot, enter a no-match query, then cancel. The slot editor
+    # must return with its unsaved field intact; persist that draft as a recipe.
+    recipe_key_action(config, 'select-first')
+    recipe_key_action(config, 'open-editor')
+    recipe_key_action(config, 'slot-open')
+    recipe_key_action(config, 'slot-dirty')
+    recipe_key_action(config, 'profile-open')
+    recipe_key_action(config, 'profile-no-match')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-profile-no-match.ppm')
+    recipe_key_action(config, 'profile-cancel')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/recipe-profile-cancelled.ppm')
+    recipe_key_action(config, 'slot-save')
+    recipe_key_action(config, 'save-editor')
+    dirty_catalog = wait_until(
+        lambda: (value if any(item.get('id') == source_template['id'] and
+                              item.get('revision', 0) > source_template.get('revision', 0)
+                              for item in value.get('layout_templates', [])) else None)
+        if (value := catalog_now()) else None, time.monotonic() + 8)
+    dirty_template = template_now(dirty_catalog, source_template['id'])
+    require(len(dirty_template.get('launches', [])) == 4 and
+            dirty_template['launches'][0].get('role') == 'DraftKeeps' and
+            dirty_template['launches'][0].get('provider') == 'shell' and
+            not dirty_template['launches'][0].get('custom_command') and
+            not log.exists() and baseline_unchanged(True),
+            'cancelled profile picker lost the dirty slot draft or launched a process')
+
+    # Reopen the slot and copy the only seeded profile through the real picker.
+    recipe_key_action(config, 'select-first')
+    recipe_key_action(config, 'open-editor')
+    recipe_key_action(config, 'slot-open')
+    recipe_key_action(config, 'profile-open')
+    recipe_key_action(config, 'profile-select')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-profile-copied.ppm')
+    recipe_key_action(config, 'slot-save')
+    recipe_key_action(config, 'save-editor')
+    copied_catalog = wait_until(
+        lambda: (value if (item := next((entry for entry in value.get('layout_templates', [])
+                                         if entry.get('id') == source_template['id']), None)) and
+                              item.get('revision', 0) > dirty_template.get('revision', 0) and
+                              len(item.get('launches', [])) == 4 else None)
+        if (value := catalog_now()) else None, time.monotonic() + 8)
+    copied_template = template_now(copied_catalog, source_template['id'])
+    require(copied_template['launches'][0].get('provider') == 'custom' and
+            copied_template['launches'][0].get('custom_command') == command and
+            copied_template['launches'][0].get('role') == '' and
+            copied_template['launches'][0].get('instructions') == '' and
+            copied_template['launches'][0].get('deliver_context') is False and
+            all(item.get('provider') == 'shell' for item in copied_template['launches'][1:]) and
+            not log.exists() and baseline_unchanged(True),
+            'saved template did not freeze the custom profile in slot zero without launching')
+
+    # Update then delete the source profile. The recipe must retain its own
+    # frozen settings and remain runnable after the catalog record is gone.
+    changed_settings = dict(profile_settings, custom_command={
+        'executable': command['executable'], 'args': ['--changed-after-copy']})
+    mutated = host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [], 'workspaces': [], 'tabs': [], 'selection': None, 'layout': None,
+        'agent_profiles': [{'expected_revision': 1, 'value': {
+            'id': profile_id, 'name': 'RecipeCustom', 'settings': changed_settings,
+            'revision': 1}}]}})['catalog']
+    changed_profile = next((item for item in mutated.get('agent_profiles', [])
+                            if item.get('id') == profile_id), None)
+    require(changed_profile is not None and changed_profile.get('revision') == 2 and
+            changed_profile.get('settings') == changed_settings,
+            'recipe source profile mutation did not persist with its expected revision')
+    host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [], 'workspaces': [], 'tabs': [], 'selection': None, 'layout': None,
+        'agent_profiles': [],
+        'remove_agent_profiles': [{'id': profile_id, 'expected_revision': 2}]}})
+    require(not any(item.get('id') == profile_id for item in catalog_now().get('agent_profiles', [])) and
+            template_now(catalog_now(), source_template['id'])['launches'][0].get('custom_command') == command,
+            'deleting the source profile changed or removed the template snapshot')
+
+    plans_before = prepared_launches_read_only()
+    tabs_before_preview = len(catalog_now().get('tabs', []))
+    recipe_key_action(config, 'select-first')
+    recipe_key_action(config, 'new-tab')
+    time.sleep(.2)
+    recipe_key_action(config, 'name-custom-tab')
+    recipe_key_action(config, 'submit-name')
+    time.sleep(.3)
+    active = template_runs_request(None)
+    require(isinstance(active, dict) and len(active.get('entries', [])) == 1,
+            'custom recipe preparation did not create exactly one active preview')
+    run_id = active['entries'][0]['id']
+    run = template_run_request(run_id)
+    require(run.get('status') == 'prepared' and run.get('name') == 'RecipeCustom' and
+            len(run.get('slots', [])) == 4 and all(slot.get('phase') == 'prepared' and
+            slot.get('placed') is False for slot in run['slots']) and
+            len(catalog_now().get('tabs', [])) == tabs_before_preview,
+            'custom recipe preview is not a four-slot prepared plan')
+    custom_slot = run['slots'][0].get('preview', {})
+    require(custom_slot.get('provider') == 'custom' and
+            custom_slot.get('custom_command') == command and
+            not custom_slot.get('deliver_context') and not custom_slot.get('include_memory') and
+            all(value is False for value in custom_slot.get('capabilities', {}).values()) and
+            all(slot.get('preview', {}).get('provider') == 'shell' for slot in run['slots'][1:]) and
+            baseline_unchanged(True) and not log.exists(),
+            'prepared run did not preserve the deleted profile snapshot or created a process early')
+    new_plans = prepared_launches_read_only()
+    plan_ids = [slot.get('preview', {}).get('plan_id') for slot in run['slots']]
+    require(all(plan_id in new_plans and new_plans[plan_id].get('phase') == 'prepared'
+                for plan_id in plan_ids) and
+            new_plans[plan_ids[0]]['payload'].get('launch', {}).get('executable') == command['executable'],
+            'custom recipe preview lacks four exact durable prepared launch plans')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-custom-run-preview.ppm')
+    require(template_run_database_record(run_id)['status'] == 'prepared' and
+            baseline_unchanged(True) and not log.exists(),
+            'custom recipe preview advanced before explicit confirmation')
+
+    recipe_key_action(config, 'custom-confirm')
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        current = template_run_request(run_id)
+        require(current.get('status') in ('prepared', 'running', 'complete') and
+                len(current.get('slots', [])) == 4,
+                'custom recipe run entered an unexpected or failed state')
+        if current.get('status') == 'complete':
+            run = current
+            break
+        time.sleep(.05)
+    else:
+        raise RuntimeError('explicit custom recipe run did not complete within the bounded window')
+    require(all(slot.get('phase') == 'not_requested' and slot.get('placed') is True
+                for slot in run['slots']) and run['slots'][0].get('preview', {}).get('custom_command') == command,
+            'confirmed custom recipe did not durably place the frozen command in slot zero')
+    final_catalog = catalog_now()
+    new_tab = next((item for item in final_catalog.get('tabs', []) if item.get('id') == run.get('tab_id')), None)
+    require(new_tab is not None and new_tab.get('name') == 'RecipeCustom' and
+            final_catalog.get('selection', {}).get('tab_id') == run.get('tab_id'),
+            'custom recipe did not create and select its named tab')
+    custom_session = run['slots'][0]['preview']['session']
+    custom_generation = run['slots'][0]['preview']['generation']
+    wait_until(lambda: (view if (view := fixture_session_models(custom_session).get(custom_generation)) and
+                        view.get('state') == 'exited' and 'CUSTOM_CLI_MARKER' in view_text(view) else None),
+               time.monotonic() + 10)
+    require(log.is_file() and not log.is_symlink() and log.stat().st_size <= 4096,
+            'custom recipe executable did not create a bounded private run record')
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    require(records == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'custom recipe did not invoke the frozen argv once in the selected workspace')
+    final_pairs = fixture_generations()
+    expected_pairs = original_generations + [
+        (slot['preview']['session'], slot['preview']['generation']) for slot in run['slots']]
+    require(len(final_pairs) == len(expected_pairs) and
+            set(original_generations).issubset(set(final_pairs)) and
+            set((slot['preview']['session'], slot['preview']['generation']) for slot in run['slots']) <=
+            set(final_pairs) and baseline_unchanged(False, allow_new=True),
+            'custom recipe changed original process identities or created unexpected generations')
+    def new_shells_running():
+        views = host_request({'command': 'list'}).get('views', [])
+        if not isinstance(views, list) or len(views) > 32:
+            return None
+        if all(any(view.get('session') == slot['preview']['session'] and
+                   view.get('generation') == slot['preview']['generation'] and
+                   view.get('state') == 'running' for view in views)
+               for slot in run['slots'][1:]):
+            return views
+        return None
+    wait_until(new_shells_running, time.monotonic() + 8)
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/recipe-custom-final-tab.ppm')
+    final_template = template_now(catalog_now(), source_template['id'])
+    require(final_template['launches'][0].get('custom_command') == command and
+            not any(item.get('id') == profile_id for item in catalog_now().get('agent_profiles', [])) and
+            template_run_database_record(run_id).get('status') == 'complete' and
+            template_run_database_record(run_id).get('slots') == 4 and
+            fixture_journal_prefixes_preserved(original_journal_prefixes),
+            'completed run or source-profile deletion changed the frozen saved template')
+    return {
+        'profile_id': profile_id, 'source_profile_deleted_after_copy': True,
+        'template_revision': final_template['revision'], 'template_custom_command': command,
+        'dirty_slot_survives_picker_cancel': True, 'no_match_picker_cancelled_without_launch': True,
+        'no_process_or_plan_advance_before_confirm': True,
+        'prepared_four_slot_review_then_explicit_confirm': True,
+        'custom_cli_invocations': records, 'custom_generation': custom_generation,
+        'original_process_identities_retained': True,
+        'captures': ['recipe-profile-no-match.ppm', 'recipe-profile-cancelled.ppm',
+                     'recipe-profile-copied.ppm', 'recipe-custom-run-preview.ppm',
+                     'recipe-custom-final-tab.ppm'],
+    }
 
 
 def run_setup_fixture(config, report, control, app, env, save):
@@ -6066,7 +6338,7 @@ def inside_run() -> int:
                 "print('NEW_RESUME_FRAME' if sys.argv[1:2] == ['resume'] else 'OLD_RESUME_FRAME')\n")
             fake_codex.chmod(0o700)
             host_path = '/artifacts/bin:/usr/bin'
-        if config.get('fixture') == 'setup':
+        if config.get('fixture') in ('setup', 'recipes'):
             custom_tools = Path('/artifacts/tools')
             custom_tools.mkdir(mode=0o700, exist_ok=True)
             tools_info = custom_tools.lstat()
@@ -6375,7 +6647,9 @@ def outer_run(args) -> dict:
                   'catalog-close-tab-review.ppm', 'catalog-close-tab-confirm.ppm', 'catalog-close-tab-fallback.ppm'] if args.fixture == 'catalog' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'four-panels-before-input.ppm', 'recipe-editor.ppm', 'recipe-run-preview.ppm',
-                  'recipe-final-tab.ppm'] if args.fixture == 'recipes' else
+                  'recipe-final-tab.ppm', 'recipe-profile-no-match.ppm',
+                  'recipe-profile-cancelled.ppm', 'recipe-profile-copied.ppm',
+                  'recipe-custom-run-preview.ppm', 'recipe-custom-final-tab.ppm'] if args.fixture == 'recipes' else
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm',
                   'opencode-resume-review.ppm', 'opencode-resumed-session.ppm',
                   'opencode-profile-library.ppm', 'opencode-profile-editor.ppm',
@@ -6408,7 +6682,7 @@ def plan(args) -> dict:
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
-                  'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
+                  'recipes': 'fixed private four-shell setup; save geometry, configure and run four shell slots; then copy a saved literal custom CLI profile into a recipe slot, prove picker cancellation preserves its dirty draft, freeze the command across source-profile mutation/deletion, preview without launching, and explicitly confirm one custom plus three shell slots',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',
                   'arbitrary_text_argument': False},

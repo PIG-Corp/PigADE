@@ -105,6 +105,9 @@ pub(super) enum ProductAction {
     NewTabFromTemplate(Uuid),
     EditRecipe,
     EditTemplateSlot(usize),
+    OpenRecipeProfiles,
+    ApplyRecipeProfile(Uuid),
+    CancelRecipeProfiles,
     SetTemplateProvider(String),
     SetTemplateRole(String),
     ToggleTemplateContext,
@@ -200,6 +203,7 @@ pub(super) enum DialogKind {
     NewTab,
     Recipe,
     RecipeSlot,
+    RecipeProfiles,
     NewTemplateTab,
     TemplateRun,
     TemplateRunContext,
@@ -248,6 +252,7 @@ impl DialogKind {
             Self::NewTab => "Новая вкладка",
             Self::Recipe => "Агенты в шаблоне",
             Self::RecipeSlot => "Настройки агента",
+            Self::RecipeProfiles => "Профиль для панели",
             Self::NewTemplateTab => "Вкладка по шаблону",
             Self::TemplateRun => "Запуск вкладки",
             Self::TemplateRunContext => "Контекст запуска",
@@ -298,6 +303,7 @@ impl DialogKind {
             Self::CreateWorkspace => &["Название задачи / воркспейса"],
             Self::Launcher => &[],
             Self::NewTab => &["Название вкладки"],
+            Self::RecipeProfiles => &["Найти профиль по имени или CLI"],
             Self::RecipeSlot => &[
                 "Роль · инструкции агенту",
                 "Дополнительные инструкции",
@@ -354,6 +360,7 @@ impl DialogKind {
             Self::NewTab => "Создать вкладку",
             Self::Recipe => "Сохранить",
             Self::RecipeSlot => "Готово",
+            Self::RecipeProfiles => "Выбрать профиль",
             Self::NewTemplateTab => "Проверить запуск",
             Self::TemplateRun | Self::TemplateRuns => "Закрыть",
             Self::TemplateRunContext => "Назад",
@@ -433,6 +440,8 @@ pub(super) struct ProductUi {
     pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
     pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
     pub(super) profile_roster_error: Option<String>,
+    pub(super) recipe_profiles: Option<crate::recipe_profiles::Picker>,
+    pub(super) recipe_profile_scroll: gpui::ScrollHandle,
     pub(super) recipe_editor: Option<crate::template_flow::RecipeEditor>,
     pub(super) template_run: Option<protocol::TemplateRunView>,
     pub(super) template_runs: Option<pigade_storage::TemplateRunPage>,
@@ -3142,6 +3151,8 @@ impl ProductUi {
                 .as_ref()
                 .map(|editor| editor.field_labels())
                 .unwrap_or(dialog.kind.fields())
+        } else if dialog.kind == DialogKind::RecipeSlot && dialog.fields.is_empty() {
+            &[]
         } else {
             dialog.kind.fields()
         };
@@ -3546,7 +3557,14 @@ impl ProductUi {
                 .tab_close_sheet
                 .as_ref()
                 .is_none_or(|sheet| sheet.request.is_some() || sheet.uncertain);
+        let profile_selected = dialog.kind != DialogKind::RecipeProfiles
+            || self.recipe_profiles.as_ref().is_some_and(|picker| {
+                picker
+                    .selected(dialog.fields.first().map_or("", EditBuffer::text))
+                    .is_some()
+            });
         let can_submit = can_bind
+            && profile_selected
             && (dialog.kind != DialogKind::WorkspaceGitCommit || self.git_commit_plan.is_some());
         let submit = if !can_submit || close_blocked {
             div().into_any_element()
@@ -3620,6 +3638,7 @@ impl ProductUi {
                         dialog.kind,
                         DialogKind::Layouts
                             | DialogKind::Recipe
+                            | DialogKind::RecipeProfiles
                             | DialogKind::NewTemplateTab
                             | DialogKind::TemplateRun
                             | DialogKind::TemplateRunContext

@@ -4341,3 +4341,99 @@ Finalize verified custom CLI profile integration and preserve current pointer-re
 - Files: docs/AGENT_HANDOFF.md, WORKLOG.md
 - Verification: Final native setup04 passes no-probe, exact argv/cwd, readonly review, Enter-ignore, Escape-cancel and once-only Ctrl+Enter launch; old processes/states and bounded journal prefixes preserved. Root inspected editor/review/confirmed captures. Native02 timeout and03 wrong-pane marker assertion were harness issues corrected by Luna; final37 harness tests/C syntax pass in that lane. Existing335 app/full workspace tests, strict Clippy, formats and debug/release build evidence remains valid; no product changes since those checks. Current20 pointer tests and full private pointer scenario pass. Version0.0.1-dev and diff checks pass.
 - Risks / next: Commit coherent custom profiles plus handoff. Broader MVP/Wayland/GPU/a11y/reboot/soak gates remain open. Preserve unrelated dirt and stash0; no user-host restart or active desktop input.
+
+## 2026-10-18T07:11:10+00:00 — /root/recipe_profiles_model_luna
+
+Add pure frozen-snapshot picker for applying saved agent profiles to recipe slots with validation, roster ordering, filtering, navigation, and capability/staleness guards
+
+- Files: crates/app/src/recipe_profiles.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/recipe_profiles.rs; git diff --check -- crates/app/src/recipe_profiles.rs passed; Cargo intentionally not run because app Cargo is root-owned
+- Risks / next: Root integrates the module and owns app compilation/tests; no process or durable profile actions are added here.
+
+## 2026-10-18T07:11:35+00:00 — /root/recipe_profiles_ui_luna
+
+Render saved agent profile picker and custom CLI recipe review details
+
+- Files: crates/app/src/template_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/template_ui.rs; git diff --check -- crates/app/src/template_ui.rs (passed); Cargo integration build not run per task scope
+- Risks / next: Root to integrate and run app checks; confirm custom provider controls and picker rendering in build.
+
+## 2026-10-18T07:11:42+00:00 — /root/recipe_profiles_ui_luna
+
+Clarify custom command run status and repeat formatting validation
+
+- Files: crates/app/src/template_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/template_ui.rs; git diff --check -- crates/app/src/template_ui.rs (passed); Cargo integration build not run per task scope
+- Risks / next: Root to integrate and run app checks; confirm custom provider controls and picker rendering in build.
+
+## 2026-10-18T07:13:39+00:00 — /root/recipe_profiles_model_luna
+
+Correct snapshot picker test baseline and explicitly mutate and clear source profile vector after snapshot creation
+
+- Files: crates/app/src/recipe_profiles.rs, WORKLOG.md
+- Verification: rustfmt --edition 2024 crates/app/src/recipe_profiles.rs; git diff --check -- crates/app/src/recipe_profiles.rs passed; Cargo not run as root-owned
+- Risks / next: Root owns app Cargo verification after integration.
+
+## 2026-10-18T07:15:51+00:00 — git_commit_research_luna
+
+Extended recipes X11 fixture to verify custom profile copy, cancellation draft restoration, frozen settings after source mutation/deletion, and explicit mixed-slot launch.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; python3 scripts/test_isolated_ime_x11.py (37 passed); strict cc -fsyntax-only -std=c11 -Wall -Wextra -Werror with X11/XTest/XCB headers (passed); no native/Cargo run.
+- Risks / next: Root to review and run the recipes fixture against the final native binary.
+
+## 2026-10-18T07:16:13+00:00 — git_commit_research_luna
+
+Tightened post-confirm recipe baseline proof to allow only appended new generations while retaining all original identities and journal prefixes; corrected fixed stage key counts.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c
+- Verification: python3 -m py_compile and scripts/test_isolated_ime_x11.py (37 passed); strict C -fsyntax-only with -Wall -Wextra -Werror passed; no native/Cargo run.
+- Risks / next: Root to review and run the recipes fixture against the final native binary.
+
+## 2026-10-18T07:17:36+00:00 — git_commit_research_luna
+
+Fixed recipe fixture setup after baseline completion: reopen the library after profile seed and bind final shell wait to its own bounded host snapshot.
+
+- Files: scripts/isolated-ime-x11.py
+- Verification: python3 -m py_compile and scripts/test_isolated_ime_x11.py (37 passed); strict C syntax check passed; no native/Cargo run.
+- Risks / next: Root to rerun final recipes fixture.
+
+## 2026-10-18T07:17:40+00:00 — /root
+
+Integrate frozen saved-agent profiles into layout recipe slots with searchable native selection and exact custom command review
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/template_commands.rs, crates/app/src/template_ui.rs, crates/app/src/dirty_documents.rs, crates/app/src/recipe_profiles.rs, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/adr/0019-custom-cli-profiles.md
+- Verification: 340 app tests pass; strict app Clippy, package-only fmt and debug/release builds pass. Initial test macro import recursion, note color type mismatch and a test reusing a changed slot baseline were fixed before passing run. Root corrected mouse chooser placement, escaped argv throughout review, preserved custom readonly forms/new field scope, protected suspended dirty drafts, and blocked held confirmation keys. Native recipes fixture pending on final release; child harness prep checks pass separately.
+- Risks / next: Run existing private recipe fixture on release, inspect search/cancel/copy/run captures, resolve real failures, then finalize handoff/commit. No host/storage/schema/dependency/user-process or active-desktop change.
+
+## 2026-10-18T07:19:03+00:00 — git_commit_research_luna
+
+Fixed recipe fixture CatalogBatch required framing fields and made dirty-role keyboard sequence match the asserted DraftKeeps value.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile and scripts/test_isolated_ime_x11.py (37 passed); strict C syntax check passed; waiting for root's final release signal before native rerun.
+- Risks / next: Rerun the private recipes fixture after root confirms release readiness.
+
+## 2026-10-18T07:20:31+00:00 — git_commit_research_luna
+
+Accepted running as an intermediate template-run state while waiting for all four confirmed slots to complete.
+
+- Files: scripts/isolated-ime-x11.py
+- Verification: py_compile + 37 harness tests passed; strict C syntax passed. Native02 reached a valid running state with custom slot invocation logged once and progress 2/4; previous harness predicate incorrectly rejected running.
+- Risks / next: Rerun the fixed fixture with a fresh private output directory.
+
+## 2026-10-18T07:21:08+00:00 — git_commit_research_luna
+
+Verified the completed private recipes fixture with custom profile copy, source mutation/deletion, cancellation and mixed-slot native launch.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: Native isolated recipes run passed: /tmp/pigade-recipe-profiles-20261018-03/run.json reports pass-private-x11-template-recipes-fixture, stage complete, bwrap exit 0. Report proves dirty slot survives picker cancellation, source profile deletion leaves template revision 4 frozen, review precedes confirmation, and one exact custom argv/cwd invocation completed alongside three shell slots with original identities retained. Python harness 37 passed and strict C syntax passed. No Cargo/desktop activity.
+- Risks / next: Root may inspect the captures and decide whether the final visual-only release needs another run.
+
+## 2026-10-18T07:23:14+00:00 — /root
+
+Finalize saved-profile recipe composition with passing native mixed-CLI flow and reviewed UI
+
+- Files: crates/app/src/template_ui.rs, crates/app/src/product.rs, docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: Final root private recipes04 exits0/pass after final footer polish; proves exact dirty-draft cancel, frozen custom copy across source edit/deletion, no pre-confirm processes, once-only literal argv/cwd and three shell slots with9 original identities/states and bounded journal prefixes retained. Inspected no-match, canceled draft, copied command, prepared review and completed tab captures.340 app tests/strictClippy/packagefmt/debug+release builds and version/diff checks pass.37 harness/C checks pass in Luna lane.01 failed invalid fixture framing;02 rejected legitimate running;03 passed before duplicate Cancel/empty submit/width cleanup. Final04 passes final release.
+- Risks / next: Commit coherent feature; keep broader goal active. No new dependency/schema/host product change or user desktop/config/process changes. Full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open; preserve unrelated dirt/stash0.

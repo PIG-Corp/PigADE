@@ -3,6 +3,24 @@ use super::*;
 use product::{Dialog, DialogKind, ProductAction as A};
 use template_flow::{Origin, Pending, RecipeEditor, RequestKind};
 
+fn slot_dialog(config: &pigade_storage::LaunchSettings) -> Dialog {
+    let mut dialog = Dialog::new(DialogKind::RecipeSlot);
+    if config.provider == "custom" {
+        dialog.fields.clear();
+    } else {
+        dialog.fields[0] = config.role.clone().into();
+        dialog.fields[1] = config.instructions.clone().into();
+        dialog.fields[2] = config.engine.model.clone().unwrap_or_default().into();
+        dialog.fields[3] = config
+            .engine
+            .reasoning_effort
+            .clone()
+            .unwrap_or_default()
+            .into();
+    }
+    dialog
+}
+
 impl CanvasApp {
     fn template_supported(&self) -> bool {
         self.product
@@ -165,27 +183,85 @@ impl CanvasApp {
                 if let Some(editor) = &mut self.product.recipe_editor
                     && let Some(config) = editor.launches.get(index)
                 {
-                    let mut dialog = Dialog::new(DialogKind::RecipeSlot);
-                    dialog.fields[0] = config.role.clone().into();
-                    dialog.fields[1] = config.instructions.clone().into();
-                    dialog.fields[2] = config.engine.model.clone().unwrap_or_default().into();
-                    dialog.fields[3] = config
-                        .engine
-                        .reasoning_effort
-                        .clone()
-                        .unwrap_or_default()
-                        .into();
+                    let dialog = slot_dialog(config);
                     editor.slot = index;
                     editor.slot_parent = parent;
                     self.product.dialog = Some(dialog);
                 }
             }
+            A::OpenRecipeProfiles => {
+                let Some(origin) = self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .filter(|dialog| dialog.kind == DialogKind::RecipeSlot)
+                    .cloned()
+                else {
+                    return;
+                };
+                let Some(editor) = self.product.recipe_editor.as_ref() else {
+                    return;
+                };
+                let Some(baseline) = editor.launches.get(editor.slot).cloned() else {
+                    return;
+                };
+                let Some(catalog) = &self.product.catalog else {
+                    return;
+                };
+                let Some(profiles) = catalog.agent_profiles.as_ref() else {
+                    self.product.notice = Some("Профили недоступны в текущем session host".into());
+                    return;
+                };
+                match crate::recipe_profiles::Picker::new(
+                    origin,
+                    editor.slot,
+                    baseline,
+                    profiles,
+                    catalog.agent_profile_roster.as_ref(),
+                ) {
+                    Ok(picker) => {
+                        self.product.recipe_profiles = Some(picker);
+                        self.product.recipe_profile_scroll.scroll_to_item(0);
+                        self.product.dialog = Some(Dialog::new(DialogKind::RecipeProfiles));
+                        self.product.notice = None;
+                    }
+                    Err(error) => self.product.notice = Some(error),
+                }
+            }
+            A::CancelRecipeProfiles => {
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == DialogKind::RecipeProfiles)
+                    && let Some(picker) = self.product.recipe_profiles.take()
+                {
+                    self.product.dialog = Some(picker.origin);
+                    self.product.notice = None;
+                }
+            }
+            A::ApplyRecipeProfile(id) => self.apply_recipe_profile(id),
             A::SetTemplateProvider(provider) => {
                 if !matches!(provider.as_str(), "shell" | "codex" | "claude" | "opencode") {
                     return;
                 }
-                if let Some(editor) = &mut self.product.recipe_editor {
-                    editor.launches[editor.slot].provider = provider;
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_none_or(|dialog| dialog.kind != DialogKind::RecipeSlot)
+                {
+                    return;
+                }
+                if let Some(editor) = &mut self.product.recipe_editor
+                    && let Some(config) = editor.launches.get_mut(editor.slot)
+                {
+                    if config.provider == "custom" {
+                        *config = template_flow::default_settings(&provider);
+                        self.product.dialog = Some(slot_dialog(config));
+                    } else {
+                        config.provider = provider;
+                    }
                     editor.changed();
                 }
             }
@@ -201,6 +277,9 @@ impl CanvasApp {
             A::ToggleTemplateContext => {
                 if let Some(editor) = &mut self.product.recipe_editor {
                     let config = &mut editor.launches[editor.slot];
+                    if config.provider == "custom" {
+                        return;
+                    }
                     config.deliver_context = !config.deliver_context;
                     editor.changed();
                 }
@@ -302,29 +381,108 @@ impl CanvasApp {
         self.sync_template_flags();
     }
 
+    fn apply_recipe_profile(&mut self, id: uuid::Uuid) {
+        let Some(dialog) = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == DialogKind::RecipeProfiles)
+        else {
+            return;
+        };
+        let Some(picker) = self.product.recipe_profiles.as_ref() else {
+            return;
+        };
+        let query = dialog
+            .fields
+            .first()
+            .map_or("", text_edit::EditBuffer::text);
+        if !picker
+            .profiles(query)
+            .iter()
+            .any(|profile| profile.id == id)
+        {
+            return;
+        }
+        let custom_supported = self
+            .product
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.custom_cli_schema == Some(1));
+        let engine_supported = self.product.engine_options_supported();
+        let Some(editor) = self.product.recipe_editor.as_mut() else {
+            return;
+        };
+        match picker.apply(id, editor, custom_supported, engine_supported) {
+            Ok(profile) => {
+                self.product.dialog = Some(slot_dialog(&profile.settings));
+                self.product.recipe_profiles = None;
+                self.product.notice = Some(format!(
+                    "Скопирован профиль «{}» · ревизия {}. Изменения профиля не обновят шаблон.",
+                    profile.name, profile.revision
+                ));
+            }
+            Err(error) => self.product.notice = Some(error),
+        }
+    }
+
     pub(super) fn submit_template_dialog(
         &mut self,
         kind: DialogKind,
         fields: &[String],
         cx: &mut Context<Self>,
     ) -> bool {
+        if matches!(
+            kind,
+            DialogKind::RecipeSlot | DialogKind::Recipe | DialogKind::NewTemplateTab
+        ) && self.product.recipe_editor.as_ref().is_some_and(|editor| {
+            editor
+                .launches
+                .iter()
+                .any(|config| config.provider == "custom")
+        }) && self
+            .product
+            .catalog
+            .as_ref()
+            .is_none_or(|catalog| catalog.custom_cli_schema != Some(1))
+        {
+            self.product.notice = Some("Текущий session host не поддерживает пользовательские команды. Настройки сохранены в черновике.".into());
+            return true;
+        }
         match kind {
+            DialogKind::RecipeProfiles => {
+                let selected = self
+                    .product
+                    .recipe_profiles
+                    .as_ref()
+                    .and_then(|picker| {
+                        picker.selected(fields.first().map(String::as_str).unwrap_or(""))
+                    })
+                    .map(|profile| profile.id);
+                if let Some(id) = selected {
+                    self.apply_recipe_profile(id);
+                } else {
+                    self.product.notice = Some("Подходящих профилей нет. Измените поиск или вернитесь к настройкам панели.".into());
+                }
+            }
             DialogKind::RecipeSlot => {
                 let engine_options_supported = self.product.engine_options_supported();
                 if let Some(editor) = &mut self.product.recipe_editor {
                     let mut config = editor.launches[editor.slot].clone();
-                    config.role = fields.first().cloned().unwrap_or_default();
-                    config.instructions = fields.get(1).cloned().unwrap_or_default();
-                    config.engine = match pigade_storage::EngineOptions::from_fields(
-                        fields.get(2).map(String::as_str).unwrap_or(""),
-                        fields.get(3).map(String::as_str).unwrap_or(""),
-                    ) {
-                        Ok(engine) => engine,
-                        Err(error) => {
-                            self.product.notice = Some(error.to_string());
-                            return true;
-                        }
-                    };
+                    if config.provider != "custom" {
+                        config.role = fields.first().cloned().unwrap_or_default();
+                        config.instructions = fields.get(1).cloned().unwrap_or_default();
+                        config.engine = match pigade_storage::EngineOptions::from_fields(
+                            fields.get(2).map(String::as_str).unwrap_or(""),
+                            fields.get(3).map(String::as_str).unwrap_or(""),
+                        ) {
+                            Ok(engine) => engine,
+                            Err(error) => {
+                                self.product.notice = Some(error.to_string());
+                                return true;
+                            }
+                        };
+                    }
                     if !config.engine.is_empty() && !engine_options_supported {
                         self.product.notice=Some("Session host не поддерживает параметры модели. Обновите host; значения не будут отброшены молча.".into());
                         return true;
@@ -490,5 +648,33 @@ impl CanvasApp {
         }
         self.sync_template_flags();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slot_dialog;
+    use crate::template_flow;
+
+    #[test]
+    fn custom_slot_has_no_stale_builtin_editors_and_new_form_scope() {
+        let mut config = template_flow::default_settings("codex");
+        config.role = "Exact role".into();
+        config.engine.model = Some("model".into());
+        let builtin = slot_dialog(&config);
+        assert_eq!(builtin.fields.len(), 4);
+        assert_eq!(builtin.fields[0].text(), "Exact role");
+        assert_eq!(builtin.fields[2].text(), "model");
+        let mut custom = template_flow::default_settings("custom");
+        custom.custom_command = Some(pigade_storage::CustomCommand {
+            executable: "/usr/bin/tool".into(),
+            args: vec!["two words".into()],
+        });
+        let readonly = slot_dialog(&custom);
+        assert!(readonly.fields.is_empty());
+        assert_ne!(builtin.id, readonly.id);
+        let returned = slot_dialog(&config);
+        assert_ne!(returned.id, builtin.id);
+        assert_eq!(returned.fields[2].text(), "model");
     }
 }
