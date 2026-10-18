@@ -79,7 +79,11 @@ impl TestHost {
                 " raise SystemExit(0)\n",
                 "safe_env={k:os.environ[k] for k in ('TERM','COLORTERM') if k in os.environ}\n",
                 "print('FIXTURE_ARGS='+json.dumps(sys.argv[1:],ensure_ascii=False))\n",
-                "text=json.loads(sys.argv[2].split('=',1)[1])\n",
+                "model=sys.argv[sys.argv.index('--model')+1] if '--model' in sys.argv else '<default>'\n",
+                "print('FIXTURE_MODEL='+model)\n",
+                "effort=next((arg for arg in sys.argv[1:] if arg.startswith('model_reasoning_effort=')),'<default>')\n",
+                "print('FIXTURE_EFFORT='+effort)\n",
+                "text=json.loads(next(arg.split('=',1)[1] for arg in sys.argv[1:] if arg.startswith('developer_instructions=')))\n",
                 "print('FIXTURE_CONTEXT_CRC32='+str(zlib.crc32(text.encode('utf-8'))))\n",
                 "print('FIXTURE_ENV='+json.dumps(safe_env,ensure_ascii=False))\n",
             ),
@@ -338,6 +342,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
+                engine: Default::default(),
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -379,6 +384,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
+                engine: Default::default(),
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -455,6 +461,7 @@ fn reviewed_context_is_immutable_during_launch_and_survives_host_reopen() -> Res
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
+                engine: Default::default(),
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -705,6 +712,7 @@ fn prepared_resume_reuses_frozen_context_preserves_history_and_rejects_stale_bin
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
+                engine: Default::default(),
                 tab,
                 provider: "codex".into(),
                 side: Direction::Right,
@@ -1304,6 +1312,7 @@ fn opencode_1193_exact_id_resume_uses_original_cwd_without_context_delivery() ->
         &host.socket(),
         Command::PrepareLaunch {
             request: PrepareRequest {
+                engine: Default::default(),
                 tab,
                 provider: "opencode".into(),
                 side: Direction::Right,
@@ -1734,6 +1743,10 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
                         id: profile_id,
                         name: original_name.into(),
                         settings: LaunchSettings {
+                            engine: pigade_storage::EngineOptions {
+                                model: Some("gpt-6-luna".into()),
+                                reasoning_effort: Some("xhigh".into()),
+                            },
                             provider: "codex".into(),
                             role: original_role.into(),
                             instructions: original_instructions.into(),
@@ -1822,13 +1835,56 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
             "prepared context omitted {expected:?}"
         );
     }
+    ensure!(
+        preview.engine.model.as_deref() == Some("gpt-6-luna")
+            && preview.engine.reasoning_effort.as_deref() == Some("xhigh")
+    );
     let plan_id = preview.plan_id;
+    // Fault injection: even a valid option string cannot drift away from the
+    // frozen argv. Reject before beginning the durable launch attempt.
+    let database = rusqlite::Connection::open(host.directory.path().join("metadata.sqlite"))?;
+    database.busy_timeout(Duration::from_secs(3))?;
+    let original_payload: String = database.query_row(
+        "SELECT payload FROM prepared_launches WHERE id=?1",
+        [plan_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let mut changed: serde_json::Value = serde_json::from_str(&original_payload)?;
+    changed["preview"]["engine"]["model"] = "changed-after-review".into();
+    database.execute(
+        "UPDATE prepared_launches SET payload=?2 WHERE id=?1",
+        rusqlite::params![plan_id.to_string(), serde_json::to_string(&changed)?],
+    )?;
+    let refused = exchange(&host.socket(), Command::StartPrepared { plan_id })?;
+    ensure!(
+        refused.error.is_some(),
+        "changed engine snapshot was launched"
+    );
+    ensure!(success(&host.socket(), Command::List)?.views.is_empty());
+    let phase: String = database.query_row(
+        "SELECT phase FROM prepared_launches WHERE id=?1",
+        [plan_id.to_string()],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        phase == "prepared",
+        "invalid snapshot consumed launch admission"
+    );
+    database.execute(
+        "UPDATE prepared_launches SET payload=?2 WHERE id=?1",
+        rusqlite::params![plan_id.to_string(), original_payload],
+    )?;
+    drop(database);
     ensure!(success(&host.socket(), Command::List)?.views.is_empty());
 
     let mut replacement = AgentProfile {
         id: profile_id,
         name: "Updated profile name".into(),
         settings: LaunchSettings {
+            engine: pigade_storage::EngineOptions {
+                model: Some("different-model".into()),
+                reasoning_effort: Some("low".into()),
+            },
             provider: "codex".into(),
             role: "changed role".into(),
             instructions: "PROFILE_CHANGED_INSTRUCTIONS".into(),
@@ -1891,6 +1947,11 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
     ensure!(views.len() == 1, "profile launch created extra generations");
     let output = views[0].frame.text();
     ensure!(
+        output.contains("FIXTURE_MODEL=gpt-6-luna")
+            && output.contains("FIXTURE_EFFORT=model_reasoning_effort=\"xhigh\""),
+        "model/effort argv did not reach the real PTY fixture"
+    );
+    ensure!(
         output.contains(&format!(
             "FIXTURE_CONTEXT_CRC32={}",
             crc32fast::hash(preview.context.text.as_bytes())
@@ -1909,6 +1970,27 @@ fn profile_launch_keeps_frozen_source_after_profile_update_and_delete() -> Resul
     ensure!(stored.profile.as_ref().is_some_and(|source| {
         source.id == profile_id && source.name == original_name && source.revision == 1
     }));
+    ensure!(
+        stored.engine == preview.engine,
+        "editing/deleting profile changed frozen engine options"
+    );
+    host.restart()?;
+    let reopened = success(
+        &host.socket(),
+        Command::GetSessionContext {
+            session: preview.session,
+            generation: preview.generation,
+        },
+    )?
+    .launch_preview
+    .context("reopened engine snapshot missing")?;
+    ensure!(
+        reopened.engine == preview.engine
+            && reopened
+                .profile
+                .as_ref()
+                .is_some_and(|source| source.revision == 1)
+    );
     ensure!(stored.role_override == original_role);
     ensure!(stored.agent_instructions == original_instructions);
     ensure!(stored.context.content_hash == preview.context.content_hash);

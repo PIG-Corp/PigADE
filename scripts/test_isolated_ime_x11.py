@@ -262,6 +262,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('exact-ID resume', plan['input']['opencode'])
         self.assertIn('public export/import of a synthetic text-only exchange', plan['input']['opencode'])
         self.assertIn('UI profile create/review/launch/edit/delete', plan['input']['opencode'])
+        self.assertIn('fixed model-option transport checks (no account/model acceptance claim)',
+                      plan['input']['opencode'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         sequence = source.split('static void opencode_input_sequence', 1)[1].split('\n}', 1)[0]
@@ -288,12 +290,24 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'opencode-resume-review.ppm'", harness)
         self.assertIn("'opencode-resumed-session.ppm'", harness)
         self.assertIn("'opencode-profile-launch-review.ppm'", harness)
+        self.assertIn("'opencode-profile-model-edit.ppm'", harness)
+        self.assertIn("'model': 'opencode/big-pickle'", harness)
+        self.assertIn("'model': 'opencode/test-other-model'", harness)
+        self.assertIn("before_catalog.get('engine_options_schema') == 1", harness)
+        self.assertIn("'model_transport_only_no_account_acceptance_claim': True", harness)
+        self.assertIn("preview.get('engine') == expected_engine", harness)
+        self.assertIn("launched_argv == ['/usr/bin/opencode', '--model', 'opencode/big-pickle']", harness)
+        self.assertIn("process_argv((after_edit_view or {}).get('pid')) == launched_argv", harness)
+        profile_argv = harness.split('    def process_argv(pid):', 1)[1].split('    def profile_by_name', 1)[0]
+        self.assertIn("Path(f'/proc/{pid}/cmdline')", profile_argv)
+        self.assertNotIn('/environ', profile_argv)
         self.assertIn('def run_opencode_profile_fixture(', harness)
         for assertion in (
                 "'command': 'detect_providers'", "'preview', {}).get('profile') or {}).get('id') == profile['id']",
                 "'role_override') == expected_settings['role']",
                 "'agent_instructions') == expected_settings['instructions']",
-                "launch.get('args') == [] and launch.get('env', {}) == {}",
+                "launch.get('args') == ['--model', 'opencode/big-pickle']",
+                "launch.get('env', {}) == {}",
                 "'frame_unchanged': (after_edit_view or {}).get('frame') == profile_frame",
                 "'1.19.3' not in text or text.count('█') < 8",
                 "final_plans.get(profile_plan_id, {}).get('payload') == payload",
@@ -309,7 +323,9 @@ class IsolatedImePlanTests(unittest.TestCase):
         profile_input = source.split('} else if (!strcmp(a.stage, "profile-create-fields")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "profile-context-off")) {', 1)[0]
         self.assertIn('XK_3', profile_input)
-        self.assertNotIn('XK_m', profile_input)
+        self.assertIn('XK_slash, XK_b, XK_i, XK_g', profile_input)
+        self.assertIn('XK_Tab', profile_input)
+        self.assertNotIn('modified_key(dpy, XK_Control_L, XK_m)', profile_input)
         self.assertIn('modified_key(dpy, XK_Control_L, XK_m)', source)
         self.assertIn("'public_metadata_directory': '/home/pigade/.local/share/opencode'", harness)
         self.assertIn("'private_loopback_enabled_for_fixture': config.get('fixture') == 'opencode'", harness)
@@ -399,15 +415,32 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertEqual(plan['fixture'], 'pointer')
         self.assertIn('last-hover unsent text', plan['input']['pointer'])
         self.assertIn('no-motion Ctrl+LMB release preserves placement/history', plan['input']['pointer'])
+        self.assertIn('subthreshold modifier drag preserves placement', plan['input']['pointer'])
+        self.assertIn('focus-mode drag preview/cancel from nonzero pane index', plan['input']['pointer'])
         self.assertFalse(plan['input']['arbitrary_text_argument'])
         source = Path(__file__).with_name('x11-ime-input.c').read_text()
         for stage in ('pointer-hover-left', 'pointer-hover-right', 'pointer-hover-input',
                       'pointer-no-motion-release',
+                      'pointer-subthreshold-hold', 'pointer-focus-toggle',
+                      'pointer-focus-mode-preview',
                       'pointer-hover-source', 'pointer-keyboard-away', 'pointer-move-right-near',
                       'pointer-hold-preview', 'pointer-drop', 'pointer-undo',
                       'pointer-selection-hold', 'pointer-ime-input', 'pointer-ime-cancel',
                       'pointer-dialog-hover', 'pointer-inactive-hold'):
             self.assertIn(f'"{stage}"', source)
+        subthreshold_stage = source.split(
+            '} else if (!strcmp(a.stage, "pointer-subthreshold-hold")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-focus-toggle")) {', 1)[0]
+        self.assertLess(subthreshold_stage.index('XTestFakeButtonEvent(dpy, 1, True'),
+                        subthreshold_stage.index('pointer_position(dpy, app_window, 355, 250)'))
+        self.assertIn('XTestFakeButtonEvent(dpy, 1, False, CurrentTime)', source)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_f)', source)
+        focus_stage = source.split(
+            '} else if (!strcmp(a.stage, "pointer-focus-mode-preview")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "pointer-drop")) {', 1)[0]
+        self.assertIn('pointer_drag_begin(dpy, app_window)', focus_stage)
+        self.assertIn('pointer_drag_release(dpy, 1)', focus_stage)
+        self.assertIn('/artifacts/pointer-focus-mode-drag.ppm', source)
         no_motion_stage = source.split(
             '} else if (!strcmp(a.stage, "pointer-no-motion-release")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "pointer-hover-source")) {', 1)[0]
@@ -427,6 +460,10 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('pointer_position(dpy, app, 350, 250)', source)
         self.assertIn("move_siblings == ('Horizontal', [right_pane, left_pane])",
                       Path(__file__).with_name('isolated-ime-x11.py').read_text())
+        fixture = Path(__file__).with_name('isolated-ime-x11.py').read_text()
+        self.assertIn("'pointer-subthreshold-held.ppm'", fixture)
+        self.assertIn("'focus_mode_drag_preview_and_cancel_preserved_nonzero_index_source_and_layout': True", fixture)
+        self.assertIn("focus_layout.get('focused') == right_pane", fixture)
         ime_stage = source.split('} else if (!strcmp(a.stage, "pointer-ime-input")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "pointer-ime-cancel")) {', 1)[0]
         self.assertLess(ime_stage.index('nanosleep'), ime_stage.index('capture(dpy, a.output)'))

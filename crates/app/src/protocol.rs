@@ -417,6 +417,10 @@ pub struct AdapterCapabilities {
     pub context_receipt: bool,
     pub native_resume: bool,
     pub conversation_id: bool,
+    #[serde(default)]
+    pub model_selection: bool,
+    #[serde(default)]
+    pub reasoning_effort: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -452,6 +456,8 @@ pub struct LaunchPreview {
     pub resume: Option<ResumeSource>,
     #[serde(default)]
     pub profile: Option<ProfileSource>,
+    #[serde(default)]
+    pub engine: pigade_storage::EngineOptions,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -9,6 +9,20 @@ impl CanvasApp {
             name.into(),
             editor.settings.role.clone().into(),
             editor.settings.instructions.clone().into(),
+            editor
+                .settings
+                .engine
+                .model
+                .clone()
+                .unwrap_or_default()
+                .into(),
+            editor
+                .settings
+                .engine
+                .reasoning_effort
+                .clone()
+                .unwrap_or_default()
+                .into(),
         ];
         dialog.fields[0].select_all();
         self.product.profile_editor = Some(editor);
@@ -92,6 +106,24 @@ impl CanvasApp {
                         role: dialog.fields[0].text().into(),
                         instructions: dialog.fields[1].text().into(),
                         deliver_context: preview.deliver_context,
+                        engine: match pigade_storage::EngineOptions::from_fields(
+                            dialog
+                                .fields
+                                .get(3)
+                                .map(text_edit::EditBuffer::text)
+                                .unwrap_or(""),
+                            dialog
+                                .fields
+                                .get(4)
+                                .map(text_edit::EditBuffer::text)
+                                .unwrap_or(""),
+                        ) {
+                            Ok(engine) => engine,
+                            Err(error) => {
+                                self.product.notice = Some(error.to_string());
+                                return;
+                            }
+                        },
                     };
                     let mut editor = profile_flow::ProfileEditor::new(settings);
                     editor.origin = Some(dialog.clone());
@@ -177,6 +209,17 @@ impl CanvasApp {
             DialogKind::AgentProfiles => self.product.dialog = None,
             DialogKind::AgentProfile => {
                 if self.product.busy {
+                    return true;
+                }
+                let has_engine_options = [3, 4].into_iter().any(|index| {
+                    fields
+                        .get(index)
+                        .is_some_and(|value| !value.trim().is_empty())
+                });
+                if has_engine_options && !self.product.engine_options_supported() {
+                    self.product.notice = Some(
+                        "Этот session host не поддерживает сохранение параметров модели и усилия. Очистите эти поля или обновите host.".into(),
+                    );
                     return true;
                 }
                 if let Some(editor) = &self.product.profile_editor {

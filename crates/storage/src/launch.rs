@@ -99,7 +99,7 @@ impl MetadataStore {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 12,
+            version <= 13,
             "database schema {version} is newer than this writer"
         );
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -108,13 +108,13 @@ impl MetadataStore {
         // VACUUM INTO reads committed WAL pages through SQLite. Never copy a
         // database file while disregarding its WAL. The backup is durable before
         // any persistent pragma/schema change to an existing older database.
-        let migration_backup = if version > 0 && version < 12 {
-            Some(backup_before_migration(&connection, path, version, 12)?)
+        let migration_backup = if version > 0 && version < 13 {
+            Some(backup_before_migration(&connection, path, version, 13)?)
         } else {
             None
         };
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        if version < 12 {
+        if version < 13 {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 0 {
                 tx.execute_batch("CREATE TABLE launch_intents (
@@ -161,7 +161,7 @@ impl MetadataStore {
             if version < 12 {
                 crate::prompt::migrate_prompts(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 12)?;
+            tx.pragma_update(None, "user_version", 13)?;
             tx.commit()?;
         }
         File::open(
@@ -620,12 +620,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         let backup = store
             .migration_backup_path()
             .context("schema-7 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v12."));
+        assert!(backup.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -691,7 +691,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -704,7 +704,7 @@ mod tests {
         let backup_path = store
             .migration_backup_path()
             .context("schema-8 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -729,12 +729,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         let backup = store
             .migration_backup_path()
             .context("schema-9 backup absent")?;
-        assert!(backup.to_string_lossy().contains(".pre-v12."));
+        assert!(backup.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -925,7 +925,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         assert_eq!(
             store.connection.query_row::<usize, _, _>(
@@ -936,7 +936,7 @@ mod tests {
             1
         );
         let backup_path = store.migration_backup_path().context("v6 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1104,7 +1104,7 @@ mod tests {
             .pragma_query_value(None, "synchronous", |r| r.get(0))?;
         assert_eq!(mode, "wal");
         assert_eq!(synchronous, 2);
-        store.connection.pragma_update(None, "user_version", 13)?;
+        store.connection.pragma_update(None, "user_version", 14)?;
         drop(store);
         assert!(MetadataStore::open(path).is_err());
         Ok(())

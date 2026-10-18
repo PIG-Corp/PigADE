@@ -125,6 +125,17 @@ impl ProductUi {
                     } else {
                         "Без передачи контекста"
                     };
+                    let engine_summary = match (
+                        profile.settings.engine.model.as_deref(),
+                        profile.settings.engine.reasoning_effort.as_deref(),
+                    ) {
+                        (Some(model), Some(effort)) => Some(format!(
+                            "CLI параметры · модель: {model} · усилие: {effort}"
+                        )),
+                        (Some(model), None) => Some(format!("CLI параметр · модель: {model}")),
+                        (None, Some(effort)) => Some(format!("CLI параметр · усилие: {effort}")),
+                        (None, None) => None,
+                    };
                     let selected = dialog.active_field == index + 1;
                     rows = rows.child(
                         div()
@@ -167,7 +178,13 @@ impl ProductUi {
                                     .child(profile_note(
                                         chrome::Colors::for_theme(self.appearance.theme).muted,
                                         detail,
-                                    )),
+                                    ))
+                                    .children(engine_summary.map(|summary| {
+                                        profile_note(
+                                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                                            summary,
+                                        )
+                                    })),
                             )
                             .child(self.icon_control(
                                 &format!("agent-profile-launch-{id}"),
@@ -203,6 +220,21 @@ impl ProductUi {
                         "Редактор профиля недоступен.",
                     ));
                 };
+                if !self.engine_options_supported()
+                    && dialog.fields.get(3..5).is_some_and(|fields| {
+                        fields.iter().any(|field| !field.text().trim().is_empty())
+                    })
+                {
+                    content = content.child(
+                        div()
+                            .id("profile-engine-unsupported")
+                            .role(Role::Alert)
+                            .text_size(px(12.))
+                            .text_color(colors.status_amber)
+                            .whitespace_normal()
+                            .child("Этот session host не поддерживает параметры модели и усилия. Очистите эти поля или обновите host; сохранить их нельзя."),
+                    );
+                }
                 let mut providers = div().flex().flex_wrap().gap_1();
                 for provider in ["claude", "codex", "opencode"] {
                     providers = providers.child(self.action_control(
@@ -241,7 +273,11 @@ impl ProductUi {
                     ))
                     .child(profile_note(
                         chrome::Colors::for_theme(self.appearance.theme).muted,
-                        "Профиль не хранит модель, авторизацию, рабочую папку или разрешения CLI.",
+                        "Профиль хранит только явно заданные модель и усилие CLI; пустые поля используют настройки CLI по умолчанию. Авторизация, рабочая папка и разрешения сюда не входят.",
+                    ))
+                    .child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Совместимость параметров проверяется при подготовке. Профиль не подтверждает доступность модели или её применение.",
                     ))
                     .child(profile_note(
                         chrome::Colors::for_theme(self.appearance.theme).muted,

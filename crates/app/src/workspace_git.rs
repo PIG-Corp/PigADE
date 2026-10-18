@@ -248,6 +248,7 @@ mod tests {
             agent_profiles: None,
             prompts: None,
             tab_close_schema: None,
+            engine_options_schema: Some(1),
         };
         let target = Target::selected(&catalog).unwrap();
         let dialog = Uuid::new_v4();

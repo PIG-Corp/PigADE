@@ -225,6 +225,18 @@ impl ProductUi {
                         .child(row_note(
                             chrome::Colors::for_theme(self.appearance.theme).muted,
                             detail,
+                        ))
+                        .child(row_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            format!(
+                                "Модель: {} · reasoning: {}",
+                                config.engine.model.as_deref().unwrap_or("настройки CLI"),
+                                config
+                                    .engine
+                                    .reasoning_effort
+                                    .as_deref()
+                                    .unwrap_or("настройки CLI")
+                            ),
                         )),
                 );
             }
@@ -379,6 +391,22 @@ impl ProductUi {
                             provider_label(&slot.preview.provider),
                             phase_label(&slot.phase)
                         )))
+                        .child(row_note(
+                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                            format!(
+                                "Модель: {} · reasoning: {}",
+                                slot.preview
+                                    .engine
+                                    .model
+                                    .as_deref()
+                                    .unwrap_or("настройки CLI"),
+                                slot.preview
+                                    .engine
+                                    .reasoning_effort
+                                    .as_deref()
+                                    .unwrap_or("настройки CLI")
+                            ),
+                        ))
                         .child(row_note(
                             chrome::Colors::for_theme(self.appearance.theme).muted,
                             if !slot.preview.can_launch {

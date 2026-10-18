@@ -1452,6 +1452,77 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     step('pointer-hover-source')
     require(catalog_layout()[1].get('focused') == left_pane,
             'off-center drag start did not select the expected source pane')
+
+    # A held Ctrl+LMB movement under the 10px threshold must remain a click.
+    subthreshold_catalog, subthreshold_layout = catalog_layout()
+    subthreshold_geometry = frame_geometries(panes)
+    helper_call(config, 'capture', '/artifacts/pointer-subthreshold-before.ppm')
+    def check_subthreshold_hold():
+        current_catalog, current_layout = catalog_layout()
+        current_tab = next(item for item in current_catalog['tabs'] if item['id'] == tab_id)
+        saved_tab = next(item for item in subthreshold_catalog['tabs'] if item['id'] == tab_id)
+        require(current_layout == subthreshold_layout and
+                current_catalog.get('layout') == subthreshold_catalog.get('layout') and
+                (current_tab.get('layout_json'), current_tab.get('active_pane'), current_tab.get('revision')) ==
+                (saved_tab.get('layout_json'), saved_tab.get('active_pane'), saved_tab.get('revision')) and
+                frame_geometries(panes) == subthreshold_geometry and
+                live_unchanged(generations, expected_processes) and
+                0 < Path('/artifacts/pointer-subthreshold-held.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'subthreshold modifier+LMB motion changed host placement, PTYs, processes, or capture')
+    report['stage'] = 'pointer-subthreshold-hold'
+    save()
+    held_stage('pointer-subthreshold-hold', 'HELD', 'RELEASE',
+               '/artifacts/pointer-subthreshold-held.ppm', check_subthreshold_hold)
+    wait_until(lambda: catalog_layout()[1] == subthreshold_layout and
+               frame_geometries(panes) == subthreshold_geometry, time.monotonic() + 5)
+    require(live_unchanged(generations, expected_processes),
+            'releasing subthreshold modifier+LMB changed a process or PTY geometry')
+
+    # Exercise drag preview from a nonzero view index while focus mode keeps
+    # the remaining panes visually suppressed. The held capture is retained
+    # so the compositor-only reveal during the drag can be reviewed.
+    step('pointer-hover-right')
+    wait_until(lambda: (layout if (layout := catalog_layout()[1]).get('focused') == right_pane else None),
+               time.monotonic() + 5)
+    step('pointer-focus-toggle')
+    focus_layout = wait_until(
+        lambda: (layout if (layout := catalog_layout()[1]).get('focus_mode') is True else None),
+        time.monotonic() + 5)
+    require(focus_layout.get('focused') == right_pane and
+            focus_layout.get('root') == before_drag.get('root') and
+            live_unchanged(generations, expected_processes),
+            'focus mode did not preserve the nonzero-index source pane and process identities')
+    focus_catalog, focus_layout = catalog_layout()
+    focus_geometry = frame_geometries(panes)
+    helper_call(config, 'capture', '/artifacts/pointer-focus-mode-before.ppm')
+    def check_focus_mode_preview():
+        current_catalog, current_layout = catalog_layout()
+        require(current_layout == focus_layout and
+                current_catalog.get('layout') == focus_catalog.get('layout') and
+                frame_geometries(panes) == focus_geometry and
+                live_unchanged(generations, expected_processes) and
+                0 < Path('/artifacts/pointer-focus-mode-drag.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+                'focus-mode drag preview committed host layout, resized PTYs, changed process identity, or lost capture')
+    report['stage'] = 'pointer-focus-mode-preview'
+    save()
+    held_stage('pointer-focus-mode-preview', 'HELD', 'CANCEL',
+               '/artifacts/pointer-focus-mode-drag.ppm', check_focus_mode_preview)
+    wait_until(lambda: catalog_layout()[1] == focus_layout and
+               frame_geometries(panes) == focus_geometry, time.monotonic() + 5)
+    require(live_unchanged(generations, expected_processes),
+            'cancelled focus-mode preview changed a process or PTY geometry')
+    step('pointer-focus-toggle')
+    normal_right = wait_until(
+        lambda: (layout if layout.get('focus_mode') is False
+                 else None) if (layout := catalog_layout()[1]) else None,
+        time.monotonic() + 5)
+    require(normal_right.get('root') == before_drag.get('root'),
+            'leaving focus mode after drag changed the pane tree')
+    step('pointer-hover-left')
+    wait_until(lambda: catalog_layout()[1] == before_drag, time.monotonic() + 5)
+    require(live_unchanged(generations, expected_processes),
+            'focus-mode drag preview changed session identities after restoring the original view')
+
     held_stage('pointer-hold-preview', 'HELD', 'CANCEL',
                '/artifacts/pointer-drag.ppm', check_drag_preview)
     wait_until(lambda: catalog_layout()[1].get('root') == before_drag.get('root') and
@@ -1547,12 +1618,17 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         'stationary_pointer_preserved_keyboard_focus_then_movement_restored_hover_focus': True,
         'unsent_input_reached_only_last_hovered_pane': True,
         'modifier_button_release_without_pointer_travel_preserved_root_weights_and_history_lengths': True,
+        'subthreshold_modifier_drag_preserved_full_layout_processes_and_pty_geometry': True,
+        'focus_mode_drag_preview_and_cancel_preserved_nonzero_index_source_and_layout': True,
+        'focus_mode_drag_capture_retained_for_remainder_reveal_review': True,
         'held_drag_preview_did_not_commit_or_resize_ptys': True,
         'escape_cancel_restored_exact_root': True,
         'selection_ime_dialog_and_inactive_focus_suppressed': True,
         'drop_inserted_source_to_right_of_expected_target_as_horizontal_sibling': True,
         'prefix_undo_restored_exact_pre_drag_layout': True,
-        'captures': ['pointer-hover.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
+        'captures': ['pointer-hover.ppm', 'pointer-subthreshold-before.ppm',
+                     'pointer-subthreshold-held.ppm', 'pointer-focus-mode-before.ppm',
+                     'pointer-focus-mode-drag.ppm', 'pointer-drag.ppm', 'pointer-after-cancel.ppm',
                      'pointer-selection.ppm', 'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm',
                      'pointer-dropped.ppm', 'pointer-undo.ppm']}
     report.update({'status': POINTER_PASS, 'stage': 'complete'})
@@ -3553,6 +3629,21 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
         return sorted((view.get('session'), view.get('generation'), view.get('pid'))
                       for view in host_request({'command': 'list'}).get('views', []))
 
+    def process_argv(pid):
+        require(type(pid) is int and 0 < pid < 2**31,
+                'profile fixture has an invalid owned process PID')
+        path = Path(f'/proc/{pid}/cmdline')
+        raw = path.read_bytes()
+        require(0 < len(raw) <= 16 * 1024,
+                'owned profile process command line is empty or oversized')
+        fields = raw.split(b'\0')
+        if fields and fields[-1] == b'':
+            fields.pop()
+        try:
+            return [field.decode('utf-8', errors='strict') for field in fields]
+        except UnicodeDecodeError as error:
+            raise RuntimeError('owned profile process command line is not UTF-8') from error
+
     def profile_by_name(catalog, name):
         profiles = catalog.get('agent_profiles')
         require(isinstance(profiles, list) and len(profiles) <= 128,
@@ -3562,6 +3653,8 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
         return matches[0] if matches else None
 
     before_catalog = catalog_now()
+    require(before_catalog.get('engine_options_schema') == 1,
+            'session host does not advertise the persisted engine-options schema')
     require(before_catalog.get('selection', {}).get('tab_id') == report['opencode']['tab'],
             'profile fixture is not on the OpenCode fixture tab')
     require(before_catalog.get('agent_profiles') == [],
@@ -3590,8 +3683,10 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
                  profile_by_name(value, 'ReviewerFixture') else None),
         time.monotonic() + 8)
     profile = profile_by_name(saved_catalog, 'ReviewerFixture')
+    expected_engine = {'model': 'opencode/big-pickle', 'reasoning_effort': None}
     expected_settings = {'provider': 'opencode', 'role': 'reviewer profile role',
-                         'instructions': 'profile instruction fixture', 'deliver_context': False}
+                         'instructions': 'profile instruction fixture', 'deliver_context': False,
+                         'engine': expected_engine}
     require(profile is not None and profile.get('revision') == 1 and
             profile.get('settings') == expected_settings,
             'profile editor did not persist the exact fixed OpenCode settings')
@@ -3623,8 +3718,10 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
             preview.get('provider') == 'opencode' and preview.get('deliver_context') is False and
             preview.get('role_override') == expected_settings['role'] and
             preview.get('agent_instructions') == expected_settings['instructions'] and
-            launch.get('args') == [] and launch.get('env', {}) == {},
-            'profile plan does not preserve exact provenance/settings without task arguments')
+            preview.get('engine') == expected_engine and
+            launch.get('args') == ['--model', 'opencode/big-pickle'] and
+            launch.get('env', {}) == {},
+            'profile plan does not preserve provenance/settings and exact model launch arguments')
     require(fixture_generations() == generations_before_create and
             process_identities() == identities_before_create,
             'profile preparation created a process before explicit review confirmation')
@@ -3661,6 +3758,9 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
         return current if time.monotonic() - stable_frame['since'] >= 0.4 else None
     profile_view = wait_until(stable_profile_view, time.monotonic() + 15)
     profile_frame = profile_view.get('frame')
+    launched_argv = process_argv(profile_view.get('pid'))
+    require(launched_argv == ['/usr/bin/opencode', '--model', 'opencode/big-pickle'],
+            'launched OpenCode command line did not carry exactly the requested model option')
     require(profile_frame is not None and report['opencode']['tab'] == preview['tab_id'],
             'profile launch did not retain its current-tab frame')
     catalog_after_launch = catalog_now()
@@ -3684,22 +3784,26 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
     helper_call(config, 'profile-select-first')
     helper_call(config, 'profile-edit')
     helper_call(config, 'profile-rename')
+    helper_call(config, 'capture', '/artifacts/opencode-profile-model-edit.ppm')
     helper_call(config, 'profile-save-edit')
     renamed_catalog = wait_until(
         lambda: (value if (value := catalog_now()).get('agent_profiles') and
                  profile_by_name(value, 'ReviewerRenamed') else None),
         time.monotonic() + 8)
     renamed = profile_by_name(renamed_catalog, 'ReviewerRenamed')
+    edited_settings = dict(expected_settings, engine={
+        'model': 'opencode/test-other-model', 'reasoning_effort': None})
     require(renamed is not None and renamed.get('id') == profile['id'] and
             renamed.get('revision') == profile['revision'] + 1 and
-            renamed.get('settings') == expected_settings,
-            'profile edit did not save the exact renamed revision')
+            renamed.get('settings') == edited_settings,
+            'profile edit did not save the renamed profile and alternate engine model')
     after_edit_view = fixture_session_models(session).get(generation)
     plans_after_edit = prepared_launches_read_only()
     edit_checks = {
         'generations_unchanged': fixture_generations() == expected_generations,
         'generation_present': after_edit_view is not None,
         'pid_unchanged': (after_edit_view or {}).get('pid') == profile_view.get('pid'),
+        'process_argv_unchanged': process_argv((after_edit_view or {}).get('pid')) == launched_argv,
         'frame_unchanged': (after_edit_view or {}).get('frame') == profile_frame,
         'source_payload_unchanged': plans_after_edit.get(profile_plan_id, {}).get('payload') == payload,
         'before_sequence': profile_view.get('sequence'),
@@ -3710,7 +3814,7 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
     report['agent_profile_edit_checks'] = edit_checks
     save()
     require(all(edit_checks[key] for key in ('generations_unchanged', 'generation_present',
-                'pid_unchanged', 'frame_unchanged', 'source_payload_unchanged')),
+                'pid_unchanged', 'process_argv_unchanged', 'frame_unchanged', 'source_payload_unchanged')),
             'editing a profile changed the live generation/frame or its immutable source snapshot')
 
     report['stage'] = 'opencode-agent-profile-delete-cancel'
@@ -3746,16 +3850,23 @@ def run_opencode_profile_fixture(config, report, app, artifacts, save):
     report['agent_profile'] = {
         'profile_name_before_edit': 'ReviewerFixture', 'profile_name_after_edit': 'ReviewerRenamed',
         'provider': 'opencode', 'context_delivery': False,
+        'model_transport_only_no_account_acceptance_claim': True,
+        'saved_engine': expected_engine,
+        'prepared_engine': preview.get('engine'),
+        'launched_process_argv': launched_argv,
+        'edited_library_engine': edited_settings['engine'],
         'role_and_instructions_saved_without_cli_arguments': True,
         'profile_provenance_revision_frozen_in_prepared_launch': profile['revision'],
         'prepare_created_no_process': True, 'one_generation_after_confirmation': True,
         'edit_left_live_pid_generation_frame_and_plan_unchanged': True,
+        'profile_model_edit_did_not_rewrite_frozen_engine_or_process_argv': True,
         'delete_cancel_preserved_profile': True,
         'delete_removed_only_reusable_profile': True,
         'live_profile_launch_visible_after_delete': True,
         'task_sent': False,
         'captures': ['opencode-profile-library.ppm', 'opencode-profile-editor.ppm',
-                     'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm'],
+                     'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm',
+                     'opencode-profile-model-edit.ppm'],
     }
     report['opencode']['captures'].extend(report['agent_profile']['captures'])
     report['opencode']['profile_plan_id'] = profile_plan_id
@@ -4650,6 +4761,8 @@ def outer_run(args) -> dict:
                  if args.fixture == 'controls' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'pointer-hover.ppm',
+                  'pointer-subthreshold-before.ppm', 'pointer-subthreshold-held.ppm',
+                  'pointer-focus-mode-before.ppm', 'pointer-focus-mode-drag.ppm',
                   'pointer-drag.ppm', 'pointer-after-cancel.ppm', 'pointer-selection.ppm',
                   'pointer-ime-preedit.ppm', 'pointer-ime.ppm', 'pointer-dialog.ppm', 'pointer-dropped.ppm',
                   'pointer-undo.ppm'] if args.fixture == 'pointer' else
@@ -4669,7 +4782,8 @@ def outer_run(args) -> dict:
                  ['opencode-logo-before.ppm', 'opencode-input-after.ppm',
                   'opencode-resume-review.ppm', 'opencode-resumed-session.ppm',
                   'opencode-profile-library.ppm', 'opencode-profile-editor.ppm',
-                  'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm']
+                  'opencode-profile-after-save.ppm', 'opencode-profile-launch-review.ppm',
+                  'opencode-profile-model-edit.ppm']
                  if args.fixture == 'opencode' else
                  ['committed.ppm'] if args.fixture in ('keyboard', 'latency') else
                  ['preedit.ppm', 'committed.ppm'])],
@@ -4695,11 +4809,11 @@ def plan(args) -> dict:
                   'history': 'fixed Ctrl+Shift+Space, I; Tab to readonly text, select/copy and attempt edit; Tab to query READY, Enter',
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
-                  'pointer': 'fixed private four-shell setup; hover follows cursor, last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, held cancel preview, Dwindle drop and layout undo',
+                  'pointer': 'fixed private four-shell setup; hover follows cursor and sends last-hover unsent text, no-motion Ctrl+LMB release preserves placement/history, subthreshold modifier drag preserves placement, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, and review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
-                  'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete using fixed ASCII values',
+                  'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',
                   'arbitrary_text_argument': False},
         'preflight': ['fresh bwrap user/pid/mount/ipc/network namespaces',
                       'private Xvfb -displayfd and MIT-MAGIC-COOKIE-1',

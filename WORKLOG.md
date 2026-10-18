@@ -3385,3 +3385,83 @@ Ship saved terminal font sizing with coherent metrics, glyphs, IME and process-p
 - Files: crates/app/src/appearance.rs, crates/app/src/appearance_commands.rs, crates/app/src/appearance_ui.rs, crates/app/src/font.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 218 app tests passed; final strict all-target app Clippy, first-party fmt/version/diff checks and locked release build passed;32 harness tests passed. Existing private native controls fixture01 and final02 passed; stty size proves kernel/model13->12->13 rows at14->15->14px for3 real shells, unchanged generation/PIDs and catalog layout/history. Final font14/15 captures inspected. Read-only Luna review identified old-geometry gesture race; root cancels gestures/composition on successful size apply. Final UI-only label/hint changes rebuilt and reverified in02.
 - Risks / next: Broader BridgeMind/runtime and full MVP goal remains active. No system zoom/config changes; Wayland, extreme-size platform/AT and real UI-process preference restart acceptance remain open. Preserve unrelated stress/research/patch dirt and stash0.
+
+## 2026-10-18T01:42:34+00:00 — /root/appearance_colors_luna
+
+Added engine model and reasoning effort fields to reusable agent profiles
+
+- Files: crates/app/src/profile_ui.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_commands.rs
+- Verification: rustfmt --edition 2024 on owned files: passed; git diff --check on owned files: passed; unit tests added but not run per root no-app-Cargo instruction; DialogKind field labels/multiline integration pending root-owned product.rs
+- Risks / next: Root updates profile form labels and single-line indices, then owns integrated app tests/build
+
+## 2026-10-18T01:42:55+00:00 — pointer_review_luna
+
+Add exact-version model and reasoning argv transports for verified provider CLIs
+
+- Files: crates/session-host/src/adapters.rs, docs/compatibility/CLI.md
+- Verification: Local claude/codex/opencode --version and --help captures reviewed; codex exec --help reviewed; rustfmt --edition 2024 --check crates/session-host/src/adapters.rs passed; git diff --check passed; Cargo tests intentionally not run pending root integration.
+- Risks / next: Root integrates prepared launch options and runs host tests; model availability and provider acceptance remain CLI-owned and unverified.
+
+## 2026-10-18T01:43:22+00:00 — /root/appearance_prefs_luna
+
+Persist bounded engine options for launch profiles and templates and advance SQLite catalog capability to schema 13
+
+- Files: crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/storage/src/prompt.rs, WORKLOG.md
+- Verification: cargo test -p pigade-storage -- --test-threads=1 (82 passed); cargo fmt -p pigade-storage -- --check passed; git diff --check -- crates/storage WORKLOG.md passed.
+- Risks / next: Root owns host/app integration. Schema 13 stores engine options in validated JSON and advertises engine_options_schema=1; v12 readers reject user_version 13 by their existing newer-schema guard.
+
+## 2026-10-18T01:45:42+00:00 — /root/close_tab_layout_luna
+
+Add model-option transport coverage to the OpenCode profile fixture
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; helper compiled to /tmp/pigade-profile-engine-helper-20261018-final; git diff --check passed
+- Risks / next: Root owns app/host build and native OpenCode profile execution; the fixture fails if the requested model prevents the TUI from starting.
+
+## 2026-10-18T01:49:19+00:00 — /root/appearance_colors_luna
+
+Documented optional engine model and reasoning options in profiles and launch reviews
+
+- Files: README.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md
+- Verification: git diff --check on owned documentation: passed; no Cargo commands or native acceptance claims
+- Risks / next: Root owns final integration, CLI receipts and workspace verification
+
+## 2026-10-18T01:52:52+00:00 — /root/pointer_review_luna
+
+Align pointer drag threshold and drop-target geometry with requested Hyprland-like interaction
+
+- Files: crates/app/src/pointer_layout.rs
+- Verification: rustfmt --edition 2024 crates/app/src/pointer_layout.rs passed; git diff --check -- crates/app/src/pointer_layout.rs passed; Cargo tests not run per task boundary
+- Risks / next: Root wires drop_target into main.rs and owns integrated test/build verification
+
+## 2026-10-18T01:55:08+00:00 — /root/close_tab_layout_luna
+
+Extend pointer fixture for subthreshold and focus-mode drag preview
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; helper compiled to /tmp/pigade-pointer-focus-helper-20261018-final; git diff --check passed
+- Risks / next: Root owns native pointer fixture execution and review of focus-mode reveal captures.
+
+## 2026-10-18T01:58:03+00:00 — /root/close_tab_layout_luna
+
+Correct profile plan assertion for serialized engine CLI args
+
+- Files: scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, WORKLOG.md
+- Verification: Inspected retained prepared-plan/profile rows read-only; python3 -m unittest scripts/test_isolated_ime_x11.py (32 passed); py_compile passed; helper compile passed; git diff --check passed
+- Risks / next: Root reruns native OpenCode engine fixture and verifies CLI argv.
+
+## 2026-10-18T02:02:13+00:00 — /root
+
+Integrate versioned native model/reasoning launch settings with immutable engine argv and schema13 compatibility
+
+- Files: crates/storage, crates/session-host, crates/app/src/product.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs, crates/app/src/protocol.rs, crates/app/src/template_commands.rs, crates/app/src/template_flow.rs, crates/app/src/template_ui.rs, SPEC.md, docs/compatibility/CLI.md, docs/AGENT_HANDOFF.md
+- Verification: 346 locked workspace tests; strict workspace Clippy and release build passed. Final frozen profile/fault real-PTY test passed. Private OpenCode engine02 passed exact argv, model edit/delete preservation and prepared provenance; editor/review captures inspected. App224 tests/strictClippy/release integrated below.
+- Risks / next: Transport only; model/account acceptance and full CLI/platform/MVP gates remain open. No native engine options reapplied on resume.
+
+## 2026-10-18T02:02:13+00:00 — /root
+
+Refine hover focus and Hyprland-style pane gestures, reveal focus-mode remainder through bounded readonly refresh
+
+- Files: crates/app/src/main.rs, crates/app/src/pointer_layout.rs, crates/app/README.md, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, DESIGN.md, SPEC.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 224 app tests passed; final extended blocked-wait/input/prefetch transport test passed separately. Strict app Clippy, release build, fmt,32 harness tests, version/diff checks passed. Final private pointer03 passed real4shell hover/input,5px pending grab, focus-mode cancel, unchanged preview PTYs/PIDs, protected IME/dialog/selection, drop and exact undo; screenshots inspected.01/02 metadata passed but missing remainder frames corrected by prompt readonly refresh.
+- Risks / next: No desktop configuration/input changes. Native Wayland, formal latency/accessibility and complete MVP gates remain open. Preserve unrelated dirty research/stress/GPUI files and stash0.

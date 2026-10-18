@@ -419,10 +419,16 @@ mod tests {
             agent_profiles: None,
             prompts: None,
             tab_close_schema: None,
+            engine_options_schema: None,
         })?;
         value.as_object_mut().unwrap().remove("prompts");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("engine_options_schema");
         let decoded: crate::Catalog = serde_json::from_value(value)?;
         assert_eq!(decoded.prompts, None);
+        assert_eq!(decoded.engine_options_schema, None);
         Ok(())
     }
 }

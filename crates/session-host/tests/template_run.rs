@@ -218,6 +218,10 @@ fn run_freezes_slots_then_advances_once_and_commits_template_with_undo() -> Resu
     };
     let launches = (0..2)
         .map(|_| LaunchSettings {
+            engine: pigade_storage::EngineOptions {
+                model: Some("gpt-6-luna".into()),
+                reasoning_effort: Some("high".into()),
+            },
             provider: "codex".into(),
             role: String::new(),
             instructions: String::new(),
@@ -305,7 +309,10 @@ fn run_freezes_slots_then_advances_once_and_commits_template_with_undo() -> Resu
     )?;
     let mut run = prepared.template_run.context("run preview missing")?;
     ensure!(
-        run.slots.len() == 2 && run.slots.iter().all(|slot| slot.phase == "prepared"),
+        run.slots.len() == 2
+            && run.slots.iter().all(|slot| slot.phase == "prepared"
+                && slot.preview.engine.model.as_deref() == Some("gpt-6-luna")
+                && slot.preview.engine.reasoning_effort.as_deref() == Some("high")),
         "all slots were not frozen"
     );
     let before = exchange(&fixture.socket(), Command::Catalog)?
@@ -660,6 +667,7 @@ fn pane_directory_rename_search_and_cross_workspace_activation_are_durable() -> 
 
     let launch = |tab, role: &str| Command::PrepareLaunch {
         request: pigade_session_host::PrepareRequest {
+            engine: Default::default(),
             tab,
             provider: "codex".into(),
             side: pigade_layout::Direction::Right,

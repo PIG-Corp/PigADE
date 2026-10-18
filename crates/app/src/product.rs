@@ -254,7 +254,13 @@ impl DialogKind {
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
             Self::AgentProfiles | Self::DeleteAgentProfile => &[],
-            Self::AgentProfile => &["Название профиля", "Роль", "Инструкции"],
+            Self::AgentProfile => &[
+                "Название профиля",
+                "Роль",
+                "Инструкции",
+                "Модель · пусто — настройки CLI",
+                "Reasoning effort · пусто — настройки CLI",
+            ],
             Self::WorkspaceGit => &[],
             Self::Controls => &[],
             Self::AddProject => &["Путь к Git-проекту"],
@@ -262,7 +268,12 @@ impl DialogKind {
             Self::CreateWorkspace => &["Название задачи / воркспейса"],
             Self::Launcher => &[],
             Self::NewTab => &["Название вкладки"],
-            Self::RecipeSlot => &["Роль · инструкции агенту", "Дополнительные инструкции"],
+            Self::RecipeSlot => &[
+                "Роль · инструкции агенту",
+                "Дополнительные инструкции",
+                "Модель · пусто — настройки CLI",
+                "Reasoning effort · пусто — настройки CLI",
+            ],
             Self::NewTemplateTab => &["Название вкладки"],
             Self::Recipe
             | Self::TemplateRun
@@ -280,6 +291,8 @@ impl DialogKind {
                 "Роль для запуска",
                 "Дополнительные инструкции агенту",
                 "Разделы памяти: номера через запятую; пусто — без памяти",
+                "Модель · пусто — настройки CLI",
+                "Reasoning effort · пусто — настройки CLI",
             ],
             Self::ResumeReview => &[],
             Self::SessionContext => &[],
@@ -845,15 +858,20 @@ pub(super) fn dialog_field_multiline(kind: DialogKind, index: usize) -> bool {
         DialogKind::Context => index != 1,
         DialogKind::ProjectContext => true,
         DialogKind::LaunchReview => index == 1,
-        DialogKind::AgentProfile => index > 0,
+        DialogKind::AgentProfile => matches!(index, 1 | 2),
         DialogKind::Prompt => index == 1,
-        DialogKind::RecipeSlot => true,
+        DialogKind::RecipeSlot => index < 2,
         DialogKind::History => index == 1,
         _ => false,
     }
 }
 
 impl ProductUi {
+    pub(super) fn engine_options_supported(&self) -> bool {
+        self.catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.engine_options_schema == Some(1))
+    }
     fn colors(&self) -> ProductColors {
         ProductColors::for_theme(self.appearance.theme)
     }
@@ -3718,6 +3736,11 @@ impl ProductUi {
         let fields_match = preview.is_some_and(|preview| {
             preview.role_override == role_override
                 && preview.agent_instructions == agent_instructions
+                && pigade_storage::EngineOptions::from_fields(
+                    dialog.fields.get(3).map(EditBuffer::text).unwrap_or(""),
+                    dialog.fields.get(4).map(EditBuffer::text).unwrap_or(""),
+                )
+                .is_ok_and(|engine| engine == preview.engine)
                 && crate::memory_choice::matches_preview(
                     dialog.fields.get(2).map(EditBuffer::text).unwrap_or(""),
                     preview.memory.as_ref(),
@@ -3778,6 +3801,15 @@ impl ProductUi {
                     profile.name, profile.revision
                 ));
             }
+            metadata = metadata.child(format!(
+                "Модель: {} · reasoning: {}",
+                preview.engine.model.as_deref().unwrap_or("настройки CLI"),
+                preview
+                    .engine
+                    .reasoning_effort
+                    .as_deref()
+                    .unwrap_or("настройки CLI")
+            ));
             if self
                 .catalog
                 .as_ref()
@@ -3829,6 +3861,11 @@ impl ProductUi {
                     "Нативное продолжение: {} · ID беседы: {}",
                     capability_label(preview.capabilities.native_resume),
                     capability_label(preview.capabilities.conversation_id)
+                ))
+                .child(format!(
+                    "Выбор модели: {} · reasoning: {}",
+                    capability_label(preview.capabilities.model_selection),
+                    capability_label(preview.capabilities.reasoning_effort)
                 ));
             preview_controls = preview_controls.child(
                 self.action_control(
@@ -3967,6 +4004,8 @@ impl ProductUi {
             (0usize, "Роль для запуска"),
             (1usize, "Дополнительные инструкции агенту"),
             (2usize, "Разделы памяти: 1, 3 · пусто — без памяти"),
+            (3usize, "Модель · пусто — настройки CLI"),
+            (4usize, "Reasoning effort · пусто — настройки CLI"),
         ]
         .into_iter()
         .fold(
@@ -4325,6 +4364,7 @@ impl ProductUi {
                     "Сохранённый контекст · сборка {} · {}",
                     preview.context.id, preview.context.content_hash
                 ))
+                .child(format!("Запрошенная модель: {} · reasoning: {}", preview.engine.model.as_deref().unwrap_or("настройки CLI"), preview.engine.reasoning_effort.as_deref().unwrap_or("настройки CLI")))
                 .child(format!(
                     "Сессия {} · поколение {}",
                     preview.session, preview.generation

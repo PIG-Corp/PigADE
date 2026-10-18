@@ -764,14 +764,14 @@ mod tests {
         let current: u32 = store
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        assert_eq!(current, 12);
+        assert_eq!(current, 13);
         let scope = Uuid::new_v4();
         assert_eq!(store.context(scope)?, ContextDocument::empty(scope));
         let saved = store.save_context(document(scope, 0, "after migration"), 0)?;
         assert_eq!(saved.revision, 1);
         assert_eq!(store.context(scope)?, saved);
         let backup_path = store.migration_backup_path().context("v3 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
         let backup = rusqlite::Connection::open_with_flags(
             backup_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

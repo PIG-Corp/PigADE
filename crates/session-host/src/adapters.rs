@@ -29,6 +29,13 @@ pub struct Capabilities {
     pub(crate) context_receipt: bool,
     pub(crate) native_resume: bool,
     pub(crate) conversation_id: bool,
+    /// The exact installed CLI version accepts an explicit startup model flag.
+    #[serde(default)]
+    pub(crate) model_selection: bool,
+    /// The exact installed CLI version accepts a documented reasoning-effort
+    /// transport. This does not certify that the selected model supports it.
+    #[serde(default)]
+    pub(crate) reasoning_effort: bool,
 }
 
 impl Capabilities {
@@ -38,6 +45,8 @@ impl Capabilities {
             context_receipt: false,
             native_resume: false,
             conversation_id: false,
+            model_selection: false,
+            reasoning_effort: false,
         }
     }
 }
@@ -95,7 +104,11 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
         Ok(AdapterInfo {
             provider: provider.to_owned(),
             cli_version,
-            adapter_version: if provider == "codex" { 2 } else { 1 },
+            adapter_version: match provider {
+                "claude" => 2,
+                "codex" => 3,
+                _ => 1,
+            },
             capabilities: Capabilities {
                 startup_context: true,
                 context_receipt: false,
@@ -103,6 +116,8 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
                 // for 0.162.1. Automatic ID discovery remains unsupported.
                 native_resume: provider == "codex",
                 conversation_id: false,
+                model_selection: true,
+                reasoning_effort: provider == "claude" || provider == "codex",
             },
             delivery_method: method.to_owned(),
             unsupported_reason: Some(format!(
@@ -119,8 +134,9 @@ pub(crate) fn inspect(provider: &str, executable: &Path) -> Result<AdapterInfo> 
             // Exact-ID selection is independent from startup instructions.
             // OpenCode validates/fetches the supplied session before its TUI;
             // automatic discovery and context merging remain unsupported.
-            info.adapter_version = 2;
+            info.adapter_version = 3;
             info.capabilities.native_resume = true;
+            info.capabilities.model_selection = true;
         }
         Ok(info)
     }
@@ -136,6 +152,96 @@ fn supported_transport(provider: &str, version: &str) -> Option<(&'static str, &
         // Instruction merging has not been verified for a frozen OpenCode
         // binary. Generic PTY launch remains available without context.
         _ => None,
+    }
+}
+
+/// Build argv for explicit fresh-session model/effort options. Empty options
+/// remain compatible with generic and unknown-version launches.
+pub(crate) fn engine_arguments(
+    info: &AdapterInfo,
+    options: &pigade_storage::EngineOptions,
+) -> Result<Vec<String>> {
+    options.validate().context("invalid engine options")?;
+    if options.is_empty() {
+        return Ok(Vec::new());
+    }
+    ensure!(
+        info.provider != "shell",
+        "shell sessions do not accept engine options"
+    );
+
+    match (info.provider.as_str(), info.cli_version.as_str()) {
+        ("claude", "2.1.259") => {
+            ensure!(
+                info.capabilities.model_selection,
+                "Claude model selection is not enabled for this adapter"
+            );
+            ensure!(
+                info.capabilities.reasoning_effort || options.reasoning_effort.is_none(),
+                "Claude reasoning effort is not enabled for this adapter"
+            );
+            let mut args = Vec::new();
+            if let Some(model) = &options.model {
+                args.extend(["--model".to_owned(), model.clone()]);
+            }
+            if let Some(effort) = &options.reasoning_effort {
+                ensure!(
+                    matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max"),
+                    "Claude 2.1.259 supports effort values low, medium, high, xhigh, and max"
+                );
+                args.extend(["--effort".to_owned(), effort.clone()]);
+            }
+            Ok(args)
+        }
+        ("codex", "0.162.1") => {
+            ensure!(
+                info.capabilities.model_selection,
+                "Codex model selection is not enabled for this adapter"
+            );
+            ensure!(
+                info.capabilities.reasoning_effort || options.reasoning_effort.is_none(),
+                "Codex reasoning effort is not enabled for this adapter"
+            );
+            let mut args = Vec::new();
+            if let Some(model) = &options.model {
+                args.extend(["--model".to_owned(), model.clone()]);
+            }
+            if let Some(effort) = &options.reasoning_effort {
+                // The bounded identifier validator excludes TOML quoting
+                // characters, so the value can be represented unambiguously.
+                args.extend([
+                    "-c".to_owned(),
+                    format!("model_reasoning_effort=\"{effort}\""),
+                ]);
+            }
+            Ok(args)
+        }
+        ("opencode", "1.19.3") => {
+            ensure!(
+                info.capabilities.model_selection,
+                "OpenCode model selection is not enabled for this adapter"
+            );
+            ensure!(
+                options.reasoning_effort.is_none(),
+                "OpenCode 1.19.3 has no verified reasoning-effort CLI flag"
+            );
+            let model = options
+                .model
+                .as_ref()
+                .context("OpenCode engine options require a model")?;
+            ensure!(
+                model
+                    .split_once('/')
+                    .is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()),
+                "OpenCode model must use provider/model format"
+            );
+            Ok(vec!["--model".to_owned(), model.clone()])
+        }
+        _ => bail!(
+            "engine options are unsupported for {} {}",
+            info.provider,
+            info.cli_version
+        ),
     }
 }
 
@@ -434,16 +540,132 @@ mod tests {
         AdapterInfo {
             provider: provider.to_owned(),
             cli_version: version.to_owned(),
-            adapter_version: 1,
+            adapter_version: match provider {
+                "claude" if version == "2.1.259" => 2,
+                "codex" if version == "0.162.1" => 3,
+                "opencode" if version == "1.19.3" => 3,
+                _ => 1,
+            },
             capabilities: Capabilities {
                 startup_context: true,
                 context_receipt: false,
                 native_resume: false,
                 conversation_id: false,
+                model_selection: matches!(
+                    (provider, version),
+                    ("claude", "2.1.259") | ("codex", "0.162.1") | ("opencode", "1.19.3")
+                ),
+                reasoning_effort: matches!(
+                    (provider, version),
+                    ("claude", "2.1.259") | ("codex", "0.162.1")
+                ),
             },
             delivery_method: "test".to_owned(),
             unsupported_reason: None,
         }
+    }
+
+    fn options(model: Option<&str>, effort: Option<&str>) -> pigade_storage::EngineOptions {
+        pigade_storage::EngineOptions {
+            model: model.map(str::to_owned),
+            reasoning_effort: effort.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn exact_engine_argv_and_context_arguments_have_stable_order() {
+        let claude = info("claude", "2.1.259");
+        let engine =
+            engine_arguments(&claude, &options(Some("claude-sonnet-5"), Some("high"))).unwrap();
+        assert_eq!(engine, ["--model", "claude-sonnet-5", "--effort", "high"]);
+        let (context, _) = context_arguments(&claude, "frozen context").unwrap();
+        let mut combined = engine;
+        combined.extend(context);
+        assert_eq!(
+            combined,
+            [
+                "--model",
+                "claude-sonnet-5",
+                "--effort",
+                "high",
+                "--append-system-prompt",
+                "frozen context"
+            ]
+        );
+
+        let codex = info("codex", "0.162.1");
+        let engine =
+            engine_arguments(&codex, &options(Some("gpt-6-astra"), Some("xhigh"))).unwrap();
+        assert_eq!(
+            engine,
+            [
+                "--model",
+                "gpt-6-astra",
+                "-c",
+                "model_reasoning_effort=\"xhigh\""
+            ]
+        );
+        let (context, _) = context_arguments(&codex, "frozen context").unwrap();
+        let mut combined = engine;
+        combined.extend(context);
+        assert_eq!(
+            combined,
+            [
+                "--model",
+                "gpt-6-astra",
+                "-c",
+                "model_reasoning_effort=\"xhigh\"",
+                "-c",
+                "developer_instructions=\"frozen context\""
+            ]
+        );
+    }
+
+    #[test]
+    fn opencode_exact_version_has_model_flag_but_no_effort_flag() {
+        let adapter = info("opencode", "1.19.3");
+        assert_eq!(
+            engine_arguments(&adapter, &options(Some("openai/gpt-5.4"), None)).unwrap(),
+            ["--model", "openai/gpt-5.4"]
+        );
+        assert!(engine_arguments(&adapter, &options(None, Some("high"))).is_err());
+        assert!(engine_arguments(&adapter, &options(Some("missing-provider"), None)).is_err());
+    }
+
+    #[test]
+    fn engine_arguments_fail_closed_for_bad_versions_capabilities_and_options() {
+        let empty = pigade_storage::EngineOptions::default();
+        assert!(
+            engine_arguments(&info("other", "unknown"), &empty)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            engine_arguments(&info("shell", "shell"), &empty)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(engine_arguments(&info("shell", "shell"), &options(Some("model"), None)).is_err());
+        assert!(
+            engine_arguments(&info("claude", "2.1.260"), &options(Some("model"), None)).is_err()
+        );
+        let mut unsupported_capability = info("codex", "0.162.1");
+        unsupported_capability.capabilities.model_selection = false;
+        assert!(engine_arguments(&unsupported_capability, &options(Some("model"), None)).is_err());
+        assert!(
+            engine_arguments(&info("claude", "2.1.259"), &options(None, Some("ultra"))).is_err()
+        );
+        assert!(
+            engine_arguments(&info("codex", "0.162.1"), &options(Some("bad value"), None)).is_err()
+        );
+    }
+
+    #[test]
+    fn old_serialized_capabilities_default_engine_flags_to_false() {
+        let serialized = r#"{"provider":"legacy","cli_version":"unknown","adapter_version":1,"capabilities":{"startup_context":false,"context_receipt":false,"native_resume":false,"conversation_id":false},"delivery_method":"none","unsupported_reason":"old"}"#;
+        let adapter: AdapterInfo = serde_json::from_str(serialized).unwrap();
+        assert!(!adapter.capabilities.model_selection);
+        assert!(!adapter.capabilities.reasoning_effort);
     }
 
     #[test]

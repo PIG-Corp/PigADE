@@ -143,6 +143,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "pointer-hover-right") && strcmp(a.stage, "pointer-hover-input") &&
         strcmp(a.stage, "pointer-no-motion-release") &&
         strcmp(a.stage, "pointer-hover-source") &&
+        strcmp(a.stage, "pointer-subthreshold-hold") &&
+        strcmp(a.stage, "pointer-focus-toggle") &&
+        strcmp(a.stage, "pointer-focus-mode-preview") &&
         strcmp(a.stage, "pointer-keyboard-away") && strcmp(a.stage, "pointer-move-right-near") &&
         strcmp(a.stage, "pointer-hold-preview") && strcmp(a.stage, "pointer-drop") &&
         strcmp(a.stage, "pointer-undo") && strcmp(a.stage, "pointer-selection-hold") &&
@@ -158,6 +161,12 @@ static Args parse_args(int argc, char **argv) {
     if (!strcmp(a.stage, "pointer-selection-hold") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-selection.ppm")))
         fail("pointer selection capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-subthreshold-hold") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-subthreshold-held.ppm")))
+        fail("subthreshold pointer capture path must be the fixed artifact");
+    if (!strcmp(a.stage, "pointer-focus-mode-preview") &&
+        (!a.output || strcmp(a.output, "/artifacts/pointer-focus-mode-drag.ppm")))
+        fail("focus-mode pointer capture path must be the fixed artifact");
     if (!strcmp(a.stage, "pointer-ime-input") &&
         (!a.output || strcmp(a.output, "/artifacts/pointer-ime-preedit.ppm")))
         fail("pointer IME preedit capture path must be the fixed artifact");
@@ -1098,6 +1107,10 @@ int main(int argc, char **argv) {
                 XK_n, XK_space, XK_f, XK_i, XK_x, XK_t, XK_u, XK_r, XK_e };
             for (size_t i = 0; i < sizeof(instructions) / sizeof(instructions[0]); ++i)
                 key(dpy, instructions[i]);
+            key(dpy, XK_Tab);
+            const KeySym model[] = { XK_o, XK_p, XK_e, XK_n, XK_c, XK_o, XK_d, XK_e,
+                XK_slash, XK_b, XK_i, XK_g, XK_minus, XK_p, XK_i, XK_c, XK_k, XK_l, XK_e };
+            for (size_t i = 0; i < sizeof(model) / sizeof(model[0]); ++i) key(dpy, model[i]);
             modified_key(dpy, XK_Control_L, XK_3);
         } else if (!strcmp(a.stage, "profile-context-off")) {
             modified_key(dpy, XK_Control_L, XK_m);
@@ -1119,6 +1132,14 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Shift_L, XK_r);
             const KeySym second[] = { XK_e, XK_n, XK_a, XK_m, XK_e, XK_d };
             for (size_t i = 0; i < sizeof(second) / sizeof(second[0]); ++i) key(dpy, second[i]);
+            key(dpy, XK_Tab);
+            key(dpy, XK_Tab);
+            key(dpy, XK_Tab);
+            modified_key(dpy, XK_Control_L, XK_a);
+            const KeySym model[] = { XK_o, XK_p, XK_e, XK_n, XK_c, XK_o, XK_d, XK_e,
+                XK_slash, XK_t, XK_e, XK_s, XK_t, XK_minus, XK_o, XK_t, XK_h, XK_e,
+                XK_r, XK_minus, XK_m, XK_o, XK_d, XK_e, XK_l };
+            for (size_t i = 0; i < sizeof(model) / sizeof(model[0]); ++i) key(dpy, model[i]);
         } else if (!strcmp(a.stage, "profile-delete")) {
             key(dpy, XK_Delete);
         } else if (!strcmp(a.stage, "profile-cancel-delete")) {
@@ -1219,6 +1240,25 @@ int main(int argc, char **argv) {
             pointer_drag_release(dpy, 0);
         } else if (!strcmp(a.stage, "pointer-hover-source")) {
             pointer_hover(dpy, app_window, 350, 250, 0);
+        } else if (!strcmp(a.stage, "pointer-subthreshold-hold")) {
+            KeyCode control = XKeysymToKeycode(dpy, XK_Control_L);
+            if (!control || !XTestFakeKeyEvent(dpy, control, True, CurrentTime))
+                fail("subthreshold drag modifier press failed");
+            pointer_position(dpy, app_window, 350, 250);
+            if (!XTestFakeButtonEvent(dpy, 1, True, CurrentTime))
+                fail("subthreshold drag button press failed");
+            pointer_position(dpy, app_window, 355, 250);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "RELEASE\n"))
+                fail("subthreshold pointer probe accepts only fixed button release");
+            pointer_drag_release(dpy, 0);
+        } else if (!strcmp(a.stage, "pointer-focus-toggle")) {
+            modified_key(dpy, XK_Control_L, XK_f);
         } else if (!strcmp(a.stage, "pointer-keyboard-away")) {
             setup_prefix(dpy, XK_h, 0);
         } else if (!strcmp(a.stage, "pointer-move-right-near")) {
@@ -1233,6 +1273,17 @@ int main(int argc, char **argv) {
             char response[32];
             if (!fgets(response, sizeof(response), stdin) || strcmp(response, "CANCEL\n"))
                 fail("pointer preview accepts only fixed cancel release");
+            pointer_drag_release(dpy, 1);
+        } else if (!strcmp(a.stage, "pointer-focus-mode-preview")) {
+            pointer_drag_begin(dpy, app_window);
+            struct timespec settle = { .tv_sec = 0, .tv_nsec = 250000000 };
+            nanosleep(&settle, NULL);
+            XSync(dpy, False);
+            capture(dpy, a.output);
+            puts("HELD"); fflush(stdout);
+            char response[32];
+            if (!fgets(response, sizeof(response), stdin) || strcmp(response, "CANCEL\n"))
+                fail("focus-mode pointer preview accepts only fixed cancel release");
             pointer_drag_release(dpy, 1);
         } else if (!strcmp(a.stage, "pointer-drop")) {
             pointer_drag_begin(dpy, app_window);
@@ -1293,6 +1344,7 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "appearance-reload") ? "2" :
                             !strcmp(a.stage, "appearance-close") ? "1" :
                             !strcmp(a.stage, "pointer-no-motion-release") ? "0" :
+                            !strcmp(a.stage, "pointer-focus-toggle") ? "2" :
                             !strcmp(a.stage, "pointer-hover-input") ? "11" :
                             !strcmp(a.stage, "pointer-ime-input") ? "5" :
                             !strcmp(a.stage, "pointer-undo") ? "2" :
@@ -1342,14 +1394,14 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "recipe-confirm-run") ? "1" :
                             !strcmp(a.stage, "profile-open") ? "11" :
                             !strcmp(a.stage, "profile-new") ? "1" :
-                            !strcmp(a.stage, "profile-create-fields") ? "67" :
+                            !strcmp(a.stage, "profile-create-fields") ? "87" :
                             !strcmp(a.stage, "profile-context-off") ? "2" :
                             !strcmp(a.stage, "profile-save") ? "2" :
                             !strcmp(a.stage, "profile-select-first") ? "1" :
                             !strcmp(a.stage, "profile-launch") ? "1" :
                             !strcmp(a.stage, "profile-confirm") ? "2" :
                             !strcmp(a.stage, "profile-edit") ? "2" :
-                            !strcmp(a.stage, "profile-rename") ? "16" :
+                            !strcmp(a.stage, "profile-rename") ? "46" :
                             !strcmp(a.stage, "profile-save-edit") ? "2" :
                             !strcmp(a.stage, "profile-delete") ? "1" :
                             !strcmp(a.stage, "profile-cancel-delete") ? "1" :

@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Pointer controls:10px drag activation without click tear-out; nearest gutter target, focus-mode drag reveal/cancel, and stable per-session geometry prevent focus-mode input/resize misrouting.
+
 - Pointer: modifier-click without travel no longer changes placement or undo; invalid drops show explicit text and an amber outline. Hover focus and relative-grab Dwindle insertion remain available without clicking the destination.
 
 - Added local Appearance settings for dark/light chrome, reduced motion, and terminal font sizing from 10–24 px. Header/palette access, keyboard controls and visible size buttons share one revision-checked preference file; metric changes update terminal grids and PTY sizes without relaunching CLI. Terminal ANSI colors remain an independent dark profile.
@@ -10,7 +12,7 @@
 
 - Revisioned prompt library with CAS editing, idempotent deletion, frozen draft insertion and explicit clipboard copy. No terminal input or automatic task submission; schema12 migration keeps a durable backup.
 
-- Именованные профили запуска агентов: библиотека, редактор, сохранение настроек из review, проверка ревизии при подготовке и неизменяемый источник профиля в снимке запуска. Схема11 мигрирует библиотеку с durable backup; CRUD не меняет живые CLI.
+- Именованные профили запуска агентов сохраняют необязательные `model` и `reasoning_effort`; LaunchSettings migration до schema13 сохраняет durable schema12 backup, а старые host отклоняют непустые engine options. Review и template slots замораживают значения вместе с argv и источником профиля; изменение библиотеки не меняет готовые планы/сессии. Native resume не переустанавливает исходный выбор модели. Доступность аккаунта и применение CLI остаются непроверенными.
 
 - Ручное продолжение точного диалога OpenCode1.19.3: проверка сохранённой папки через публичный локальный API перед review/start, отдельный bounded worker, новое поколение при сохранении прежней истории и раскладки. Контекст PigADE и последнее задание повторно не отправляются; неизвестный исход запуска остаётся заблокированным.
 

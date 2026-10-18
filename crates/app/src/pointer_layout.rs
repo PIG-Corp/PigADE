@@ -5,10 +5,9 @@ use std::collections::BTreeMap;
 use pigade_layout::{Command, Direction, LayoutModel, LayoutState, PaneRect, Rect, TabLayout};
 use uuid::Uuid;
 
-/// A modifier grab can float immediately, but a click is never a placement edit.
+/// A modifier grab begins moving only after the pointer travels more than 10px.
 pub(crate) fn travelled(grab_x: f64, grab_y: f64, x: f64, y: f64) -> bool {
-    [grab_x, grab_y, x, y].into_iter().all(f64::is_finite)
-        && ((x - grab_x).abs() > 6.0 || (y - grab_y).abs() > 6.0)
+    [grab_x, grab_y, x, y].into_iter().all(f64::is_finite) && (x - grab_x).hypot(y - grab_y) > 10.0
 }
 
 /// Map the original grab point onto the temporary, smaller dragged pane.
@@ -75,6 +74,43 @@ pub(crate) fn drop_command(
         side,
         split,
     })
+}
+
+/// Select the closest non-source pane for a drop, including pointer positions
+/// in gaps between panes. UUID order breaks equal-distance ties consistently.
+pub(crate) fn drop_target(panes: &[PaneRect], source: Uuid, x: f64, y: f64) -> Option<PaneRect> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    panes
+        .iter()
+        .copied()
+        .filter(|pane| pane.pane != source && valid_rect(pane.rect))
+        .min_by(|first, second| {
+            distance_squared(first.rect, x, y)
+                .total_cmp(&distance_squared(second.rect, x, y))
+                .then_with(|| first.pane.cmp(&second.pane))
+        })
+}
+
+fn distance_squared(rect: Rect, x: f64, y: f64) -> f64 {
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    let dx = if x < rect.x {
+        rect.x - x
+    } else if x > right {
+        x - right
+    } else {
+        0.0
+    };
+    let dy = if y < rect.y {
+        rect.y - y
+    } else if y > bottom {
+        y - bottom
+    } else {
+        0.0
+    };
+    dx.mul_add(dx, dy * dy)
 }
 
 /// Preview removing a pane for the floating portion of a drag.
@@ -181,10 +217,16 @@ impl FocusQueue {
 
 #[cfg(test)]
 mod tests {
-    use pigade_layout::{Axis, Command, Direction, Node, PaneRect, Rect, SplitId, TabLayout};
+    use pigade_layout::{
+        Axis, Command, Direction, LayoutState, Node, PaneRect, Rect, SplitId, TabLayout,
+    };
+    use std::collections::BTreeMap;
     use uuid::Uuid;
 
-    use super::{FocusIntent, FocusQueue, detached_layout, drop_command, floating_rect, travelled};
+    use super::{
+        FocusIntent, FocusQueue, detached_layout, drop_command, drop_target, floating_rect,
+        travelled,
+    };
 
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)
@@ -206,11 +248,74 @@ mod tests {
     #[test]
     fn a_grab_click_or_jitter_does_not_authorize_placement() {
         assert!(!travelled(300., 200., 300., 200.));
-        assert!(!travelled(300., 200., 306., 194.));
-        assert!(travelled(300., 200., 307., 200.));
-        assert!(travelled(300., 200., 300., 193.));
+        assert!(!travelled(300., 200., 310., 200.));
+        assert!(!travelled(300., 200., 306., 208.));
+        assert!(travelled(300., 200., 310.01, 200.));
+        assert!(travelled(300., 200., 308., 208.));
         assert!(!travelled(f64::NAN, 200., 307., 200.));
         assert!(!travelled(300., 200., f64::INFINITY, 200.));
+    }
+
+    #[test]
+    fn drop_target_uses_nearest_rectangle_through_gutters_and_outside_canvas() {
+        let panes = [
+            PaneRect {
+                pane: id(1),
+                rect: Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 100.,
+                    height: 100.,
+                },
+            },
+            PaneRect {
+                pane: id(2),
+                rect: Rect {
+                    x: 120.,
+                    y: 0.,
+                    width: 100.,
+                    height: 100.,
+                },
+            },
+        ];
+        assert_eq!(drop_target(&panes, id(1), 110., 50.).unwrap().pane, id(2));
+        assert_eq!(drop_target(&panes, id(1), -20., 50.).unwrap().pane, id(2));
+        assert!(drop_target(&panes, id(1), f64::NAN, 50.).is_none());
+        assert!(drop_target(&[], id(1), 50., 50.).is_none());
+    }
+
+    #[test]
+    fn drop_target_ignores_source_and_breaks_distance_ties_by_identity() {
+        let panes = [
+            PaneRect {
+                pane: id(3),
+                rect: Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 10.,
+                    height: 10.,
+                },
+            },
+            PaneRect {
+                pane: id(2),
+                rect: Rect {
+                    x: 20.,
+                    y: 0.,
+                    width: 10.,
+                    height: 10.,
+                },
+            },
+            PaneRect {
+                pane: id(1),
+                rect: Rect {
+                    x: -20.,
+                    y: 0.,
+                    width: 10.,
+                    height: 10.,
+                },
+            },
+        ];
+        assert_eq!(drop_target(&panes, id(3), 5., 5.).unwrap().pane, id(1));
     }
 
     #[test]
@@ -335,6 +440,32 @@ mod tests {
         assert_eq!(preview.panes(), vec![id(2)]);
         assert_eq!(preview.focused, Some(id(2)));
         assert!(!preview.focus_mode);
+        let projected = LayoutState {
+            tabs: BTreeMap::from([(id(9), preview)]),
+        }
+        .project(
+            id(9),
+            Rect {
+                x: 0.,
+                y: 0.,
+                width: 800.,
+                height: 600.,
+            },
+            pigade_layout::Size {
+                width: 100.,
+                height: 80.,
+            },
+            0.,
+        )
+        .unwrap();
+        assert_eq!(
+            projected
+                .panes
+                .iter()
+                .map(|pane| pane.pane)
+                .collect::<Vec<_>>(),
+            [id(2)]
+        );
         assert!(
             detached_layout(
                 &TabLayout {

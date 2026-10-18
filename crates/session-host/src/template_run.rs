@@ -190,6 +190,7 @@ pub(crate) fn prepare(host: &mut Host, request: TemplateRunRequest) -> Result<Te
                 include_memory: false,
                 memory_selection: None,
                 deliver_context: settings.deliver_context,
+                engine: settings.engine,
             },
         ))?;
         ensure!(

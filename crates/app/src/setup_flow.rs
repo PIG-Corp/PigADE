@@ -116,6 +116,7 @@ mod tests {
             agent_profiles: None,
             prompts: None,
             tab_close_schema: None,
+            engine_options_schema: Some(1),
         }
     }
 

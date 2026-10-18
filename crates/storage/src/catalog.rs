@@ -143,18 +143,80 @@ pub struct LayoutTemplate {
     pub launches: Option<Vec<LaunchSettings>>,
     pub revision: u64,
 }
+
+/// Optional provider engine selection stored with reusable launch settings.
+/// The native CLI remains responsible for validating model/account/effort
+/// compatibility when it starts a provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EngineOptions {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+}
+
+impl EngineOptions {
+    /// Build settings from editor fields, trimming values and treating blank
+    /// fields as absent before validating the resulting wire representation.
+    pub fn from_fields(model: &str, reasoning_effort: &str) -> Result<Self> {
+        let options = Self {
+            model: nonempty_trimmed(model),
+            reasoning_effort: nonempty_trimmed(reasoning_effort),
+        };
+        options.validate()?;
+        Ok(options)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.reasoning_effort.is_none()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Some(model) = &self.model {
+            ensure!(
+                (1..=256).contains(&model.len())
+                    && model.is_ascii()
+                    && model.as_bytes()[0].is_ascii_alphanumeric()
+                    && model
+                        .bytes()
+                        .all(|byte| { byte.is_ascii_alphanumeric() || b"._-/:[]".contains(&byte) }),
+                "engine model identifier must be 1 to 256 bounded ASCII identifier characters"
+            );
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            ensure!(
+                (1..=32).contains(&effort.len())
+                    && effort.is_ascii()
+                    && effort.as_bytes()[0].is_ascii_lowercase()
+                    && effort.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte)
+                    }),
+                "reasoning effort must be 1 to 32 lowercase identifier characters"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn nonempty_trimmed(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchSettings {
     pub provider: String,
     pub role: String,
     pub instructions: String,
     pub deliver_context: bool,
+    #[serde(default)]
+    pub engine: EngineOptions,
 }
 
 impl LaunchSettings {
     /// Validate the deliberately small, credential-free launch profile stored
     /// alongside a reusable geometry template.
     pub fn validate(&self) -> Result<()> {
+        self.engine.validate()?;
         ensure!(
             matches!(
                 self.provider.as_str(),
@@ -162,6 +224,12 @@ impl LaunchSettings {
             ),
             "unsupported template launch provider"
         );
+        if self.provider == "shell" {
+            ensure!(
+                self.engine.is_empty(),
+                "shell launch settings cannot contain engine options"
+            );
+        }
         ensure!(
             self.role.len() <= 8 * 1024
                 && self.instructions.len() <= 64 * 1024
@@ -279,6 +347,9 @@ pub struct Catalog {
     /// `None` means the connected host predates atomic tab close support.
     #[serde(default)]
     pub tab_close_schema: Option<u16>,
+    /// `None` means the connected host predates persisted engine options.
+    #[serde(default)]
+    pub engine_options_schema: Option<u32>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabClose {
@@ -1301,6 +1372,7 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         agent_profiles: Some(read_agent_profiles(connection, agent_profile_count)?),
         prompts: Some(read_prompts(connection)?),
         tab_close_schema: Some(1),
+        engine_options_schema: Some(1),
     };
     // This shared reader also runs inside apply_catalog's uncommitted
     // transaction. Existing oversized state fails explicitly without changing
@@ -1332,6 +1404,7 @@ mod tests {
                 role: "reviewer".into(),
                 instructions: "Review the change".into(),
                 deliver_context: false,
+                engine: EngineOptions::default(),
             },
             revision,
         }
@@ -1345,9 +1418,14 @@ mod tests {
         let id = Uuid::new_v4();
         {
             let mut store = MetadataStore::open(&path)?;
+            let mut created = profile(id, 0, "claude");
+            created.settings.engine = EngineOptions {
+                model: Some("claude-sonnet-4-5".into()),
+                reasoning_effort: Some("high".into()),
+            };
             let catalog = store.apply_catalog(CatalogBatch {
                 agent_profiles: vec![CatalogWrite {
-                    value: profile(id, 0, "claude"),
+                    value: created,
                     expected_revision: None,
                 }],
                 ..CatalogBatch::default()
@@ -1355,6 +1433,10 @@ mod tests {
             assert_eq!(catalog.agent_profiles.as_ref().unwrap()[0].revision, 1);
             let mut updated = profile(id, 1, "codex");
             updated.name = "Updated profile".into();
+            updated.settings.engine = EngineOptions {
+                model: Some("claude-sonnet-4-5".into()),
+                reasoning_effort: Some("high".into()),
+            };
             let catalog = store.apply_catalog(CatalogBatch {
                 agent_profiles: vec![CatalogWrite {
                     value: updated,
@@ -1366,11 +1448,16 @@ mod tests {
             assert_eq!(saved.len(), 1);
             assert_eq!(saved[0].revision, 2);
             assert_eq!(saved[0].settings.provider, "codex");
+            let mut updated = profile(id, 1, "codex");
+            updated.settings.engine = EngineOptions {
+                model: Some("gpt-5.5-codex".into()),
+                reasoning_effort: Some("xhigh".into()),
+            };
             assert!(
                 store
                     .apply_catalog(CatalogBatch {
                         agent_profiles: vec![CatalogWrite {
-                            value: profile(id, 1, "claude"),
+                            value: updated,
                             expected_revision: Some(1),
                         }],
                         ..CatalogBatch::default()
@@ -1384,6 +1471,15 @@ mod tests {
                 .settings
                 .provider,
             "codex"
+        );
+        let saved_profile = store.catalog()?.agent_profiles.unwrap().remove(0);
+        assert_eq!(
+            saved_profile.settings.engine.model.as_deref(),
+            Some("claude-sonnet-4-5")
+        );
+        assert_eq!(
+            saved_profile.settings.engine.reasoning_effort.as_deref(),
+            Some("high")
         );
         assert!(
             store
@@ -1478,12 +1574,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-10 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1529,12 +1625,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-11 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v12."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1557,6 +1653,75 @@ mod tests {
             )?,
             0
         );
+        Ok(())
+    }
+
+    #[test]
+    fn schema_v12_migration_backs_up_legacy_launch_settings_and_preserves_data() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let profile_id = Uuid::new_v4();
+        {
+            let mut store = MetadataStore::open(&path)?;
+            let mut saved = profile(profile_id, 0, "codex");
+            saved.name = "Legacy profile".into();
+            store.apply_catalog(CatalogBatch {
+                agent_profiles: vec![CatalogWrite {
+                    value: saved,
+                    expected_revision: None,
+                }],
+                ..CatalogBatch::default()
+            })?;
+        }
+        let legacy_settings: String = {
+            let connection = Connection::open(&path)?;
+            let stored: String = connection.query_row(
+                "SELECT settings_json FROM agent_profiles WHERE id=?1",
+                [profile_id.to_string()],
+                |row| row.get(0),
+            )?;
+            let mut value: serde_json::Value = serde_json::from_str(&stored)?;
+            value.as_object_mut().unwrap().remove("engine");
+            let legacy = serde_json::to_string(&value)?;
+            connection.execute(
+                "UPDATE agent_profiles SET settings_json=?1 WHERE id=?2",
+                params![legacy, profile_id.to_string()],
+            )?;
+            connection.pragma_update(None, "user_version", 12)?;
+            legacy
+        };
+
+        let store = MetadataStore::open(&path)?;
+        let catalog = store.catalog()?;
+        assert_eq!(catalog.engine_options_schema, Some(1));
+        let restored = &catalog.agent_profiles.as_ref().unwrap()[0];
+        assert_eq!(restored.name, "Legacy profile");
+        assert!(restored.settings.engine.is_empty());
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            13
+        );
+
+        let backup_path = store
+            .migration_backup_path()
+            .context("schema-12 backup absent")?;
+        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            12
+        );
+        let preserved: String = backup.query_row(
+            "SELECT settings_json FROM agent_profiles WHERE id=?1",
+            [profile_id.to_string()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(preserved, legacy_settings);
+        assert!(serde_json::from_str::<serde_json::Value>(&preserved)?["engine"].is_null());
         Ok(())
     }
 
@@ -1664,6 +1829,99 @@ mod tests {
     }
 
     #[test]
+    fn engine_options_are_bounded_normalized_and_default_for_legacy_launches() -> Result<()> {
+        assert!(EngineOptions::default().is_empty());
+        EngineOptions::default().validate()?;
+        assert_eq!(
+            EngineOptions::from_fields("  ", "\t")?,
+            EngineOptions::default()
+        );
+        assert_eq!(
+            EngineOptions::from_fields(" gpt-5.5/codex ", " xhigh ")?,
+            EngineOptions {
+                model: Some("gpt-5.5/codex".into()),
+                reasoning_effort: Some("xhigh".into()),
+            }
+        );
+        assert!(EngineOptions::from_fields("--flag", "high").is_err());
+
+        for model in [
+            "",
+            "--danger",
+            "gpt model",
+            "model\nname",
+            "model@name",
+            "模型",
+        ] {
+            assert!(
+                EngineOptions {
+                    model: Some(model.into()),
+                    reasoning_effort: None,
+                }
+                .validate()
+                .is_err(),
+                "accepted invalid model {model:?}"
+            );
+        }
+        assert!(
+            EngineOptions {
+                model: Some(format!("m{}", "x".repeat(256))),
+                reasoning_effort: None,
+            }
+            .validate()
+            .is_err()
+        );
+        for effort in ["", "High", "-high", "high effort", "high\n", "界"] {
+            assert!(
+                EngineOptions {
+                    model: None,
+                    reasoning_effort: Some(effort.into()),
+                }
+                .validate()
+                .is_err(),
+                "accepted invalid effort {effort:?}"
+            );
+        }
+        assert!(
+            EngineOptions {
+                model: None,
+                reasoning_effort: Some(format!("h{}", "i".repeat(32))),
+            }
+            .validate()
+            .is_err()
+        );
+
+        let mut legacy = serde_json::to_value(LaunchSettings {
+            provider: "codex".into(),
+            role: String::new(),
+            instructions: String::new(),
+            deliver_context: false,
+            engine: EngineOptions::default(),
+        })?;
+        legacy.as_object_mut().unwrap().remove("engine");
+        let decoded: LaunchSettings = serde_json::from_value(legacy)?;
+        assert!(decoded.engine.is_empty());
+        let explicit_empty = EngineOptions {
+            model: Some(String::new()),
+            reasoning_effort: None,
+        };
+        assert!(explicit_empty.validate().is_err());
+
+        let shell = LaunchSettings {
+            provider: "shell".into(),
+            role: String::new(),
+            instructions: String::new(),
+            deliver_context: false,
+            engine: EngineOptions {
+                model: Some("model".into()),
+                reasoning_effort: None,
+            },
+        };
+        assert!(shell.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn template_launch_settings_are_additive_bounded_and_match_geometry() -> Result<()> {
         let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir()?;
@@ -1673,6 +1931,10 @@ mod tests {
             role: "reviewer".into(),
             instructions: "Review the implementation".into(),
             deliver_context: true,
+            engine: EngineOptions {
+                model: Some("gpt-5.5-codex".into()),
+                reasoning_effort: Some("high".into()),
+            },
         };
         settings.validate()?;
         let id = Uuid::new_v4();
@@ -1690,9 +1952,61 @@ mod tests {
             ..CatalogBatch::default()
         })?;
         assert_eq!(saved.template_launch_schema, Some(1));
+        assert_eq!(saved.engine_options_schema, Some(1));
         assert_eq!(
-            saved.layout_templates.unwrap()[0].launches,
-            Some(vec![settings])
+            saved.layout_templates.as_ref().unwrap()[0].launches,
+            Some(vec![settings.clone()])
+        );
+
+        let mut next_settings = settings.clone();
+        next_settings.engine = EngineOptions {
+            model: Some("gpt-5.6-codex".into()),
+            reasoning_effort: Some("medium".into()),
+        };
+        let updated = store.apply_catalog(CatalogBatch {
+            layout_templates: vec![CatalogWrite {
+                value: LayoutTemplate {
+                    id,
+                    name: "Configured".into(),
+                    geometry: one_pane_template(),
+                    launches: Some(vec![next_settings.clone()]),
+                    revision: 1,
+                },
+                expected_revision: Some(1),
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(updated.layout_templates.as_ref().unwrap()[0].revision, 2);
+        assert_eq!(
+            updated.layout_templates.as_ref().unwrap()[0].launches,
+            Some(vec![next_settings])
+        );
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    layout_templates: vec![CatalogWrite {
+                        value: LayoutTemplate {
+                            id,
+                            name: "Configured".into(),
+                            geometry: one_pane_template(),
+                            launches: Some(vec![settings]),
+                            revision: 1,
+                        },
+                        expected_revision: Some(1),
+                    }],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        assert_eq!(
+            store.catalog()?.layout_templates.unwrap()[0]
+                .launches
+                .as_ref()
+                .unwrap()[0]
+                .engine
+                .model
+                .as_deref(),
+            Some("gpt-5.6-codex")
         );
 
         for invalid in [
@@ -1701,24 +2015,28 @@ mod tests {
                 role: String::new(),
                 instructions: String::new(),
                 deliver_context: false,
+                engine: EngineOptions::default(),
             },
             LaunchSettings {
                 provider: "shell".into(),
                 role: "x".repeat(8 * 1024 + 1),
                 instructions: String::new(),
                 deliver_context: false,
+                engine: EngineOptions::default(),
             },
             LaunchSettings {
                 provider: "claude".into(),
                 role: String::new(),
                 instructions: "x".repeat(64 * 1024 + 1),
                 deliver_context: false,
+                engine: EngineOptions::default(),
             },
             LaunchSettings {
                 provider: "opencode".into(),
                 role: "\0".into(),
                 instructions: String::new(),
                 deliver_context: false,
+                engine: EngineOptions::default(),
             },
         ] {
             assert!(invalid.validate().is_err());
@@ -1749,6 +2067,7 @@ mod tests {
                             role: String::new(),
                             instructions: String::new(),
                             deliver_context: false,
+                            engine: EngineOptions::default(),
                         };
                         2
                     ]),
@@ -2562,7 +2881,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            12
+            13
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -2657,7 +2976,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                12
+                13
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

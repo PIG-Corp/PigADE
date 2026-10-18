@@ -84,6 +84,7 @@ pub(crate) fn default_settings(provider: &str) -> LaunchSettings {
         role: String::new(),
         instructions: String::new(),
         deliver_context: false,
+        engine: Default::default(),
     }
 }
 

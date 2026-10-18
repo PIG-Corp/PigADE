@@ -168,6 +168,13 @@ impl CanvasApp {
                     let mut dialog = Dialog::new(DialogKind::RecipeSlot);
                     dialog.fields[0] = config.role.clone().into();
                     dialog.fields[1] = config.instructions.clone().into();
+                    dialog.fields[2] = config.engine.model.clone().unwrap_or_default().into();
+                    dialog.fields[3] = config
+                        .engine
+                        .reasoning_effort
+                        .clone()
+                        .unwrap_or_default()
+                        .into();
                     editor.slot = index;
                     editor.slot_parent = parent;
                     self.product.dialog = Some(dialog);
@@ -303,10 +310,25 @@ impl CanvasApp {
     ) -> bool {
         match kind {
             DialogKind::RecipeSlot => {
+                let engine_options_supported = self.product.engine_options_supported();
                 if let Some(editor) = &mut self.product.recipe_editor {
                     let mut config = editor.launches[editor.slot].clone();
                     config.role = fields.first().cloned().unwrap_or_default();
                     config.instructions = fields.get(1).cloned().unwrap_or_default();
+                    config.engine = match pigade_storage::EngineOptions::from_fields(
+                        fields.get(2).map(String::as_str).unwrap_or(""),
+                        fields.get(3).map(String::as_str).unwrap_or(""),
+                    ) {
+                        Ok(engine) => engine,
+                        Err(error) => {
+                            self.product.notice = Some(error.to_string());
+                            return true;
+                        }
+                    };
+                    if !config.engine.is_empty() && !engine_options_supported {
+                        self.product.notice=Some("Session host не поддерживает параметры модели. Обновите host; значения не будут отброшены молча.".into());
+                        return true;
+                    }
                     if let Err(error) = config.validate() {
                         self.product.notice = Some(error.to_string());
                         return true;

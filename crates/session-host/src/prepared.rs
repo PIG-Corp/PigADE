@@ -24,6 +24,8 @@ pub struct PrepareRequest {
     #[serde(default)]
     pub memory_selection: Option<MemorySelection>,
     pub deliver_context: bool,
+    #[serde(default)]
+    pub engine: pigade_storage::EngineOptions,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +61,8 @@ pub struct LaunchPreview {
     pub resume: Option<ResumeSource>,
     #[serde(default)]
     pub profile: Option<ProfileSource>,
+    #[serde(default)]
+    pub engine: pigade_storage::EngineOptions,
 }
 
 /// Immutable provenance; later library edits do not alter this launch.
@@ -155,6 +159,7 @@ pub(crate) fn prepare_profile(
             include_memory: false,
             memory_selection: None,
             deliver_context: saved.settings.deliver_context,
+            engine: saved.settings.engine.clone(),
         };
         let mut plan = build_plan(host, &catalog, request)?;
         plan.preview.profile = Some(ProfileSource {
@@ -177,6 +182,7 @@ pub(crate) fn build_plan(
     catalog: &Catalog,
     request: PrepareRequest,
 ) -> Result<StoredPlan> {
+    request.engine.validate()?;
     let tab = catalog
         .tabs
         .iter()
@@ -221,13 +227,17 @@ pub(crate) fn build_plan(
     let model =
         LayoutModel::from_history(serde_json::from_str::<LayoutHistory>(&catalog.layout.json)?)?;
     model.preview(placement.clone())?;
-    let mut unavailable_reason = None;
-    let mut arguments = (Vec::new(), Default::default());
+    let engine_args = adapters::engine_arguments(&info, &request.engine);
+    let mut unavailable_reason = engine_args.as_ref().err().map(ToString::to_string);
+    let mut arguments = (engine_args.unwrap_or_default(), Default::default());
     let needs_transport = request.deliver_context && !context.text.is_empty();
     if needs_transport {
         if info.capabilities.startup_context {
             match adapters::context_arguments(&info, &context.text) {
-                Ok(result) => arguments = result,
+                Ok(result) => {
+                    arguments.0.extend(result.0);
+                    arguments.1 = result.1;
+                }
                 Err(error) => unavailable_reason = Some(error.to_string()),
             }
         } else {
@@ -242,6 +252,9 @@ pub(crate) fn build_plan(
     };
     if needs_transport && request.provider == "codex" && unavailable_reason.is_none() {
         warnings.push("Для этого запуска значение developer_instructions задаётся сохранённым снимком. Пользовательские файлы конфигурации не меняются.".into());
+    }
+    if !request.engine.is_empty() {
+        warnings.push("Выбранные модель и reasoning передаются CLI как параметры запуска. Доступ аккаунта и совместимость проверяет CLI; PigADE не подменяет модель при ошибке.".into());
     }
     let preview = LaunchPreview {
         plan_id,
@@ -273,6 +286,7 @@ pub(crate) fn build_plan(
         conversation: None,
         resume: None,
         profile: None,
+        engine: request.engine,
     };
     Ok(StoredPlan {
         requested_revision: preview.context.id,
@@ -611,6 +625,9 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
         }
         .into();
         plan.preview.conversation = Some(binding.clone());
+        // Native conversation settings may have been changed inside the CLI;
+        // an original launch request is not evidence of their current value.
+        plan.preview.engine = Default::default();
         plan.preview.resume = Some(ResumeSource {
             binding,
             previous_head: head,
@@ -618,6 +635,7 @@ pub(crate) fn prepare_resume(host: &mut Host, session: Uuid) -> Result<LaunchPre
         plan.preview.warnings = vec![
             "Будет запущен новый процесс в той же панели. Предыдущее поколение останется доступно в истории.".into(),
             "Последнее задание не отправляется повторно. Продолжение подтверждается самим CLI; новая беседа при ошибке не создаётся.".into(),
+            "Модель и reasoning исходного запуска не применяются повторно: настройки продолженного диалога определяет CLI.".into(),
             if plan.preview.deliver_context {
                 "Используется сохранённая ревизия контекста; текущие правки проекта и воркспейса не подставляются."
             } else {
@@ -810,21 +828,26 @@ fn validate_plan(plan: &StoredPlan) -> Result<()> {
                 && *target == plan.preview.target && *side == plan.preview.side),
         "saved placement differs from reviewed destination"
     );
+    plan.preview.engine.validate()?;
+    let info = adapters::AdapterInfo {
+        provider: plan.preview.provider.clone(),
+        cli_version: plan.preview.cli_version.clone(),
+        adapter_version: plan.preview.adapter_version,
+        capabilities: plan.preview.capabilities.clone(),
+        delivery_method: plan.preview.delivery_method.clone(),
+        unsupported_reason: None,
+    };
     let expected = if let Some(resume) = &plan.preview.resume {
+        ensure!(
+            plan.preview.engine.is_empty(),
+            "resume must not reapply original model or reasoning settings"
+        );
         ensure!(
             resume.binding.session_id == plan.launch.session
                 && resume.binding.provider == plan.preview.provider
                 && resume.binding.context_revision == plan.preview.context.id,
             "saved resume binding differs from its frozen context"
         );
-        let info = adapters::AdapterInfo {
-            provider: plan.preview.provider.clone(),
-            cli_version: plan.preview.cli_version.clone(),
-            adapter_version: plan.preview.adapter_version,
-            capabilities: plan.preview.capabilities.clone(),
-            delivery_method: plan.preview.delivery_method.clone(),
-            unsupported_reason: None,
-        };
         adapters::resume_arguments(
             &info,
             &resume.binding.conversation_id,
@@ -832,21 +855,20 @@ fn validate_plan(plan: &StoredPlan) -> Result<()> {
             (plan.preview.deliver_context && !plan.preview.context.text.is_empty())
                 .then_some(plan.preview.context.text.as_str()),
         )?
-    } else if plan.preview.deliver_context && !plan.preview.context.text.is_empty() {
-        let info = adapters::AdapterInfo {
-            provider: plan.preview.provider.clone(),
-            cli_version: plan.preview.cli_version.clone(),
-            adapter_version: plan.preview.adapter_version,
-            capabilities: plan.preview.capabilities.clone(),
-            delivery_method: plan.preview.delivery_method.clone(),
-            unsupported_reason: None,
-        };
+    } else {
         if !plan.preview.can_launch {
             return Ok(());
         }
-        adapters::context_arguments(&info, &plan.preview.context.text)?
-    } else {
-        (Vec::new(), Default::default())
+        let mut args = adapters::engine_arguments(&info, &plan.preview.engine)?;
+        let env = if plan.preview.deliver_context && !plan.preview.context.text.is_empty() {
+            let (context_args, env) =
+                adapters::context_arguments(&info, &plan.preview.context.text)?;
+            args.extend(context_args);
+            env
+        } else {
+            Default::default()
+        };
+        (args, env)
     };
     ensure!(
         plan.launch.args == expected.0 && plan.launch.env == expected.1,
