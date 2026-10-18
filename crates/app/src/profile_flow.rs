@@ -70,6 +70,12 @@ impl ProfileEditor {
         }
     }
 
+    /// Start a new, unsaved draft from a saved profile's launch settings.
+    /// Identity, revision, and any runtime references remain independent.
+    pub fn duplicate(profile: &AgentProfile) -> Self {
+        Self::new(profile.settings.clone())
+    }
+
     pub(crate) fn field_labels(&self) -> &'static [&'static str] {
         if self.settings.provider == "custom" {
             &[
@@ -194,6 +200,18 @@ impl ProfileEditor {
     }
 }
 
+pub(crate) fn duplicate_name(profile: &AgentProfile) -> String {
+    let candidate = format!("{} · копия", profile.name);
+    if !profile.name.trim().is_empty()
+        && !profile.name.chars().any(char::is_control)
+        && candidate.len() <= 256
+    {
+        candidate
+    } else {
+        "Копия профиля".into()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Pending {
     pub request: Uuid,
@@ -206,6 +224,108 @@ pub(crate) struct Pending {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_is_an_independent_unsaved_builtin_draft() {
+        let mut settings = crate::template_flow::default_settings("codex");
+        settings.role = "reviewer".into();
+        settings.instructions = "Review carefully".into();
+        settings.engine.model = Some("gpt-review".into());
+        settings.engine.reasoning_effort = Some("high".into());
+        let source = pigade_storage::AgentProfile {
+            id: Uuid::new_v4(),
+            name: "Reviewer".into(),
+            settings,
+            revision: 17,
+        };
+        let first = ProfileEditor::duplicate(&source);
+        let second = ProfileEditor::duplicate(&source);
+
+        assert_ne!(first.id, source.id);
+        assert_ne!(first.id, second.id);
+        assert!(first.saved.is_none());
+        assert!(first.origin.is_none());
+        assert_eq!(first.settings, source.settings);
+        assert_eq!(source.name, "Reviewer");
+        assert_eq!(duplicate_name(&source), "Reviewer · копия");
+
+        let fields = first.initial_fields(duplicate_name(&source));
+        let write = first
+            .write(
+                &fields
+                    .iter()
+                    .map(|field| field.text().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(write.value.id, first.id);
+        assert_eq!(write.value.revision, 0);
+        assert_eq!(write.expected_revision, None);
+        assert_eq!(write.value.settings, source.settings);
+        assert_eq!(
+            first
+                .write(&[
+                    "Copy".into(),
+                    "reviewer".into(),
+                    "Review carefully".into(),
+                    "gpt-review".into(),
+                    "high".into()
+                ])
+                .unwrap()
+                .value
+                .id,
+            write.value.id
+        );
+    }
+
+    #[test]
+    fn duplicate_custom_draft_round_trips_exact_arguments_without_source_revision() {
+        let mut settings = crate::template_flow::default_settings("custom");
+        settings.custom_command = Some(pigade_storage::CustomCommand {
+            executable: "/usr/bin/tool".into(),
+            args: vec![
+                "before\rafter".into(),
+                "line\r\nend".into(),
+                "slash\\".into(),
+            ],
+        });
+        let source = pigade_storage::AgentProfile {
+            id: Uuid::new_v4(),
+            name: "Tool".into(),
+            settings: settings.clone(),
+            revision: 9,
+        };
+        let duplicate = ProfileEditor::duplicate(&source);
+        assert_ne!(duplicate.id, source.id);
+        assert!(duplicate.saved.is_none());
+        assert_eq!(duplicate.settings, settings);
+
+        let fields = duplicate.initial_fields(duplicate_name(&source));
+        let write = duplicate
+            .write(
+                &fields
+                    .iter()
+                    .map(|field| field.text().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        assert_eq!(write.value.settings.custom_command, settings.custom_command);
+        assert_eq!(write.value.revision, 0);
+        assert_eq!(write.expected_revision, None);
+        assert_eq!(write.value.id, duplicate.id);
+    }
+
+    #[test]
+    fn duplicate_name_uses_bounded_fallback_without_truncating_source() {
+        let source = pigade_storage::AgentProfile {
+            id: Uuid::new_v4(),
+            name: "x".repeat(256),
+            settings: crate::template_flow::default_settings("codex"),
+            revision: 1,
+        };
+        assert_eq!(duplicate_name(&source), "Копия профиля");
+        assert_eq!(source.name.len(), 256);
+    }
 
     #[test]
     fn roster_reply_preserves_identity_selection_and_does_not_replace_new_dialog() {

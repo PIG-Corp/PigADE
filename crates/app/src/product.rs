@@ -22,6 +22,8 @@ mod custom_launch_ui;
 mod git_status_ui;
 #[path = "navigation_ui.rs"]
 mod navigation_ui;
+#[path = "profile_access_ui.rs"]
+mod profile_access_ui;
 #[path = "profile_ui.rs"]
 mod profile_ui;
 #[path = "prompt_ui.rs"]
@@ -60,6 +62,7 @@ pub(super) enum ProductAction {
     NewAgentProfile,
     NewCustomProfile,
     EditAgentProfile(Uuid),
+    DuplicateAgentProfile(Uuid),
     LaunchAgentProfile(Uuid),
     DeleteAgentProfile(Uuid),
     SetAgentProfilePinned(Uuid, bool),
@@ -192,6 +195,7 @@ pub(super) enum DialogKind {
     DeletePrompt,
     AgentProfiles,
     AgentProfile,
+    ProfilePreparing,
     DeleteAgentProfile,
     WorkspaceGit,
     WorkspaceGitCommit,
@@ -241,6 +245,7 @@ impl DialogKind {
             Self::DeletePrompt => "Удалить промпт?",
             Self::AgentProfiles => "Профили агентов",
             Self::AgentProfile => "Настройки профиля",
+            Self::ProfilePreparing => "Подготовка агента",
             Self::DeleteAgentProfile => "Удалить профиль?",
             Self::WorkspaceGit => "Git воркспейса",
             Self::WorkspaceGitCommit => "Проверка коммита Git",
@@ -287,7 +292,7 @@ impl DialogKind {
             Self::CloseTab => &[],
             Self::Prompts | Self::DeletePrompt => &[],
             Self::Prompt => &["Название", "Текст промпта"],
-            Self::AgentProfiles | Self::DeleteAgentProfile => &[],
+            Self::AgentProfiles | Self::DeleteAgentProfile | Self::ProfilePreparing => &[],
             Self::AgentProfile => &[
                 "Название профиля",
                 "Роль",
@@ -349,6 +354,7 @@ impl DialogKind {
             Self::DeletePrompt => "Удалить промпт",
             Self::AgentProfiles => "Готово",
             Self::AgentProfile => "Сохранить профиль",
+            Self::ProfilePreparing => "Отмена",
             Self::DeleteAgentProfile => "Удалить профиль",
             Self::WorkspaceGit => "Закрыть",
             Self::WorkspaceGitCommit => "Создать коммит",
@@ -437,6 +443,7 @@ pub(super) struct ProductUi {
     pub(super) prompt_editor: Option<crate::prompt_flow::PromptEditor>,
     pub(super) prompt_delete: Option<pigade_storage::Prompt>,
     pub(super) prompt_origin: Option<Dialog>,
+    pub(super) profile_preparing_label: Option<String>,
     pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
     pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
     pub(super) profile_roster_error: Option<String>,
@@ -1779,7 +1786,10 @@ impl ProductUi {
                     )),
             );
         }
-        sidebar = sidebar.child(tree).child(footer);
+        sidebar = sidebar
+            .child(tree)
+            .child(self.profile_access_sidebar(cx))
+            .child(footer);
         if !compact && (self.busy || self.notice.is_some()) {
             let message = self
                 .notice
@@ -2852,6 +2862,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Launcher {
             return self.launcher_overlay(cx);
+        }
+        if dialog.kind == DialogKind::ProfilePreparing {
+            return self.profile_preparing_overlay(cx);
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(dialog, layouts, cx);
@@ -3969,6 +3982,7 @@ impl ProductUi {
                             .text_color(colors.muted)
                             .child(availability.to_owned()),
                     )
+                    .child(self.profile_access_launcher(cx))
                     .child(choices)
                     .child(div().mt(px(16.)).child(self.action_control(
                         "launcher-close".into(),

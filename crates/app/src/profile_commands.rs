@@ -218,7 +218,10 @@ impl CanvasApp {
                     self.profile_editor_open(editor, "Новый агент".into());
                 }
             }
-            A::EditAgentProfile(id) | A::DeleteAgentProfile(id) | A::LaunchAgentProfile(id) => {
+            A::EditAgentProfile(id)
+            | A::DuplicateAgentProfile(id)
+            | A::DeleteAgentProfile(id)
+            | A::LaunchAgentProfile(id) => {
                 let Some(profile) = self
                     .product
                     .catalog
@@ -231,6 +234,12 @@ impl CanvasApp {
                     return;
                 };
                 match action {
+                    A::DuplicateAgentProfile(_) => {
+                        self.profile_editor_open(
+                            profile_flow::ProfileEditor::duplicate(&profile),
+                            profile_flow::duplicate_name(&profile),
+                        );
+                    }
                     A::EditAgentProfile(_) => self.profile_editor_open(
                         profile_flow::ProfileEditor::saved(profile.clone()),
                         profile.name,
@@ -265,6 +274,30 @@ impl CanvasApp {
                                 Some("Выберите воркспейс и вкладку перед запуском".into());
                             return;
                         };
+                        let from_quick_access = self
+                            .product
+                            .dialog
+                            .as_ref()
+                            .is_none_or(|dialog| dialog.kind == DialogKind::Launcher);
+                        if !from_quick_access
+                            && self
+                                .product
+                                .dialog
+                                .as_ref()
+                                .is_none_or(|dialog| dialog.kind != DialogKind::AgentProfiles)
+                        {
+                            return;
+                        }
+                        if from_quick_access {
+                            if !self.product.profile_target_available() {
+                                self.product.notice = Some("Сначала выберите готовый воркспейс и вкладку для запуска профиля".into());
+                                return;
+                            }
+                            self.product.profile_preparing_label =
+                                Some(format!("{} · ревизия {}", profile.name, profile.revision));
+                            self.product.dialog = Some(Dialog::new(DialogKind::ProfilePreparing));
+                            self.product.notice = None;
+                        }
                         let Some(dialog) = self.product.dialog.as_ref() else {
                             return;
                         };

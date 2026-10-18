@@ -2753,6 +2753,14 @@ impl CanvasApp {
 
     fn sync_editor_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let scope = self.product.dialog.as_ref().map(|dialog| dialog.id);
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_none_or(|dialog| dialog.kind != product::DialogKind::ProfilePreparing)
+        {
+            self.product.profile_preparing_label = None;
+        }
         if !self
             .product
             .dialog
@@ -3726,6 +3734,7 @@ impl CanvasApp {
             | A::NewAgentProfile
             | A::NewCustomProfile
             | A::EditAgentProfile(_)
+            | A::DuplicateAgentProfile(_)
             | A::LaunchAgentProfile(_)
             | A::DeleteAgentProfile(_)
             | A::SetAgentProfilePinned(_, _)
@@ -4705,6 +4714,7 @@ impl CanvasApp {
                     | DialogKind::DeletePrompt
                     | DialogKind::AgentProfiles
                     | DialogKind::AgentProfile
+                    | DialogKind::ProfilePreparing
                     | DialogKind::DeleteAgentProfile => {
                         unreachable!("profile dialog handled above")
                     }
@@ -6412,6 +6422,51 @@ impl CanvasApp {
             cx.stop_propagation();
             return;
         }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::Launcher)
+            && (k.modifiers.control || k.modifiers.platform)
+            && !k.modifiers.alt
+            && !k.modifiers.shift
+        {
+            if !event.is_held && self.text_input.preedit.is_empty() {
+                let action = if k.key == "p" {
+                    Some(product::ProductAction::OpenAgentProfiles)
+                } else {
+                    k.key
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|number| (1..=9).contains(number))
+                        .and_then(|number| {
+                            self.product
+                                .pinned_agent_profiles()
+                                .get(number - 1)
+                                .map(|profile| {
+                                    product::ProductAction::LaunchAgentProfile(profile.id)
+                                })
+                        })
+                };
+                if let Some(action) = action {
+                    self.product_action(action, window, cx);
+                }
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::ProfilePreparing)
+        {
+            if !event.is_held && self.text_input.preedit.is_empty() && k.key == "escape" {
+                self.product_action(product::ProductAction::CloseDialog, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if event.is_held
             && self.product.dialog.as_ref().is_some_and(|dialog| {
                 matches!(
@@ -6717,7 +6772,8 @@ impl CanvasApp {
                 .dialog
                 .as_ref()
                 .is_some_and(|dialog| dialog.kind == product::DialogKind::AgentProfiles)
-                && ((k.key == "p" && k.modifiers.control)
+                && ((matches!(k.key.as_str(), "p" | "d")
+                    && (k.modifiers.control || k.modifiers.platform))
                     || (matches!(k.key.as_str(), "up" | "down") && k.modifiers.alt))
                 && (event.is_held || !self.text_input.preedit.is_empty())
             {
@@ -6831,6 +6887,21 @@ impl CanvasApp {
                                     })
                                 });
                             allowed.then_some(product::ProductAction::MoveAgentProfile(*id, delta))
+                        }
+                        _ => None,
+                    })
+                }
+                "d" if (k.modifiers.control || k.modifiers.platform)
+                    && !k.modifiers.shift
+                    && !k.modifiers.alt
+                    && !event.is_held
+                    && self.product.dialog.as_ref().is_some_and(|dialog| {
+                        dialog.kind == product::DialogKind::AgentProfiles
+                    }) =>
+                {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::LaunchAgentProfile(id) => {
+                            Some(product::ProductAction::DuplicateAgentProfile(*id))
                         }
                         _ => None,
                     })

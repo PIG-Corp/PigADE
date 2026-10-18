@@ -315,6 +315,13 @@ impl ProductUi {
                                 cx,
                             ))
                             .child(self.icon_control(
+                                &format!("agent-profile-duplicate-{id}"),
+                                &format!("Создать копию профиля {}", profile.name),
+                                "layers",
+                                ProductAction::DuplicateAgentProfile(id),
+                                cx,
+                            ))
+                            .child(self.icon_control(
                                 &format!("agent-profile-delete-{id}"),
                                 &format!("Удалить профиль {}", profile.name),
                                 "close",
@@ -342,7 +349,7 @@ impl ProductUi {
                     ));
                 }
                 content.child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
-                    "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Delete — удалить · Ctrl+P — закрепить · Alt+↑/↓ — переместить · Ctrl+R — обновить",
+                    "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Ctrl+D — копировать · Delete — удалить · Ctrl+P — закрепить · Alt+↑/↓ — переместить · Ctrl+R — обновить",
                 ))
             }
             DialogKind::AgentProfile => {

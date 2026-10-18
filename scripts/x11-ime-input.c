@@ -166,6 +166,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "profile-new") && strcmp(a.stage, "profile-create-fields") &&
         strcmp(a.stage, "profile-context-off") &&
         strcmp(a.stage, "profile-save") && strcmp(a.stage, "profile-select-first") &&
+        strcmp(a.stage, "profile-duplicate") && strcmp(a.stage, "profile-duplicate-rename") &&
+        strcmp(a.stage, "profile-select-copy") && strcmp(a.stage, "profile-pin-copy") &&
+        strcmp(a.stage, "profile-library-close") && strcmp(a.stage, "profile-sidebar-copy") &&
+        strcmp(a.stage, "profile-review-enter") && strcmp(a.stage, "profile-review-cancel") &&
+        strcmp(a.stage, "launcher-select-first-pin") &&
         strcmp(a.stage, "profile-launch") && strcmp(a.stage, "profile-confirm") &&
         strcmp(a.stage, "profile-edit") && strcmp(a.stage, "profile-rename") &&
         strcmp(a.stage, "profile-save-edit") && strcmp(a.stage, "profile-delete") &&
@@ -1731,6 +1736,31 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_Return);
         } else if (!strcmp(a.stage, "profile-select-first")) {
             key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "profile-duplicate")) {
+            modified_key(dpy, XK_Control_L, XK_d);
+        } else if (!strcmp(a.stage, "profile-duplicate-rename")) {
+            modified_key(dpy, XK_Control_L, XK_a);
+            modified_key(dpy, XK_Shift_L, XK_p);
+            const KeySym first[] = { XK_i, XK_n, XK_n, XK_e, XK_d };
+            for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); ++i) key(dpy, first[i]);
+            modified_key(dpy, XK_Shift_L, XK_c);
+            const KeySym last[] = { XK_o, XK_p, XK_y };
+            for (size_t i = 0; i < sizeof(last) / sizeof(last[0]); ++i) key(dpy, last[i]);
+        } else if (!strcmp(a.stage, "profile-select-copy")) {
+            key(dpy, XK_Down);
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "profile-pin-copy")) {
+            modified_key(dpy, XK_Control_L, XK_p);
+        } else if (!strcmp(a.stage, "profile-library-close")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "profile-sidebar-copy")) {
+            setup_click(dpy, app_window, 100, 666);
+        } else if (!strcmp(a.stage, "profile-review-enter")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "profile-review-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "launcher-select-first-pin")) {
+            modified_key(dpy, XK_Control_L, XK_1);
         } else if (!strcmp(a.stage, "profile-launch")) {
             key(dpy, XK_Return);
         } else if (!strcmp(a.stage, "profile-confirm")) {
@@ -2155,6 +2185,15 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "profile-context-off") ? "2" :
                             !strcmp(a.stage, "profile-save") ? "2" :
                             !strcmp(a.stage, "profile-select-first") ? "1" :
+                            !strcmp(a.stage, "profile-duplicate") ? "2" :
+                            !strcmp(a.stage, "profile-duplicate-rename") ? "14" :
+                            !strcmp(a.stage, "profile-select-copy") ? "2" :
+                            !strcmp(a.stage, "profile-pin-copy") ? "2" :
+                            !strcmp(a.stage, "profile-library-close") ? "1" :
+                            !strcmp(a.stage, "profile-sidebar-copy") ? "0" :
+                            !strcmp(a.stage, "profile-review-enter") ? "1" :
+                            !strcmp(a.stage, "profile-review-cancel") ? "1" :
+                            !strcmp(a.stage, "launcher-select-first-pin") ? "2" :
                             !strcmp(a.stage, "profile-launch") ? "1" :
                             !strcmp(a.stage, "profile-confirm") ? "2" :
                             !strcmp(a.stage, "profile-edit") ? "2" :

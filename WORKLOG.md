@@ -4437,3 +4437,51 @@ Finalize saved-profile recipe composition with passing native mixed-CLI flow and
 - Files: crates/app/src/template_ui.rs, crates/app/src/product.rs, docs/AGENT_HANDOFF.md, WORKLOG.md
 - Verification: Final root private recipes04 exits0/pass after final footer polish; proves exact dirty-draft cancel, frozen custom copy across source edit/deletion, no pre-confirm processes, once-only literal argv/cwd and three shell slots with9 original identities/states and bounded journal prefixes retained. Inspected no-match, canceled draft, copied command, prepared review and completed tab captures.340 app tests/strictClippy/packagefmt/debug+release builds and version/diff checks pass.37 harness/C checks pass in Luna lane.01 failed invalid fixture framing;02 rejected legitimate running;03 passed before duplicate Cancel/empty submit/width cleanup. Final04 passes final release.
 - Risks / next: Commit coherent feature; keep broader goal active. No new dependency/schema/host product change or user desktop/config/process changes. Full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open; preserve unrelated dirt/stash0.
+
+## 2026-10-18T07:27:49+00:00 — profile_copy_luna
+
+Added saved agent profile duplication as an independent unsaved draft with bounded default naming, library row control, and Ctrl+D hint.
+
+- Files: crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs
+- Verification: crates/app/bootstrap.sh fmt --package pigade-app completed; git diff --check -- crates/app/src/profile_flow.rs crates/app/src/profile_ui.rs passed. Cargo tests not run because app Cargo is reserved to the root lane.
+- Risks / next: Root to register DuplicateAgentProfile action and run app tests/build.
+
+## 2026-10-18T07:28:05+00:00 — profile_access_ui_luna
+
+Added pinned saved-agent access for the sidebar, launcher, and read-only preparation overlay.
+
+- Files: crates/app/src/profile_access_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/profile_access_ui.rs; git diff --check -- crates/app/src/profile_access_ui.rs passed. App integration/build pending root-owned module wiring and ProductUi field.
+- Risks / next: Root integrates module calls, preparing state/dialog routing, and owns app build verification.
+
+## 2026-10-18T07:35:47+00:00 — git_commit_research_luna
+
+Extend private setup fixture to verify duplicated pinned profiles in sidebar and Add Agent, preserving prepare-only review before explicit launch
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: py_compile, 37 harness tests, and strict C syntax pass. Private native setup run 01 failed closed because the fixed rename sequence typed PinedCopy; run 02 saved/pinned PinnedCopy but clicked the Profiles sidebar link at y642 rather than pinned row at y666, then failed closed before preparing. Captures and read-only SQLite confirmed both harness defects; the rename sequence and click coordinate were corrected. No Cargo or host-desktop action.
+- Risks / next: Root to run final private setup fixture against final visual release; inspect profile/sidebar captures and launcher confirmation proof.
+
+## 2026-10-18T07:36:33+00:00 — /root
+
+Integrate pinned agent quick access and independent profile copies through existing durable review
+
+- Files: crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_access_ui.rs, crates/app/src/profile_flow.rs, README.md, SPEC.md, DESIGN.md, docs/PROJECT_MAP.md, docs/adr/0016-agent-profile-roster.md
+- Verification: 345 app tests, strictClippy and debug/release builds passed before final nonshrinking-list wrappers; same345tests/Clippy pass after wrappers with final release building. Added exact quick-preparation modal request scope, current-tab/revision binding and held/IME keyboard guards; terminal CtrlD unchanged. Root repaired2scope visibility errors and partial roster move, bounded launcher scroll/first9 shortcuts, reused ProfileEditor::new for duplication. Luna readonly review found no source defect, clarified builtin version probes occur in ordinary preparation (custom never probed); README now distinguishes session start. Native01 typed fixed name incorrectly;02 proved copy/save/pin but helper hit library row. Both harness fixes logged by Luna. Final private run pending.
+- Risks / next: After final release exit0 run existing private setup03, inspect pin/chooser/review/copy captures and commit. No new host/storage/schema/dependency or active-desktop/config/user-process changes; preserve unrelated dirt/stash0.
+
+## 2026-10-18T07:40:42+00:00 — /root
+
+Finalize pinned profile access and independent copies with verified private launch flow
+
+- Files: crates/app/src/profile_access_ui.rs, docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: Final345 app tests, strict app Clippy, package fmt, debug/release builds pass. Root setup03 private X11 passes exact independent copy/settings/source preservation, pin/sidebar/chooser review, Enter-ignore/Escape-cancel and one explicit additional argv/cwd launch with original process identities/states retained. Inspected final copy/sidebar/review/chooser/confirmed captures.37 harness/static checks passed in Luna lane. Earlier01 name typo and02 click coordinate were harness defects fixed before03. Fresh pointer_layout20tests also pass; current pointer native recheck running.
+- Risks / next: Commit coherent profile block after pointer recheck; no broad goal completion. Transient preparing modal not separately visually captured. No host/storage/schema/dependency/user desktop/config/process change; preserve unrelated dirt/stash0.
+
+## 2026-10-18T07:45:12+00:00 — /root
+
+Revalidate requested hover focus and Hyprland-style drag on final release; repair test presentation races without changing pointer behavior
+
+- Files: scripts/isolated-ime-x11.py, docs/AGENT_HANDOFF.md, WORKLOG.md
+- Verification: 20 pointer_layout tests pass. Root private pointer04 exits0/pass for full hover/header/input/activation/immediate-pickup/stationary-release/Dwindle/gutter/cancel/undo/cross-tab/IME/file-and-clipboard flow.01 failed exit-mode paint race;02 froze selection before tab ACK;03 captured clipboard before paint. Added selected-tab wait and existing-style .35/.25 paint settles; all original invariants retained with named preview failures.37 harness tests and py_compile pass. Luna readonly review confirms predicates preserved. Inspected03 pickup/gutter captures on same release binary. Version checks pass after correcting check-versions.py typo to existing check-version.py.
+- Risks / next: Commit profile feature and verified pointer harness fixes. Actual Hyprland/Wayland parity remains unverified; no product pointer edits, active-desktop interaction, user config/host/process mutation. Broad goal stays active; preserve unrelated dirt/stash0.

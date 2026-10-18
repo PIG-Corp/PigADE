@@ -154,6 +154,7 @@ class IsolatedImePlanTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertIn('read-only launch review', plan['input']['setup'])
         self.assertIn('Ctrl+Enter runs the exact argv once', plan['input']['setup'])
+        self.assertIn('duplicate it with independent settings, pin it', plan['input']['setup'])
 
         harness = SCRIPT.read_text()
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
@@ -187,6 +188,24 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('config, report, app, save, session, focused, tab', harness)
         self.assertIn('live_input_session in {key[0] for key in final_models}', custom_flow)
         self.assertIn("view_text(final_models[(live_input_session,", custom_flow)
+
+        profile_flow = harness.split('def run_pinned_profile_access_fixture(', 1)[1].split(
+            '\ndef run_context_fixture(', 1)[0]
+        for stage in ('profile-open', 'profile-select-first', 'profile-duplicate',
+                      'profile-duplicate-rename', 'profile-save', 'profile-select-copy',
+                      'profile-pin-copy', 'profile-library-close', 'profile-sidebar-copy',
+                      'profile-review-enter', 'profile-review-cancel', 'setup-launcher',
+                      'launcher-select-first-pin', 'profile-confirm'):
+            self.assertIn(f'"{stage}"', helper)
+        self.assertIn("helper_call(config, 'profile-sidebar-copy')", profile_flow)
+        self.assertIn('setup_click(dpy, app_window, 100, 666)', helper)
+        self.assertIn("helper_call(config, 'launcher-select-first-pin')", profile_flow)
+        self.assertIn("records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}]",
+                      profile_flow)
+        self.assertIn("'phase') == 'prepared'", profile_flow)
+        self.assertIn("'phase') == 'not_requested'", profile_flow)
+        self.assertIn("'copy_pinned_and_visible_in_sidebar_and_launcher': True", profile_flow)
+        self.assertIn("'profile-launcher-confirmed.ppm'", harness)
 
     def test_journal_prefix_contract_allows_append_but_rejects_rewrite(self):
         self.assertTrue(IME.journal_prefix_matches(b'old journal bytes',

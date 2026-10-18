@@ -1927,6 +1927,10 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
         time.monotonic() + 5)
     require(normal_right.get('root') == before_drag.get('root'),
             'leaving focus mode after drag changed the pane tree')
+    # As on entry above, the host ACK precedes presentation of the restored
+    # tiled bounds. Move only after paint has settled: a stationary pointer
+    # deliberately does not override keyboard focus when geometry changes.
+    time.sleep(0.35)
     step('pointer-hover-left')
     wait_until(lambda: catalog_layout()[1] == before_drag, time.monotonic() + 5)
     require(live_unchanged(generations, expected_processes),
@@ -2194,6 +2198,13 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
             'explicit populated-destination fixture shell was not live')
     helper_call(config, 'capture', '/artifacts/pointer-tab-drop-populated-before.ppm')
     step('pointer-select-first-tab')
+    wait_until(lambda: (catalog if catalog['selection'].get('tab_id') == tab_id else None)
+               if (catalog := host_request({'command': 'catalog'})['catalog']) else None,
+               time.monotonic() + 5)
+    # Reading the source tree alone does not acknowledge tab selection: that
+    # tree also exists while hidden. Settle the selected tab before freezing
+    # PTY geometry and selection for the no-mutation preview assertion.
+    time.sleep(0.35)
     source_layout = wait_until(
         lambda: (layout if layout.get('root') == source_root else None)
         if (layout := catalog_layout()[1]) else None,
@@ -2213,14 +2224,17 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
 
     def check_populated_tab_drop_hold():
         current_catalog = host_request({'command': 'catalog'})['catalog']
-        require(tab_layout(current_catalog, tab_id) == source_layout and
-                tab_layout(current_catalog, destination_id) == populated_layout and
-                current_catalog.get('layout') == populated_catalog.get('layout') and
-                current_catalog.get('selection') == populated_selection_before and
-                frame_geometries(panes) == populated_geometries and
-                live_unchanged(populated_generations, populated_processes) and
-                0 < Path('/artifacts/pointer-tab-drop-populated-preview.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
-                'populated tab-drop preview changed host layouts, selection, PTYs, or process identities')
+        checks = {
+            'source layout': tab_layout(current_catalog, tab_id) == source_layout,
+            'destination layout': tab_layout(current_catalog, destination_id) == populated_layout,
+            'placement history': current_catalog.get('layout') == populated_catalog.get('layout'),
+            'selection': current_catalog.get('selection') == populated_selection_before,
+            'PTY geometry': frame_geometries(panes) == populated_geometries,
+            'process identities': live_unchanged(populated_generations, populated_processes),
+            'capture': 0 < Path('/artifacts/pointer-tab-drop-populated-preview.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
+        }
+        require(all(checks.values()), 'populated tab-drop preview failed: ' +
+                ', '.join(name for name, passed in checks.items() if not passed))
 
     report['stage'] = 'pointer-tab-drop-populated-preview'
     save()
@@ -2500,10 +2514,14 @@ def run_pointer_fixture(config, report, control, app, env, save, tab_id, baselin
     require(clipboard_reply.get('selection_transfer') is True and
             pointer_state_snapshot() == clipboard_before,
             'second multiline clipboard review changed host or terminal state')
+    # Selection transfer acknowledges the source, not presentation of the
+    # review sheet; match the first-paste paint settle above.
+    time.sleep(0.25)
     helper_call(config, 'capture', '/artifacts/pointer-clipboard-review-confirm.ppm')
-    require(0 < Path('/artifacts/pointer-clipboard-review-confirm.ppm').stat().st_size <= MAX_CAPTURE_BYTES and
-            pointer_chrome_pixel('pointer-clipboard-review-confirm.ppm') != pointer_review_baseline,
+    require(0 < Path('/artifacts/pointer-clipboard-review-confirm.ppm').stat().st_size <= MAX_CAPTURE_BYTES,
             'second multiline review capture is missing or oversized')
+    require(pointer_chrome_pixel('pointer-clipboard-review-confirm.ppm') != pointer_review_baseline,
+            'second multiline review sheet is not visible')
     target_key = next(key for key in clipboard_before[1] if key[0] == drop_target)
     target_modes = clipboard_before[1][target_key][3].get('modes')
     require(type(target_modes) is int and target_modes & 16,
@@ -4358,6 +4376,8 @@ def run_setup_fixture(config, report, control, app, env, save):
         'ordinary_enter_does_not_launch': True, 'ctrl_enter_launches_once': True,
         'no_shell_or_context_transport': True,
         'existing_journal_prefix_preserved': True}
+    if report.get('profile_access'):
+        report['setup']['captures'].extend(report['profile_access']['captures'])
     report.update({'status': SETUP_PASS, 'stage': 'complete'})
     save()
 
@@ -4522,6 +4542,216 @@ def run_custom_cli_profile_fixture(config, report, app, save, shell_session, liv
             'custom launch receipts lost their frozen plan payloads')
     time.sleep(0.35)
     helper_call(config, 'capture', '/artifacts/custom-launch-confirmed.ppm')
+    report['stage'] = 'pinned-agent-profile-copy'
+    save()
+    report['profile_access'] = run_pinned_profile_access_fixture(
+        config, report, save, profile, command, tab_id)
+
+
+def run_pinned_profile_access_fixture(config, report, save, source_profile, command, tab_id):
+    """Duplicate and pin one saved profile; verify sidebar and Launcher are prepare-only."""
+    catalog_now = lambda: host_request({'command': 'catalog'})['catalog']
+    def profiles(catalog):
+        items = catalog.get('agent_profiles')
+        require(isinstance(items, list) and len(items) <= 128,
+                'pinned profile catalog is invalid or oversized')
+        return items
+    def profile_by_id(catalog, profile_id):
+        matches = [item for item in profiles(catalog) if item.get('id') == profile_id]
+        require(len(matches) <= 1, 'pinned profile ID is duplicated')
+        return matches[0] if matches else None
+    def identities():
+        views = host_request({'command': 'list'}).get('views', [])
+        require(isinstance(views, list) and len(views) <= 32,
+                'pinned profile process snapshot exceeds bounds')
+        return sorted((view.get('session'), view.get('generation'), view.get('pid'))
+                      for view in views)
+    def records():
+        path = Path('/artifacts/custom-cli-runs.jsonl')
+        require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 4096,
+                'custom CLI recorder is missing or exceeds the private bound')
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    baseline_generations = fixture_generations()
+    baseline_identities = identities()
+    baseline_journals = fixture_journal_prefixes([generation for _, generation in baseline_generations])
+    baseline_models = {}
+    for session, generation in baseline_generations:
+        view = fixture_session_models(session).get(generation)
+        require(view is not None, 'pinned profile fixture lost an existing generation')
+        baseline_models[(session, generation)] = (view.get('pid'), view.get('state'))
+    source = profile_by_id(catalog_now(), source_profile['id'])
+    require(source is not None and source.get('revision') == source_profile.get('revision') == 1 and
+            source.get('settings') == {'provider': 'custom', 'role': '', 'instructions': '',
+                'deliver_context': False,
+                'engine': {'model': None, 'reasoning_effort': None},
+                'custom_command': command} and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'pinned profile fixture did not start from the exact saved and once-run custom profile')
+
+    report['stage'] = 'pinned-agent-profile-duplicate'
+    save()
+    helper_call(config, 'profile-open')
+    helper_call(config, 'profile-select-first')
+    helper_call(config, 'profile-duplicate')
+    helper_call(config, 'profile-duplicate-rename')
+    time.sleep(.2)
+    helper_call(config, 'capture', '/artifacts/profile-duplicate-editor.ppm')
+    helper_call(config, 'profile-save')
+    copied_catalog = wait_until(
+        lambda: (value if len(profiles(value)) == 2 and
+                 any(item.get('name') == 'PinnedCopy' for item in profiles(value)) else None)
+        if (value := catalog_now()) else None, time.monotonic() + 8)
+    copies = [item for item in profiles(copied_catalog) if item.get('name') == 'PinnedCopy']
+    original_after = profile_by_id(copied_catalog, source_profile['id'])
+    require(len(copies) == 1 and original_after == source and
+            copies[0].get('id') != source_profile['id'] and copies[0].get('revision') == 1 and
+            copies[0].get('settings') == source['settings'] and
+            fixture_generations() == baseline_generations and identities() == baseline_identities and
+            fixture_journal_prefixes_preserved(baseline_journals) and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'duplicate profile did not get an independent ID with exact copied settings and no launch')
+    copied_profile = copies[0]
+    plans_before_pin = prepared_launches_read_only()
+    helper_call(config, 'profile-select-copy')
+    helper_call(config, 'profile-pin-copy')
+    pinned_catalog = wait_until(
+        lambda: (value if isinstance((roster := value.get('agent_profile_roster')), dict) and
+                 roster.get('schema') == 1 and copied_profile['id'] in roster.get('pinned_ids', [])
+                 else None)
+        if (value := catalog_now()) else None, time.monotonic() + 8)
+    roster = pinned_catalog['agent_profile_roster']
+    require(roster.get('ordered_ids') == [source_profile['id'], copied_profile['id']] and
+            roster.get('pinned_ids') == [copied_profile['id']] and
+            profile_by_id(pinned_catalog, source_profile['id']) == source and
+            profile_by_id(pinned_catalog, copied_profile['id']) == copied_profile and
+            fixture_generations() == baseline_generations and identities() == baseline_identities and
+            fixture_journal_prefixes_preserved(baseline_journals) and
+            prepared_launches_read_only() == plans_before_pin and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'pinning the duplicate changed profile settings or prepared/executed a command')
+
+    report['stage'] = 'pinned-agent-profile-sidebar-prepare'
+    save()
+    # Closing and reopening the library clears transient save notices while
+    # preserving the selected tab, giving the pin row a deterministic position.
+    helper_call(config, 'profile-library-close')
+    helper_call(config, 'profile-open')
+    helper_call(config, 'profile-library-close')
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/profile-sidebar-pinned.ppm')
+    helper_call(config, 'profile-sidebar-copy')
+    time.sleep(.1)
+    helper_call(config, 'capture', '/artifacts/profile-sidebar-preparing.ppm')
+    sidebar_plans = wait_until(
+        lambda: (plans if len(plans := prepared_launches_read_only()) > len(plans_before_pin)
+                 and any(((item.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') ==
+                          copied_profile['id']) for key, item in plans.items() if key not in plans_before_pin)
+                 else None), time.monotonic() + 10)
+    sidebar_candidates = [(key, item) for key, item in sidebar_plans.items()
+                          if key not in plans_before_pin and
+                          (item.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') ==
+                          copied_profile['id']]
+    require(len(sidebar_candidates) == 1,
+            'pinned sidebar action did not prepare exactly one frozen profile plan')
+    sidebar_plan_id, sidebar_plan = sidebar_candidates[0]
+    sidebar_payload = sidebar_plan['payload']
+    sidebar_preview = sidebar_payload.get('preview', {})
+    require(sidebar_plan.get('phase') == 'prepared' and
+            sidebar_preview.get('profile') == {'id': copied_profile['id'], 'name': 'PinnedCopy', 'revision': 1} and
+            sidebar_preview.get('custom_command') == command and
+            fixture_generations() == baseline_generations and identities() == baseline_identities and
+            fixture_journal_prefixes_preserved(baseline_journals) and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'sidebar quick action did not stop at a read-only prepared review')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/profile-sidebar-review.ppm')
+    helper_call(config, 'profile-review-enter')
+    require(fixture_generations() == baseline_generations and identities() == baseline_identities and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}] and
+            prepared_launches_read_only().get(sidebar_plan_id, {}).get('phase') == 'prepared',
+            'ordinary Enter from pinned-profile review launched the command')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/profile-sidebar-review-enter.ppm')
+    helper_call(config, 'profile-review-cancel')
+    require(fixture_generations() == baseline_generations and identities() == baseline_identities and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'Escape from pinned-profile review executed the command')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/profile-sidebar-cancelled.ppm')
+
+    report['stage'] = 'pinned-agent-profile-launcher-prepare'
+    save()
+    # The toolbar opens the ordinary Add Agent chooser. Ctrl+1 must resolve to
+    # the first pinned profile and still go through prepared review.
+    plans_before_launcher = prepared_launches_read_only()
+    helper_call(config, 'setup-launcher')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/profile-launcher-pinned.ppm')
+    helper_call(config, 'launcher-select-first-pin')
+    launcher_plans = wait_until(
+        lambda: (plans if len(plans := prepared_launches_read_only()) > len(plans_before_launcher)
+                 and any((item.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') ==
+                         copied_profile['id'] for key, item in plans.items() if key not in plans_before_launcher)
+                 else None), time.monotonic() + 10)
+    launcher_candidates = [(key, item) for key, item in launcher_plans.items()
+                           if key not in plans_before_launcher and
+                           (item.get('payload', {}).get('preview', {}).get('profile') or {}).get('id') ==
+                           copied_profile['id']]
+    require(len(launcher_candidates) == 1,
+            'Add Agent Ctrl+1 did not prepare exactly one pinned profile plan')
+    launcher_plan_id, launcher_plan = launcher_candidates[0]
+    launcher_payload = launcher_plan['payload']
+    launcher_preview = launcher_payload.get('preview', {})
+    require(launcher_plan.get('phase') == 'prepared' and
+            launcher_preview.get('profile') == {'id': copied_profile['id'], 'name': 'PinnedCopy', 'revision': 1} and
+            launcher_preview.get('custom_command') == command and
+            fixture_generations() == baseline_generations and identities() == baseline_identities and
+            fixture_journal_prefixes_preserved(baseline_journals) and
+            records() == [{'argv': command['args'], 'cwd': '/home/pigade/demo'}],
+            'Add Agent chooser did not preserve the pinned profile review before confirmation')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/profile-launcher-review.ppm')
+    helper_call(config, 'profile-confirm')
+    new_session, new_generation = launcher_preview['session'], launcher_preview['generation']
+    wait_until(lambda: (view if (view := fixture_session_models(new_session).get(new_generation)) and
+                        view.get('state') == 'exited' and 'CUSTOM_CLI_MARKER' in view_text(view) and
+                        len(records()) == 2 else None), time.monotonic() + 12)
+    expected_record = {'argv': command['args'], 'cwd': '/home/pigade/demo'}
+    require(records() == [expected_record, expected_record] and
+            fixture_generations() == sorted(baseline_generations + [(new_session, new_generation)]) and
+            set(baseline_identities).issubset(set(identities())) and
+            fixture_journal_prefixes_preserved(baseline_journals),
+            'explicit Add Agent confirmation did not execute exactly once or changed an existing PTY')
+    final_models = {}
+    for session, generation in baseline_generations:
+        view = fixture_session_models(session).get(generation)
+        final_models[(session, generation)] = view
+    require(all(view is not None and (view.get('pid'), view.get('state')) == baseline_models[(session, generation)]
+                for (session, generation), view in final_models.items()),
+            'pinned profile launch changed an existing process identity or state')
+    final_plans = prepared_launches_read_only()
+    require(final_plans.get(sidebar_plan_id, {}).get('phase') == 'prepared' and
+            final_plans.get(sidebar_plan_id, {}).get('payload') == sidebar_payload and
+            final_plans.get(launcher_plan_id, {}).get('phase') == 'not_requested' and
+            final_plans.get(launcher_plan_id, {}).get('payload') == launcher_payload,
+            'pinned quick-action receipts did not preserve preparation and explicit confirmation states')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/profile-launcher-confirmed.ppm')
+    return {
+        'source_profile_id': source_profile['id'], 'copied_profile_id': copied_profile['id'],
+        'source_profile_unchanged': True, 'copy_has_independent_id_and_exact_settings': True,
+        'copy_pinned_and_visible_in_sidebar_and_launcher': True,
+        'sidebar_action_stops_at_prepared_review': True,
+        'ordinary_enter_and_escape_do_not_execute': True,
+        'launcher_ctrl1_confirms_once': True, 'custom_cli_invocations': records(),
+        'original_process_identities_and_states_retained': True,
+        'captures': ['profile-duplicate-editor.ppm', 'profile-sidebar-pinned.ppm',
+                     'profile-sidebar-preparing.ppm', 'profile-sidebar-review.ppm',
+                     'profile-sidebar-review-enter.ppm', 'profile-sidebar-cancelled.ppm',
+                     'profile-launcher-pinned.ppm', 'profile-launcher-review.ppm',
+                     'profile-launcher-confirmed.ppm'],
+    }
 def run_context_fixture(config, report, env, save, app, host):
     report['stage'] = 'workspace-context-editor'
     save()
@@ -6597,7 +6827,12 @@ def outer_run(args) -> dict:
                   'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'agent-picker.ppm', 'agent-direct.ppm', 'welcome-compact.ppm', 'workspace-compact.ppm',
-                  'four-panels.ppm', 'four-panels-compact.ppm'] if args.fixture == 'setup' else
+                  'four-panels.ppm', 'four-panels-compact.ppm',
+                  'profile-duplicate-editor.ppm', 'profile-sidebar-pinned.ppm',
+                  'profile-sidebar-preparing.ppm', 'profile-sidebar-review.ppm',
+                  'profile-sidebar-review-enter.ppm', 'profile-sidebar-cancelled.ppm',
+                  'profile-launcher-pinned.ppm', 'profile-launcher-review.ppm',
+                  'profile-launcher-confirmed.ppm'] if args.fixture == 'setup' else
                  ['welcome.ppm', 'welcome-compact.ppm', 'new-project.ppm', 'workspace-ready.ppm',
                   'first-terminal.ppm', 'four-panels-before-input.ppm', 'controls-settings.ppm',
                   'appearance-light.ppm', 'appearance-dark.ppm',
@@ -6678,7 +6913,7 @@ def plan(args) -> dict:
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space, P, type resume, Enter to review; Return confirms the frozen plan',
                   'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
-                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once in the selected workspace',
+                    'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
                   'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
