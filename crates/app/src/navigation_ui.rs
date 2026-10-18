@@ -19,6 +19,7 @@ fn command_aliases(action: &ProductAction) -> &'static [&'static str] {
             "workspace sessions",
             "сессии воркспейса",
         ],
+        ProductAction::OpenTerminalLinks => &["links", "url", "osc8", "ссылки"],
         ProductAction::OpenSessions => &["sessions", "hidden", "сессии"],
         _ => &[],
     }

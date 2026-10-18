@@ -5309,3 +5309,35 @@ Integrate workspace session recovery overview with scoped exact-ID resume, atomi
 - Files: crates/app/src/workspace_session_commands.rs, crates/app/src/workspace_sessions.rs, crates/app/src/workspace_sessions_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, crates/app/src/activity_ui.rs, crates/app/src/catalog_flow.rs, crates/app/src/git_batch.rs, crates/app/src/git_watch.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_drop.rs, crates/app/src/workspace_git.rs, crates/session-host/src/workspace_sessions.rs, crates/session-host/src/lib.rs, crates/session-host/src/resume_probe.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/src/workspace_git.rs, crates/storage/src/catalog.rs, crates/storage/src/prompt.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: Root verified 442 app,89 storage,3 overview unit,9 context_launch real-host IPC and38 harness tests; strict workspace/app Clippy, workspace/package formatting, version/diff checks, release host bins/examples and app builds pass. Private native resume02 passes; overview/review/new-frame captures inspected. Run01 selection-revision expectation corrected to exact +1 plus pin removal with all other selection/layout/undo bytes unchanged; successful ResumeReview now closes. No desktop input/config/live host changes. Luna separately logged bounded model/backend/fixture edits and reviewed integration.
 - Risks / next: Commit this coherent feature preserving unrelated stress/research/GPUI dirt and stash0. Workspace overview is metadata-only and private fake-Codex X11 acceptance does not close real-provider/full-platform/reboot/24h/performance/a11y MVP gates; broad product goal remains active.
+
+## 2026-10-18T12:48:49+00:00 — terminal_links_model_luna
+
+Add bounded frozen visible-frame hyperlink capture and explicit URL review state
+
+- Files: crates/app/src/terminal_links.rs
+- Verification: rustfmt --edition 2024 crates/app/src/terminal_links.rs; git diff --check -- crates/app/src/terminal_links.rs passed; Cargo verification not run per assigned scope
+- Risks / next: Root to wire UI and run app verification; URL safety and review state covered by module tests pending Cargo run
+
+## 2026-10-18T12:49:54+00:00 — terminal_links_model_luna
+
+Tighten terminal link capture bounds, blocked literal display, and confirm semantics after review
+
+- Files: crates/app/src/terminal_links.rs
+- Verification: rustfmt --edition 2024 crates/app/src/terminal_links.rs; git diff --check -- crates/app/src/terminal_links.rs passed; Cargo verification not run per assigned scope
+- Risks / next: Root to integrate display_literal helper and run app verification; no Cargo/native tools used
+
+## 2026-10-18T12:52:01+00:00 — terminal_links_fixture_luna
+
+Extend the existing isolated history fixture with fixed OSC 8 list/review/copy/blocked/open flows and a private URL launcher recorder
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 -v (38 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; git diff --check
+- Risks / next: Root should run the isolated release fixture and review list/review/blocked/returned/cancelled captures; this lane did not compile C or launch native UI.
+
+## 2026-10-18T13:08:55+00:00 — /root
+
+Ship explicit OSC8 link list, frozen canonical destination review and one-shot platform opening from live and historical cells; preserve terminal input, drag and source identity
+
+- Files: crates/app/src/terminal_links.rs, crates/app/src/terminal_link_commands.rs, crates/app/src/terminal_link_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
+- Verification: 449 app tests, strict app Clippy/package fmt,38 existing Python harness tests incl strict C helper compile, version/diff checks and final release build pass. Root private history04 passes live/history distinct URLs, exact clipboard, cancel and blocked schemes, one launcher call after explicit confirm, immutable model/journal/layout/process boot/start/PID/cwd and no CLI input; final reviews visually inspected. Native01 fixture NameError corrected;02/03 passed earlier slices. Root corrected state/geometry budget, URI normalization and truncation tests, one-shot cancellation gates and numeric URI-pool caching. No host/parser/dependency/desktop/live-session mutation.
+- Risks / next: Commit feature preserving unrelated stress/research/unused GPUI patch dirt and stash0. Plain-text/file/custom-protocol links and full Wayland/GPU/a11y/reboot/24h/performance/MVP acceptance remain open; broad product goal continues. Actual browser success is not reported by GPUI open_url, only an explicit platform request.

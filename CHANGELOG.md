@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- OSC 8 links from the visible live/history frame now have a frozen list and destination review. Explicit confirmation opens only validated HTTP/HTTPS URLs; cancel, copy, unsupported schemes and frame changes cannot trigger automatic external navigation.
+
 - Workspace session overview distinguishes live processes, saved history, pinned generations and uncertain launches across all tabs. Opening preserves processes; exact-ID continuation uses scoped preflight and a separate native resume confirmation.
 
 - Reviewed whole-status Stage All/Unstage All with exact literal paths, one native index replacement, durable receipts and mutually enforced unknown-outcome gates. Existing files and CLI processes are preserved; release private X11 and real-Git/restart/fault coverage pass.

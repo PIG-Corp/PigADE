@@ -94,6 +94,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/app/src/mouse_delivery.rs, main.rs admission | Bounded receipt reservations, optimistic mouse rollback and motion headroom; local saturation never latches input or retries bytes |
 | crates/app/src/cursor.rs | Pure typed cursor geometry, wide-cell normalization, blink/reduced-motion and block glyph contrast; native paint/lifecycle in main.rs |
 | crates/app/src/palette.rs | Bounded host-cell color resolver; typed sorted dynamic overrides, truecolor and unchanged default theme; no ANSI parser |
+| crates/app/src/terminal_links.rs, terminal_link_commands.rs, terminal_link_ui.rs | Bounded frozen visible-cell OSC8 capture, canonical HTTP/HTTPS destination review and explicit one-shot platform open/copy; no terminal/parser/host mutation, Prefix,X |
 | crates/app/src/terminal_insert.rs, terminal_insert_commands.rs | Bounded POSIX file-path quoting and generation/mode-bound explicit paste review; native file-drop targeting and clipboard files, no FS read/upload/automatic Enter; existing input worker remains sole send route |
 | crates/app/src/input.rs | Pure keyboard/atomic explicit paste encoding and local UTF16 composition; no ANSI parser or implicit shared-prompt delivery |
 | crates/app/src/controls.rs | Exact held-modifier panel bindings, EN/RU normalization and bounded atomic UI-local controls.json; default Ctrl, optional Alt/Super/Ctrl+Alt/prefix-only |

@@ -51,6 +51,8 @@ mod template_commands;
 mod template_flow;
 mod terminal_insert;
 mod terminal_insert_commands;
+mod terminal_link_commands;
+mod terminal_links;
 mod text_edit;
 mod tiling;
 mod transfer_flow;
@@ -3939,6 +3941,7 @@ impl CanvasApp {
                 | A::OpenHostMaintenance
                 | A::OpenWorkspaceSwitcher
                 | A::OpenWorkspaceSessions
+                | A::OpenTerminalLinks
                 | A::OpenAppearance
                 | A::OpenCloseTab
                 | A::CloseManagedTab
@@ -3976,6 +3979,13 @@ impl CanvasApp {
             self.pending_context_editor = None;
         }
         match action {
+            A::OpenTerminalLinks
+            | A::RefreshTerminalLinks
+            | A::SelectTerminalLink(_)
+            | A::ReviewTerminalLink
+            | A::BackTerminalLinks
+            | A::CopyTerminalLink
+            | A::ConfirmTerminalLink => self.terminal_link_action(action, cx),
             A::OpenWorkspaceSessions
             | A::RefreshWorkspaceSessions
             | A::FirstWorkspaceSessions
@@ -4668,6 +4678,15 @@ impl CanvasApp {
                 self.layout_command(command, cx);
             }
             A::CloseDialog => {
+                if self
+                    .product
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.kind == product::DialogKind::TerminalLinks)
+                    && let Some(mut sheet) = self.product.terminal_links.take()
+                {
+                    sheet.cancel();
+                }
                 if let Some(dialog) = self
                     .product
                     .dialog
@@ -5275,6 +5294,9 @@ impl CanvasApp {
                     DialogKind::RenamePane => self.submit_pane_name(cx),
                     DialogKind::WorkspaceGit => {
                         self.workspace_git_action(A::RefreshWorkspaceGit, cx)
+                    }
+                    DialogKind::TerminalLinks => {
+                        self.terminal_link_action(A::ReviewTerminalLink, cx)
                     }
                     DialogKind::WorkspaceSessions => {
                         self.workspace_session_action(A::OpenWorkspaceSession, cx)
@@ -7269,6 +7291,79 @@ impl CanvasApp {
             .product
             .dialog
             .as_ref()
+            .is_some_and(|dialog| dialog.kind == product::DialogKind::TerminalLinks)
+        {
+            use product::ProductAction as A;
+            let control = k.modifiers.control || k.modifiers.platform;
+            if self
+                .product
+                .terminal_links
+                .as_ref()
+                .is_some_and(|sheet| sheet.stage == terminal_links::SheetStage::Review)
+                && matches!(
+                    k.key.as_str(),
+                    "up" | "down" | "home" | "end" | "pageup" | "pagedown"
+                )
+                && !control
+                && !k.modifiers.alt
+            {
+                let scroll = &self.product.terminal_link_address_scroll;
+                let mut offset = scroll.offset();
+                offset.y = match k.key.as_str() {
+                    "home" => px(0.),
+                    "end" => -scroll.max_offset().y,
+                    "up" => offset.y + px(24.),
+                    "down" => offset.y - px(24.),
+                    "pageup" => offset.y + px(200.),
+                    _ => offset.y - px(200.),
+                }
+                .max(-scroll.max_offset().y)
+                .min(px(0.));
+                scroll.set_offset(offset);
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+            let action = match k.key.as_str() {
+                "escape" if !event.is_held => Some(A::CloseDialog),
+                "left" if k.modifiers.alt && !event.is_held => Some(A::BackTerminalLinks),
+                "enter" if !event.is_held && !k.modifiers.alt && !k.modifiers.shift => {
+                    Some(if control {
+                        A::ConfirmTerminalLink
+                    } else {
+                        A::ReviewTerminalLink
+                    })
+                }
+                "c" if control && !event.is_held && !k.modifiers.alt => Some(A::CopyTerminalLink),
+                "r" if control && !event.is_held && !k.modifiers.alt => {
+                    Some(A::RefreshTerminalLinks)
+                }
+                "up" | "down" | "home" | "end" | "pageup" | "pagedown" => {
+                    self.product.terminal_links.as_ref().map(|sheet| {
+                        let next = match k.key.as_str() {
+                            "home" => 0,
+                            "end" => sheet.rows.len().saturating_sub(1),
+                            "up" => sheet.selected.saturating_sub(1),
+                            "down" => sheet.selected.saturating_add(1),
+                            "pageup" => sheet.selected.saturating_sub(8),
+                            _ => sheet.selected.saturating_add(8),
+                        }
+                        .min(sheet.rows.len().saturating_sub(1));
+                        A::SelectTerminalLink(next)
+                    })
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.product_action(action, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self
+            .product
+            .dialog
+            .as_ref()
             .is_some_and(|dialog| dialog.kind == product::DialogKind::WorkspaceSessions)
         {
             use product::ProductAction as A;
@@ -8311,6 +8406,7 @@ impl CanvasApp {
             let action = match k.key.as_str() {
                 "a" => Some(product::ProductAction::OpenWorkspaceSwitcher),
                 "u" => Some(product::ProductAction::OpenWorkspaceSessions),
+                "x" => Some(product::ProductAction::OpenTerminalLinks),
                 "p" => Some(product::ProductAction::OpenPalette),
                 "e" => Some(if k.modifiers.shift {
                     product::ProductAction::EditProjectContext

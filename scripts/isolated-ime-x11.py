@@ -82,12 +82,30 @@ try:
         for row in range(history_rows):
             line = (f"\x1b[38;2;231;72;86mSCROLLBACK_{row:03d}\x1b[0m "
                     f"\x1b[31mANSI_RED\x1b[0m Привет 界 e\u0301\r\n")
+            if row == 200 and len(sys.argv) > 4 and sys.argv[4] == "links":
+                line = ("\x1b]8;id=history-only;https://example.test/history-only\x1b\\" +
+                        line.removesuffix("\r\n") + "\x1b]8;;\x1b\\\r\n")
             pending = memoryview(line.encode("utf-8"))
             while pending:
                 written = os.write(1, pending)
                 if not written:
                     raise RuntimeError("private history fixture PTY write made no progress")
                 pending = pending[written:]
+        if len(sys.argv) > 4 and sys.argv[4] == "links":
+            # Fixed OSC 8 targets: the display label intentionally differs
+            # from the approved URL, followed by two unsupported schemes.
+            for identity, target, label in (
+                ("fixture-safe", "https://example.test/pigade?fixture=osc8", "display-only.example"),
+                ("fixture-javascript", "javascript:alert(1)", "blocked-javascript.example"),
+                ("fixture-file", "file:///etc/passwd", "blocked-file.example"),
+            ):
+                line = f"\x1b]8;id={identity};{target}\x1b\\{label}\x1b]8;;\x1b\\\r\n"
+                pending = memoryview(line.encode("utf-8"))
+                while pending:
+                    written = os.write(1, pending)
+                    if not written:
+                        raise RuntimeError("private OSC 8 fixture PTY write made no progress")
+                    pending = pending[written:]
     os.write(1, b"PIGADE-IME-READY\r\n")
     control.sendall(b"READY\n")
     while True:
@@ -799,6 +817,94 @@ def run_history_fixture(config, report, control, env, save):
     screen_models = fixture_session_models(session)
     screen_generations = fixture_generations()
     screen_journals = fixture_journal_hashes([generation])
+    screen_pid = screen_models[generation].get('pid')
+    require(type(screen_pid) is int and screen_pid > 0, 'history fixture has no live source PID')
+    screen_process_identity = process_identity(screen_pid)
+    screen_cwd = os.readlink(f'/proc/{screen_pid}/cwd')
+
+    def links_unchanged():
+        invariant_snapshot(screen_models, screen_generations, screen_journals)
+        require(process_identity(screen_pid) == screen_process_identity and
+                os.readlink(f'/proc/{screen_pid}/cwd') == screen_cwd,
+                'terminal link UI unexpectedly changed process identity or working directory')
+        control.sendall(b'CHECK\n')
+        require(json_line(control, timeout=2) == 'NO_PRECOMMIT_INPUT',
+                'terminal link review input reached the CLI')
+
+    # Exercise visible OSC 8 rows before any history navigation changes the
+    # viewport. Every UI-only action must preserve the frozen source and PTY.
+    links = frame.get('hyperlinks', [])
+    link_targets = [row[1] for row in links if isinstance(row, list) and len(row) == 2]
+    require(link_targets == ['https://example.test/pigade?fixture=osc8',
+                             'javascript:alert(1)', 'file:///etc/passwd'],
+            'history fixture did not publish the exact fixed OSC 8 link rows')
+    helper_call(config, 'links-open')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/terminal-links-list.ppm')
+    links_unchanged()
+    helper_call(config, 'links-list-ctrl-enter')
+    time.sleep(.2)
+    links_unchanged()
+    helper_call(config, 'links-refresh')
+    time.sleep(.25)
+    links_unchanged()
+    helper_call(config, 'links-enter-review')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/terminal-links-review.ppm')
+    helper_call(config, 'links-review-enter')
+    links_unchanged()
+    helper_call(config, 'links-copy')
+    copied = helper_call(config, 'links-clipboard-report')
+    require(bytes.fromhex(copied.get('hex', '')) ==
+            b'https://example.test/pigade?fixture=osc8',
+            'terminal link review did not copy its canonical target exactly')
+    links_unchanged()
+    helper_call(config, 'links-back')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/terminal-links-returned.ppm')
+    links_unchanged()
+    helper_call(config, 'links-enter-review')
+    helper_call(config, 'links-cancel')
+    time.sleep(.2)
+    helper_call(config, 'capture', '/artifacts/terminal-links-cancelled.ppm')
+    links_unchanged()
+
+    # Both unsupported schemes stay blocked through explicit confirmation and
+    # cannot reach the fixture-owned launcher.
+    helper_call(config, 'links-open')
+    helper_call(config, 'links-down')
+    helper_call(config, 'links-enter-review')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/terminal-links-blocked.ppm')
+    helper_call(config, 'links-confirm')
+    time.sleep(.2)
+    links_unchanged()
+    require(not Path('/artifacts/url-opens.jsonl').exists(),
+            'blocked javascript link reached an external launcher')
+    helper_call(config, 'links-cancel')
+    helper_call(config, 'links-open')
+    helper_call(config, 'links-down')
+    helper_call(config, 'links-down')
+    helper_call(config, 'links-enter-review')
+    helper_call(config, 'links-confirm')
+    time.sleep(.2)
+    links_unchanged()
+    require(not Path('/artifacts/url-opens.jsonl').exists(),
+            'blocked file link reached an external launcher')
+    helper_call(config, 'links-cancel')
+
+    # A safe target is launched only after review confirmation, exactly once.
+    helper_call(config, 'links-open')
+    helper_call(config, 'links-enter-review')
+    helper_call(config, 'links-confirm')
+    time.sleep(.35)
+    links_unchanged()
+    launcher_log = Path('/artifacts/url-opens.jsonl')
+    require(launcher_log.is_file(), 'confirmed safe link did not reach the private launcher stub')
+    launcher_records = [json.loads(row) for row in launcher_log.read_text().splitlines()]
+    require(launcher_records == [{'program': 'xdg-open',
+                                  'argv': ['https://example.test/pigade?fixture=osc8']}],
+            'safe link was not launched exactly once with its frozen canonical URL')
 
     def check_cli_input_absent():
         control.sendall(b'CHECK\n')
@@ -815,6 +921,20 @@ def run_history_fixture(config, report, control, env, save):
     time.sleep(.35)
     helper_call(config, 'capture', '/artifacts/scrollback-open.ppm')
     invariant_snapshot(screen_models, screen_generations, screen_journals)
+    helper_call(config, 'links-open')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/terminal-links-history-list.ppm')
+    helper_call(config, 'links-enter-review')
+    time.sleep(.25)
+    helper_call(config, 'links-copy')
+    history_copy = helper_call(config, 'links-clipboard-report')
+    require(bytes.fromhex(history_copy.get('hex', '')) == b'https://example.test/history-only',
+            'historical link capture substituted the live frame or wrong history row')
+    helper_call(config, 'capture', '/artifacts/terminal-links-history-review.ppm')
+    helper_call(config, 'links-cancel')
+    links_unchanged()
+    require([json.loads(row) for row in launcher_log.read_text().splitlines()] == launcher_records,
+            'historical link review/copy unexpectedly requested external navigation')
     helper_call(config, 'scrollback-probe-input')
     check_cli_input_absent()
     invariant_snapshot(screen_models, screen_generations, screen_journals)
@@ -898,12 +1018,20 @@ def run_history_fixture(config, report, control, env, save):
         'truecolor_rgb_verified': truecolor, 'named_red_verified': named_red,
         'scrollback_input_blocked': True, 'unmodified_wheel_and_history_navigation_verified': True,
         'live_input_after_return_exactly_once': True,
+        'visible_osc8_links': link_targets,
+        'link_list_review_copy_cancel_blocked_schemes_and_confirm_once_verified': True,
+        'historical_osc8_target_distinct_from_live': True,
+        'confirmed_url_launcher_records': launcher_records,
         'new_processes': False,
         'captures': ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                      'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
                      'scrollback-live.ppm', 'history-open.ppm',
-                     'history-search.ppm', 'history-readonly.ppm'],
-        'scope': 'fixed private X11 history sheet; visual search/selection need image review'}
+                     'history-search.ppm', 'history-readonly.ppm',
+                     'terminal-links-list.ppm', 'terminal-links-review.ppm',
+                     'terminal-links-blocked.ppm', 'terminal-links-returned.ppm',
+                     'terminal-links-cancelled.ppm', 'terminal-links-history-list.ppm',
+                     'terminal-links-history-review.ppm'],
+        'scope': 'fixed private X11 history and visible OSC 8 link sheets; screenshots need image review'}
     report.update({'status': HISTORY_PASS, 'stage': 'complete'})
     save()
 
@@ -7786,15 +7914,27 @@ def inside_run() -> int:
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(control_path)); os.chmod(control_path, 0o600); listener.listen(1); listener.settimeout(8)
         host_path = '/usr/bin'
-        if config.get('fixture') in ('resume', 'setup'):
+        if config.get('fixture') in ('resume', 'setup', 'history'):
             private_bin = Path('/artifacts/bin'); private_bin.mkdir(mode=0o700)
-            fake_codex = private_bin / 'codex'
-            fake_codex.write_text("#!/usr/bin/python3\nimport sys\n"
+            if config.get('fixture') == 'history':
+                # Record every attempted destination, including blocked ones.
+                # Success prevents any fallback launcher or actual browser.
+                launcher = private_bin / 'xdg-open'
+                launcher.write_text(
+                    "#!/usr/bin/python3\nimport json, os, sys\n"
+                    "record={'program':'xdg-open','argv':sys.argv[1:]}\n"
+                    "fd=os.open('/artifacts/url-opens.jsonl', os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_NOFOLLOW, 0o600)\n"
+                    "try: os.write(fd, (json.dumps(record, separators=(',',':'))+'\\n').encode())\n"
+                    "finally: os.close(fd)\n")
+                launcher.chmod(0o700)
+            if config.get('fixture') in ('resume', 'setup'):
+                fake_codex = private_bin / 'codex'
+                fake_codex.write_text("#!/usr/bin/python3\nimport sys\n"
                 "if sys.argv[1:] == ['--version']:\n print('codex-cli 0.162.1'); raise SystemExit(0)\n"
                 "import json\n"
                 "with open('/artifacts/codex-starts.jsonl','a') as log: log.write(json.dumps(sys.argv[1:])+'\\n')\n"
                 "print('NEW_RESUME_FRAME' if sys.argv[1:2] == ['resume'] else 'OLD_RESUME_FRAME')\n")
-            fake_codex.chmod(0o700)
+                fake_codex.chmod(0o700)
             host_path = '/artifacts/bin:/usr/bin'
         if config.get('fixture') in ('setup', 'recipes'):
             custom_tools = Path('/artifacts/tools')
@@ -7835,7 +7975,8 @@ def inside_run() -> int:
                     (LATENCY_KEYS if config.get('fixture') == 'latency' else
                      KEYBOARD_EXPECTED if config.get('fixture') == 'keyboard' else
                      b'xyz' if config.get('fixture') == 'history' else '你好'.encode()).hex(),
-                    '256' if config.get('fixture') == 'history' else '0'],
+                    '256' if config.get('fixture') == 'history' else '0'] +
+                    (['links'] if config.get('fixture') == 'history' else []),
                 'cwd': '/artifacts', 'geometry': {'rows': 24, 'cols': 80}}
         launch = host_request({'command': 'launch', 'spec': spec})
         require(launch.get('error') is None, 'private fixture launch failed')
@@ -7858,6 +7999,8 @@ def inside_run() -> int:
         save()
         app_env = dict(fcitx_env)
         app_env['PIGADE_HOST_BINARY'] = '/pigade/host'
+        if config.get('fixture') == 'history':
+            app_env['PATH'] = '/artifacts/bin:/usr/bin'
         app_env['LP_NUM_THREADS'] = '2'
         app_env['LIBGL_ALWAYS_SOFTWARE'] = 'true'
         app_env['VK_DRIVER_FILES'] = '/pigade/platform-sdk/lavapipe-icd.json'
@@ -8061,7 +8204,11 @@ def outer_run(args) -> dict:
                   'workspace-session-resumed.ppm'] if args.fixture == 'resume' else
                  ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                   'scrollback-newer.ppm', 'scrollback-escape-live.ppm', 'scrollback-live.ppm',
-                  'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm'] if args.fixture == 'history' else
+                  'history-open.ppm', 'history-search.ppm', 'history-readonly.ppm',
+                  'terminal-links-list.ppm', 'terminal-links-review.ppm',
+                  'terminal-links-blocked.ppm', 'terminal-links-returned.ppm',
+                  'terminal-links-cancelled.ppm', 'terminal-links-history-list.ppm',
+                  'terminal-links-history-review.ppm'] if args.fixture == 'history' else
                  ['welcome.ppm', 'new-project.ppm', 'workspace-ready.ppm', 'first-terminal.ppm',
                   'agent-picker.ppm', 'agent-direct.ppm', 'handoff-open.ppm', 'handoff-preview.ppm',
                   'welcome-compact.ppm', 'workspace-compact.ppm',
@@ -8160,7 +8307,7 @@ def plan(args) -> dict:
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space,U opens workspace session overview; Up/Down selects UUID-sorted rows, Enter opens exact pane, Ctrl+R refreshes, Ctrl+Enter prepares only; Escape cancels; a bounded fixed Down sequence selects the readonly-queried Codex row before the existing native resume confirmation',
-                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows; Shift+PageUp, unmodified wheel, Home, Shift+PageDown, Escape and End navigate private-pane scrollback; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; then existing readonly selection/copy/edit and READY search',
+                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows plus three fixed OSC 8 links visible in the live frame; Prefix,X opens visible link review, plain Enter only opens review, Ctrl+Enter in List is ignored, Alt+Left returns to List, Ctrl+C copies only the canonical allowed URL, blocked javascript/file schemes never launch, and Ctrl+Enter opens the allowed URL once through a private recording stub; link UI preserves PTY, generation, frame, journal and layout state; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; existing history checks stay read-only',
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
@@ -8181,7 +8328,7 @@ def plan(args) -> dict:
                        if args.fixture == 'generations' else
                        'private fake Codex only; workspace overview and native resume review are captured before explicit confirmation'
                        if args.fixture == 'resume' else
-                       'colored 256-row pane scrollback is navigated without PTY input, return routes one fixed marker to live PTY, and existing history sheet selects/copies/searches without mutation'
+                       'fixed OSC 8 rows exercise list/review/back/copy/cancel, blocked URI rejection and a single captured allowed launch before colored 256-row pane scrollback navigation; the remaining history actions preserve their prior no-input and state invariants'
                        if args.fixture == 'history' else
                        'fresh project becomes shared workspace Основной with Development tab and no automatic CLI; explicit shell action creates one shell'),
                       'host display/session/device paths and inherited desktop variables absent'],
@@ -8195,7 +8342,7 @@ def plan(args) -> dict:
                     if args.fixture == 'generations' else
                     'workspace overview, review cancellation, and confirmed new-generation captures are retained for human review'
                     if args.fixture == 'resume' else
-                    'history open/search/readonly captures are retained for human review'
+                    'link list/review/blocked/returned and history captures are retained for human review'
                     if args.fixture == 'history' else
                     'welcome, project dialog, workspace and first-terminal captures are retained for human review'
                     if args.fixture == 'setup' else

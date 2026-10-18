@@ -40,6 +40,8 @@ mod prompt_ui;
 mod session_control_ui;
 #[path = "template_ui.rs"]
 mod template_ui;
+#[path = "terminal_link_ui.rs"]
+mod terminal_link_ui;
 #[path = "workspace_sessions_ui.rs"]
 mod workspace_sessions_ui;
 #[path = "workspace_switcher_ui.rs"]
@@ -202,6 +204,13 @@ pub(super) enum ProductAction {
     OpenGenerations,
     LoadGenerations(Option<u64>),
     SelectGeneration(Option<Uuid>),
+    OpenTerminalLinks,
+    RefreshTerminalLinks,
+    SelectTerminalLink(usize),
+    ReviewTerminalLink,
+    BackTerminalLinks,
+    CopyTerminalLink,
+    ConfirmTerminalLink,
     OpenHistory,
     OpenHandoff,
     SetHandoffProvider(String),
@@ -286,6 +295,7 @@ pub(super) enum DialogKind {
     StopSession,
     History,
     TerminalInsert,
+    TerminalLinks,
     Handoff,
 }
 
@@ -343,6 +353,7 @@ impl DialogKind {
             Self::StopSession => "Остановить CLI?",
             Self::History => "История сессии",
             Self::TerminalInsert => "Проверить вставку",
+            Self::TerminalLinks => "Ссылки панели",
         }
     }
 
@@ -354,7 +365,10 @@ impl DialogKind {
             ],
             Self::WorkspaceSwitcher => &["Проект, задача или путь…"],
             Self::HostMaintenance | Self::Activity | Self::WorkspaceSessions => &[],
-            Self::Appearance | Self::TerminalInsert | Self::CustomLaunchReview => &[],
+            Self::Appearance
+            | Self::TerminalInsert
+            | Self::CustomLaunchReview
+            | Self::TerminalLinks => &[],
             Self::CloseTab => &[],
             Self::Prompts => &["Найти по названию или тексту…"],
             Self::DeletePrompt => &[],
@@ -455,6 +469,7 @@ impl DialogKind {
             Self::Generations => "Показать поколение",
             Self::Transfer => "Закрыть",
             Self::Sessions | Self::WorkspaceSessions => "Закрыть",
+            Self::TerminalLinks => "Проверить ссылку",
             Self::StopSession => "Остановить CLI",
             Self::History => "Закрыть",
             Self::TerminalInsert => "Вставить",
@@ -546,6 +561,9 @@ pub(super) struct ProductUi {
     pub(super) show_archived: bool,
     pub(super) context: Option<ContextDocument>,
     pub(super) sessions: Vec<SessionSummary>,
+    pub(super) terminal_links: Option<crate::terminal_links::LinkSheet>,
+    pub(super) terminal_links_scroll: gpui::ScrollHandle,
+    pub(super) terminal_link_address_scroll: gpui::ScrollHandle,
     pub(super) workspace_sessions: crate::workspace_sessions::Model,
     pub(super) workspace_sessions_scroll: gpui::ScrollHandle,
     pub(super) git_watch_view: Option<crate::git_watch::View>,
@@ -806,6 +824,7 @@ fn palette_commands() -> Vec<(&'static str, ProductAction)> {
         ("Сессии", ProductAction::OpenSessions),
         ("Остановить CLI", ProductAction::OpenStop),
         ("История панели · I", ProductAction::OpenHistory),
+        ("Ссылки панели · X", ProductAction::OpenTerminalLinks),
         (
             "Передать контекст другому агенту · handoff",
             ProductAction::OpenHandoff,
@@ -895,6 +914,7 @@ fn panel_action(action: &ProductAction) -> bool {
             | ProductAction::OpenStop
             | ProductAction::OpenHandoff
             | ProductAction::OpenHistory
+            | ProductAction::OpenTerminalLinks
             | ProductAction::OpenGenerations
             | ProductAction::OpenTransfer
             | ProductAction::InspectSessionContext
@@ -3175,6 +3195,9 @@ impl ProductUi {
         }
         if dialog.kind == DialogKind::Transfer {
             return self.transfer_overlay(dialog, layouts, cx);
+        }
+        if dialog.kind == DialogKind::TerminalLinks {
+            return self.terminal_links_overlay(cx);
         }
         if dialog.kind == DialogKind::WorkspaceSessions {
             return self.workspace_sessions_overlay(cx);

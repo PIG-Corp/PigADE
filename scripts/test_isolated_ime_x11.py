@@ -145,6 +145,28 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('XTestFakeButtonEvent(dpy, 4, True, CurrentTime)', helper)
         self.assertIn('pointer_position(dpy, app, 640, 400)', helper)
 
+        link_flow = history_flow.split("helper_call(config, 'links-open')", 1)[1].split(
+            "# Unmodified wheel is exercised", 1)[0]
+        for stage in ('links-open', 'links-list-ctrl-enter', 'links-enter-review',
+                      'links-review-enter', 'links-copy', 'links-clipboard-report',
+                      'links-back', 'links-down', 'links-refresh', 'links-confirm', 'links-cancel'):
+            self.assertIn(f'"{stage}"', helper)
+            self.assertIn(f"helper_call(config, '{stage}'", link_flow)
+        self.assertLess(link_flow.index("helper_call(config, 'links-list-ctrl-enter')"),
+                        link_flow.index("helper_call(config, 'links-enter-review')"))
+        self.assertLess(link_flow.index("helper_call(config, 'links-review-enter')"),
+                        link_flow.index("helper_call(config, 'links-copy')"))
+        self.assertIn("b'https://example.test/pigade?fixture=osc8'", link_flow)
+        self.assertIn('("fixture-javascript", "javascript:alert(1)", "blocked-javascript.example")', harness)
+        self.assertIn('("fixture-file", "file:///etc/passwd", "blocked-file.example")', harness)
+        self.assertIn("launcher_records == [{'program': 'xdg-open'", link_flow)
+        self.assertIn("app_env['PATH'] = '/artifacts/bin:/usr/bin'", harness)
+        self.assertIn("sys.argv[4] == \"links\"", harness)
+        self.assertIn("link_targets == ['https://example.test/pigade?fixture=osc8'", harness)
+        self.assertIn("b'https://example.test/history-only'", history_flow)
+        self.assertIn("'terminal-links-history-review.ppm'", harness)
+        self.assertIn("'historical_osc8_target_distinct_from_live': True", history_flow)
+
     def test_resume_fixture_drives_workspace_overview_and_gates_exact_native_resume(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \

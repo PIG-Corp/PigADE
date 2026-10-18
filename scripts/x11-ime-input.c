@@ -1,6 +1,6 @@
 /* Fixed-sequence X11/XTEST helper for a private PigADE IME fixture.
  * It intentionally has no text/key arguments: only fixed compose/commit,
- * EN/RU/CLI, workspace-context/session recovery, generation-history and template-recipe sequences can synthesize input,
+ * EN/RU/CLI, workspace-context/session recovery, generation-history, terminal-link and template-recipe sequences can synthesize input,
  * after private-server ownership checks. The latency stage uses50 fixed
  * alphabet keys and private pixel readback. No arbitrary key/text arguments.
  */
@@ -129,6 +129,12 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "workspace-sessions-cancel") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
         strcmp(a.stage, "history-readonly") && strcmp(a.stage, "scrollback-open") &&
+        strcmp(a.stage, "links-open") && strcmp(a.stage, "links-list-ctrl-enter") &&
+        strcmp(a.stage, "links-enter-review") && strcmp(a.stage, "links-review-enter") &&
+        strcmp(a.stage, "links-copy") && strcmp(a.stage, "links-back") &&
+        strcmp(a.stage, "links-down") && strcmp(a.stage, "links-refresh") &&
+        strcmp(a.stage, "links-cancel") &&
+        strcmp(a.stage, "links-confirm") && strcmp(a.stage, "links-clipboard-report") &&
         strcmp(a.stage, "scrollback-wheel") && strcmp(a.stage, "scrollback-top") &&
         strcmp(a.stage, "scrollback-newer") &&
         strcmp(a.stage, "scrollback-end") && strcmp(a.stage, "scrollback-close") &&
@@ -1592,6 +1598,63 @@ int main(int argc, char **argv) {
             modified_key(dpy, XK_Control_L, XK_c);
             key(dpy, XK_BackSpace);
             key(dpy, XK_Tab);
+        } else if (!strcmp(a.stage, "links-open")) {
+            setup_prefix(dpy, XK_x, 0);
+        } else if (!strcmp(a.stage, "links-list-ctrl-enter")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "links-enter-review") ||
+                   !strcmp(a.stage, "links-review-enter")) {
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "links-copy")) {
+            modified_key(dpy, XK_Control_L, XK_c);
+        } else if (!strcmp(a.stage, "links-back")) {
+            modified_key(dpy, XK_Alt_L, XK_Left);
+        } else if (!strcmp(a.stage, "links-down")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "links-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "links-cancel")) {
+            key(dpy, XK_Escape);
+        } else if (!strcmp(a.stage, "links-confirm")) {
+            modified_key(dpy, XK_Control_L, XK_Return);
+        } else if (!strcmp(a.stage, "links-clipboard-report")) {
+            /* Read the existing private CLIPBOARD selection without changing it. */
+            Atom clipboard = XInternAtom(dpy, "CLIPBOARD", False);
+            Atom utf8 = XInternAtom(dpy, "UTF8_STRING", False);
+            Atom property = XInternAtom(dpy, "PIGADE_LINK_FIXTURE_REPORT", False);
+            Window requestor = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
+            if (!requestor) fail("cannot create link clipboard report window");
+            XSelectInput(dpy, requestor, PropertyChangeMask);
+            XConvertSelection(dpy, clipboard, utf8, property, requestor, CurrentTime);
+            XFlush(dpy);
+            uint64_t deadline = monotonic_ns() + UINT64_C(2000000000);
+            int received = 0;
+            while (monotonic_ns() < deadline && !received) {
+                while (XPending(dpy)) {
+                    XEvent event; XNextEvent(dpy, &event);
+                    if (event.type == SelectionNotify && event.xselection.requestor == requestor) {
+                        if (event.xselection.property == None)
+                            fail("link target clipboard has no UTF8_STRING selection");
+                        received = 1;
+                        break;
+                    }
+                }
+                if (!received) { struct timespec pause = {.tv_sec=0,.tv_nsec=10000000}; nanosleep(&pause, NULL); }
+            }
+            if (!received) fail("link target clipboard report timed out");
+            Atom actual_type = None; int actual_format = 0; unsigned long count = 0, after = 0;
+            unsigned char *value = NULL;
+            int status = XGetWindowProperty(dpy, requestor, property, 0, 2048, True,
+                                            utf8, &actual_type, &actual_format,
+                                            &count, &after, &value);
+            if (status != Success || actual_type != utf8 || actual_format != 8 || after || count > 8192)
+                fail("link target clipboard report property is invalid");
+            printf("{\"stage\":\"links-clipboard-report\",\"hex\":\"");
+            for (unsigned long index = 0; index < count; ++index) printf("%02x", value[index]);
+            puts("\"}");
+            if (value) XFree(value);
+            XDestroyWindow(dpy, requestor);
+            XSync(dpy, False);
         } else if (!strcmp(a.stage, "scrollback-open")) {
             modified_key(dpy, XK_Shift_L, XK_Page_Up);
         } else if (!strcmp(a.stage, "scrollback-wheel")) {
@@ -2278,6 +2341,17 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "scrollback-newer") ? "2" :
                             !strcmp(a.stage, "scrollback-probe-input") ? "3" :
                             !strcmp(a.stage, "scrollback-live-input") ? "3" :
+                            !strcmp(a.stage, "links-open") ? "6" :
+                            !strcmp(a.stage, "links-list-ctrl-enter") ? "2" :
+                            !strcmp(a.stage, "links-enter-review") ? "1" :
+                            !strcmp(a.stage, "links-review-enter") ? "1" :
+                            !strcmp(a.stage, "links-copy") ? "2" :
+                            !strcmp(a.stage, "links-back") ? "2" :
+                            !strcmp(a.stage, "links-down") ? "1" :
+                            !strcmp(a.stage, "links-refresh") ? "2" :
+                            !strcmp(a.stage, "links-cancel") ? "1" :
+                            !strcmp(a.stage, "links-confirm") ? "2" :
+                            !strcmp(a.stage, "links-clipboard-report") ? "0" :
                             !strcmp(a.stage, "opencode-input") ? "16" :
                             !strcmp(a.stage, "controls-focus-toggle") ? "2" :
                             !strcmp(a.stage, "controls-focus-right") ? "2" :
@@ -2428,7 +2502,9 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "prompt-rename") ? "15" :
                             !strcmp(a.stage, "context-edit") ? "7" :
                             !strcmp(a.stage, "wm-close") ? "0" : "1";
-        if (!strcmp(a.stage, "pointer-clipboard-paste")) {
+        if (!strcmp(a.stage, "links-clipboard-report")) {
+            /* The report JSON was emitted directly after bounded selection readback. */
+        } else if (!strcmp(a.stage, "pointer-clipboard-paste")) {
             printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"synthetic_keystrokes\":%s,"
                    "\"selection_transfer\":true,\"payload_bytes\":%zu}\n",
                    a.stage, (long)a.app, count, sizeof(FIXED_CLIPBOARD_TEXT) - 1);
