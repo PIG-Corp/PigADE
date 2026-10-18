@@ -6,7 +6,7 @@
 
 use std::{
     env,
-    fs::{self, File, OpenOptions},
+    fs::{self, File, OpenOptions, TryLockError},
     io::{Read, Write},
     os::unix::{
         ffi::OsStrExt,
@@ -24,6 +24,7 @@ const PROTOCOL: u64 = 2;
 const IPC_LIMIT: usize = 8 * 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
 const READY_POLL: Duration = Duration::from_millis(40);
+const STOPPING_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_UNIX_SOCKET_PATH: usize = 107;
 
 fn profile_name() -> String {
@@ -68,8 +69,42 @@ fn resolve_socket_inner(
 
     let prior_endpoint_error = match probe_existing_endpoint(&socket, READY_TIMEOUT)? {
         Endpoint::Healthy => return Ok((socket, None)),
+        Endpoint::Stopping => match wait_for_stopping_endpoint(
+            &socket,
+            &runtime_root.join("endpoint.lock"),
+            STOPPING_TIMEOUT,
+        )? {
+            StoppingResolution::Healthy => return Ok((socket, None)),
+            StoppingResolution::Released => Some("the prior host completed shutdown".into()),
+        },
         Endpoint::Unresponsive(reason) => Some(reason),
-        Endpoint::Missing => None,
+        Endpoint::Missing => match wait_for_missing_socket_lock(
+            &socket,
+            &runtime_root.join("endpoint.lock"),
+            STOPPING_TIMEOUT,
+        )? {
+            Some(StoppingResolution::Healthy) => return Ok((socket, None)),
+            Some(StoppingResolution::Released) => {
+                // The endpoint was intentionally removed while the previous
+                // host still owned endpoint.lock. Reprobe before launching.
+                match probe_existing_endpoint(&socket, READY_TIMEOUT)? {
+                    Endpoint::Healthy => return Ok((socket, None)),
+                    Endpoint::Stopping => match wait_for_stopping_endpoint(
+                        &socket,
+                        &runtime_root.join("endpoint.lock"),
+                        STOPPING_TIMEOUT,
+                    )? {
+                        StoppingResolution::Healthy => return Ok((socket, None)),
+                        StoppingResolution::Released => {
+                            Some("the prior host completed shutdown".into())
+                        }
+                    },
+                    Endpoint::Unresponsive(reason) => Some(reason),
+                    Endpoint::Missing => Some("the prior host completed shutdown".into()),
+                }
+            }
+            None => None,
+        },
     };
 
     let binary = resolve_host_binary()?;
@@ -107,6 +142,7 @@ fn resolve_socket_inner(
                 reap_in_background(child);
                 return Ok((socket, None));
             }
+            Endpoint::Stopping => (),
             // A newly bound socket may precede the fully initialized serve
             // loop. Continue bounded polling without ever replacing it.
             Endpoint::Unresponsive(_) => (),
@@ -155,7 +191,175 @@ fn resolve_socket_inner(
 enum Endpoint {
     Missing,
     Healthy,
+    Stopping,
     Unresponsive(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoppingResolution {
+    Released,
+    Healthy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EndpointLockIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+fn wait_for_stopping_endpoint(
+    socket: &Path,
+    endpoint_lock: &Path,
+    timeout: Duration,
+) -> Result<StoppingResolution, String> {
+    let expected_lock = endpoint_lock_identity(endpoint_lock)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match probe_existing_endpoint(socket, Duration::from_millis(100))? {
+            Endpoint::Healthy => return Ok(StoppingResolution::Healthy),
+            Endpoint::Missing if endpoint_lock_available(endpoint_lock, expected_lock)? => {
+                return Ok(StoppingResolution::Released);
+            }
+            Endpoint::Stopping | Endpoint::Unresponsive(_) | Endpoint::Missing => (),
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "session host is still shutting down; its endpoint was preserved and no replacement was started: {}",
+                socket.display()
+            ));
+        }
+        thread::sleep(READY_POLL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+/// If shutdown has already unlinked host.sock but still holds endpoint.lock,
+/// wait for that exact lock to be released before allowing a fresh launch.
+/// An absent or already-released lock leaves ordinary startup unchanged.
+fn wait_for_missing_socket_lock(
+    socket: &Path,
+    endpoint_lock: &Path,
+    timeout: Duration,
+) -> Result<Option<StoppingResolution>, String> {
+    let expected_lock = match fs::symlink_metadata(endpoint_lock) {
+        Ok(_) => endpoint_lock_identity(endpoint_lock)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "inspect endpoint ownership lock {}: {error}",
+                endpoint_lock.display()
+            ));
+        }
+    };
+    if endpoint_lock_available(endpoint_lock, expected_lock)? {
+        return Ok(None);
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        if matches!(
+            probe_existing_endpoint(socket, Duration::from_millis(100))?,
+            Endpoint::Healthy
+        ) {
+            return Ok(Some(StoppingResolution::Healthy));
+        }
+        if endpoint_lock_available(endpoint_lock, expected_lock)? {
+            return Ok(Some(StoppingResolution::Released));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "previous session host still owns endpoint.lock; no replacement was started: {}",
+                socket.display()
+            ));
+        }
+        thread::sleep(READY_POLL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+fn endpoint_lock_identity(path: &Path) -> Result<EndpointLockIdentity, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "inspect endpoint ownership lock {}: {error}",
+            path.display()
+        )
+    })?;
+    validate_endpoint_lock_metadata(path, &metadata)?;
+    Ok(EndpointLockIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    })
+}
+
+fn validate_endpoint_lock_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    if !metadata.is_file()
+        || metadata.uid() != current_uid()?
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err(format!(
+            "endpoint ownership lock {} is not a private owned file; it was preserved",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn endpoint_lock_available(path: &Path, expected: EndpointLockIdentity) -> Result<bool, String> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let lock = match options.open(path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "open endpoint ownership lock {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let metadata = lock.metadata().map_err(|error| {
+        format!(
+            "inspect endpoint ownership lock {}: {error}",
+            path.display()
+        )
+    })?;
+    validate_endpoint_lock_metadata(path, &metadata)?;
+    if metadata.dev() != expected.dev || metadata.ino() != expected.ino {
+        return Err(format!(
+            "endpoint ownership lock {} changed during host shutdown; it was preserved",
+            path.display()
+        ));
+    }
+    match lock.try_lock() {
+        Ok(()) => (),
+        Err(TryLockError::WouldBlock) => return Ok(false),
+        Err(TryLockError::Error(error)) => {
+            return Err(format!(
+                "probe endpoint ownership lock {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    let current = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "recheck endpoint ownership lock {}: {error}",
+            path.display()
+        )
+    })?;
+    validate_endpoint_lock_metadata(path, &current)?;
+    if current.dev() != expected.dev || current.ino() != expected.ino {
+        let _ = lock.unlock();
+        return Err(format!(
+            "endpoint ownership lock {} changed during host shutdown; it was preserved",
+            path.display()
+        ));
+    }
+    if let Err(error) = lock.unlock() {
+        return Err(format!(
+            "release endpoint ownership probe {}: {error}",
+            path.display(),
+        ));
+    }
+    Ok(true)
 }
 
 fn probe_existing_endpoint(socket: &Path, timeout: Duration) -> Result<Endpoint, String> {
@@ -179,7 +383,8 @@ fn probe_existing_endpoint(socket: &Path, timeout: Duration) -> Result<Endpoint,
         ));
     }
     match query_catalog(socket, timeout) {
-        Ok(()) => Ok(Endpoint::Healthy),
+        Ok(CatalogProbe::Healthy) => Ok(Endpoint::Healthy),
+        Ok(CatalogProbe::Stopping) => Ok(Endpoint::Stopping),
         Err(error) => Ok(Endpoint::Unresponsive(format!(
             "existing host endpoint {} did not answer a protocol-v2 catalog request; it was preserved: {error}",
             socket.display()
@@ -187,7 +392,13 @@ fn probe_existing_endpoint(socket: &Path, timeout: Duration) -> Result<Endpoint,
     }
 }
 
-fn query_catalog(socket: &Path, timeout: Duration) -> Result<(), String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogProbe {
+    Healthy,
+    Stopping,
+}
+
+fn query_catalog(socket: &Path, timeout: Duration) -> Result<CatalogProbe, String> {
     let mut stream = UnixStream::connect(socket).map_err(|error| format!("connect: {error}"))?;
     stream
         .set_read_timeout(Some(timeout))
@@ -219,6 +430,18 @@ fn query_catalog(socket: &Path, timeout: Duration) -> Result<(), String> {
         .map_err(|error| format!("read catalog response: {error}"))?;
     let response: serde_json::Value = serde_json::from_slice(&payload)
         .map_err(|error| format!("decode catalog response: {error}"))?;
+    if response.get("protocol").and_then(serde_json::Value::as_u64) == Some(PROTOCOL)
+        && response
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        && response
+            .get("rejected_before_admission")
+            .and_then(serde_json::Value::as_str)
+            == Some("host_shutting_down")
+    {
+        return Ok(CatalogProbe::Stopping);
+    }
     if response.get("protocol").and_then(serde_json::Value::as_u64) != Some(PROTOCOL)
         || !response.get("error").is_none_or(serde_json::Value::is_null)
         || !response
@@ -227,7 +450,7 @@ fn query_catalog(socket: &Path, timeout: Duration) -> Result<(), String> {
     {
         return Err("host response is not a successful protocol-v2 catalog".into());
     }
-    Ok(())
+    Ok(CatalogProbe::Healthy)
 }
 
 fn state_root() -> Result<PathBuf, String> {
@@ -460,6 +683,113 @@ mod tests {
         child.wait().map_err(|error| error.to_string())?;
         host.0.take();
         Ok(())
+    }
+
+    #[test]
+    fn stopping_host_marker_waits_and_preserves_unresponsive_endpoint() {
+        let directory = env::temp_dir().join(format!("pigade-stopping-{}", uuid::Uuid::new_v4()));
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&directory).expect("private test directory");
+        let _cleanup = PrivateTree(directory.clone());
+        let socket = directory.join("host.sock");
+        let endpoint_lock = directory.join("endpoint.lock");
+        let listener = UnixListener::bind(&socket).expect("fake private listener");
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+        let lock = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&endpoint_lock)
+            .expect("private endpoint lock file");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("catalog probe connection");
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).expect("read request length");
+            let mut request = vec![0; u32::from_le_bytes(length) as usize];
+            stream.read_exact(&mut request).expect("read request");
+            let payload = serde_json::to_vec(&serde_json::json!({
+                "protocol": PROTOCOL,
+                "error": "host is shutting down",
+                "rejected_before_admission": "host_shutting_down"
+            }))
+            .expect("encode fake host response");
+            stream
+                .write_all(&(payload.len() as u32).to_le_bytes())
+                .and_then(|()| stream.write_all(&payload))
+                .expect("write fake host response");
+            drop(stream);
+            drop(listener);
+        });
+
+        assert_eq!(
+            query_catalog(&socket, Duration::from_secs(1)).expect("stopping marker probe"),
+            CatalogProbe::Stopping
+        );
+        server.join().expect("fake host thread");
+        let error = wait_for_stopping_endpoint(&socket, &endpoint_lock, Duration::from_millis(120))
+            .expect_err("a present stopping endpoint must not start a replacement");
+        assert!(error.contains("no replacement was started"));
+        assert!(fs::symlink_metadata(&socket).is_ok());
+        drop(lock);
+    }
+
+    #[test]
+    fn stopping_wait_requires_endpoint_lock_release_after_socket_disappears() {
+        let directory = env::temp_dir().join(format!("pigade-lock-probe-{}", uuid::Uuid::new_v4()));
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&directory).expect("private test directory");
+        let _cleanup = PrivateTree(directory.clone());
+        let lock_path = directory.join("endpoint.lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&lock_path)
+            .expect("private endpoint lock");
+        let lock_identity = endpoint_lock_identity(&lock_path).expect("endpoint lock identity");
+        lock.try_lock().expect("acquire test endpoint lock");
+        assert!(
+            !endpoint_lock_available(&lock_path, lock_identity).expect("locked endpoint probe")
+        );
+        lock.unlock().expect("release test endpoint lock");
+        assert!(
+            endpoint_lock_available(&lock_path, lock_identity).expect("released endpoint probe")
+        );
+    }
+
+    #[test]
+    fn missing_socket_waits_for_held_shutdown_lock_before_startup() {
+        let directory =
+            env::temp_dir().join(format!("pigade-release-wait-{}", uuid::Uuid::new_v4()));
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&directory).expect("private test directory");
+        let _cleanup = PrivateTree(directory.clone());
+        let socket = directory.join("host.sock");
+        let lock_path = directory.join("endpoint.lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&lock_path)
+            .expect("private endpoint lock");
+        lock.try_lock().expect("acquire test endpoint lock");
+        let unlock = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            lock.unlock().expect("release test endpoint lock");
+        });
+        assert_eq!(
+            wait_for_missing_socket_lock(&socket, &lock_path, Duration::from_secs(1))
+                .expect("bounded wait for lock release"),
+            Some(StoppingResolution::Released)
+        );
+        unlock.join().expect("unlock test endpoint");
+        assert!(!socket.exists());
     }
 
     #[test]

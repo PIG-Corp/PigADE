@@ -4813,3 +4813,67 @@ Expose local host build status and cooperative idle replacement, retain unknown 
 - Files: crates/app/src/host_maintenance.rs, crates/app/src/host_maintenance_commands.rs, crates/app/src/host_maintenance_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, crates/app/src/provider_discovery.rs, crates/app/src/startup.rs, crates/app/src/close_ui.rs, crates/session-host/src/lib.rs, scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0021-cooperative-host-update.md
 - Verification: Root app tests383/383; workspace/app strict Clippy and formatting pass. Root IPC tests8/8, lifecycle5/5 and client CLI3/3 pass; final app and host release builds pass. Existing Python harness37/37 and strict C helper compile pass. Native setup02 authenticates installed helper and proves readonly inspect/refresh/CtrlEnter preserves explicit host and generations; root inspected capture. First native automation pass had a private helper-path error caught visually; fixed isolated app_env, then02 passed actual status. Final copy avoids calling confirmed live CLI an unknown launch. Actual user host readonly inspection: legacy, different binary,9 active sessions, no shutdown sent. Bounded Luna review found/fixed admission race, unknown mutation freeze and helper rebuild/pre-send lock cases.
 - Risks / next: Commit coherent block. Broad goal/release gates remain active; legacy host shutdown unsupported. Follow-up startup race: concurrent fresh UI during sealed host delivery may fail transiently on writer lock; typed host_shutting_down should cause wait/retry. Preserve unrelated resource/soak dirt, patch files and stash0.
+
+## 2026-10-18T09:24:31+00:00 — handoff_format_luna
+
+Wait for sealed-host shutdown markers, reprobe endpoint and ownership lock before starting a replacement, and preserve unresolved endpoints.
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/startup.rs and git diff --check -- crates/app/src/startup.rs passed. App Cargo tests not run because root owns the app Cargo lane; added focused tests for marker recognition, endpoint preservation, and lock-release reprobe.
+- Risks / next: Root to run startup/app tests. Existing host shutdown ordering removes the socket before releasing endpoint.lock; startup now waits for both transitions and never unlinks or retries startup.
+
+## 2026-10-18T09:25:00+00:00 — handoff_format_luna
+
+Hardened stopping-state wait by pinning endpoint.lock device/inode and refusing changed lock paths.
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/startup.rs and targeted git diff --check passed. App Cargo tests remain pending for root-owned lane.
+- Risks / next: Root to run focused startup tests and app checks; lock-file replacement is treated as an error without unlinking or spawning.
+
+## 2026-10-18T09:26:25+00:00 — workspace_nav_store_luna
+
+Add bounded private per-host workspace navigation preferences with operation-level locked merges
+
+- Files: crates/app/src/workspace_nav_store.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/workspace_nav_store.rs and git diff --check -- crates/app/src/workspace_nav_store.rs passed; app Cargo tests/build were not run per root-owned app Cargo lane
+- Risks / next: Root should wire module and run targeted app tests/build; integration may need API adjustment
+
+## 2026-10-18T09:26:41+00:00 — workspace_nav_store_luna
+
+Extend navigation store preservation coverage for exposed and oversized files
+
+- Files: crates/app/src/workspace_nav_store.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/workspace_nav_store.rs and git diff --check -- crates/app/src/workspace_nav_store.rs WORKLOG.md passed; app Cargo tests remain pending root-owned lane
+- Risks / next: Root to run integrated app test/build; no Cargo command run in this worker lane
+
+## 2026-10-18T09:27:43+00:00 — workspace_switcher_ui_luna
+
+Render cached workspace switcher rows with current, recent, unread, status, pagination, and preference feedback
+
+- Files: crates/app/src/workspace_switcher_ui.rs
+- Verification: rustfmt --edition 2024 crates/app/src/workspace_switcher_ui.rs and git diff --check -- crates/app/src/workspace_switcher_ui.rs passed; Cargo compile pending root-owned integration lane
+- Risks / next: Root to wire ProductUi state/module/actions and compile; verify API alignment
+
+## 2026-10-18T09:27:57+00:00 — handoff_format_luna
+
+Replace undeclared libc lock probing with std File locking while preserving ownership checks
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/startup.rs and git diff --check -- crates/app/src/startup.rs passed; Cargo intentionally not run in root-owned app lane
+- Risks / next: Root to run startup/app tests and compile; lock probe never creates files and still verifies locked descriptor and path device/inode before release.
+
+## 2026-10-18T09:35:52+00:00 — handoff_format_luna
+
+Cover shutdown gap where host.sock is gone but endpoint.lock remains held
+
+- Files: crates/app/src/startup.rs
+- Verification: rustfmt --edition 2024 --check crates/app/src/startup.rs and git diff --check -- crates/app/src/startup.rs passed; app Cargo tests remain with root
+- Risks / next: Root to run focused startup tests and app integration; wait is bounded to six seconds and only applies to an existing validated held lock.
+
+## 2026-10-18T09:50:54+00:00 — root
+
+Integrate bounded startup wait for cooperative host shutdown and socket-missing endpoint-lock gap
+
+- Files: crates/app/src/startup.rs
+- Verification: Root final app suite393/393 includes stopping-marker, same-inode lock-release and initial-missing-socket-held-lock tests; strict app Clippy and release build pass. Source reviewed no dependency/libc addition, no endpoint unlink/create for lock probing, no signals or CLI starts; ordinary readiness3s and explicit-socket behavior retained.
+- Risks / next: Commit isolated startup fix, then workspace navigation block. Broad product goal remains active; unrelated worktree changes preserved.
