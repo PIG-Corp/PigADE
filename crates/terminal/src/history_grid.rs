@@ -29,20 +29,35 @@ fn validate_width(cols: u16) -> Result<()> {
     Ok(())
 }
 
-fn core_row(row: &alacritty_terminal::grid::Row<CoreCell>, cols: u16) -> Result<HistoryGridRow> {
+fn validate_span(column_start: u16, cols: u16) -> Result<()> {
     validate_width(cols)?;
+    ensure!(
+        column_start
+            .checked_add(cols)
+            .is_some_and(|end| end <= MAX_GRID_COLUMNS),
+        "history grid span outside 0..=1024"
+    );
+    Ok(())
+}
+
+fn core_row(
+    row: &alacritty_terminal::grid::Row<CoreCell>,
+    column_start: u16,
+    cols: u16,
+) -> Result<HistoryGridRow> {
+    validate_span(column_start, cols)?;
     let source_columns = u16::try_from(row.len())?;
     ensure!(
         source_columns > 0 && source_columns <= MAX_GRID_COLUMNS,
         "invalid history row width"
     );
-    let count = usize::from(cols.min(source_columns));
+    let count = usize::from(cols.min(source_columns.saturating_sub(column_start)));
     let mut cells = Vec::new();
     cells.try_reserve_exact(count)?;
     let mut hyperlinks = Vec::new();
     let mut link_indices = std::collections::HashMap::new();
     let mut byte_count = 0usize;
-    for cell in row.into_iter().take(count) {
+    for cell in row.into_iter().skip(usize::from(column_start)).take(count) {
         let extra = cell
             .zerowidth()
             .map_or(0, |chars| chars.iter().map(|ch| ch.len_utf8()).sum());
@@ -71,7 +86,7 @@ fn core_row(row: &alacritty_terminal::grid::Row<CoreCell>, cols: u16) -> Result<
         source_columns,
         cells,
         hyperlinks,
-        horizontal_clipped: cols < source_columns,
+        horizontal_clipped: column_start.saturating_add(cols) < source_columns,
     })
 }
 
@@ -105,7 +120,17 @@ fn core_cell(
 /// Project one retained normal-grid row, oldest first, without changing model state.
 impl Terminal {
     pub fn normal_history_grid_row(&self, row_index: usize, cols: u16) -> Result<HistoryGridRow> {
-        validate_width(cols)?;
+        self.normal_history_grid_span(row_index, 0, cols)
+    }
+
+    /// Project a bounded horizontal span of one retained normal-grid row.
+    pub fn normal_history_grid_span(
+        &self,
+        row_index: usize,
+        column_start: u16,
+        cols: u16,
+    ) -> Result<HistoryGridRow> {
+        validate_span(column_start, cols)?;
         let grid = self.term.normal_grid();
         let history_size = grid.history_size();
         let row_count = history_size
@@ -116,7 +141,7 @@ impl Terminal {
             "normal history row index outside grid"
         );
         let line = Line(i32::try_from(row_index)? - i32::try_from(history_size)?);
-        core_row(&grid[line], cols)
+        core_row(&grid[line], column_start, cols)
     }
 
     /// Explicit dynamic colors currently governing normal hot rows.
@@ -131,7 +156,16 @@ impl Terminal {
 
 /// Project a decoded cold row using the same style vocabulary as live frames.
 pub fn decoded_row(row: &history::DecodedRow, cols: u16) -> Result<HistoryGridRow> {
-    validate_width(cols)?;
+    decoded_span(row, 0, cols)
+}
+
+/// Project a bounded horizontal span of a decoded cold row.
+pub fn decoded_span(
+    row: &history::DecodedRow,
+    column_start: u16,
+    cols: u16,
+) -> Result<HistoryGridRow> {
+    validate_span(column_start, cols)?;
     let source_columns = row.columns;
     ensure!(
         source_columns > 0
@@ -140,13 +174,13 @@ pub fn decoded_row(row: &history::DecodedRow, cols: u16) -> Result<HistoryGridRo
             && usize::from(row.occupied) <= row.cells.len(),
         "invalid decoded history row dimensions"
     );
-    let count = usize::from(cols.min(source_columns));
+    let count = usize::from(cols.min(source_columns.saturating_sub(column_start)));
     let mut cells = Vec::new();
     cells.try_reserve_exact(count)?;
     let mut hyperlinks = Vec::new();
     let mut link_indices = std::collections::HashMap::new();
     let mut byte_count = 0usize;
-    for cell in row.cells.iter().take(count) {
+    for cell in row.cells.iter().skip(usize::from(column_start)).take(count) {
         let extra = cell.zerowidth.iter().map(|ch| ch.len_utf8()).sum::<usize>();
         byte_count = byte_count
             .checked_add(cell.c.len_utf8() + extra + 128)
@@ -176,7 +210,7 @@ pub fn decoded_row(row: &history::DecodedRow, cols: u16) -> Result<HistoryGridRo
         source_columns,
         cells,
         hyperlinks,
-        horizontal_clipped: cols < source_columns,
+        horizontal_clipped: column_start.saturating_add(cols) < source_columns,
     })
 }
 
@@ -277,6 +311,12 @@ mod tests {
             vec![("id".into(), "https://example.invalid/".into())]
         );
         assert!(decoded_row(&row, 1025).is_err());
+        let span = decoded_span(&row, 1, 2)?;
+        assert_eq!(span.source_columns, 3);
+        assert_eq!(span.cells, decoded_row(&row, 3)?.cells[1..]);
+        assert!(!span.horizontal_clipped);
+        assert!(decoded_span(&row, 3, 1)?.cells.is_empty());
+        assert!(decoded_span(&row, 1023, 2).is_err());
         let clipped_wide = decoded_row(&row, 1)?;
         assert!(clipped_wide.horizontal_clipped);
         assert_eq!(clipped_wide.cells.len(), 1);
@@ -296,6 +336,10 @@ mod tests {
         let expected = frame.cells[..8].to_vec();
         let live = terminal.normal_history_grid_row(row_index, 8)?;
         assert_eq!(live.cells, expected);
+        let span = terminal.normal_history_grid_span(row_index, 2, 3)?;
+        assert_eq!(span.cells, expected[2..5]);
+        assert_eq!(span.source_columns, 8);
+        assert!(span.horizontal_clipped);
         assert!(live.cells[0].flags & Flags::BOLD.bits() != 0);
         assert!(live.cells[0].flags & Flags::UNDERLINE.bits() != 0);
         assert_eq!(live.cells[1].hyperlink, Some(0));

@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Frozen terminal history now supports horizontal column navigation with Alt+Left/Right/Home/End and footer controls. Copy/handoff preserve visible physical spans; wide edge glyphs and old-host capability fallback are handled explicitly.
+
 - OSC 8 links from the visible live/history frame now have a frozen list and destination review. Explicit confirmation opens only validated HTTP/HTTPS URLs; cancel, copy, unsupported schemes and frame changes cannot trigger automatic external navigation.
 
 - Workspace session overview distinguishes live processes, saved history, pinned generations and uncertain launches across all tabs. Opening preserves processes; exact-ID continuation uses scoped preflight and a separate native resume confirmation.

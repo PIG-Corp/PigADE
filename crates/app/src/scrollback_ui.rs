@@ -39,6 +39,10 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
     if !(1..=128).contains(&rows)
         || !(1..=1024).contains(&cols)
         || u32::from(rows) * u32::from(cols) > 32768
+        || page
+            .column_start
+            .checked_add(cols)
+            .is_none_or(|end| end > 1024)
         || page.session.to_string() != base.session
         || page.generation.to_string() != base.generation
         || page.start > page.total_rows
@@ -63,12 +67,17 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
     for (index, row) in page.rows.iter().enumerate() {
         if row.row != page.start + index as u64
             || row.source_columns > 1024
-            || row.cells.len() != usize::from(row.source_columns.min(cols))
+            || row.cells.len()
+                != usize::from(
+                    row.source_columns
+                        .saturating_sub(page.column_start)
+                        .min(cols),
+                )
             || (row.boundary.is_some() && !row.cells.is_empty())
         {
             return Err("Нарушен порядок или ширина строки истории".into());
         }
-        for cell in &row.cells {
+        for (column, cell) in row.cells.iter().enumerate() {
             budget = budget
                 .checked_add(
                     cell.text.len()
@@ -92,6 +101,14 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
                 return Err("Страница истории превышает лимит или содержит неверную ссылку".into());
             }
             let mut cell = cell.clone();
+            if column + 1 == row.cells.len() && cell.flags & 0x0020 != 0 {
+                // The trailing half of this wide glyph is outside the page.
+                // Keep the physical cell/background, but do not paint or copy
+                // half a character or expose its invisible hyperlink.
+                cell.text.clear();
+                cell.flags = (cell.flags & !0x0020) | 0x0040;
+                cell.hyperlink = None;
+            }
             cell.fg = freeze_color(&cell.fg, &row.palette_overrides);
             cell.bg = freeze_color(&cell.bg, &row.palette_overrides);
             cell.underline = cell
@@ -144,6 +161,52 @@ fn display_page(base: &View, page: &protocol::HistoryGridPage) -> Result<View, S
 }
 
 impl CanvasApp {
+    pub(super) fn scrollback_copy_spans(&self) -> Option<(Vec<u16>, u16)> {
+        let page = self.scrollback.displayed_page()?;
+        Some((
+            page.rows
+                .iter()
+                .map(|row| {
+                    if row.boundary.is_some() {
+                        page.cols.saturating_add(page.column_start)
+                    } else {
+                        row.source_columns
+                    }
+                })
+                .collect(),
+            page.column_start,
+        ))
+    }
+    pub(super) fn pan_scrollback(
+        &mut self,
+        delta: i16,
+        edge: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.close_flow.active() || self.product.dialog.is_some() || !self.selected_history() {
+            return;
+        }
+        if self
+            .product
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.history_pan_schema)
+            != Some(1)
+        {
+            self.input_notice=Some("Горизонтальный просмотр недоступен у подключённой службы; текстовая история остаётся доступна.".into());
+            cx.notify();
+            return;
+        }
+        let (_, cols) = self.history_dimensions();
+        match edge {
+            Some(false) => self.scrollback.reset_columns(),
+            Some(true) => self.scrollback.last_column_page(cols),
+            None => self.scrollback.pan_columns(delta),
+        }
+        self.service_scrollback(window, cx);
+        cx.notify();
+    }
     pub(super) fn history_target(&self, view: &View) -> bool {
         self.scrollback
             .active_identity()
@@ -251,6 +314,15 @@ impl CanvasApp {
             self.scrollback_selection = None;
             self.scrollback_dragging = false;
         }
+        let pan_supported = self
+            .product
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.history_pan_schema)
+            == Some(1);
+        if !pan_supported {
+            self.scrollback.reset_columns();
+        }
         if self.product.busy || self.close_flow.active() {
             return;
         }
@@ -283,6 +355,29 @@ impl CanvasApp {
                 rows,
                 cols,
             },
+            GridQuery::GridColumns {
+                snapshot,
+                start,
+                rows,
+                cols,
+                column_start,
+            } => {
+                if !pan_supported {
+                    self.scrollback.fail_request(
+                        request.id,
+                        "Горизонтальный просмотр больше не поддерживается службой",
+                    );
+                    cx.notify();
+                    return;
+                }
+                protocol::HistoryViewQuery::GridColumns {
+                    snapshot,
+                    start,
+                    rows,
+                    cols,
+                    column_start,
+                }
+            }
             GridQuery::Close { snapshot } => protocol::HistoryViewQuery::Close { snapshot },
         };
         if self.try_product_command(
@@ -380,22 +475,12 @@ impl CanvasApp {
         Some(self.scrollback.visible().map_or_else(
             || "Загрузка истории · End / Escape — текущий вывод".into(),
             |page| {
-                format!(
-                    "История · строки {}–{} / {} · seq {} · End / Escape — текущий вывод{}",
-                    page.start + 1,
-                    (page.start + u64::from(page.rows)).min(page.total_rows),
-                    page.total_rows,
-                    page.sequence,
-                    if self
-                        .scrollback
-                        .displayed_page()
-                        .is_some_and(|page| page.horizontal_clipped)
-                    {
-                        " · строки исходной ширины обрезаны справа"
-                    } else {
-                        ""
-                    }
-                )
+                let clipped=self.scrollback.displayed_page().is_some_and(|page|page.horizontal_clipped);
+                let pending=self.scrollback.columns_start()!=page.column_start;
+                format!("История · строки {}–{} / {} · столбцы {}–{} · seq {}{}{} · End / Esc — текущий вывод",
+                    page.start+1,(page.start+u64::from(page.rows)).min(page.total_rows),page.total_rows,
+                    page.column_start+1,page.column_start.saturating_add(page.cols),page.sequence,
+                    if clipped && self.product.catalog.as_ref().and_then(|catalog| catalog.history_pan_schema) == Some(1) {" · Alt+←/→ — столбцы"}else if clipped {" · полная ширина — в текстовой истории"}else{""},if pending {" · обновление"}else{""})
             },
         ))
     }
@@ -428,6 +513,25 @@ impl CanvasApp {
                 return true;
             }
             return false;
+        }
+        if key.modifiers.alt
+            && !key.modifiers.control
+            && !key.modifiers.platform
+            && !key.modifiers.shift
+            && matches!(key.key.as_str(), "left" | "right" | "home" | "end")
+        {
+            self.pan_scrollback(
+                if key.key == "left" { -8 } else { 8 },
+                match key.key.as_str() {
+                    "home" => Some(false),
+                    "end" => Some(true),
+                    _ => None,
+                },
+                window,
+                cx,
+            );
+            cx.stop_propagation();
+            return true;
         }
         // Management modifier and prefix remain available; terminal input does not.
         if key.key == "space" && key.modifiers.control && key.modifiers.shift {
@@ -523,22 +627,35 @@ mod tests {
             rows: vec![
                 protocol::HistoryGridRow {
                     row: 4,
-                    source_columns: 1,
+                    source_columns: 2,
                     boundary: None,
-                    cells: vec![styled.clone()],
+                    cells: vec![
+                        styled.clone(),
+                        protocol::Cell {
+                            flags: 0x40,
+                            ..blank()
+                        },
+                    ],
                     palette_overrides: vec![(1, [1, 2, 3]), (257, [4, 5, 6])],
                 },
                 protocol::HistoryGridRow {
                     row: 5,
-                    source_columns: 1,
+                    source_columns: 2,
                     boundary: None,
-                    cells: vec![styled],
+                    cells: vec![
+                        styled,
+                        protocol::Cell {
+                            flags: 0x40,
+                            ..blank()
+                        },
+                    ],
                     palette_overrides: vec![(1, [7, 8, 9])],
                 },
             ],
             hyperlinks: vec![],
             cols: 2,
             horizontal_clipped: false,
+            column_start: 0,
             warnings: vec![],
         };
         (view, page)
@@ -561,6 +678,60 @@ mod tests {
             protocol::CursorPresentationShape::Hidden
         );
         assert_eq!(display.frame.modes, 0);
+    }
+    #[test]
+    fn panned_wide_edges_do_not_copy_half_glyphs_join_rows_or_expose_hidden_links() {
+        use crate::selection::{CellPosition, CellSelection};
+        let (base, mut page) = fixture();
+        page.column_start = 1;
+        page.hyperlinks = vec![("edge".into(), "https://example.test/hidden".into())];
+        page.rows[0].source_columns = 3;
+        page.rows[0].cells = vec![
+            protocol::Cell {
+                flags: 0x40,
+                hyperlink: Some(0),
+                ..blank()
+            },
+            protocol::Cell {
+                text: "b".into(),
+                flags: 0x10,
+                ..blank()
+            },
+        ];
+        page.rows[1].source_columns = 4;
+        page.rows[1].cells = vec![
+            protocol::Cell {
+                text: "c".into(),
+                ..blank()
+            },
+            protocol::Cell {
+                text: "界".into(),
+                flags: 0x20,
+                hyperlink: Some(0),
+                ..blank()
+            },
+        ];
+        let original = page.clone();
+        let display = display_page(&base, &page).unwrap();
+        assert_eq!(page, original);
+        assert!(display.frame.cells[3].text.is_empty());
+        assert!(display.frame.cells[3].hyperlink.is_none());
+        let selection = CellSelection::new(
+            &display,
+            CellPosition { row: 0, column: 0 },
+            CellPosition { row: 1, column: 1 },
+        )
+        .unwrap();
+        assert_eq!(
+            selection.text_with_row_spans(&display, &[3, 4], 1).unwrap(),
+            "b\nc"
+        );
+        assert!(
+            crate::terminal_links::capture(&display, uuid::Uuid::new_v4())
+                .unwrap()
+                .rows
+                .is_empty()
+        );
     }
     #[test]
     fn cached_history_defaults_follow_theme_without_changing_explicit_historical_colors() {

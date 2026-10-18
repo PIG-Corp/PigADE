@@ -49,6 +49,13 @@ pub(crate) enum GridQuery {
         rows: u16,
         cols: u16,
     },
+    GridColumns {
+        snapshot: Uuid,
+        start: u64,
+        rows: u16,
+        cols: u16,
+        column_start: u16,
+    },
     Close {
         snapshot: Uuid,
     },
@@ -69,6 +76,7 @@ pub(crate) struct PageMeta {
     pub start: u64,
     pub rows: u16,
     pub cols: u16,
+    pub column_start: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +89,7 @@ enum PendingKind {
         identity: PaneIdentity,
         snapshot: Uuid,
         dimensions: Dimensions,
+        column_start: u16,
     },
     Close(Uuid),
 }
@@ -100,6 +109,7 @@ pub(crate) struct HistoryViewport {
     close_after_pending: Option<Uuid>,
     desired_back: u64,
     desired_top: bool,
+    desired_column_start: u16,
     desired_dimensions: Option<Dimensions>,
     queued_lines: i64,
     needs_query: bool,
@@ -116,6 +126,46 @@ pub(crate) enum Completion {
 }
 
 impl HistoryViewport {
+    pub(crate) fn columns_start(&self) -> u16 {
+        self.desired_column_start
+    }
+
+    pub(crate) fn reset_columns(&mut self) {
+        self.set_column_start(0);
+    }
+
+    pub(crate) fn last_column_page(&mut self, cols: u16) {
+        let max = self.page.as_ref().map_or(0, |page| {
+            page.rows
+                .iter()
+                .map(|row| row.source_columns)
+                .max()
+                .unwrap_or(0)
+                .saturating_sub(cols)
+        });
+        self.set_column_start(max.min(MAX_GRID_COLS.saturating_sub(cols)));
+    }
+
+    pub(crate) fn pan_columns(&mut self, delta: i16) {
+        let Some(dimensions) = self.desired_dimensions else {
+            return;
+        };
+        let max = MAX_GRID_COLS.saturating_sub(dimensions.cols);
+        self.set_column_start(
+            self.desired_column_start
+                .saturating_add_signed(delta)
+                .min(max),
+        );
+    }
+
+    fn set_column_start(&mut self, start: u16) {
+        if self.desired_identity.is_some() && self.desired_column_start != start {
+            self.desired_column_start = start;
+            self.needs_query = true;
+            self.error = None;
+        }
+    }
+
     pub(crate) fn visible(&self) -> Option<PageMeta> {
         self.visible
     }
@@ -141,9 +191,15 @@ impl HistoryViewport {
             }
             self.page = None;
             self.desired_back = 0;
+            self.desired_column_start = 0;
         }
         self.desired_identity = Some(identity);
         self.desired_dimensions = dimensions;
+        if let Some(dimensions) = dimensions {
+            self.desired_column_start = self
+                .desired_column_start
+                .min(MAX_GRID_COLS.saturating_sub(dimensions.cols));
+        }
         self.desired_back = back.max(1);
         self.desired_top = false;
         self.needs_query = dimensions.is_some();
@@ -162,6 +218,9 @@ impl HistoryViewport {
             return;
         };
         self.desired_dimensions = Some(dimensions);
+        self.desired_column_start = self
+            .desired_column_start
+            .min(MAX_GRID_COLS.saturating_sub(dimensions.cols));
         if self.desired_top
             && let Some(page) = self.visible
         {
@@ -204,6 +263,11 @@ impl HistoryViewport {
             return;
         }
         self.desired_dimensions = Dimensions::bounded(rows, cols);
+        if let Some(dimensions) = self.desired_dimensions {
+            self.desired_column_start = self
+                .desired_column_start
+                .min(MAX_GRID_COLS.saturating_sub(dimensions.cols));
+        }
         if let (Some(page), Some(dimensions)) = (self.visible, self.desired_dimensions) {
             self.desired_back = page.total_rows.saturating_sub(u64::from(dimensions.rows));
         }
@@ -220,6 +284,7 @@ impl HistoryViewport {
         self.visible = None;
         self.page = None;
         self.desired_back = 0;
+        self.desired_column_start = 0;
         self.desired_top = false;
         self.queued_lines = 0;
         self.needs_query = false;
@@ -271,6 +336,9 @@ impl HistoryViewport {
         let dimensions = Dimensions::bounded(rows, cols)?;
         if self.desired_dimensions != Some(dimensions) {
             self.desired_dimensions = Some(dimensions);
+            self.desired_column_start = self
+                .desired_column_start
+                .min(MAX_GRID_COLS.saturating_sub(dimensions.cols));
             self.needs_query = true;
         }
         if !self.needs_query {
@@ -285,11 +353,21 @@ impl HistoryViewport {
             };
             Request {
                 id: Uuid::new_v4(),
-                query: GridQuery::Grid {
-                    snapshot: page.snapshot,
-                    start,
-                    rows: dimensions.rows,
-                    cols: dimensions.cols,
+                query: if self.desired_column_start == 0 {
+                    GridQuery::Grid {
+                        snapshot: page.snapshot,
+                        start,
+                        rows: dimensions.rows,
+                        cols: dimensions.cols,
+                    }
+                } else {
+                    GridQuery::GridColumns {
+                        snapshot: page.snapshot,
+                        start,
+                        rows: dimensions.rows,
+                        cols: dimensions.cols,
+                        column_start: self.desired_column_start,
+                    }
                 },
             }
         } else {
@@ -317,6 +395,17 @@ impl HistoryViewport {
                 identity,
                 snapshot: *snapshot,
                 dimensions,
+                column_start: 0,
+            },
+            GridQuery::GridColumns {
+                snapshot,
+                column_start,
+                ..
+            } => PendingKind::Grid {
+                identity,
+                snapshot: *snapshot,
+                dimensions,
+                column_start: *column_start,
             },
             GridQuery::Close { .. } => unreachable!(),
         };
@@ -358,26 +447,31 @@ impl HistoryViewport {
                     start: page.start,
                     rows: page.rows_requested,
                     cols: page.cols,
+                    column_start: page.column_start,
                 };
                 let expected = match pending.kind {
                     PendingKind::Open {
                         identity,
                         dimensions,
-                    } => Some((identity, None, dimensions)),
+                    } => Some((identity, None, dimensions, 0)),
                     PendingKind::Grid {
                         identity,
                         snapshot,
                         dimensions,
-                    } => Some((identity, Some(snapshot), dimensions)),
+                        column_start,
+                    } => Some((identity, Some(snapshot), dimensions, column_start)),
                     PendingKind::Close(_) => None,
                 };
-                let valid = expected.is_some_and(|(identity, snapshot, dimensions)| {
-                    page_meta.identity == identity
-                        && snapshot.is_none_or(|snapshot| page_meta.snapshot == snapshot)
-                        && page_meta.rows == dimensions.rows
-                        && page_meta.cols == dimensions.cols
-                        && u32::from(page_meta.rows) * u32::from(page_meta.cols) <= MAX_GRID_CELLS
-                });
+                let valid =
+                    expected.is_some_and(|(identity, snapshot, dimensions, column_start)| {
+                        page_meta.identity == identity
+                            && snapshot.is_none_or(|snapshot| page_meta.snapshot == snapshot)
+                            && page_meta.rows == dimensions.rows
+                            && page_meta.cols == dimensions.cols
+                            && page_meta.column_start == column_start
+                            && u32::from(page_meta.rows) * u32::from(page_meta.cols)
+                                <= MAX_GRID_CELLS
+                    });
                 let expected_identity = expected.map(|value| value.0);
                 if !valid
                     || current != expected_identity
@@ -416,6 +510,7 @@ impl HistoryViewport {
                     page_meta.start != expected_start
                         || page_meta.rows != dimensions.rows
                         || page_meta.cols != dimensions.cols
+                        || page_meta.column_start != self.desired_column_start
                 });
                 Completion::AcceptedPage(page_meta)
             }
@@ -482,10 +577,17 @@ mod tests {
             total_rows: 400,
             start,
             rows_requested: 24,
-            rows: vec![],
+            rows: vec![protocol::HistoryGridRow {
+                row: start,
+                source_columns: 200,
+                boundary: None,
+                cells: vec![],
+                palette_overrides: vec![],
+            }],
             cols: 80,
             hyperlinks: vec![],
             horizontal_clipped: false,
+            column_start: 0,
             warnings: vec![],
         }
     }
@@ -687,5 +789,104 @@ mod tests {
         state.end_live();
         assert!(state.is_live());
         assert!(state.visible().is_none());
+    }
+
+    #[test]
+    fn horizontal_intent_coalesces_across_open_and_stale_pages() {
+        let pane = identity(1, 2);
+        let mut state = HistoryViewport::default();
+        state.open(pane, 24, 80, 1);
+        let open = state.prepare_next(Some(pane), 24, 80).unwrap();
+        state.pan_columns(8);
+        state.pan_columns(8);
+        state.complete_page(open.id, Ok(page(5, pane, 375)), Some(pane));
+        let next = state.prepare_next(Some(pane), 24, 80).unwrap();
+        assert!(matches!(
+            next.query,
+            GridQuery::GridColumns {
+                column_start: 16,
+                ..
+            }
+        ));
+        state.pan_columns(8);
+        let mut old = page(5, pane, 375);
+        old.column_start = 16;
+        assert_eq!(
+            state.complete_page(next.id, Ok(old), Some(pane)),
+            Completion::AcceptedPage(PageMeta {
+                snapshot: Uuid::from_u128(5),
+                identity: pane,
+                sequence: 12,
+                total_rows: 400,
+                start: 375,
+                rows: 24,
+                cols: 80,
+                column_start: 16,
+            })
+        );
+        assert_eq!(state.columns_start(), 24);
+        let latest = state.prepare_next(Some(pane), 24, 80).unwrap();
+        assert!(matches!(
+            latest.query,
+            GridQuery::GridColumns {
+                column_start: 24,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn horizontal_offset_is_clamped_on_resize_and_old_zero_query_is_preserved() {
+        let pane = identity(1, 2);
+        let mut state = HistoryViewport::default();
+        state.open(pane, 24, 80, 1);
+        let open = state.prepare_next(Some(pane), 24, 80).unwrap();
+        state.complete_page(open.id, Ok(page(5, pane, 375)), Some(pane));
+        assert!(state.prepare_next(Some(pane), 24, 80).is_none());
+        assert!(matches!(
+            state.prepare_next(Some(pane), 30, 80),
+            Some(Request {
+                query: GridQuery::Grid { .. },
+                ..
+            })
+        ));
+        let resize = state.pending.as_ref().unwrap().id;
+        let mut resized = page(5, pane, 370);
+        resized.rows_requested = 30;
+        assert!(matches!(
+            state.complete_page(resize, Ok(resized), Some(pane)),
+            Completion::AcceptedPage(_)
+        ));
+        state.last_column_page(80);
+        assert_eq!(state.columns_start(), 120);
+        state.pan_columns(500);
+        assert!(state.columns_start() <= 944);
+    }
+
+    #[test]
+    fn vertical_and_horizontal_offsets_are_combined_and_wrong_column_echo_is_rejected() {
+        let pane = identity(1, 2);
+        let mut state = HistoryViewport::default();
+        state.open(pane, 24, 80, 1);
+        let open = state.prepare_next(Some(pane), 24, 80).unwrap();
+        state.complete_page(open.id, Ok(page(5, pane, 375)), Some(pane));
+        state.pan_columns(8);
+        state.scroll_lines(4, 24, 80);
+        let request = state.prepare_next(Some(pane), 24, 80).unwrap();
+        assert!(matches!(
+            request.query,
+            GridQuery::GridColumns {
+                start: 371,
+                column_start: 8,
+                ..
+            }
+        ));
+        let mut wrong = page(5, pane, 371);
+        wrong.column_start = 0;
+        assert_eq!(
+            state.complete_page(request.id, Ok(wrong), Some(pane)),
+            Completion::Stale
+        );
+        assert!(state.displayed_page().is_none());
     }
 }

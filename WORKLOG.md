@@ -5341,3 +5341,43 @@ Ship explicit OSC8 link list, frozen canonical destination review and one-shot p
 - Files: crates/app/src/terminal_links.rs, crates/app/src/terminal_link_commands.rs, crates/app/src/terminal_link_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/navigation.rs, crates/app/src/navigation_ui.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md
 - Verification: 449 app tests, strict app Clippy/package fmt,38 existing Python harness tests incl strict C helper compile, version/diff checks and final release build pass. Root private history04 passes live/history distinct URLs, exact clipboard, cancel and blocked schemes, one launcher call after explicit confirm, immutable model/journal/layout/process boot/start/PID/cwd and no CLI input; final reviews visually inspected. Native01 fixture NameError corrected;02/03 passed earlier slices. Root corrected state/geometry budget, URI normalization and truncation tests, one-shot cancellation gates and numeric URI-pool caching. No host/parser/dependency/desktop/live-session mutation.
 - Risks / next: Commit feature preserving unrelated stress/research/unused GPUI patch dirt and stash0. Plain-text/file/custom-protocol links and full Wayland/GPU/a11y/reboot/24h/performance/MVP acceptance remain open; broad product goal continues. Actual browser success is not reported by GPUI open_url, only an explicit platform request.
+
+## 2026-10-18T13:13:51+00:00 — history_pan_host_luna
+
+Added bounded horizontal spans for immutable history grid rows and host GridColumns query
+
+- Files: crates/terminal/src/history_grid.rs, crates/session-host/src/history_view.rs
+- Verification: rustfmt --edition 2024 on both owned files; git diff --check passed. Cargo tests/build not run per task boundary.
+- Risks / next: Root integrates protocol/catalog/app routing and owns Cargo verification; no host lib routing change appears needed because GridColumns uses an existing snapshot.
+
+## 2026-10-18T13:14:28+00:00 — /root/history_pan_model_luna
+
+Add horizontal intent and column correlation to immutable history viewport
+
+- Files: crates/app/src/scrollback.rs, crates/app/src/protocol.rs
+- Verification: rustfmt --edition 2024 and git diff --check passed; Cargo intentionally not run per assigned scope
+- Risks / next: Root must integrate UI mapping and verify app compilation with storage capability field and remaining DTO literals
+
+## 2026-10-18T13:15:46+00:00 — history_pan_fixture_luna
+
+Extend the isolated history fixture with a frozen wide snapshot, verified private-window resize, and horizontal pan key stages
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m unittest scripts.test_isolated_ime_x11 -v (38 passed); python3 -m py_compile scripts/isolated-ime-x11.py scripts/test_isolated_ime_x11.py; git diff --check -- scripts/isolated-ime-x11.py scripts/x11-ime-input.c scripts/test_isolated_ime_x11.py passed
+- Risks / next: Root to run the integrated private native fixture and inspect left/right/end/home/wide captures; confirm Alt bindings and marker visibility after UI integration
+
+## 2026-10-18T13:20:20+00:00 — history_pan_host_luna
+
+Added real-host IPC coverage for horizontal GridColumns spans and immutable snapshot compatibility
+
+- Files: crates/session-host/tests/history_view.rs
+- Verification: rustfmt --edition 2024 passed; git diff --check passed. Cargo/native integration test not run per task boundary.
+- Risks / next: Root owns Cargo verification and integration of concurrent protocol/app changes.
+
+## 2026-10-18T13:39:27+00:00 — /root
+
+Integrate horizontal frozen history spans, legacy capability gates, wide-edge display/copy and footer/keyboard navigation
+
+- Files: crates/app/src/scrollback_ui.rs, crates/app/src/main.rs, crates/app/src/scrollback.rs, crates/app/src/selection.rs, crates/app/src/handoff_commands.rs, crates/storage/src/catalog.rs, crates/session-host/tests/history_view.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0018-in-pane-cell-history.md
+- Verification: 454 app tests;6 focused host history,3 terminal grid,32 catalog and2 real-host PTY IPC tests pass. Strict workspace/app Clippy, root/app format, aligned0.0.1-dev, diff check and release root bins/examples/app pass.39 existing harness tests incl strict C compile pass. Private final X11 history07 passes both-axis navigation, exact frozen far-right URI copy, no history input, one xyz after return, unchanged semantic model/journal/layout/process/cwd after explicit resize baselines. Root inspected +8/end/home/wide captures. Earlier app failures were invalid resize/wide-cell fixtures, repaired. Native01 wrong DTO field,02 wrong link selection,03-06 volatile idle-checkpoint/probe equality failures remain failed evidence; root added a comparator regression retaining semantic/event/output checks. Reporting-only pan capture/dimension fields follow07; binary/actions unchanged.
+- Risks / next: Commit coherent feature preserving unrelated stress/research/unused GPUI dirt and stash0. Cold reflow/scroll persistence and full Wayland/GPU/a11y/performance/reboot/soak/MVP gates remain open; broad product goal stays active.

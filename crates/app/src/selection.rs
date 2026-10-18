@@ -130,23 +130,25 @@ impl CellSelection {
     /// copying screen-filling padding after a selection while retaining blank
     /// lines and intentional spaces within lines.
     pub fn text(&self, view: &View) -> Result<String, SelectionError> {
-        self.text_with_widths(view, None)
+        self.text_with_spans(view, None, 0)
     }
 
-    /// Historical physical rows can be narrower than the display viewport.
-    /// Padding is not source text and soft wraps belong to the source edge.
-    pub fn text_with_row_widths(
+    /// Copy a physical horizontal viewport without joining missing columns
+    /// across soft-wrapped source rows. Widths describe complete source rows.
+    pub fn text_with_row_spans(
         &self,
         view: &View,
         widths: &[u16],
+        column_start: u16,
     ) -> Result<String, SelectionError> {
-        self.text_with_widths(view, Some(widths))
+        self.text_with_spans(view, Some(widths), usize::from(column_start))
     }
 
-    fn text_with_widths(
+    fn text_with_spans(
         &self,
         view: &View,
         widths: Option<&[u16]>,
+        column_start: usize,
     ) -> Result<String, SelectionError> {
         self.ensure_current(view)?;
         validate_frame(view)?;
@@ -166,9 +168,9 @@ impl CellSelection {
                 .copied()
                 .filter(|width| *width > 0)
                 .map_or(cols, usize::from);
-            let row_cols = source_cols.min(cols);
-            let last_col = last_col.min(row_cols - 1);
-            let cells = if first_col <= last_col {
+            let row_cols = source_cols.saturating_sub(column_start).min(cols);
+            let last_col = last_col.min(row_cols.saturating_sub(1));
+            let cells = if row_cols > 0 && first_col <= last_col {
                 &view.frame.cells[row * cols + first_col..=row * cols + last_col]
             } else {
                 &[]
@@ -179,7 +181,9 @@ impl CellSelection {
             } else {
                 cells.iter().filter_map(selected_cell_text).collect()
             };
-            let soft_wrap = row < end.row
+            let soft_wrap = column_start == 0
+                && row < end.row
+                && row_cols > 0
                 && first_col <= last_col
                 && source_cols <= cols
                 && view.frame.cells[row * cols + row_cols - 1].flags & WRAPLINE != 0;
@@ -347,7 +351,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            selected.text_with_row_widths(&frame, &[2, 3]).unwrap(),
+            selected.text_with_row_spans(&frame, &[2, 3], 0).unwrap(),
             "abcde"
         );
         assert_eq!(selected.text(&frame).unwrap(), "ab  \ncde ");
@@ -363,8 +367,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            selected.text_with_row_widths(&frame, &[4, 2]).unwrap(),
+            selected.text_with_row_spans(&frame, &[4, 2], 0).unwrap(),
             "ab\ncd"
+        );
+    }
+
+    #[test]
+    fn panned_rows_copy_only_visible_spans_without_false_soft_wrap_joins() {
+        let frame = view(&[
+            &[("a", 0), ("b", WRAPLINE)],
+            &[("c", 0), ("d", WRAPLINE)],
+            &[(" ", 0), (" ", 0)],
+        ]);
+        let selection = CellSelection::new(
+            &frame,
+            CellPosition { row: 0, column: 0 },
+            CellPosition { row: 2, column: 1 },
+        )
+        .unwrap();
+        assert_eq!(
+            selection
+                .text_with_row_spans(&frame, &[4, 3, 1], 2)
+                .unwrap(),
+            "ab\nc"
         );
     }
 

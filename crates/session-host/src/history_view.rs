@@ -59,6 +59,13 @@ pub enum Query {
         rows: u16,
         cols: u16,
     },
+    GridColumns {
+        snapshot: Uuid,
+        start: u64,
+        rows: u16,
+        cols: u16,
+        column_start: u16,
+    },
     Search {
         snapshot: Uuid,
         text: String,
@@ -90,6 +97,8 @@ pub struct GridPage {
     pub rows_requested: u16,
     pub hyperlinks: Vec<(String, String)>,
     pub cols: u16,
+    #[serde(default)]
+    pub column_start: u16,
     pub horizontal_clipped: bool,
     pub warnings: Vec<String>,
 }
@@ -380,19 +389,19 @@ fn process(
             let Some((path, sequence)) = source else {
                 return error("open grid requires a validated snapshot source");
             };
-            if let Err(error) = validate_grid_request(rows, cols) {
+            if let Err(error) = validate_grid_request(rows, cols, 0) {
                 return self::error(&error.to_string());
             }
             if snapshots.len() == SNAPSHOT_LIMIT {
                 snapshots.pop_front();
             }
-            match validate_grid_request(rows, cols)
+            match validate_grid_request(rows, cols, 0)
                 .and_then(|()| open_snapshot(&path, session, generation, sequence))
             {
                 Ok(mut snapshot) => {
                     let end = snapshot.total_rows.saturating_sub(back);
                     let start = end.saturating_sub(u64::from(rows));
-                    let result = grid_page(&mut snapshot, start, rows, cols);
+                    let result = grid_page(&mut snapshot, start, rows, 0, cols);
                     snapshots.push_back(snapshot);
                     result
                         .map(|page| response(Some(Reply::Grid { page }), None, None))
@@ -410,12 +419,36 @@ fn process(
             if source.is_some() {
                 return error("grid cannot supply a new source");
             }
-            if let Err(e) = validate_grid_request(rows, cols) {
+            if let Err(e) = validate_grid_request(rows, cols, 0) {
                 return error(&format!("history grid request invalid: {e:#}"));
             }
             match take_snapshot(snapshots, snapshot) {
                 Ok(mut s) => {
-                    let result = grid_page(&mut s, start, rows, cols);
+                    let result = grid_page(&mut s, start, rows, 0, cols);
+                    snapshots.push_back(s);
+                    result
+                        .map(|page| response(Some(Reply::Grid { page }), None, None))
+                        .unwrap_or_else(|e| error(&format!("history grid failed: {e:#}")))
+                }
+                Err(e) => error(&e),
+            }
+        }
+        Query::GridColumns {
+            snapshot,
+            start,
+            rows,
+            cols,
+            column_start,
+        } => {
+            if source.is_some() {
+                return error("grid cannot supply a new source");
+            }
+            if let Err(e) = validate_grid_request(rows, cols, column_start) {
+                return error(&format!("history grid request invalid: {e:#}"));
+            }
+            match take_snapshot(snapshots, snapshot) {
+                Ok(mut s) => {
+                    let result = grid_page(&mut s, start, rows, column_start, cols);
                     snapshots.push_back(s);
                     result
                         .map(|page| response(Some(Reply::Grid { page }), None, None))
@@ -456,7 +489,7 @@ fn process(
     }
 }
 
-fn validate_grid_request(rows: u16, cols: u16) -> Result<()> {
+fn validate_grid_request(rows: u16, cols: u16, column_start: u16) -> Result<()> {
     ensure!(
         (1..=GRID_ROW_LIMIT as u16).contains(&rows),
         "history grid rows outside 1..=128"
@@ -464,6 +497,12 @@ fn validate_grid_request(rows: u16, cols: u16) -> Result<()> {
     ensure!(
         (1..=GRID_COL_LIMIT).contains(&cols),
         "history grid columns outside 1..=1024"
+    );
+    ensure!(
+        column_start
+            .checked_add(cols)
+            .is_some_and(|end| end <= GRID_COL_LIMIT),
+        "history grid span outside 0..=1024"
     );
     ensure!(
         usize::from(rows)
@@ -474,8 +513,14 @@ fn validate_grid_request(rows: u16, cols: u16) -> Result<()> {
     Ok(())
 }
 
-fn grid_page(snapshot: &mut Snapshot, start: u64, rows: u16, cols: u16) -> Result<GridPage> {
-    validate_grid_request(rows, cols)?;
+fn grid_page(
+    snapshot: &mut Snapshot,
+    start: u64,
+    rows: u16,
+    column_start: u16,
+    cols: u16,
+) -> Result<GridPage> {
+    validate_grid_request(rows, cols, column_start)?;
     ensure!(
         start <= snapshot.total_rows,
         "history grid start outside snapshot"
@@ -491,43 +536,48 @@ fn grid_page(snapshot: &mut Snapshot, start: u64, rows: u16, cols: u16) -> Resul
     let mut estimated_bytes = 256usize;
     let cold_rows = snapshot.history.summary().records;
     for row_index in start..end {
-        let (source_columns, boundary, cells, palette, links, row_clipped) =
-            if row_index < cold_rows {
-                let (metadata, decoded) = cold_record(snapshot, row_index)?;
-                match decoded {
-                    Some(decoded) => {
-                        let projected = pigade_terminal::history_grid::decoded_row(decoded, cols)?;
-                        (
-                            projected.source_columns,
-                            None,
-                            projected.cells,
-                            metadata.palette.clone(),
-                            projected.hyperlinks,
-                            projected.horizontal_clipped,
-                        )
-                    }
-                    None => (
-                        0,
-                        Some(metadata.reason.clone()),
-                        Vec::new(),
+        let (source_columns, boundary, cells, palette, links, row_clipped) = if row_index
+            < cold_rows
+        {
+            let (metadata, decoded) = cold_record(snapshot, row_index)?;
+            match decoded {
+                Some(decoded) => {
+                    let projected =
+                        pigade_terminal::history_grid::decoded_span(decoded, column_start, cols)?;
+                    (
+                        projected.source_columns,
+                        None,
+                        projected.cells,
                         metadata.palette.clone(),
-                        Vec::new(),
-                        false,
-                    ),
+                        projected.hyperlinks,
+                        projected.horizontal_clipped,
+                    )
                 }
-            } else {
-                let hot_index = usize::try_from(row_index - cold_rows)?;
-                let projected = snapshot.terminal.normal_history_grid_row(hot_index, cols)?;
-                let palette = snapshot.terminal.normal_history_palette();
-                (
-                    projected.source_columns,
-                    None,
-                    projected.cells,
-                    palette,
-                    projected.hyperlinks,
-                    projected.horizontal_clipped,
-                )
-            };
+                None => (
+                    0,
+                    Some(metadata.reason.clone()),
+                    Vec::new(),
+                    metadata.palette.clone(),
+                    Vec::new(),
+                    false,
+                ),
+            }
+        } else {
+            let hot_index = usize::try_from(row_index - cold_rows)?;
+            let projected =
+                snapshot
+                    .terminal
+                    .normal_history_grid_span(hot_index, column_start, cols)?;
+            let palette = snapshot.terminal.normal_history_palette();
+            (
+                projected.source_columns,
+                None,
+                projected.cells,
+                palette,
+                projected.hyperlinks,
+                projected.horizontal_clipped,
+            )
+        };
         let hyperlink_base = u32::try_from(hyperlinks.len())?;
         let mut row_cost = std::mem::size_of::<GridRow>() + 32;
         for cell in &cells {
@@ -599,6 +649,7 @@ fn grid_page(snapshot: &mut Snapshot, start: u64, rows: u16, cols: u16) -> Resul
         rows_requested: rows,
         hyperlinks,
         cols,
+        column_start,
         horizontal_clipped: clipped,
         warnings: snapshot.warnings.clone(),
     };
@@ -1020,7 +1071,7 @@ mod tests {
             decoded: None,
             search: None,
         };
-        let page = grid_page(&mut snapshot, 0, 128, 256)?;
+        let page = grid_page(&mut snapshot, 0, 128, 0, 256)?;
         assert_eq!(page.rows.len(), 128);
         assert_eq!(page.rows[0].cells.len(), 256);
         assert_eq!(page.rows[127].cells.len(), 256);
@@ -1093,26 +1144,40 @@ mod tests {
                 .iter()
                 .any(|row| row.row < cold && row.chunk.total_bytes > 0)
         );
-        let grid = grid_page(&mut snapshot, cold.saturating_sub(1), 2, 8)?;
+        let grid = grid_page(&mut snapshot, cold.saturating_sub(1), 2, 0, 8)?;
         assert_eq!(grid.rows_requested, 2);
         assert_eq!(grid.rows.len(), 2);
         assert_eq!(grid.rows[0].boundary.as_deref(), Some("clear"));
         assert_eq!(grid.rows[1].row, cold);
         let expected_hot = snapshot.terminal.normal_history_grid_row(0, 8)?;
         assert_eq!(grid.rows[1].cells, expected_hot.cells);
+        let hot_span = grid_page(&mut snapshot, cold, 1, 2, 3)?;
+        assert_eq!(hot_span.column_start, 2);
+        assert_eq!(hot_span.rows[0].source_columns, expected_hot.source_columns);
+        assert_eq!(hot_span.rows[0].cells, expected_hot.cells[2..5]);
+        let (_, cold_decoded) = cold_record(&mut snapshot, 1)?;
+        let cold_full = pigade_terminal::history_grid::decoded_span(
+            cold_decoded.as_ref().expect("typed cold row"),
+            0,
+            8,
+        )?;
+        let cold_span = grid_page(&mut snapshot, 1, 1, 2, 3)?;
+        assert_eq!(cold_span.rows[0].source_columns, cold_full.source_columns);
+        assert_eq!(cold_span.rows[0].cells, cold_full.cells[2..5]);
+        assert!(grid_page(&mut snapshot, cold, 1, 1023, 2).is_err());
         assert!(!grid.horizontal_clipped);
         assert_eq!(
             grid,
-            grid_page(&mut snapshot, cold.saturating_sub(1), 2, 8)?
+            grid_page(&mut snapshot, cold.saturating_sub(1), 2, 0, 8)?
         );
         assert!(
             grid.rows[0]
                 .palette_overrides
                 .contains(&(1, [0x11, 0x22, 0x33]))
         );
-        assert!(grid_page(&mut snapshot, 0, 129, 8).is_err());
-        assert!(grid_page(&mut snapshot, 0, 1, 1025).is_err());
-        assert!(validate_grid_request(128, 1024).is_err());
+        assert!(grid_page(&mut snapshot, 0, 129, 0, 8).is_err());
+        assert!(grid_page(&mut snapshot, 0, 1, 0, 1025).is_err());
+        assert!(validate_grid_request(128, 1024, 0).is_err());
 
         let invalid_open = process(
             &mut VecDeque::new(),
@@ -1134,7 +1199,7 @@ mod tests {
         oversized.cells[0].zerowidth = vec!['x'; 1_100_000];
         snapshot.decoded = Some((0, metadata, Some(oversized)));
         assert!(
-            grid_page(&mut snapshot, 0, 1, 8)
+            grid_page(&mut snapshot, 0, 1, 0, 8)
                 .unwrap_err()
                 .to_string()
                 .contains("exceeds 1 MiB")
@@ -1146,7 +1211,7 @@ mod tests {
         escaped.cells[0].zerowidth = vec!['\u{1}'; 700_000];
         snapshot.decoded = Some((0, metadata, Some(escaped)));
         assert!(
-            grid_page(&mut snapshot, 0, 1, 8)
+            grid_page(&mut snapshot, 0, 1, 0, 8)
                 .unwrap_err()
                 .to_string()
                 .contains("4 MiB")

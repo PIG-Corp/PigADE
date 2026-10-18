@@ -668,6 +668,7 @@ mod tests {
             history_grid_schema: None,
             custom_cli_schema: None,
             workspace_sessions_schema: None,
+            history_pan_schema: None,
         }
     }
 

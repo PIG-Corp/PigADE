@@ -1190,6 +1190,7 @@ mod focus_placement_tests {
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
             workspace_sessions_schema: None,
+            history_pan_schema: None,
         };
         let mut after = before.clone();
         after.tabs[0].revision += 1;
@@ -5977,15 +5978,10 @@ impl CanvasApp {
             if let (Some(selection), Some(view)) =
                 (&self.scrollback_selection, &self.scrollback_display)
             {
-                let widths = self.scrollback.displayed_page().map(|page| {
-                    page.rows
-                        .iter()
-                        .map(|row| row.source_columns)
-                        .collect::<Vec<_>>()
-                });
-                let text = widths.as_deref().map_or_else(
+                let spans = self.scrollback_copy_spans();
+                let text = spans.as_ref().map_or_else(
                     || selection.text(view),
-                    |widths| selection.text_with_row_widths(view, widths),
+                    |(widths, start)| selection.text_with_row_spans(view, widths, *start),
                 );
                 if let Ok(text) = text {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -9649,6 +9645,12 @@ impl Render for CanvasApp {
                                 .border_color(rgb(colors.border))
                                 .child(div().flex_1().min_w_0().truncate().child(status));
                             if !self.scrollback.is_live() {
+                                if self.product.catalog.as_ref().and_then(|catalog|catalog.history_pan_schema)==Some(1) {
+                                    for (id,label,delta,edge) in [("history-pan-left","←",-8,None),("history-pan-home","Начало строки",0,Some(false)),("history-pan-right","→",8,None)] {
+                                        status_row=status_row.child(div().id(id).role(Role::Button).aria_label(match id {"history-pan-left"=>"История: столбцы левее","history-pan-right"=>"История: столбцы правее",_=>"История: начало строки"}).px(px(6.)).text_color(rgb(colors.accent)).child(label)
+                                            .on_mouse_down(MouseButton::Left,cx.listener(move |this,_,window,cx|{this.pan_scrollback(delta,edge,window,cx);cx.stop_propagation();})));
+                                    }
+                                }
                                 status_row=status_row.child(div().id("scrollback-live").role(Role::Button).aria_label("К текущему выводу")
                                     .px(px(8.)).text_color(rgb(colors.accent)).child("К текущему выводу")
                                     .on_mouse_down(MouseButton::Left,cx.listener(|this,_,window,cx| {if !this.close_flow.active() {this.return_to_live(window,cx);}cx.stop_propagation();})));

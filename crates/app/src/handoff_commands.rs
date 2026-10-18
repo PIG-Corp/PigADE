@@ -232,20 +232,12 @@ impl CanvasApp {
                     )
                     .ok()
                 })?;
-                let widths = historical
-                    .then(|| self.scrollback.displayed_page())
-                    .flatten()
-                    .map(|page| {
-                        page.rows
-                            .iter()
-                            .map(|row| row.source_columns)
-                            .collect::<Vec<_>>()
-                    });
-                let text = widths
-                    .as_deref()
+                let spans = historical.then(|| self.scrollback_copy_spans()).flatten();
+                let text = spans
+                    .as_ref()
                     .map_or_else(
                         || selection.text(view),
-                        |widths| selection.text_with_row_widths(view, widths),
+                        |(widths, start)| selection.text_with_row_spans(view, widths, *start),
                     )
                     .ok()?;
                 Some((

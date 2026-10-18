@@ -1018,6 +1018,13 @@ pub enum HistoryViewQuery {
         rows: u16,
         cols: u16,
     },
+    GridColumns {
+        snapshot: uuid::Uuid,
+        start: u64,
+        rows: u16,
+        cols: u16,
+        column_start: u16,
+    },
     Open {
         session: uuid::Uuid,
         generation: uuid::Uuid,
@@ -1098,6 +1105,8 @@ pub struct HistoryGridPage {
     pub rows: Vec<HistoryGridRow>,
     pub hyperlinks: Vec<(String, String)>,
     pub cols: u16,
+    #[serde(default)]
+    pub column_start: u16,
     pub horizontal_clipped: bool,
     pub warnings: Vec<String>,
 }

@@ -85,6 +85,12 @@ try:
             if row == 200 and len(sys.argv) > 4 and sys.argv[4] == "links":
                 line = ("\x1b]8;id=history-only;https://example.test/history-only\x1b\\" +
                         line.removesuffix("\r\n") + "\x1b]8;;\x1b\\\r\n")
+            if row == 201 and len(sys.argv) > 4 and sys.argv[4] == "links":
+                label = "FAR_RIGHT_096"
+                prefix = "SCROLLBACK_201 "
+                prefix += "x" * (96 - len(prefix))
+                line = (prefix + "\x1b]8;id=far-right-history;https://example.test/history-far-right\x1b\\" +
+                        label + "\x1b]8;;\x1b\\\r\n")
             pending = memoryview(line.encode("utf-8"))
             while pending:
                 written = os.write(1, pending)
@@ -777,6 +783,22 @@ def run_memory_fixture(config, report, env, save):
     save()
 
 
+def history_model_state(models):
+    """Exclude live probe/timing samples, retaining all semantic model/counters.
+
+    An idle checkpoint updates checkpoint_ns/checkpoints and actor stage without any new
+    terminal event, frame, process or journal byte. Neither is terminal state.
+    """
+    result = {}
+    for generation, view in models.items():
+        state = {key: value for key, value in view.items() if key != 'actor_diagnostic'}
+        if isinstance(state.get('metrics'), dict):
+            state['metrics'] = {key: value for key, value in state['metrics'].items()
+                                if key not in ('checkpoint_ns', 'checkpoints')}
+        result[generation] = state
+    return result
+
+
 def run_history_fixture(config, report, control, env, save):
     report['stage'] = 'terminal-history-viewer'
     save()
@@ -788,10 +810,23 @@ def run_history_fixture(config, report, control, env, save):
     source_hashes = fixture_journal_hashes([generation])
 
     def invariant_snapshot(expected_models, expected_generations, expected_journals):
-        require(fixture_session_models(session) == expected_models and
-                fixture_generations() == expected_generations and
-                fixture_journal_hashes([generation]) == expected_journals and
-                host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+        current_models = history_model_state(fixture_session_models(session))
+        expected_models = history_model_state(expected_models)
+        checks = {
+            'models': current_models == expected_models,
+            'generations': fixture_generations() == expected_generations,
+            'journal': fixture_journal_hashes([generation]) == expected_journals,
+            'layout': host_request({'command': 'catalog'})['catalog']['layout'] == baseline_layout,
+        }
+        if not all(checks.values()):
+            changes = {key: [field for field in set(current_models.get(key, {})) |
+                             set(expected_models.get(key, {}))
+                             if current_models.get(key, {}).get(field) !=
+                             expected_models.get(key, {}).get(field)]
+                       for key in set(current_models) | set(expected_models)}
+            report['history_invariant_failure'] = {'checks': checks, 'changed_fields': changes}
+            save()
+        require(all(checks.values()),
                 'scrollback view changed terminal state, process generations, journal, or layout')
 
     populated = wait_until(lambda: (view if (view := fixture_session_models(session).get(
@@ -920,6 +955,88 @@ def run_history_fixture(config, report, control, env, save):
     helper_call(config, 'scrollback-open')
     time.sleep(.35)
     helper_call(config, 'capture', '/artifacts/scrollback-open.ppm')
+    original_columns = screen_models[generation].get('frame', {}).get('geometry', {}).get('cols', 0)
+    require(type(original_columns) is int and original_columns >= 109,
+            'frozen source grid cannot contain the complete fixed far-right marker')
+    # Freeze history at the original private-window geometry, then narrow only
+    # the verified private app window. The resize is model-authoritative, so
+    # establish fresh invariants after its PTY/model/journal update settles.
+    helper_call(config, 'scrollback-resize-narrow')
+    narrowed = wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        generation, {}).get('frame', {}).get('geometry', {}).get('cols', original_columns) < original_columns
+                                  else None), time.monotonic() + 5)
+    require(narrowed is not None, 'private app resize did not narrow the live PTY grid')
+    require(narrowed[generation]['frame']['geometry']['cols'] <= 96,
+            'narrow viewport did not completely hide the fixed far-right marker')
+    time.sleep(.35)
+    pan_models = fixture_session_models(session)
+    pan_generations = fixture_generations()
+    pan_journals = fixture_journal_hashes([generation])
+    pan_layout = host_request({'command': 'catalog'})['catalog']['layout']
+    pan_pid = pan_models[generation].get('pid')
+    require(type(pan_pid) is int and pan_pid > 0, 'resized history fixture has no live source PID')
+    pan_process_identity = process_identity(pan_pid)
+    pan_cwd = os.readlink(f'/proc/{pan_pid}/cwd')
+
+    def pan_unchanged():
+        require(history_model_state(fixture_session_models(session)) == history_model_state(pan_models) and
+                fixture_generations() == pan_generations and
+                fixture_journal_hashes([generation]) == pan_journals and
+                host_request({'command': 'catalog'})['catalog']['layout'] == pan_layout,
+                'horizontal history pan changed the post-resize model, frame, journal, or layout')
+        require(process_identity(pan_pid) == pan_process_identity and
+                os.readlink(f'/proc/{pan_pid}/cwd') == pan_cwd,
+                'horizontal history pan changed process identity or working directory')
+        check_cli_input_absent()
+
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-left-edge.ppm')
+    helper_call(config, 'scrollback-pan-right')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-right-8.ppm')
+    pan_unchanged()
+    helper_call(config, 'scrollback-pan-left')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-return-left.ppm')
+    pan_unchanged()
+    helper_call(config, 'scrollback-pan-end')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-end.ppm')
+    pan_unchanged()
+    # The far-right link exists only in the original frozen columns. Copy
+    # its exact target from the shown cells to prove Alt+End changed the UI
+    # viewport, rather than merely leaving the live model untouched.
+    helper_call(config, 'links-open')
+    helper_call(config, 'links-down')
+    helper_call(config, 'links-enter-review')
+    helper_call(config, 'links-copy')
+    far_right_copy = helper_call(config, 'links-clipboard-report')
+    require(bytes.fromhex(far_right_copy.get('hex', '')) ==
+            b'https://example.test/history-far-right',
+            'horizontal history pan did not expose the frozen far-right link')
+    helper_call(config, 'links-cancel')
+    pan_unchanged()
+    require([json.loads(row) for row in launcher_log.read_text().splitlines()] == launcher_records,
+            'panned history link inspection requested external navigation')
+    helper_call(config, 'scrollback-pan-home')
+    time.sleep(.25)
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-home.ppm')
+    pan_unchanged()
+    helper_call(config, 'scrollback-resize-wide')
+    widened = wait_until(lambda: (models if (models := fixture_session_models(session)).get(
+        generation, {}).get('frame', {}).get('geometry', {}).get('cols', 0) > pan_models[generation].get(
+            'frame', {}).get('geometry', {}).get('cols', 0) else None), time.monotonic() + 5)
+    require(widened is not None, 'private app restore did not widen the live PTY grid')
+    time.sleep(.35)
+    helper_call(config, 'capture', '/artifacts/scrollback-pan-wide-frozen.ppm')
+    # The restore resize is authoritative too; reset the shared baseline for
+    # the existing history/link read-only checks that follow it.
+    screen_models = fixture_session_models(session)
+    screen_generations = fixture_generations()
+    screen_journals = fixture_journal_hashes([generation])
+    baseline_layout = host_request({'command': 'catalog'})['catalog']['layout']
+    screen_pid = screen_models[generation].get('pid')
+    screen_process_identity = process_identity(screen_pid)
+    screen_cwd = os.readlink(f'/proc/{screen_pid}/cwd')
     invariant_snapshot(screen_models, screen_generations, screen_journals)
     helper_call(config, 'links-open')
     time.sleep(.25)
@@ -1018,6 +1135,10 @@ def run_history_fixture(config, report, control, env, save):
         'truecolor_rgb_verified': truecolor, 'named_red_verified': named_red,
         'scrollback_input_blocked': True, 'unmodified_wheel_and_history_navigation_verified': True,
         'live_input_after_return_exactly_once': True,
+        'horizontal_pan_keys_and_frozen_far_right_link_verified': True,
+        'pan_source_columns': original_columns,
+        'pan_narrow_columns': pan_models[generation]['frame']['geometry']['cols'],
+        'pan_widened_columns': screen_models[generation]['frame']['geometry']['cols'],
         'visible_osc8_links': link_targets,
         'link_list_review_copy_cancel_blocked_schemes_and_confirm_once_verified': True,
         'historical_osc8_target_distinct_from_live': True,
@@ -1025,7 +1146,10 @@ def run_history_fixture(config, report, control, env, save):
         'new_processes': False,
         'captures': ['scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                      'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
-                     'scrollback-live.ppm', 'history-open.ppm',
+                     'scrollback-live.ppm', 'scrollback-pan-left-edge.ppm',
+                     'scrollback-pan-right-8.ppm', 'scrollback-pan-return-left.ppm',
+                     'scrollback-pan-end.ppm', 'scrollback-pan-home.ppm',
+                     'scrollback-pan-wide-frozen.ppm', 'history-open.ppm',
                      'history-search.ppm', 'history-readonly.ppm',
                      'terminal-links-list.ppm', 'terminal-links-review.ppm',
                      'terminal-links-blocked.ppm', 'terminal-links-returned.ppm',
@@ -8307,7 +8431,7 @@ def plan(args) -> dict:
                   'memory': 'fixed Ctrl+Shift+Space, Shift+Enter, Tab, Tab, 2, Ctrl+R; no confirm/launch',
                   'generations': 'fixed Ctrl+Shift+Space, O, 2, Enter; reopen O and type fixed current, Enter',
                   'resume': 'fixed Ctrl+Shift+Space,U opens workspace session overview; Up/Down selects UUID-sorted rows, Enter opens exact pane, Ctrl+R refreshes, Ctrl+Enter prepares only; Escape cancels; a bounded fixed Down sequence selects the readonly-queried Codex row before the existing native resume confirmation',
-                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows plus three fixed OSC 8 links visible in the live frame; Prefix,X opens visible link review, plain Enter only opens review, Ctrl+Enter in List is ignored, Alt+Left returns to List, Ctrl+C copies only the canonical allowed URL, blocked javascript/file schemes never launch, and Ctrl+Enter opens the allowed URL once through a private recording stub; link UI preserves PTY, generation, frame, journal and layout state; fixed xyz is blocked while historical and reaches the live PTY exactly once after return; existing history checks stay read-only',
+                  'history': 'fixed 256 ANSI truecolor/named-color Unicode rows plus live and history-only OSC 8 links, with a 96-column far-right marker/link; freeze the history snapshot, resize the verified private X11 app to 900x800, exercise Alt+Left/Right/Home/End horizontal panning and widen to 1280x800; capture left/right/end/home/wide states and prove panning preserves the post-resize model, frame, journal, layout, process and CLI input; existing fixed link review/copy/open and scrollback read-only checks remain, and fixed xyz reaches the live PTY exactly once after return',
                     'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then Ctrl+Enter from the selected empty ready tab launches exactly one real shell PTY in that tab; start one fake Codex and hand off its visible output through prepare then explicit Ctrl+Enter, proving cancel and preparation leave the source untouched and the new generation receives exact frozen context; save one literal custom CLI profile, capture read-only launch review, prove Enter/Escape do not execute, and Ctrl+Enter runs the exact argv once; duplicate it with independent settings, pin it, verify sidebar and Add Agent prepare-only reviews, cancel sidebar, then explicitly confirm one Launcher invocation',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance persists independent terminal Dark/Light/Follow app palette, chrome theme and terminal font while preserving pane placement, session selection, frames, geometry, processes and journals; create one private hidden-tab shell, verify hidden output/end metadata with PollPanels returning no frames, exercise persisted mark-all/selected acknowledgements, then open the exact exited generation and verify visible-current-head acknowledgement',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',

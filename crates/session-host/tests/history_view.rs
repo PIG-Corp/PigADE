@@ -18,7 +18,7 @@ use uuid::Uuid;
 const WAIT: Duration = Duration::from_secs(30);
 const FIXTURE: &str = r#"
 import sys
-sys.stdout.write("\x1b[38;2;12;34;56m\x1b]8;;https://example.test/history\x07COLD_OLD_MARKER_界\x1b]8;;\x07\x1b[0m\r\n")
+sys.stdout.write("\x1b]4;1;rgb:0c/22/38\x07\x1b[38;2;12;34;56m\x1b]8;;https://example.test/history\x07ABCD界 COLD_OLD_MARKER_界\x1b]8;;\x07\x1b[0m\r\n")
 sys.stdout.write("".join(f"FILLER_{i:05d}\r\n" for i in range(10050)))
 sys.stdout.write("SOFTWRAP_UTF8_界_MARKER\r\nCURRENT_HOT_MARKER\r\nREADY_HIST_VIEW\r\n")
 sys.stdout.flush()
@@ -500,6 +500,26 @@ fn colored_grid_is_bounded_readonly_and_frozen_across_new_output() -> Result<()>
     };
     ensure!(first.start == 0 && first.rows[0].row == 0);
     ensure!(
+        first.column_start == 0,
+        "legacy Grid query must stay at column zero"
+    );
+    let zero_span = history_reply(success(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::GridColumns {
+                snapshot: opened.snapshot,
+                start: 0,
+                rows: 4,
+                cols: 16,
+                column_start: 0,
+            },
+        },
+    )?)?;
+    ensure!(
+        matches!(zero_span, history_view::Reply::Grid { page } if page == first),
+        "column-zero GridColumns differs from legacy Grid"
+    );
+    ensure!(
         first
             .rows
             .iter()
@@ -512,11 +532,91 @@ fn colored_grid_is_bounded_readonly_and_frozen_across_new_output() -> Result<()>
             .iter()
             .any(|(_, uri)| uri == "https://example.test/history")
     );
+    let live_before_ui = host.view(&spec)?;
+    let journal = host.root().join(format!("{}.journal", spec.generation));
+    let journal_len_before_ui = fs::metadata(&journal)?.len();
+    let sliced = history_reply(success(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::GridColumns {
+                snapshot: opened.snapshot,
+                start: 0,
+                rows: 4,
+                cols: 8,
+                column_start: 4,
+            },
+        },
+    )?)?;
+    let history_view::Reply::Grid { page: sliced } = sliced else {
+        bail!("expected sliced cold cells")
+    };
+    ensure!(sliced.column_start == 4 && sliced.cols == 8);
+    ensure!(sliced.rows.len() == first.rows.len());
+    ensure!(
+        sliced
+            .rows
+            .iter()
+            .all(|row| row.source_columns > sliced.cols),
+        "fixture did not preserve source rows wider than the requested slice"
+    );
+    for (whole, part) in first.rows.iter().zip(&sliced.rows) {
+        ensure!(
+            part.cells == whole.cells[4..12],
+            "GridColumns did not return the exact original cell span"
+        );
+        ensure!(part.source_columns == whole.source_columns);
+        ensure!(part.palette_overrides == whole.palette_overrides);
+    }
+    ensure!(
+        sliced
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.text.contains('界')),
+        "sliced page omitted the wide Unicode fixture cell"
+    );
+    ensure!(
+        sliced
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.hyperlink.is_some())
+            && sliced
+                .hyperlinks
+                .iter()
+                .any(|(_, uri)| uri == "https://example.test/history"),
+        "sliced page omitted its OSC hyperlink"
+    );
+    ensure!(
+        sliced.rows[0]
+            .palette_overrides
+            .contains(&(1, [12, 34, 56])),
+        "sliced page omitted its source-row palette"
+    );
     let readonly = host.view(&spec)?;
     ensure!(
-        readonly.sequence == before.sequence
-            && readonly.frame == before.frame
-            && readonly.pid == before.pid
+        readonly.sequence == live_before_ui.sequence
+            && readonly.generation == live_before_ui.generation
+            && readonly.frame == live_before_ui.frame
+            && readonly.pid == live_before_ui.pid
+            && fs::metadata(&journal)?.len() == journal_len_before_ui,
+        "history grid query changed live host or journal state"
+    );
+    let wrong_offset = exchange(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::GridColumns {
+                snapshot: opened.snapshot,
+                start: 0,
+                rows: 1,
+                cols: 2,
+                column_start: 1023,
+            },
+        },
+    )?;
+    ensure!(
+        wrong_offset.error.is_some(),
+        "invalid column span was accepted"
     );
     success(
         &host.socket(),
@@ -529,8 +629,32 @@ fn colored_grid_is_bounded_readonly_and_frozen_across_new_output() -> Result<()>
     host.wait_view(&spec, |view| {
         compact_frame(view).contains("AFTER_SNAPSHOT_MARKER")
     })?;
+    success(
+        &host.socket(),
+        Command::Resize {
+            session: spec.session,
+            generation: spec.generation,
+            geometry: Geometry::new(4, 20)?,
+        },
+    )?;
+    host.wait_view(&spec, |view| {
+        view.frame.geometry.rows == 4 && view.frame.geometry.cols == 20
+    })?;
     let reread = history_reply(success(&host.socket(), Command::HistoryView { query })?)?;
     ensure!(matches!(reread,history_view::Reply::Grid{page} if page==first));
+    let reread_slice = history_reply(success(
+        &host.socket(),
+        Command::HistoryView {
+            query: history_view::Query::GridColumns {
+                snapshot: opened.snapshot,
+                start: 0,
+                rows: 4,
+                cols: 8,
+                column_start: 4,
+            },
+        },
+    )?)?;
+    ensure!(matches!(reread_slice, history_view::Reply::Grid { page } if page == sliced));
     let invalid = exchange(
         &host.socket(),
         Command::HistoryView {

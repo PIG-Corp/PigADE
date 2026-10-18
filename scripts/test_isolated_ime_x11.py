@@ -99,6 +99,29 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn("'context-prompt-inserted.ppm'", harness)
         self.assertIn("'context-prompt-delete-review.ppm'", harness)
 
+    def test_history_state_ignores_idle_checkpoint_timing_but_retains_terminal_changes(self):
+        import copy
+        baseline = {'generation': {'sequence': 5, 'frame': {'geometry': {'rows': 2, 'cols': 3}},
+                                  'pid': 42, 'metrics': {'events': 5, 'output_bytes': 100,
+                                                       'checkpoints': 1, 'checkpoint_ns': 7},
+                                  'actor_diagnostic': {'stage': 'waiting'}}}
+        original = copy.deepcopy(baseline)
+        idle = copy.deepcopy(baseline)
+        idle['generation']['metrics']['checkpoint_ns'] = 99
+        idle['generation']['metrics']['checkpoints'] = 2
+        idle['generation']['actor_diagnostic'] = {'stage': 'checkpoint'}
+        self.assertEqual(IME.history_model_state(baseline), IME.history_model_state(idle))
+        for path, value in ((('sequence',), 6), (('pid',), 43),
+                            (('frame', 'geometry', 'cols'), 4),
+                            (('metrics', 'events'), 6), (('metrics', 'output_bytes'), 101)):
+            changed = copy.deepcopy(idle)
+            target = changed['generation']
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            self.assertNotEqual(IME.history_model_state(baseline), IME.history_model_state(changed))
+        self.assertEqual(baseline, original)
+
     def test_history_fixture_covers_colored_scrollback_and_live_return_without_native_run(self):
         output = io.StringIO()
         with mock.patch.object(IME.subprocess, 'Popen', side_effect=AssertionError('spawned')), \
@@ -109,6 +132,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertEqual(plan['fixture'], 'history')
         self.assertIn('256 ANSI truecolor/named-color Unicode rows', plan['input']['history'])
         self.assertIn('reaches the live PTY exactly once after return', plan['input']['history'])
+        self.assertIn('96-column far-right marker/link', plan['input']['history'])
+        self.assertIn('Alt+Left/Right/Home/End horizontal panning', plan['input']['history'])
 
         harness = SCRIPT.read_text()
         helper = Path(__file__).with_name('x11-ime-input.c').read_text()
@@ -116,6 +141,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('history_rows in (0, 256)', harness)
         self.assertIn('\\x1b[38;2;231;72;86mSCROLLBACK_', harness)
         self.assertIn('\\x1b[31mANSI_RED', harness)
+        self.assertIn('FAR_RIGHT_096', harness)
+        self.assertIn('https://example.test/history-far-right', harness)
         self.assertIn("b'xyz' if config.get('fixture') == 'history'", harness)
         self.assertIn("'256' if config.get('fixture') == 'history' else '0'", harness)
         self.assertIn("'SCROLLBACK_255' in screen_text", harness)
@@ -126,7 +153,10 @@ class IsolatedImePlanTests(unittest.TestCase):
             '\ndef run_resume_fixture(', 1)[0]
         stages = ('scrollback-open', 'scrollback-probe-input', 'scrollback-wheel',
                   'scrollback-top', 'scrollback-newer', 'scrollback-close',
-                  'scrollback-end', 'scrollback-live-input')
+                  'scrollback-end', 'scrollback-live-input',
+                  'scrollback-resize-narrow', 'scrollback-resize-wide',
+                  'scrollback-pan-right', 'scrollback-pan-left',
+                  'scrollback-pan-home', 'scrollback-pan-end')
         for stage in stages:
             self.assertIn(f'helper_call(config, \'{stage}\')', history_flow)
             self.assertIn(f'"{stage}"', helper)
@@ -139,9 +169,16 @@ class IsolatedImePlanTests(unittest.TestCase):
                       history_flow)
         for capture in ('scrollback-open.ppm', 'scrollback-wheel.ppm', 'scrollback-top.ppm',
                         'scrollback-newer.ppm', 'scrollback-escape-live.ppm',
-                        'scrollback-live.ppm'):
+                        'scrollback-live.ppm', 'scrollback-pan-left-edge.ppm',
+                        'scrollback-pan-right-8.ppm', 'scrollback-pan-return-left.ppm',
+                        'scrollback-pan-end.ppm', 'scrollback-pan-home.ppm',
+                        'scrollback-pan-wide-frozen.ppm'):
             self.assertIn(capture, harness)
-        self.assertIn('fixture_journal_hashes([generation]) == expected_journals', history_flow)
+        self.assertIn('post-resize model, frame, journal, or layout', harness)
+        self.assertIn('scrollback-resize-narrow', helper)
+        self.assertIn('XResizeWindow(dpy, w, target_width, 800u)', helper)
+        self.assertIn('attr.width != (int)target_width || attr.height != 800', helper)
+        self.assertIn("'journal': fixture_journal_hashes([generation]) == expected_journals", history_flow)
         self.assertIn('XTestFakeButtonEvent(dpy, 4, True, CurrentTime)', helper)
         self.assertIn('pointer_position(dpy, app, 640, 400)', helper)
 

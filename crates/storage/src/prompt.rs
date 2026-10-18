@@ -427,6 +427,7 @@ mod tests {
             history_grid_schema: Some(1),
             custom_cli_schema: Some(1),
             workspace_sessions_schema: None,
+            history_pan_schema: None,
         })?;
         value.as_object_mut().unwrap().remove("prompts");
         value

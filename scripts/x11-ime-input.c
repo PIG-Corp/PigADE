@@ -129,6 +129,9 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "workspace-sessions-cancel") &&
         strcmp(a.stage, "history-open") && strcmp(a.stage, "history-search") &&
         strcmp(a.stage, "history-readonly") && strcmp(a.stage, "scrollback-open") &&
+        strcmp(a.stage, "scrollback-resize-narrow") && strcmp(a.stage, "scrollback-resize-wide") &&
+        strcmp(a.stage, "scrollback-pan-right") && strcmp(a.stage, "scrollback-pan-left") &&
+        strcmp(a.stage, "scrollback-pan-home") && strcmp(a.stage, "scrollback-pan-end") &&
         strcmp(a.stage, "links-open") && strcmp(a.stage, "links-list-ctrl-enter") &&
         strcmp(a.stage, "links-enter-review") && strcmp(a.stage, "links-review-enter") &&
         strcmp(a.stage, "links-copy") && strcmp(a.stage, "links-back") &&
@@ -1452,6 +1455,19 @@ int main(int argc, char **argv) {
     } else if (!strcmp(a.stage, "capture")) {
         verify_app_focus_target(&a, dpy, c, 0); XSync(dpy, False); capture(dpy, a.output);
         printf("{\"stage\":\"capture\",\"path\":\"%s\",\"width\":%d,\"height\":%d}\n", a.output, DisplayWidth(dpy, DefaultScreen(dpy)), DisplayHeight(dpy, DefaultScreen(dpy)));
+    } else if (!strcmp(a.stage, "scrollback-resize-narrow") ||
+               !strcmp(a.stage, "scrollback-resize-wide")) {
+        Window w = verify_app_focus_target(&a, dpy, c, 1);
+        unsigned int target_width = !strcmp(a.stage, "scrollback-resize-narrow") ? 900u : 1280u;
+        XResizeWindow(dpy, w, target_width, 800u);
+        XSync(dpy, False);
+        struct timespec settle = { .tv_sec = 0, .tv_nsec = 350000000 };
+        nanosleep(&settle, NULL);
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(dpy, w, &attr) || attr.width != (int)target_width || attr.height != 800)
+            fail("verified private app window did not reach its fixed fixture size");
+        printf("{\"stage\":\"%s\",\"app_pid\":%ld,\"window_verified\":true,\"width\":%d,\"height\":%d}\n",
+               a.stage, (long)a.app, attr.width, attr.height);
     } else if (!strcmp(a.stage, "latency")) {
         latency_sequence(&a, dpy, c);
     } else if (!strcmp(a.stage, "focus")) {
@@ -1657,6 +1673,14 @@ int main(int argc, char **argv) {
             XSync(dpy, False);
         } else if (!strcmp(a.stage, "scrollback-open")) {
             modified_key(dpy, XK_Shift_L, XK_Page_Up);
+        } else if (!strcmp(a.stage, "scrollback-pan-right")) {
+            modified_key(dpy, XK_Alt_L, XK_Right);
+        } else if (!strcmp(a.stage, "scrollback-pan-left")) {
+            modified_key(dpy, XK_Alt_L, XK_Left);
+        } else if (!strcmp(a.stage, "scrollback-pan-home")) {
+            modified_key(dpy, XK_Alt_L, XK_Home);
+        } else if (!strcmp(a.stage, "scrollback-pan-end")) {
+            modified_key(dpy, XK_Alt_L, XK_End);
         } else if (!strcmp(a.stage, "scrollback-wheel")) {
             scrollback_wheel(dpy, app_window);
         } else if (!strcmp(a.stage, "scrollback-top")) {
@@ -2339,6 +2363,10 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "scrollback-open") ? "2" :
                             !strcmp(a.stage, "scrollback-wheel") ? "0" :
                             !strcmp(a.stage, "scrollback-newer") ? "2" :
+                            !strcmp(a.stage, "scrollback-pan-right") ? "1" :
+                            !strcmp(a.stage, "scrollback-pan-left") ? "1" :
+                            !strcmp(a.stage, "scrollback-pan-home") ? "1" :
+                            !strcmp(a.stage, "scrollback-pan-end") ? "1" :
                             !strcmp(a.stage, "scrollback-probe-input") ? "3" :
                             !strcmp(a.stage, "scrollback-live-input") ? "3" :
                             !strcmp(a.stage, "links-open") ? "6" :

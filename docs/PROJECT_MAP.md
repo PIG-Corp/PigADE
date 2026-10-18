@@ -4,6 +4,7 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 
 | Location | Responsibility |
 |---|---|
+| crates/terminal/src/history_grid.rs; session-host/src/history_view.rs; app/src/scrollback.rs, scrollback_ui.rs | Frozen typed normal-history rows and bounded horizontal spans; history_pan_schema capability, exact offset correlation, shared worker/leases, display-only wide-edge masking and input isolation |
 | Cargo.toml/Cargo.lock | Host/storage/terminal/layout workspace; locked dependencies; canonical first-party version |
 | crates/terminal | Sole ANSI/core adapter, validated geometry, ordered timers, cell DTOs and full checkpoint envelope |
 | crates/terminal/src/lib.rs listener | Retains all live response events FIFO and one last title update; ignores historical/external effects already excluded by the runtime profile |
@@ -183,4 +184,4 @@ not live memory admission; see ADR0013 and the resource-refusal report.
 
 Native close protection: `crates/app/src/close_flow.rs` owns review/flush/deadline states; `close_ui.rs` binds WM close, modal input and ACK-driven pending resources; `dirty_documents.rs` inventories active/suspended authored drafts without including their text. The existing isolated context fixture tests WM_DELETE_WINDOW cancel/discard with an independent host. See [ADR0017](adr/0017-native-window-close-review.md).
 
-`terminal/src/history_grid.rs` projects typed normal/cold rows to bounded styled cells; `session-host/src/history_view.rs` shares frozen grid/text snapshots and palettes. `app/src/scrollback.rs` owns one historical viewport's coalesced intent/request/lease state, and `scrollback_ui.rs` caches display cells, marks readonly state and handles safe return to live. Native history verification extends the existing isolated history fixture. [ADR0018](adr/0018-in-pane-cell-history.md) defines bounds and remaining width/persistence limitations.
+`terminal/src/history_grid.rs` projects typed normal/cold rows to bounded styled cells; `session-host/src/history_view.rs` shares frozen grid/text snapshots and palettes. `app/src/scrollback.rs` owns one historical viewport's coalesced intent/request/lease state, and `scrollback_ui.rs` caches display cells, marks readonly state and handles safe return to live. Native history verification extends the existing isolated history fixture. [ADR0018](adr/0018-in-pane-cell-history.md) defines span bounds, legacy behavior and remaining reflow/persistence limitations.
