@@ -101,6 +101,108 @@ impl Drop for HostFixture {
     }
 }
 
+#[test]
+fn profile_roster_edits_are_atomic_metadata_and_survive_host_restart() -> Result<()> {
+    use pigade_storage::{AgentProfile, CatalogBatch, CatalogWrite, LaunchSettings};
+    let mut host = HostFixture::new()?;
+    let ids = [
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    ];
+    let seeded = exchange(
+        &host.socket(),
+        Command::CatalogApply {
+            batch: Box::new(CatalogBatch {
+                agent_profiles: ids
+                    .iter()
+                    .enumerate()
+                    .map(|(index, id)| CatalogWrite {
+                        value: AgentProfile {
+                            id: *id,
+                            name: format!("Role {index}"),
+                            revision: 0,
+                            settings: LaunchSettings {
+                                provider: "codex".into(),
+                                role: "Review".into(),
+                                instructions: "Inspect changes".into(),
+                                deliver_context: false,
+                                engine: Default::default(),
+                            },
+                        },
+                        expected_revision: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        },
+    )?
+    .catalog
+    .context("seed catalog missing")?;
+    let roster = seeded
+        .agent_profile_roster
+        .as_ref()
+        .context("roster capability missing")?;
+    ensure!(roster.schema == 1 && roster.ordered_ids == ids);
+    let order = vec![ids[2], ids[0], ids[1]];
+    let pins = vec![ids[0], ids[2]];
+    let saved = exchange(
+        &host.socket(),
+        Command::SetAgentProfileRoster {
+            expected_revision: roster.revision,
+            ordered_ids: order.clone(),
+            pinned_ids: pins.clone(),
+        },
+    )?
+    .catalog
+    .context("roster result missing")?;
+    let current = saved
+        .agent_profile_roster
+        .as_ref()
+        .context("saved roster missing")?;
+    ensure!(current.ordered_ids == order && current.pinned_ids == pins);
+    ensure!(current.revision == roster.revision + 1);
+    ensure!(
+        saved.agent_profiles == seeded.agent_profiles
+            && saved.selection == seeded.selection
+            && saved.layout == seeded.layout
+            && saved.projects == seeded.projects
+            && saved.workspaces == seeded.workspaces
+            && saved.tabs == seeded.tabs
+    );
+    for (revision, proposed_order, proposed_pins) in [
+        (roster.revision, order.clone(), pins.clone()),
+        (current.revision, vec![ids[2], ids[0], ids[0]], pins.clone()),
+        (current.revision, vec![ids[2], ids[0]], pins.clone()),
+        (current.revision, order.clone(), vec![uuid::Uuid::new_v4()]),
+    ] {
+        ensure!(
+            exchange(
+                &host.socket(),
+                Command::SetAgentProfileRoster {
+                    expected_revision: revision,
+                    ordered_ids: proposed_order,
+                    pinned_ids: proposed_pins,
+                }
+            )
+            .is_err(),
+            "invalid/stale roster was accepted"
+        );
+        ensure!(
+            exchange(&host.socket(), Command::Catalog)?.catalog.as_ref() == Some(&saved),
+            "rejected roster changed metadata"
+        );
+    }
+    ensure!(
+        exchange(&host.socket(), Command::List)?.views.is_empty(),
+        "profile arrangement launched a CLI"
+    );
+    host.restart()?;
+    ensure!(exchange(&host.socket(), Command::Catalog)?.catalog.as_ref() == Some(&saved));
+    ensure!(exchange(&host.socket(), Command::List)?.views.is_empty());
+    Ok(())
+}
+
 fn exchange(socket: &Path, command: Command) -> Result<Response> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;

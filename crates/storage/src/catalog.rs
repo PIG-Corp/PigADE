@@ -17,6 +17,10 @@ use crate::agent_profile::{
     AgentProfile, AgentProfileDelete, MAX_AGENT_PROFILE_SETTINGS_BYTES, MAX_AGENT_PROFILES,
     validate_agent_profile_settings,
 };
+use crate::agent_profile_roster::{
+    AgentProfileRoster, profile_created, profile_deleted, profile_ids,
+    read as read_agent_profile_roster,
+};
 use crate::prompt::{MAX_PROMPTS, Prompt, PromptDelete, delete_prompt, read_prompts, write_prompt};
 
 const MAX_PROJECTS: usize = 256;
@@ -341,6 +345,9 @@ pub struct Catalog {
     /// `None` means the connected host predates agent profile support.
     #[serde(default)]
     pub agent_profiles: Option<Vec<AgentProfile>>,
+    /// Durable profile ordering and pin preferences, when supported by the host.
+    #[serde(default)]
+    pub agent_profile_roster: Option<AgentProfileRoster>,
     /// `None` means the connected host predates prompt library support.
     #[serde(default)]
     pub prompts: Option<Vec<Prompt>>,
@@ -488,6 +495,20 @@ pub(crate) fn migrate_agent_profiles(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn migrate_agent_profile_roster(connection: &Connection) -> Result<()> {
+    connection.execute_batch("CREATE TABLE agent_profile_roster (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL CHECK(schema=1),
+      revision INTEGER NOT NULL CHECK(revision>0), ordered_ids TEXT NOT NULL, pinned_ids TEXT NOT NULL
+    );")?;
+    let mut stmt = connection.prepare("SELECT id FROM agent_profiles ORDER BY rowid")?;
+    let ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    ensure!(ids.len() <= 128, "too many agent profiles to migrate");
+    connection.execute("INSERT INTO agent_profile_roster(singleton,schema,revision,ordered_ids,pinned_ids) VALUES(1,1,1,?1,'[]')", [serde_json::to_string(&ids)?])?;
+    Ok(())
+}
+
 impl MetadataStore {
     pub fn catalog(&self) -> Result<Catalog> {
         read_catalog(&self.connection)
@@ -552,12 +573,20 @@ impl MetadataStore {
     }
 }
 
+pub(crate) fn read_catalog_for_roster(connection: &Connection) -> Result<Catalog> {
+    read_catalog(connection)
+}
+
 fn apply_catalog_batch(
     tx: &Transaction<'_>,
     batch: CatalogBatch,
     run: Option<CatalogWrite<crate::StoredTemplateRun>>,
     close: Option<TabClose>,
 ) -> Result<Catalog> {
+    if !batch.agent_profiles.is_empty() || !batch.remove_agent_profiles.is_empty() {
+        let ids = profile_ids(tx)?;
+        read_agent_profile_roster(tx, &ids)?;
+    }
     ensure!(
         batch.projects.len() <= MAX_PROJECTS
             && batch.workspaces.len() <= MAX_WORKSPACES
@@ -949,6 +978,7 @@ fn write_agent_profile(tx: &Transaction<'_>, write: CatalogWrite<AgentProfile>) 
                 "INSERT INTO agent_profiles(id,name,settings_json,revision) VALUES(?1,?2,?3,1)",
                 params![profile.id.to_string(), profile.name, settings],
             )?;
+            profile_created(tx, profile.id)?;
         }
         Some(expected) => {
             let changed = tx.execute(
@@ -975,7 +1005,8 @@ fn delete_agent_profile(tx: &Transaction<'_>, delete: AgentProfileDelete) -> Res
         "agent profile",
         delete.id,
         delete.expected_revision,
-    )
+    )?;
+    profile_deleted(tx, delete.id)
 }
 fn delete_layout_template(tx: &Transaction<'_>, delete: LayoutTemplateDelete) -> Result<()> {
     ensure!(
@@ -1373,6 +1404,10 @@ fn read_catalog(connection: &Connection) -> Result<Catalog> {
         template_launch_schema: Some(1),
         pane_labels: Some(read_pane_labels(connection, pane_label_count)?),
         agent_profiles: Some(read_agent_profiles(connection, agent_profile_count)?),
+        agent_profile_roster: Some(read_agent_profile_roster(
+            connection,
+            &profile_ids(connection)?,
+        )?),
         prompts: Some(read_prompts(connection)?),
         tab_close_schema: Some(1),
         engine_options_schema: Some(1),
@@ -1402,7 +1437,7 @@ mod tests {
     fn profile(id: Uuid, revision: u64, provider: &str) -> AgentProfile {
         AgentProfile {
             id,
-            name: "Review profile".into(),
+            name: format!("Review profile {id}"),
             settings: LaunchSettings {
                 provider: provider.into(),
                 role: "reviewer".into(),
@@ -1435,6 +1470,7 @@ mod tests {
                 ..CatalogBatch::default()
             })?;
             assert_eq!(catalog.agent_profiles.as_ref().unwrap()[0].revision, 1);
+            assert_eq!(catalog.agent_profile_roster.as_ref().unwrap().revision, 2);
             let mut updated = profile(id, 1, "codex");
             updated.name = "Updated profile".into();
             updated.settings.engine = EngineOptions {
@@ -1452,6 +1488,7 @@ mod tests {
             assert_eq!(saved.len(), 1);
             assert_eq!(saved[0].revision, 2);
             assert_eq!(saved[0].settings.provider, "codex");
+            assert_eq!(catalog.agent_profile_roster.as_ref().unwrap().revision, 2);
             let mut updated = profile(id, 1, "codex");
             updated.settings.engine = EngineOptions {
                 model: Some("gpt-5.5-codex".into()),
@@ -1503,7 +1540,186 @@ mod tests {
             }],
             ..CatalogBatch::default()
         })?;
-        assert!(store.catalog()?.agent_profiles.unwrap().is_empty());
+        let after_delete = store.catalog()?;
+        assert!(after_delete.agent_profiles.unwrap().is_empty());
+        assert_eq!(after_delete.agent_profile_roster.unwrap().revision, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn agent_profile_roster_cas_membership_and_atomic_profile_updates() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let mut store = MetadataStore::open(&path)?;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        store.apply_catalog(CatalogBatch {
+            agent_profiles: vec![new(profile(a, 0, "claude")), new(profile(b, 0, "codex"))],
+            ..CatalogBatch::default()
+        })?;
+        let before = store.catalog()?;
+        assert_eq!(
+            before.agent_profile_roster.as_ref().unwrap().ordered_ids,
+            vec![a, b]
+        );
+        assert!(
+            store
+                .set_agent_profile_roster(3, vec![b, a], vec![Uuid::new_v4()])
+                .is_err()
+        );
+        assert!(
+            store
+                .set_agent_profile_roster(1, vec![a, b], vec![])
+                .is_err()
+        );
+        let changed = store.set_agent_profile_roster(3, vec![b, a], vec![b])?;
+        assert_eq!(changed.agent_profile_roster.as_ref().unwrap().revision, 4);
+        let edited = store.apply_catalog(CatalogBatch {
+            agent_profiles: vec![update(profile(a, 1, "opencode"), 1)],
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(edited.agent_profile_roster, changed.agent_profile_roster);
+        let deleted = store.apply_catalog(CatalogBatch {
+            remove_agent_profiles: vec![AgentProfileDelete {
+                id: b,
+                expected_revision: 99,
+            }],
+            ..CatalogBatch::default()
+        });
+        assert!(deleted.is_err());
+        assert_eq!(
+            store.catalog()?.agent_profile_roster,
+            changed.agent_profile_roster
+        );
+        let deleted = store.apply_catalog(CatalogBatch {
+            remove_agent_profiles: vec![AgentProfileDelete {
+                id: b,
+                expected_revision: 1,
+            }],
+            ..CatalogBatch::default()
+        })?;
+        assert_eq!(
+            deleted.agent_profile_roster.as_ref().unwrap().ordered_ids,
+            vec![a]
+        );
+        assert!(
+            deleted
+                .agent_profile_roster
+                .as_ref()
+                .unwrap()
+                .pinned_ids
+                .is_empty()
+        );
+        let committed = deleted.agent_profile_roster.clone();
+        drop(store);
+        assert_eq!(
+            MetadataStore::open(path)?.catalog()?.agent_profile_roster,
+            committed
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn profile_roster_migration_from_v13_preserves_rowid_order_and_backup() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("state.sqlite");
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        {
+            let mut store = MetadataStore::open(&path)?;
+            store.apply_catalog(CatalogBatch {
+                agent_profiles: vec![new(profile(a, 0, "claude")), new(profile(b, 0, "codex"))],
+                ..CatalogBatch::default()
+            })?;
+            store
+                .connection
+                .execute("DROP TABLE agent_profile_roster", [])?;
+            store.connection.pragma_update(None, "user_version", 13)?;
+        }
+        let store = MetadataStore::open(&path)?;
+        let catalog = store.catalog()?;
+        assert_eq!(
+            catalog.agent_profile_roster.unwrap().ordered_ids,
+            vec![a, b]
+        );
+        let backup_path = store.migration_backup_path().unwrap();
+        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
+        let backup =
+            Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(
+            backup.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
+            13
+        );
+        assert_eq!(
+            backup
+                .query_row::<usize, _, _>("SELECT COUNT(*) FROM agent_profiles", [], |row| row
+                    .get(0))?,
+            2
+        );
+        assert_eq!(backup.query_row::<usize, _, _>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_profile_roster'", [], |row| row.get(0))?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn roster_revision_overflow_rolls_back_profile_creation() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        store
+            .connection
+            .execute("UPDATE agent_profile_roster SET revision=?1", [i64::MAX])?;
+        let id = Uuid::new_v4();
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    agent_profiles: vec![new(profile(id, 0, "claude"))],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        assert_eq!(store.catalog()?.agent_profiles.unwrap().len(), 0);
+        assert!(
+            store
+                .set_agent_profile_roster(i64::MAX as u64, vec![], vec![])
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_roster_is_rejected_before_profile_batch_can_repair_it() -> Result<()> {
+        let _serial = crate::STORAGE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir()?;
+        let mut store = MetadataStore::open(dir.path().join("state.sqlite"))?;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        store.apply_catalog(CatalogBatch {
+            agent_profiles: vec![new(profile(a, 0, "claude")), new(profile(b, 0, "codex"))],
+            ..CatalogBatch::default()
+        })?;
+        store.connection.execute(
+            "UPDATE agent_profile_roster SET ordered_ids=?1",
+            [serde_json::to_string(&vec![a])?],
+        )?;
+        assert!(
+            store
+                .apply_catalog(CatalogBatch {
+                    remove_agent_profiles: vec![AgentProfileDelete {
+                        id: b,
+                        expected_revision: 1,
+                    }],
+                    ..CatalogBatch::default()
+                })
+                .is_err()
+        );
+        let still_present: usize = store.connection.query_row(
+            "SELECT COUNT(*) FROM agent_profiles WHERE id=?1",
+            [b.to_string()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(still_present, 1);
         Ok(())
     }
 
@@ -1564,7 +1780,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(
-                "DROP TABLE prompt_records; DROP TABLE agent_profiles; PRAGMA user_version=10;",
+                "DROP TABLE prompt_records; DROP TABLE agent_profile_roster; DROP TABLE agent_profiles; PRAGMA user_version=10;",
             )?;
         }
         let store = MetadataStore::open(&path)?;
@@ -1578,12 +1794,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            13
+            14
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-10 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1619,7 +1835,7 @@ mod tests {
         }
         {
             let connection = Connection::open(&path)?;
-            connection.execute_batch("DROP TABLE prompt_records; PRAGMA user_version=11;")?;
+            connection.execute_batch("DROP TABLE prompt_records; DROP TABLE agent_profile_roster; PRAGMA user_version=11;")?;
         }
         let store = MetadataStore::open(&path)?;
         let catalog = store.catalog()?;
@@ -1629,12 +1845,12 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            13
+            14
         );
         let backup_path = store
             .migration_backup_path()
             .context("schema-11 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -1692,6 +1908,7 @@ mod tests {
                 "UPDATE agent_profiles SET settings_json=?1 WHERE id=?2",
                 params![legacy, profile_id.to_string()],
             )?;
+            connection.execute("DROP TABLE agent_profile_roster", [])?;
             connection.pragma_update(None, "user_version", 12)?;
             legacy
         };
@@ -1706,13 +1923,13 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            13
+            14
         );
 
         let backup_path = store
             .migration_backup_path()
             .context("schema-12 backup absent")?;
-        assert!(backup_path.to_string_lossy().contains(".pre-v13."));
+        assert!(backup_path.to_string_lossy().contains(".pre-v14."));
         let backup =
             Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         assert_eq!(
@@ -2885,7 +3102,7 @@ mod tests {
             store
                 .connection
                 .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-            13
+            14
         );
         let backup = store.migration_backup_path().context("v1 backup absent")?;
         assert_eq!(
@@ -2980,7 +3197,7 @@ mod tests {
                 store
                     .connection
                     .pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?,
-                13
+                14
             );
             let backup = Connection::open_with_flags(
                 store.migration_backup_path().context("v2 backup absent")?,

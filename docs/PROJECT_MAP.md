@@ -15,6 +15,8 @@ Read [AGENTS.md](../AGENTS.md), [SPEC](../SPEC.md), [DESIGN](../DESIGN.md) and t
 | crates/layout/src/lib.rs, session-host/src/catalog.rs, storage/src/catalog.rs | Metadata tab removal rebases all placement snapshots, validates active-run dependencies and commits selection/layout/delete atomically; no CLI stop or schema bump |
 | crates/app/src/prompt_flow.rs, prompt_commands.rs, prompt_ui.rs | Reusable prompt editor/library; exact draft selection/undo restoration, no terminal input, explicit clipboard copy |
 | crates/storage/src/agent_profile.rs, catalog.rs, launch.rs | Bounded128-entry named launch-profile library with optional validated model/reasoning settings; revision CAS writes/deletes; schema13 keeps a durable v12 backup, legacy options default empty and old-host capability gates nonempty values |
+| crates/storage/src/agent_profile_roster.rs | Schema14 independent roster CAS for profile order/pins; exact current membership, migration backup, atomic create/delete maintenance and no launch/placement side effects |
+| crates/app/src/profile_roster.rs | Pure pinned-first projection, partition moves, validated mutation payload and stable selected-profile identity; absent capability preserves old-host order |
 | crates/app/src/profile_flow.rs, profile_commands.rs, profile_ui.rs | Native profile editor/library with optional model/effort, exact dialog/request receipts, retained post-save edits, explicit review and unchanged live sessions |
 | crates/storage/src/archive.rs | Bounded PIGARC01 fragment-file primitive, complete-row validation and fsync receipts used by host-owned cold history |
 | crates/layout | Platform-neutral tiling transactions, identity-free schema1 geometry templates, geometry/focus projection and persistent100undo/redo |

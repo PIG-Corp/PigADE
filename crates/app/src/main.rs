@@ -21,6 +21,7 @@ mod pointer_layout;
 mod product;
 mod profile_commands;
 mod profile_flow;
+mod profile_roster;
 mod prompt_commands;
 mod prompt_flow;
 mod protocol;
@@ -1126,6 +1127,7 @@ mod focus_placement_tests {
             template_launch_schema: Some(1),
             pane_labels: Some(vec![]),
             agent_profiles: None,
+            agent_profile_roster: None,
             prompts: None,
             tab_close_schema: None,
             engine_options_schema: Some(1),
@@ -1183,7 +1185,8 @@ struct CanvasApp {
     catalog_edit: Option<CatalogEdit>,
     prompt_reload: Option<uuid::Uuid>,
     profile_prepare: Option<profile_flow::Pending>,
-    profile_reload: Option<(uuid::Uuid, uuid::Uuid)>,
+    profile_reload: Option<profile_flow::RosterReload>,
+    profile_roster_pending: Option<profile_flow::RosterPending>,
     transfer_reload: Option<TransferReload>,
     template_flow: template_flow::RunFlow,
     deferred_product_action: Option<product::ProductAction>,
@@ -1390,8 +1393,9 @@ impl CanvasApp {
                                         let close_reply=this.product.tab_close_sheet.as_ref().is_some_and(|sheet|sheet.request.is_some() && sheet.request==ui_request);
                                         let prompt_refresh=this.prompt_reload.is_some_and(|request|Some(request)==ui_request);
                                         if prompt_refresh { this.prompt_reload=None; }
-                                        let profile_refresh=this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==ui_request);
-                                        if profile_refresh { this.profile_reload=None; }
+                                        let profile_refresh=this.profile_reload.as_ref().is_some_and(|pending|Some(pending.request)==ui_request);
+                                        let profile_reload = if profile_refresh { this.profile_reload.take() } else { None };
+                                        let roster_write = if this.profile_roster_pending.as_ref().is_some_and(|pending|Some(pending.request)==ui_request) { this.profile_roster_pending.take() } else { None };
                                         let transfer_pending = if this.transfer_reload.is_some_and(|pending| Some(pending.request) == ui_request) { this.transfer_reload.take() } else { None };
                                         let transfer_refresh = transfer_pending.is_some();
                                         let transfer_source = transfer_pending.map(|pending| pending.source);
@@ -1406,7 +1410,7 @@ impl CanvasApp {
                                             this.focus_queue.complete(reply.ui_request.expect("matching focus request"),saved);
                                         }
                                         this.product.catalog = Some(catalog);
-                                        if !keep_local {
+                                        if !keep_local && roster_write.is_none() && profile_reload.is_none() {
                                             if !transfer_refresh {
                                                 this.product.notice = None;
                                                 this.product.dialog = None;
@@ -1424,8 +1428,33 @@ impl CanvasApp {
                                             }
                                             this.product.notice=Some(if changed {"Сохранено; новые правки ещё не сохранены".into()} else {edit.notice});
                                             this.product.dialog=if same_dialog && !changed {edit.return_dialog.or_else(||edit.return_to.map(product::Dialog::new))} else {current_dialog};
-                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply || transfer_refresh {
+                                        } else if template_pending.is_some() || navigation_pending.is_some() || profile_refresh || prompt_refresh || close_reply || transfer_refresh || roster_write.is_some() {
                                             this.product.dialog=current_dialog;
+                                            if let Some(pending) = roster_write
+                                                && this.product.dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::AgentProfiles) {
+                                                    let valid = this.product.catalog.as_ref().and_then(|value| value.agent_profile_roster.as_ref()).is_some_and(|roster| {
+                                                        roster.schema == 1 && roster.revision == pending.expected_revision.saturating_add(1)
+                                                            && roster.ordered_ids == pending.ordered_ids && roster.pinned_ids == pending.pinned_ids
+                                                    });
+                                                    if valid {
+                                                        let ids = this.product.catalog.as_ref().and_then(|value| value.agent_profiles.as_ref()).map(|items| items.iter().map(|item| item.id).collect::<Vec<_>>()).unwrap_or_default();
+                                                        let roster = this.product.catalog.as_ref().and_then(|value| value.agent_profile_roster.as_ref());
+                                                        if let Some(dialog) = &mut this.product.dialog { profile_flow::restore_roster_selection(dialog, pending.dialog, pending.selected_profile, &ids, roster); this.product.layout_scroll.scroll_to_item(dialog.active_field); }
+                                                        this.product.profile_roster_error = None;
+                                                        this.product.notice = Some("Порядок профилей сохранён".into());
+                                                    } else {
+                                                        this.product.profile_roster_error = Some("Ответ хоста не подтвердил новый порядок. Обновите библиотеку для проверки.".into());
+                                                    }
+                                            }
+                                            if let Some(pending) = profile_reload
+                                                && this.product.dialog.as_ref().is_some_and(|dialog| dialog.id == pending.dialog && dialog.kind == product::DialogKind::AgentProfiles) {
+                                                    if let Some(selected) = pending.selected_profile {
+                                                        let ids = this.product.catalog.as_ref().and_then(|value| value.agent_profiles.as_ref()).map(|items| items.iter().map(|item| item.id).collect::<Vec<_>>()).unwrap_or_default();
+                                                        let roster = this.product.catalog.as_ref().and_then(|value| value.agent_profile_roster.as_ref());
+                                                        if let Some(dialog) = &mut this.product.dialog { profile_flow::restore_roster_selection(dialog, pending.dialog, selected, &ids, roster); this.product.layout_scroll.scroll_to_item(dialog.active_field); }
+                                                    }
+                                                    this.product.profile_roster_error = None;
+                                            }
                                             if transfer_dialog_live {
                                                 this.product.notice = if source_is_current {
                                                     None
@@ -1531,7 +1560,23 @@ impl CanvasApp {
                                         this.deferred_product_action=None;
                                     }
                                     if this.prompt_reload.is_some_and(|request|Some(request)==error.ui_request) {this.prompt_reload=None;}
-                                    if this.profile_reload.as_ref().is_some_and(|(request,_)|Some(*request)==error.ui_request) {this.profile_reload=None;}
+                                    if this.profile_reload.as_ref().is_some_and(|pending|Some(pending.request)==error.ui_request) {
+                                        let pending=this.profile_reload.take().expect("matching profile refresh");
+                                        if this.product.dialog.as_ref().is_some_and(|dialog|dialog.id==pending.dialog && dialog.kind==product::DialogKind::AgentProfiles) {
+                                            this.product.profile_roster_error=Some("Не удалось обновить библиотеку профилей. Черновик и выбор сохранены.".into());
+                                        }
+                                    }
+                                    if this.profile_roster_pending.as_ref().is_some_and(|pending|Some(pending.request)==error.ui_request) {
+                                        let pending=this.profile_roster_pending.take().expect("matched profile roster write");
+                                        if this.product.dialog.as_ref().is_some_and(|dialog|dialog.id==pending.dialog && dialog.kind==product::DialogKind::AgentProfiles) {
+                                            this.product.profile_roster_error=Some("Порядок не подтверждён. Обновите библиотеку, чтобы проверить результат; повтор не выполнялся.".into());
+                                            let ids=this.product.catalog.as_ref().and_then(|catalog|catalog.agent_profiles.as_ref()).map(|items|items.iter().map(|item|item.id).collect::<Vec<_>>()).unwrap_or_default();
+                                            let roster=this.product.catalog.as_ref().and_then(|catalog|catalog.agent_profile_roster.as_ref());
+                                            if let Some(dialog)=&mut this.product.dialog {
+                                                profile_flow::restore_roster_selection(dialog, pending.dialog, pending.selected_profile, &ids, roster);
+                                            }
+                                        }
+                                    }
                                     if this.profile_prepare.as_ref().is_some_and(|pending|Some(pending.request)==error.ui_request) {this.profile_prepare=None;}
                                     if this.catalog_edit.as_ref().is_some_and(|edit|Some(edit.request)==error.ui_request) {this.catalog_edit=None;}
                                     if this.setup_flow.as_ref().is_some_and(|flow| flow.matches(error.ui_request)) { this.setup_flow = None; }
@@ -1746,6 +1791,7 @@ impl CanvasApp {
             prompt_reload: None,
             profile_prepare: None,
             profile_reload: None,
+            profile_roster_pending: None,
             transfer_reload: None,
             template_flow: Default::default(),
             deferred_product_action: None,
@@ -3627,6 +3673,8 @@ impl CanvasApp {
             | A::EditAgentProfile(_)
             | A::LaunchAgentProfile(_)
             | A::DeleteAgentProfile(_)
+            | A::SetAgentProfilePinned(_, _)
+            | A::MoveAgentProfile(_, _)
             | A::SetProfileProvider(_)
             | A::ToggleProfileContext
             | A::SaveLaunchAsProfile => self.profile_action(action, cx),
@@ -6341,6 +6389,18 @@ impl CanvasApp {
                     | product::DialogKind::TemplateRuns
             )
         }) {
+            if self
+                .product
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.kind == product::DialogKind::AgentProfiles)
+                && ((k.key == "p" && k.modifiers.control)
+                    || (matches!(k.key.as_str(), "up" | "down") && k.modifiers.alt))
+                && (event.is_held || !self.text_input.preedit.is_empty())
+            {
+                cx.stop_propagation();
+                return;
+            }
             if event.is_held && matches!(k.key.as_str(), "enter" | "delete") {
                 cx.stop_propagation();
                 return;
@@ -6353,96 +6413,156 @@ impl CanvasApp {
                 .as_ref()
                 .map_or(0, |dialog| dialog.active_field)
                 .min(count.saturating_sub(1));
-            let action =
-                match k.key.as_str() {
-                    "enter"
-                        if (k.modifiers.control || k.modifiers.platform)
-                            && self.product.dialog.as_ref().is_some_and(|dialog| {
-                                dialog.kind == product::DialogKind::Recipe
-                            }) =>
-                    {
-                        Some(product::ProductAction::SubmitDialog)
-                    }
-                    "enter" if k.modifiers.control || k.modifiers.platform => {
-                        entries.get(selected).map(|(_, action)| match action {
-                            product::ProductAction::ApplyLayout(id) => {
-                                product::ProductAction::NewTabFromTemplate(*id)
-                            }
-                            _ => action.clone(),
-                        })
-                    }
-                    "r" if (k.modifiers.control || k.modifiers.platform)
-                        && self.product.dialog.as_ref().is_some_and(|dialog| {
-                            matches!(
-                                dialog.kind,
-                                product::DialogKind::Prompts | product::DialogKind::AgentProfiles
-                            )
-                        }) =>
-                    {
-                        Some(
-                            if self
-                                .product
-                                .dialog
-                                .as_ref()
-                                .is_some_and(|dialog| dialog.kind == product::DialogKind::Prompts)
-                            {
-                                product::ProductAction::ReloadPrompts
-                            } else {
-                                product::ProductAction::ReloadAgentProfiles
-                            },
+            let action = match k.key.as_str() {
+                "enter"
+                    if (k.modifiers.control || k.modifiers.platform)
+                        && self
+                            .product
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.kind == product::DialogKind::Recipe) =>
+                {
+                    Some(product::ProductAction::SubmitDialog)
+                }
+                "enter" if k.modifiers.control || k.modifiers.platform => {
+                    entries.get(selected).map(|(_, action)| match action {
+                        product::ProductAction::ApplyLayout(id) => {
+                            product::ProductAction::NewTabFromTemplate(*id)
+                        }
+                        _ => action.clone(),
+                    })
+                }
+                "r" if (k.modifiers.control || k.modifiers.platform)
+                    && self.product.dialog.as_ref().is_some_and(|dialog| {
+                        matches!(
+                            dialog.kind,
+                            product::DialogKind::Prompts | product::DialogKind::AgentProfiles
                         )
-                    }
-                    "e" if k.modifiers.control || k.modifiers.platform => {
-                        entries.get(selected).and_then(|(_, action)| match action {
-                            product::ProductAction::UsePrompt(id) => {
-                                Some(product::ProductAction::EditPrompt(*id))
-                            }
-                            product::ProductAction::LaunchAgentProfile(id) => {
-                                Some(product::ProductAction::EditAgentProfile(*id))
-                            }
-                            product::ProductAction::ApplyLayout(id) => {
-                                Some(product::ProductAction::ConfigureTemplate(*id))
-                            }
-                            _ => None,
-                        })
-                    }
-                    "escape"
-                        if self.product.dialog.as_ref().is_some_and(|dialog| {
-                            dialog.kind == product::DialogKind::TemplateRunContext
+                    }) =>
+                {
+                    Some(
+                        if self
+                            .product
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.kind == product::DialogKind::Prompts)
+                        {
+                            product::ProductAction::ReloadPrompts
+                        } else {
+                            product::ProductAction::ReloadAgentProfiles
+                        },
+                    )
+                }
+                "p" if k.modifiers.control
+                    && !k.modifiers.shift
+                    && !k.modifiers.alt
+                    && !k.modifiers.platform
+                    && !event.is_held
+                    && self.product.dialog.as_ref().is_some_and(|dialog| {
+                        dialog.kind == product::DialogKind::AgentProfiles
+                    }) =>
+                {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::LaunchAgentProfile(id) => {
+                            let pinned = self
+                                .product
+                                .catalog
+                                .as_ref()
+                                .and_then(|catalog| catalog.agent_profile_roster.as_ref())
+                                .is_some_and(|roster| roster.pinned_ids.contains(id));
+                            Some(product::ProductAction::SetAgentProfilePinned(*id, !pinned))
+                        }
+                        _ => None,
+                    })
+                }
+                "up" | "down"
+                    if k.modifiers.alt
+                        && !k.modifiers.shift
+                        && !k.modifiers.control
+                        && !k.modifiers.platform
+                        && !event.is_held
+                        && self.product.dialog.as_ref().is_some_and(|dialog| {
+                            dialog.kind == product::DialogKind::AgentProfiles
                         }) =>
-                    {
-                        Some(product::ProductAction::ReturnTemplateRun)
-                    }
-                    "escape" => Some(product::ProductAction::CloseDialog),
-                    "enter" => entries.get(selected).map(|(_, action)| action.clone()),
-                    "delete"
-                        if self.product.dialog.as_ref().is_some_and(|dialog| {
-                            matches!(
-                                dialog.kind,
-                                product::DialogKind::Prompts | product::DialogKind::AgentProfiles
-                            )
-                        }) =>
-                    {
-                        entries.get(selected).and_then(|(_, action)| match action {
-                            product::ProductAction::UsePrompt(id) => {
-                                Some(product::ProductAction::DeletePrompt(*id))
-                            }
-                            product::ProductAction::LaunchAgentProfile(id) => {
-                                Some(product::ProductAction::DeleteAgentProfile(*id))
-                            }
-                            _ => None,
-                        })
-                    }
-                    "delete" if k.modifiers.shift => {
-                        entries.get(selected).and_then(|(_, action)| match action {
-                            product::ProductAction::ApplyLayout(id) => {
-                                Some(product::ProductAction::DeleteLayout(*id))
-                            }
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                };
+                {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::LaunchAgentProfile(id) => {
+                            let delta = if k.key == "up" { -1 } else { 1 };
+                            let allowed = self
+                                .product
+                                .catalog
+                                .as_ref()
+                                .and_then(|catalog| {
+                                    catalog.agent_profiles.as_ref().map(|profiles| {
+                                        (profiles, catalog.agent_profile_roster.as_ref())
+                                    })
+                                })
+                                .is_some_and(|(profiles, roster)| {
+                                    let ids: Vec<_> =
+                                        profiles.iter().map(|profile| profile.id).collect();
+                                    roster.is_some_and(|roster| {
+                                        profile_roster::move_within_partition(
+                                            &ids, roster, *id, delta,
+                                        )
+                                        .is_some()
+                                    })
+                                });
+                            allowed.then_some(product::ProductAction::MoveAgentProfile(*id, delta))
+                        }
+                        _ => None,
+                    })
+                }
+                "e" if k.modifiers.control || k.modifiers.platform => {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::UsePrompt(id) => {
+                            Some(product::ProductAction::EditPrompt(*id))
+                        }
+                        product::ProductAction::LaunchAgentProfile(id) => {
+                            Some(product::ProductAction::EditAgentProfile(*id))
+                        }
+                        product::ProductAction::ApplyLayout(id) => {
+                            Some(product::ProductAction::ConfigureTemplate(*id))
+                        }
+                        _ => None,
+                    })
+                }
+                "escape"
+                    if self.product.dialog.as_ref().is_some_and(|dialog| {
+                        dialog.kind == product::DialogKind::TemplateRunContext
+                    }) =>
+                {
+                    Some(product::ProductAction::ReturnTemplateRun)
+                }
+                "escape" => Some(product::ProductAction::CloseDialog),
+                "enter" => entries.get(selected).map(|(_, action)| action.clone()),
+                "delete"
+                    if self.product.dialog.as_ref().is_some_and(|dialog| {
+                        matches!(
+                            dialog.kind,
+                            product::DialogKind::Prompts | product::DialogKind::AgentProfiles
+                        )
+                    }) =>
+                {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::UsePrompt(id) => {
+                            Some(product::ProductAction::DeletePrompt(*id))
+                        }
+                        product::ProductAction::LaunchAgentProfile(id) => {
+                            Some(product::ProductAction::DeleteAgentProfile(*id))
+                        }
+                        _ => None,
+                    })
+                }
+                "delete" if k.modifiers.shift => {
+                    entries.get(selected).and_then(|(_, action)| match action {
+                        product::ProductAction::ApplyLayout(id) => {
+                            Some(product::ProductAction::DeleteLayout(*id))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
             if let Some(action) = action {
                 self.product_action(action, window, cx);
             } else if count > 0 && matches!(k.key.as_str(), "up" | "down" | "tab") {

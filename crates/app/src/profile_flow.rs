@@ -2,6 +2,42 @@
 use pigade_storage::{AgentProfile, CatalogWrite, LaunchSettings};
 use uuid::Uuid;
 
+pub(crate) fn restore_roster_selection(
+    dialog: &mut crate::product::Dialog,
+    expected_dialog: Uuid,
+    selected_profile: Uuid,
+    profile_ids: &[Uuid],
+    roster: Option<&pigade_storage::AgentProfileRoster>,
+) -> bool {
+    if dialog.id != expected_dialog || dialog.kind != crate::product::DialogKind::AgentProfiles {
+        return false;
+    }
+    let order = crate::profile_roster::display_order(profile_ids, roster);
+    if let Some(index) = order.visible_index(selected_profile) {
+        dialog.active_field = index + 1;
+        true
+    } else {
+        false
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RosterPending {
+    pub request: Uuid,
+    pub dialog: Uuid,
+    pub expected_revision: u64,
+    pub selected_profile: Uuid,
+    pub ordered_ids: Vec<Uuid>,
+    pub pinned_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RosterReload {
+    pub request: Uuid,
+    pub dialog: Uuid,
+    pub selected_profile: Option<Uuid>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProfileEditor {
     pub id: Uuid,
@@ -66,6 +102,41 @@ pub(crate) struct Pending {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roster_reply_preserves_identity_selection_and_does_not_replace_new_dialog() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let roster = pigade_storage::AgentProfileRoster {
+            schema: 1,
+            revision: 2,
+            ordered_ids: vec![c, a, b],
+            pinned_ids: vec![a],
+        };
+        let mut original = crate::product::Dialog::new(crate::product::DialogKind::AgentProfiles);
+        let id = original.id;
+        assert!(restore_roster_selection(
+            &mut original,
+            id,
+            b,
+            &[a, b, c],
+            Some(&roster)
+        ));
+        assert_eq!(original.active_field, 3); // visible order is [A, C, B]
+
+        let mut newer = crate::product::Dialog::new(crate::product::DialogKind::Prompts);
+        let newer_id = newer.id;
+        assert!(!restore_roster_selection(
+            &mut newer,
+            id,
+            b,
+            &[a, b, c],
+            Some(&roster)
+        ));
+        assert_eq!(newer.id, newer_id);
+        assert_eq!(newer.kind, crate::product::DialogKind::Prompts);
+    }
 
     #[test]
     fn retry_keeps_create_identity_and_saved_edit_uses_opened_revision() {

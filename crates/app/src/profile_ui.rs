@@ -1,5 +1,6 @@
 //! Rendering for the reusable agent profile library and editor.
 use super::*;
+use crate::profile_roster;
 
 fn profile_provider_label(provider: &str) -> &str {
     match provider {
@@ -24,12 +25,16 @@ impl ProductUi {
         match self.dialog.as_ref().map(|dialog| dialog.kind) {
             Some(DialogKind::AgentProfiles) => {
                 let mut entries = vec![("Новый профиль…".into(), ProductAction::NewAgentProfile)];
-                if let Some(profiles) = self
-                    .catalog
-                    .as_ref()
-                    .and_then(|catalog| catalog.agent_profiles.as_ref())
+                if let Some(catalog) = &self.catalog
+                    && let Some(profiles) = &catalog.agent_profiles
                 {
-                    for profile in profiles {
+                    let ids: Vec<_> = profiles.iter().map(|profile| profile.id).collect();
+                    let order =
+                        profile_roster::display_order(&ids, catalog.agent_profile_roster.as_ref());
+                    for id in order.visible_ids() {
+                        let Some(profile) = profiles.iter().find(|profile| profile.id == id) else {
+                            continue;
+                        };
                         entries.push((
                             format!("Запустить · {}", profile.name),
                             ProductAction::LaunchAgentProfile(profile.id),
@@ -100,7 +105,44 @@ impl ProductUi {
                     );
                 }
 
-                for (index, profile) in profiles.iter().enumerate() {
+                let profile_ids: Vec<_> = profiles.iter().map(|profile| profile.id).collect();
+                let roster = self
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.agent_profile_roster.as_ref());
+                let order = profile_roster::display_order(&profile_ids, roster);
+                if let Some(warning) = order.warning {
+                    content = content.child(
+                        div()
+                            .id("agent-profile-roster-warning")
+                            .role(Role::Status)
+                            .text_size(px(11.))
+                            .text_color(colors.status_amber)
+                            .whitespace_normal()
+                            .child(warning),
+                    );
+                } else if roster.is_none() {
+                    content = content.child(profile_note(
+                        chrome::Colors::for_theme(self.appearance.theme).muted,
+                        "Этот host показывает исходный порядок; закрепление и перестановка недоступны.",
+                    ));
+                }
+                if let Some(error) = &self.profile_roster_error {
+                    content = content.child(
+                        div()
+                            .id("agent-profile-roster-error")
+                            .role(Role::Alert)
+                            .text_size(px(11.))
+                            .text_color(colors.status_amber)
+                            .whitespace_normal()
+                            .child(error.clone()),
+                    );
+                }
+
+                for (index, id) in order.visible_ids().iter().enumerate() {
+                    let Some(profile) = profiles.iter().find(|profile| profile.id == *id) else {
+                        continue;
+                    };
                     let id = profile.id;
                     let provider = profile_provider_label(&profile.settings.provider);
                     let provider_state = match self.providers.as_ref() {
@@ -137,6 +179,17 @@ impl ProductUi {
                         (None, None) => None,
                     };
                     let selected = dialog.active_field == index + 1;
+                    let pinned = order.pinned_ids.contains(&id);
+                    let partition: Vec<_> = order
+                        .ordered_ids
+                        .iter()
+                        .copied()
+                        .filter(|value| order.pinned_ids.contains(value) == pinned)
+                        .collect();
+                    let can_move_up =
+                        order.can_mutate && partition.first().is_some_and(|first| *first != id);
+                    let can_move_down =
+                        order.can_mutate && partition.last().is_some_and(|last| *last != id);
                     rows = rows.child(
                         div()
                             .id(format!("agent-profile-row-{id}"))
@@ -171,6 +224,12 @@ impl ProductUi {
                                             .truncate()
                                             .child(profile.name.clone()),
                                     )
+                                    .when(pinned, |view| {
+                                        view.child(profile_note(
+                                            chrome::Colors::for_theme(self.appearance.theme).muted,
+                                            "Закреплён",
+                                        ))
+                                    })
                                     .child(profile_note(
                                         chrome::Colors::for_theme(self.appearance.theme).muted,
                                         format!("{provider} · {provider_state}"),
@@ -186,6 +245,54 @@ impl ProductUi {
                                         )
                                     })),
                             )
+                            .when(order.can_mutate, |row| {
+                                row.child(
+                                    self.action_control(
+                                        format!("agent-profile-pin-{id}"),
+                                        if pinned {
+                                            "Открепить"
+                                        } else {
+                                            "Закрепить"
+                                        }
+                                        .into(),
+                                        ProductAction::SetAgentProfilePinned(id, !pinned),
+                                        ControlStyle {
+                                            role: Role::Button,
+                                            selected: pinned,
+                                            compact: true,
+                                        },
+                                        cx,
+                                    ),
+                                )
+                                .when(can_move_up, |row| {
+                                    row.child(self.action_control_with_accessible_name(
+                                        format!("agent-profile-up-{id}"),
+                                        "↑".into(),
+                                        format!("Переместить профиль {} выше", profile.name),
+                                        ProductAction::MoveAgentProfile(id, -1),
+                                        ControlStyle {
+                                            role: Role::Button,
+                                            selected: false,
+                                            compact: true,
+                                        },
+                                        cx,
+                                    ))
+                                })
+                                .when(can_move_down, |row| {
+                                    row.child(self.action_control_with_accessible_name(
+                                        format!("agent-profile-down-{id}"),
+                                        "↓".into(),
+                                        format!("Переместить профиль {} ниже", profile.name),
+                                        ProductAction::MoveAgentProfile(id, 1),
+                                        ControlStyle {
+                                            role: Role::Button,
+                                            selected: false,
+                                            compact: true,
+                                        },
+                                        cx,
+                                    ))
+                                })
+                            })
                             .child(self.icon_control(
                                 &format!("agent-profile-launch-{id}"),
                                 &format!("Запустить профиль {}", profile.name),
@@ -210,7 +317,7 @@ impl ProductUi {
                     );
                 }
                 content.child(rows).child(self.action_control("profiles-refresh".into(),"Обновить библиотеку".into(),ProductAction::ReloadAgentProfiles,ControlStyle{role:Role::Button,selected:false,compact:true},cx)).child(profile_note(chrome::Colors::for_theme(self.appearance.theme).muted,
-                    "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Delete — удалить · Ctrl+R — обновить",
+                    "↑ ↓ — выбрать · Enter — запуск · Ctrl+E — изменить · Delete — удалить · Ctrl+P — закрепить · Alt+↑/↓ — переместить · Ctrl+R — обновить",
                 ))
             }
             DialogKind::AgentProfile => {

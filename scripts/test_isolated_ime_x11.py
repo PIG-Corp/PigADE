@@ -685,6 +685,8 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('rename/find a pane', plan['input']['catalog'])
         self.assertIn('exact-generation stop action', plan['input']['catalog'])
         self.assertIn('stop hidden bootstrap through Sessions', plan['input']['catalog'])
+        self.assertIn('seed metadata-only agent profiles and pin/reorder them through the library UI',
+                      plan['input']['catalog'])
         self.assertIn('open/refresh private workspace Git', plan['input']['catalog'])
         self.assertIn('stage/unstage four fixed per-file diffs through Git UI', plan['input']['catalog'])
         self.assertIn('review and confirm a fixed native Git commit with actual hooks',
@@ -703,6 +705,51 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('stop_confirmation_cancel_preserved_named_generation', source)
         self.assertIn('hidden_sessions_stop_exited_only_unplaced_bootstrap', source)
         self.assertIn('other_four_process_states_and_pane_tree_preserved_after_hidden_stop', source)
+        self.assertIn('agent_profile_pin_and_partition_reorder_persisted_exact_roster', source)
+        self.assertIn('agent_profile_display_order_survived_library_close_and_reopen', source)
+        self.assertIn('agent_profile_actions_preserved_profile_revisions_selection_layout_frames_and_journals',
+                      source)
+        profile_flow = source.split("report['stage'] = 'catalog-agent-profiles-seed'", 1)[1].split(
+            'git_catalog, git_layout = catalog_layout()', 1)[0]
+        for stage in ('catalog-profiles-open', 'catalog-profiles-query',
+                      'catalog-profiles-select-first', 'catalog-profiles-select-next',
+                      'catalog-profiles-pin', 'catalog-profiles-move-up',
+                      'catalog-profiles-move-down', 'catalog-profiles-close'):
+            self.assertIn(f"helper_call(config, '{stage}')", profile_flow)
+        self.assertLess(profile_flow.index("helper_call(config, 'catalog-profiles-close')"),
+                        profile_flow.index("helper_call(config, 'catalog-profiles-open')",
+                                           profile_flow.index("helper_call(config, 'catalog-profiles-close')") + 1))
+        self.assertIn("roster.get('ordered_ids') == order", source)
+        self.assertIn("'settings': profile_settings", source)
+        self.assertIn("control.sendall(b'CHECK\\n')", source)
+        self.assertNotIn('profile-launch', profile_flow)
+        self.assertNotIn('detect_providers', profile_flow)
+        seed = source.split("seeded_catalog = host_request({'command': 'catalog_apply'", 1)[1].split(
+            "profile_catalog, profile_layout = catalog_layout()", 1)[0]
+        self.assertIn("'name': name", seed)
+        self.assertIn("'revision': 0", seed)
+        self.assertIn("'provider': 'codex'", source)
+        self.assertIn("'model': None, 'reasoning_effort': None", source)
+        expected_actions = ('catalog-profiles-open', 'catalog-profiles-query',
+                            'catalog-profiles-select-first', 'catalog-profiles-pin',
+                            'catalog-profiles-select-next', 'catalog-profiles-pin',
+                            'catalog-profiles-move-up', 'catalog-profiles-pin',
+                            'catalog-profiles-move-down', 'catalog-profiles-close',
+                            'catalog-profiles-open', 'catalog-profiles-query',
+                            'catalog-profiles-close')
+        cursor = 0
+        for stage in expected_actions:
+            cursor = profile_flow.index(f"helper_call(config, '{stage}')", cursor) + 1
+        helper = Path(__file__).with_name('x11-ime-input.c').read_text()
+        open_sequence = helper.split('} else if (!strcmp(a.stage, "catalog-profiles-open")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-profiles-query")) {', 1)[0]
+        self.assertIn('setup_prefix(dpy, XK_p, 0)', open_sequence)
+        query_sequence = helper.split('} else if (!strcmp(a.stage, "catalog-profiles-query")) {', 1)[1].split(
+            '} else if (!strcmp(a.stage, "catalog-profiles-select-first")) {', 1)[0]
+        self.assertIn('XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_s', query_sequence)
+        self.assertIn('modified_key(dpy, XK_Control_L, XK_p)', helper)
+        self.assertIn('modified_key(dpy, XK_Alt_L, XK_Up)', helper)
+        self.assertIn('modified_key(dpy, XK_Alt_L, XK_Down)', helper)
         self.assertIn('current_panes == process_sessions - {bootstrap_key[0]}', source)
         self.assertIn('workspace_git_snapshot_covers_staged_unstaged_and_untracked', source)
         self.assertIn('workspace_git_refresh_reflects_private_file_removal', source)
@@ -766,6 +813,10 @@ class IsolatedImePlanTests(unittest.TestCase):
                       'catalog-stop-confirm', 'catalog-sessions-open',
                       'catalog-sessions-action', 'catalog-hidden-stop-review',
                       'catalog-hidden-stop-confirm', 'catalog-git-open',
+                      'catalog-profiles-open', 'catalog-profiles-query',
+                      'catalog-profiles-select-first', 'catalog-profiles-select-next',
+                      'catalog-profiles-pin', 'catalog-profiles-move-up',
+                      'catalog-profiles-move-down', 'catalog-profiles-close',
                       'catalog-git-query', 'catalog-git-refresh', 'catalog-git-diff-first',
                       'catalog-git-diff-second', 'catalog-git-index-apply',
                       'catalog-git-commit-open', 'catalog-git-commit-message',
@@ -805,6 +856,9 @@ class IsolatedImePlanTests(unittest.TestCase):
         self.assertIn('key(dpy, XK_Return)', hidden_stop)
         self.assertIn("'/artifacts/catalog-hidden-stop-review.ppm'", source)
         self.assertIn("'/artifacts/catalog-hidden-stop-complete.ppm'", source)
+        for artifact in ('catalog-agent-profiles-initial.ppm', 'catalog-agent-profiles-pinned.ppm',
+                         'catalog-agent-profiles-final.ppm', 'catalog-agent-profiles-reopened.ppm'):
+            self.assertIn(artifact, source)
         self.assertIn('!strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2"', helper)
         git_query = helper.split('} else if (!strcmp(a.stage, "catalog-git-query")) {', 1)[1].split(
             '} else if (!strcmp(a.stage, "catalog-git-refresh")) {', 1)[0]

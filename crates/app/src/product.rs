@@ -58,6 +58,8 @@ pub(super) enum ProductAction {
     EditAgentProfile(Uuid),
     LaunchAgentProfile(Uuid),
     DeleteAgentProfile(Uuid),
+    SetAgentProfilePinned(Uuid, bool),
+    MoveAgentProfile(Uuid, isize),
     SetProfileProvider(String),
     ToggleProfileContext,
     SaveLaunchAsProfile,
@@ -422,6 +424,7 @@ pub(super) struct ProductUi {
     pub(super) prompt_origin: Option<Dialog>,
     pub(super) profile_editor: Option<crate::profile_flow::ProfileEditor>,
     pub(super) profile_delete: Option<pigade_storage::AgentProfile>,
+    pub(super) profile_roster_error: Option<String>,
     pub(super) recipe_editor: Option<crate::template_flow::RecipeEditor>,
     pub(super) template_run: Option<protocol::TemplateRunView>,
     pub(super) template_runs: Option<pigade_storage::TemplateRunPage>,
@@ -3555,21 +3558,21 @@ impl ProductUi {
                     .role(Role::Dialog)
                     .aria_label(dialog.kind.title())
                     .w_full()
-                    .max_w(px(
-                        if matches!(
-                            dialog.kind,
-                            DialogKind::Layouts
-                                | DialogKind::Recipe
-                                | DialogKind::NewTemplateTab
-                                | DialogKind::TemplateRun
-                                | DialogKind::TemplateRunContext
-                                | DialogKind::WorkspaceGitCommit
-                        ) {
-                            560.
-                        } else {
-                            440.
-                        },
-                    ))
+                    .max_w(px(if dialog.kind == DialogKind::AgentProfiles {
+                        640.
+                    } else if matches!(
+                        dialog.kind,
+                        DialogKind::Layouts
+                            | DialogKind::Recipe
+                            | DialogKind::NewTemplateTab
+                            | DialogKind::TemplateRun
+                            | DialogKind::TemplateRunContext
+                            | DialogKind::WorkspaceGitCommit
+                    ) {
+                        560.
+                    } else {
+                        440.
+                    }))
                     .mx(px(16.))
                     .flex()
                     .flex_col()

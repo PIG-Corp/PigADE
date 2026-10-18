@@ -289,6 +289,7 @@ mod tests {
             template_launch_schema: None,
             pane_labels: None,
             agent_profiles: None,
+            agent_profile_roster: None,
             prompts: None,
             tab_close_schema: None,
             engine_options_schema: Some(1),

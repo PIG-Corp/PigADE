@@ -289,6 +289,12 @@ pub enum Command {
     CatalogApply {
         batch: Box<pigade_storage::CatalogBatch>,
     },
+    /// Change profile-list metadata independently of launches and pane placement.
+    SetAgentProfileRoster {
+        expected_revision: u64,
+        ordered_ids: Vec<Uuid>,
+        pinned_ids: Vec<Uuid>,
+    },
     SetCanvasOffset {
         tab: Uuid,
         offset: pigade_storage::CanvasOffset,
@@ -1484,6 +1490,19 @@ impl Host {
                 projects::create_workspace(&mut self.metadata, &self.root, project, task, worktree)?
             }
             Command::CatalogApply { batch } => catalog::apply_metadata(&mut self.metadata, *batch)?,
+            Command::SetAgentProfileRoster {
+                expected_revision,
+                ordered_ids,
+                pinned_ids,
+            } => {
+                // Keep malformed placement from being hidden by an unrelated edit.
+                catalog::read_metadata(&self.metadata)?;
+                self.metadata.set_agent_profile_roster(
+                    expected_revision,
+                    ordered_ids,
+                    pinned_ids,
+                )?
+            }
             Command::CloseTab {
                 tab,
                 expected_revision,

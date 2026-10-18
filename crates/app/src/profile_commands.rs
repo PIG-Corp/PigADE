@@ -3,6 +3,80 @@ use super::*;
 use product::{Dialog, DialogKind, ProductAction as A};
 
 impl CanvasApp {
+    fn update_profile_roster(
+        &mut self,
+        id: uuid::Uuid,
+        pinned: Option<bool>,
+        delta: Option<isize>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.product.profile_roster_error.is_some() {
+            self.product.notice =
+                Some("Обновите библиотеку (Ctrl+R) перед изменением порядка.".into());
+            return;
+        }
+        if self.profile_roster_pending.is_some() {
+            self.product.notice = Some("Дождитесь завершения обновления порядка профилей".into());
+            return;
+        }
+        let Some(dialog) = self
+            .product
+            .dialog
+            .as_ref()
+            .filter(|dialog| dialog.kind == DialogKind::AgentProfiles)
+        else {
+            return;
+        };
+        let dialog_id = dialog.id;
+        let Some(catalog) = self.product.catalog.as_ref() else {
+            return;
+        };
+        let Some(profiles) = catalog.agent_profiles.as_ref() else {
+            return;
+        };
+        let ids: Vec<_> = profiles.iter().map(|profile| profile.id).collect();
+        let Some(roster) = catalog.agent_profile_roster.as_ref() else {
+            self.product.notice =
+                Some("Текущий host не поддерживает изменение порядка профилей".into());
+            return;
+        };
+        let order = profile_roster::display_order(&ids, Some(roster));
+        if !order.can_mutate {
+            self.product.notice = Some(
+                order
+                    .warning
+                    .unwrap_or("Обновите библиотеку перед изменением порядка профилей.")
+                    .into(),
+            );
+            return;
+        }
+        let changed = if let Some(pinned) = pinned {
+            profile_roster::set_pinned(&ids, roster, id, pinned)
+        } else if let Some(delta) = delta {
+            profile_roster::move_within_partition(&ids, roster, id, delta)
+        } else {
+            None
+        };
+        let Some((ordered_ids, pinned_ids)) = changed else {
+            self.product.notice = Some("Профиль нельзя переместить дальше в этой группе".into());
+            return;
+        };
+        let request = uuid::Uuid::new_v4();
+        let expected_revision = roster.revision;
+        let command =
+            profile_roster::command_payload(request, expected_revision, &ordered_ids, &pinned_ids);
+        if self.try_product_command(command, cx) {
+            self.profile_roster_pending = Some(profile_flow::RosterPending {
+                request,
+                dialog: dialog_id,
+                expected_revision,
+                selected_profile: id,
+                ordered_ids,
+                pinned_ids,
+            });
+        }
+    }
+
     fn profile_editor_open(&mut self, editor: profile_flow::ProfileEditor, name: String) {
         let mut dialog = Dialog::new(DialogKind::AgentProfile);
         dialog.fields = vec![
@@ -63,13 +137,27 @@ impl CanvasApp {
                     .filter(|dialog| dialog.kind == DialogKind::AgentProfiles)
                 {
                     let dialog_id = dialog.id;
+                    let selected_profile = self.product.catalog.as_ref().and_then(|catalog| {
+                        let profiles = catalog.agent_profiles.as_ref()?;
+                        let ids: Vec<_> = profiles.iter().map(|profile| profile.id).collect();
+                        profile_roster::display_order(&ids, catalog.agent_profile_roster.as_ref())
+                            .selected_id(dialog.active_field)
+                    });
                     if self
                         .try_product_command(json!({"command":"catalog","_ui_request":request}), cx)
                     {
-                        self.profile_reload = Some((request, dialog_id));
+                        self.profile_reload = Some(profile_flow::RosterReload {
+                            request,
+                            dialog: dialog_id,
+                            selected_profile,
+                        });
                     }
                 }
             }
+            A::SetAgentProfilePinned(id, pinned) => {
+                self.update_profile_roster(id, Some(pinned), None, cx)
+            }
+            A::MoveAgentProfile(id, delta) => self.update_profile_roster(id, None, Some(delta), cx),
             A::OpenAgentProfiles => {
                 self.product.dialog = Some(Dialog::new(DialogKind::AgentProfiles));
                 self.product.notice = None;

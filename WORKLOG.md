@@ -3973,3 +3973,51 @@ Integrated frozen native Git commit review with original hooks/signing, durable 
 - Files: crates/session-host/src/workspace_git_commit.rs, crates/session-host/src/workspace_git_commit_hooks.rs, crates/session-host/src/workspace_git.rs, crates/session-host/src/workspace_git_index.rs, crates/session-host/src/lib.rs, crates/session-host/src/main.rs, crates/session-host/src/history_read.rs, crates/session-host/src/history_view.rs, crates/session-host/src/ipc_server.rs, crates/session-host/tests/project_setup.rs, crates/app/src/workspace_git.rs, crates/app/src/git_status_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/protocol.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0015-guarded-native-git-commit.md
 - Verification: Workspace tests passed; final guard change:7 module and9 real IPC tests passed; app283 tests then23 targeted Git tests passed; strict workspace/app Clippy, debug/release builds, format/version/diff checks and34 harness tests passed. Private release catalog02 passed exact commit tree/parent/message, hooks once, unchanged unstaged bytes/catalog/process identity and tab close/reattach; fresh review/result visually inspected.
 - Risks / next: Linux actual Git2.55.0 attached local/unborn branch only; no merge/rebase/amend/commit-all/remotes/interactive prompts. Unknown never repeats; hooks side effects are not rolled back. Full MVP/platform/reboot/soak/performance/a11y gates remain open; user hosts/CLI and unrelated dirt/stash untouched.
+
+## 2026-10-18T05:31:18+00:00 — git_commit_engine_luna
+
+Added durable agent profile roster ordering and pin state with schema 14 migration, revision CAS, and atomic profile create/delete updates.
+
+- Files: crates/storage/src/agent_profile_roster.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs
+- Verification: git diff --check passed; Cargo tests were intentionally not run per task boundary.
+- Risks / next: Root owns Cargo verification and host integration.
+
+## 2026-10-18T05:31:39+00:00 — git_commit_engine_luna
+
+Updated the legacy-host catalog fixture for the new optional agent profile roster field.
+
+- Files: crates/storage/src/prompt.rs
+- Verification: git diff --check passed.
+- Risks / next: Root owns Cargo verification and host integration.
+
+## 2026-10-18T05:33:36+00:00 — git_commit_engine_luna
+
+Corrected synthetic legacy schema fixtures for the v14 roster migration, updated current schema expectations, and validate roster integrity before profile writes or deletions.
+
+- Files: crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs
+- Verification: cargo test -p pigade-storage schema_v1 passed all three v10/v11/v12 migration cases; cargo test -p pigade-storage corrupt_roster_is_rejected_before_profile_batch_can_repair_it passed; git diff --check passed.
+- Risks / next: Root owns full workspace verification and integration.
+
+## 2026-10-18T05:34:17+00:00 — git_commit_research_luna
+
+Extended the existing isolated catalog fixture with three metadata-only agent profiles and fixed-keyboard pin/reorder/reopen checks before the Git flow. Each UI action checks the exact durable roster and frozen profile revisions/settings, selection/layout, process/frame identities, journal hashes and absence of bootstrap terminal input.
+
+- Files: scripts/isolated-ime-x11.py, scripts/x11-ime-input.c, scripts/test_isolated_ime_x11.py
+- Verification: python3 -m py_compile passed; scripts/test_isolated_ime_x11.py passed all 34 tests; strict C syntax check with -std=c11 -Wall -Wextra -Werror passed; scoped git diff --check passed. No native desktop or Cargo runs.
+- Risks / next: Root owns integration and isolated native execution. The fixture uses the newly specified unique palette alias “profiles”; native UI behavior and visible list ordering remain pending the root-approved isolated run.
+
+## 2026-10-18T05:34:29+00:00 — git_commit_ui_luna
+
+Added pinned and reordered agent profile library UI with CAS writes, identity-based selection restoration, explicit reload recovery, and keyboard controls
+
+- Files: crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_roster.rs, crates/app/src/profile_ui.rs, crates/app/src/product.rs, crates/app/src/main.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/workspace_git.rs, crates/app/src/transfer_flow.rs, WORKLOG.md
+- Verification: git diff --check passed. Added pure tests for roster ordering/fallback, invalid roster, partition move boundaries, request CAS payload, and late-reply dialog/selection correlation. Cargo, rustfmt, and native fixture were not run per root-owned lane.
+- Risks / next: Root should rustfmt/compile/test the app, inspect response correlation and fixture the exact A/B/C pin/move scenario; host restart/read uncertainty policies remain root-owned.
+
+## 2026-10-18T05:46:16+00:00 — /root
+
+Integrated persistent agent profile pinning/order, schema14 migration and identity-preserving library controls
+
+- Files: crates/storage/src/agent_profile_roster.rs, crates/storage/src/catalog.rs, crates/storage/src/launch.rs, crates/storage/src/lib.rs, crates/storage/src/context.rs, crates/storage/src/conversation.rs, crates/storage/src/prompt.rs, crates/session-host/src/lib.rs, crates/session-host/src/catalog.rs, crates/session-host/src/workspace_git.rs, crates/session-host/tests/project_setup.rs, crates/app/src/profile_roster.rs, crates/app/src/profile_commands.rs, crates/app/src/profile_flow.rs, crates/app/src/profile_ui.rs, crates/app/src/main.rs, crates/app/src/product.rs, crates/app/src/catalog_flow.rs, crates/app/src/setup_flow.rs, crates/app/src/transfer_flow.rs, crates/app/src/workspace_git.rs, scripts/isolated-ime-x11.py, scripts/test_isolated_ime_x11.py, scripts/x11-ime-input.c, README.md, SPEC.md, DESIGN.md, CHANGELOG.md, crates/app/README.md, docs/PROJECT_MAP.md, docs/AGENT_HANDOFF.md, docs/adr/0016-agent-profile-roster.md
+- Verification: Full workspace passes including88 storage and10 real IPC tests; app288 plus12 targeted profile tests pass; strict workspace/app Clippy, formats/version/diff and debug/release builds pass;34 harness tests pass. Existing private release catalog03 passes exact pin/order revisions, UUID selection and reopen with unchanged profile content, layout, terminal frames/journal hashes and process identities, plus existing Git/tab scenarios. Final/reopened640px library visually reviewed.
+- Risks / next: Old hosts retain original profile order without new controls. Metadata schema14 requires pre-v14 backup for downgrade; no running user host/PTY was restarted. Native Wayland/a11y/reboot/soak/performance and full MVP gates remain open. Original unrelated dirt and stash0 preserved.

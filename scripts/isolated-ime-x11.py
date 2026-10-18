@@ -2656,6 +2656,115 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
     helper_call(config, 'capture', '/artifacts/catalog-hidden-stop-complete.ppm')
     helper_call(config, 'catalog-stop-cancel')
 
+    # Seed metadata-only profiles after stop handling, then exercise only the
+    # library's fixed keyboard controls. No provider process is ever launched.
+    report['stage'] = 'catalog-agent-profiles-seed'
+    save()
+    profile_ids = [str(uuid.uuid4()) for _ in range(3)]
+    profile_names = ['Coder', 'Reviewer', 'Planner']
+    profile_settings = {
+        'provider': 'codex', 'role': '', 'instructions': '',
+        'deliver_context': False,
+        'engine': {'model': None, 'reasoning_effort': None},
+    }
+    seeded_catalog = host_request({'command': 'catalog_apply', 'batch': {
+        'projects': [], 'workspaces': [], 'tabs': [],
+        'agent_profiles': [
+            {'expected_revision': None, 'value': {
+                'id': profile_id, 'name': name, 'settings': profile_settings,
+                'revision': 0,
+            }}
+            for profile_id, name in zip(profile_ids, profile_names, strict=True)
+        ],
+    }})['catalog']
+    seeded_profiles = seeded_catalog.get('agent_profiles')
+    initial_roster = seeded_catalog.get('agent_profile_roster')
+    require(isinstance(seeded_profiles, list) and len(seeded_profiles) == 3 and
+            [(item['id'], item['name'], item['revision'], item['settings'])
+             for item in seeded_profiles] == [
+                 (profile_id, name, 1, profile_settings)
+                 for profile_id, name in zip(profile_ids, profile_names, strict=True)
+             ] and isinstance(initial_roster, dict) and
+            initial_roster.get('schema') == 1 and
+            initial_roster.get('ordered_ids') == profile_ids and
+            initial_roster.get('pinned_ids') == [],
+            'metadata-only agent profile fixture did not seed its exact initial roster')
+    profile_catalog, profile_layout = catalog_layout()
+    profile_selection = profile_catalog.get('selection')
+    profile_tab_wire = next(item for item in profile_catalog['tabs']
+                            if item['id'] == tab_id)['layout_json']
+    profile_generation_ids = fixture_generations()
+    profile_processes = process_identities()
+    profile_frames = process_frame_snapshot()
+    profile_journals = fixture_journal_hashes([generation for _, generation in profile_generation_ids])
+    profile_entries = [
+        {'id': profile_id, 'name': name, 'revision': 1, 'settings': profile_settings}
+        for profile_id, name in zip(profile_ids, profile_names, strict=True)
+    ]
+
+    def verify_profile_ui(order, pinned, expected_revision):
+        catalog = wait_until(
+            lambda: (value if isinstance((roster := value.get('agent_profile_roster')), dict) and
+                     roster.get('schema') == 1 and roster.get('revision') == expected_revision and
+                     roster.get('ordered_ids') == order and roster.get('pinned_ids') == pinned
+                     else None)
+            if (value := host_request({'command': 'catalog'})['catalog']) else None,
+            time.monotonic() + 6)
+        roster = catalog['agent_profile_roster']
+        require(catalog.get('agent_profiles') == profile_entries and
+                catalog.get('selection') == profile_selection and
+                next(item for item in catalog['tabs'] if item['id'] == tab_id)
+                    ['layout_json'] == profile_tab_wire and
+                catalog_layout()[1] == profile_layout and
+                fixture_generations() == profile_generation_ids and
+                process_identities() == profile_processes and
+                process_frame_snapshot() == profile_frames and
+                fixture_journal_hashes([generation for _, generation in profile_generation_ids]) == profile_journals,
+                'profile list interaction changed profile contents, selection, layout, or a live terminal')
+        return roster
+
+    report['stage'] = 'catalog-agent-profiles-seed'
+    save()
+    helper_call(config, 'catalog-profiles-open')
+    helper_call(config, 'catalog-profiles-query')
+    helper_call(config, 'catalog-profiles-refresh')
+    time.sleep(.3)
+    helper_call(config, 'capture', '/artifacts/catalog-agent-profiles-initial.ppm')
+    verify_profile_ui(profile_ids, [], initial_roster['revision'])
+
+    report['stage'] = 'catalog-agent-profiles-reorder'
+    save()
+    helper_call(config, 'catalog-profiles-select-first')
+    verify_profile_ui(profile_ids, [], initial_roster['revision'])
+    helper_call(config, 'catalog-profiles-pin')
+    verify_profile_ui(profile_ids, [profile_ids[0]], initial_roster['revision'] + 1)
+    helper_call(config, 'catalog-profiles-select-next')
+    verify_profile_ui(profile_ids, [profile_ids[0]], initial_roster['revision'] + 1)
+    helper_call(config, 'catalog-profiles-pin')
+    verify_profile_ui(profile_ids, profile_ids[:2], initial_roster['revision'] + 2)
+    helper_call(config, 'catalog-profiles-move-up')
+    pinned_order = [profile_ids[1], profile_ids[0], profile_ids[2]]
+    verify_profile_ui(pinned_order, profile_ids[:2], initial_roster['revision'] + 3)
+    helper_call(config, 'capture', '/artifacts/catalog-agent-profiles-pinned.ppm')
+    helper_call(config, 'catalog-profiles-pin')
+    verify_profile_ui(pinned_order, [profile_ids[0]], initial_roster['revision'] + 4)
+    helper_call(config, 'catalog-profiles-move-down')
+    final_order = [profile_ids[2], profile_ids[0], profile_ids[1]]
+    verify_profile_ui(final_order, [profile_ids[0]], initial_roster['revision'] + 5)
+    helper_call(config, 'capture', '/artifacts/catalog-agent-profiles-final.ppm')
+
+    report['stage'] = 'catalog-agent-profiles-reopen'
+    save()
+    helper_call(config, 'catalog-profiles-close')
+    verify_profile_ui(final_order, [profile_ids[0]], initial_roster['revision'] + 5)
+    helper_call(config, 'catalog-profiles-open')
+    verify_profile_ui(final_order, [profile_ids[0]], initial_roster['revision'] + 5)
+    helper_call(config, 'catalog-profiles-query')
+    helper_call(config, 'capture', '/artifacts/catalog-agent-profiles-reopened.ppm')
+    verify_profile_ui(final_order, [profile_ids[0]], initial_roster['revision'] + 5)
+    helper_call(config, 'catalog-profiles-close')
+    verify_profile_ui(final_order, [profile_ids[0]], initial_roster['revision'] + 5)
+
     git_catalog, git_layout = catalog_layout()
     git_selection = git_catalog.get('selection')
     workspace_id = git_selection.get('workspace_id') if isinstance(git_selection, dict) else None
@@ -3173,6 +3282,10 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
         'hidden_sessions_stop_confirmation_preserved_bootstrap_until_confirm': True,
         'hidden_sessions_stop_exited_only_unplaced_bootstrap': True,
         'other_four_process_states_and_pane_tree_preserved_after_hidden_stop': True,
+        'agent_profiles_seeded_as_metadata_only_with_zero_process_launches': True,
+        'agent_profile_pin_and_partition_reorder_persisted_exact_roster': True,
+        'agent_profile_display_order_survived_library_close_and_reopen': True,
+        'agent_profile_actions_preserved_profile_revisions_selection_layout_frames_and_journals': True,
         'workspace_git_snapshot_covers_staged_unstaged_and_untracked': True,
         'workspace_git_refresh_reflects_private_file_removal': True,
         'workspace_git_index_actions_used_fixed_ui_and_restored_exact_index': True,
@@ -3231,6 +3344,8 @@ def run_catalog_fixture(config, report, control, app, env, save, tab_id, baselin
                      'catalog-stop-review.ppm', 'catalog-stop-complete.ppm',
                      'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm',
                      'catalog-hidden-stop-review.ppm', 'catalog-hidden-stop-complete.ppm',
+                     'catalog-agent-profiles-initial.ppm', 'catalog-agent-profiles-pinned.ppm',
+                     'catalog-agent-profiles-final.ppm', 'catalog-agent-profiles-reopened.ppm',
                      'catalog-git-query.ppm', 'catalog-git-snapshot.ppm',
                      'catalog-git-refreshed.ppm', 'catalog-git-index-staged-review.ppm',
                      'catalog-git-worktree-review.ppm', 'catalog-git-index-tracked-review.ppm',
@@ -5697,7 +5812,10 @@ def outer_run(args) -> dict:
                   'catalog-pane-rename-input.ppm', 'catalog-pane-renamed.ppm',
                   'catalog-pane-palette.ppm', 'catalog-stop-review.ppm',
                   'catalog-stop-complete.ppm', 'catalog-sessions-query.ppm', 'catalog-hidden-sessions.ppm', 'catalog-hidden-stop-review.ppm',
-                  'catalog-hidden-stop-complete.ppm', 'catalog-git-query.ppm',
+                  'catalog-hidden-stop-complete.ppm',
+                  'catalog-agent-profiles-initial.ppm', 'catalog-agent-profiles-pinned.ppm',
+                  'catalog-agent-profiles-final.ppm', 'catalog-agent-profiles-reopened.ppm',
+                  'catalog-git-query.ppm',
                   'catalog-git-snapshot.ppm', 'catalog-git-refreshed.ppm',
                   'catalog-git-index-staged-review.ppm', 'catalog-git-worktree-review.ppm',
                   'catalog-git-index-tracked-review.ppm', 'catalog-git-untracked-review.ppm',
@@ -5737,7 +5855,7 @@ def plan(args) -> dict:
                   'setup': 'fixed private welcome Create project mouse click, type demo, Ctrl+Enter; then toolbar Terminal mouse click',
                   'controls': 'fixed private four-shell setup; Ctrl focus/Dwindle move/resize/close, private modifier selection and Alt+F, then Appearance settings persist Light/reduced-motion/Dark and terminal font size while preserving pane placement and process identity',
                   'pointer': 'fixed private four-shell setup; hover follows cursor, verifies top-left pane header focus without a click, and sends last-hover unsent text; held zero-motion Ctrl+LMB visibly picks up without durable edits and stationary release preserves exact placement/history, five-pixel modifier drag preview is cancelled with Escape and preserves exact layout/PTY geometry/process identity, focus-mode drag preview/cancel from nonzero pane index, held cancel preview, Dwindle drop and layout undo, then gutter drop nearest-pane insertion and exact tree/history undo; then native empty-tab creation and cross-tab pane drag preview/cancel and atomic transfer undo with exact two-tab snapshots, followed by Ctrl+Shift+2 and searchable-prefix keyboard transfers into an occupied tab with source-selection preservation and exact undo; picker search/selection remains visible after refresh before Enter; native XDND fixed URI list opens review, Escape cancels, and explicit Ctrl+Enter inserts only quoted unsent paths into the hit pane; fixed multiline clipboard paste is previewed, Enter ignored, Escape cancels, and Ctrl+Enter is gated on bracketed-paste mode',
-                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
+                  'catalog': 'fixed private four-shell setup; save/apply/undo/delete geometry, rename/find a pane, review/cancel/confirm its exact-generation stop action, stop hidden bootstrap through Sessions, seed metadata-only agent profiles and pin/reorder them through the library UI, open/refresh private workspace Git, stage/unstage four fixed per-file diffs through Git UI, review and confirm a fixed native Git commit with actual hooks, then review/cancel/confirm Close Tab with snapshot-safe session reattachment',
                   'recipes': 'fixed private four-shell setup; save geometry, configure four shell slots, preview without launching, then explicitly confirm and verify four acknowledged launches in a new tab',
                   'latency': 'fixed50 ordered alphabet keys with unique causal flat-cell colors and private pixel readback',
                   'opencode': 'real /usr/bin/opencode 1.19.3; fixed unsent prompt, private loopback session creation, bounded public export/import of a synthetic text-only exchange, exact-ID resume, missing-ID negative check, then UI profile create/review/launch/edit/delete with fixed model-option transport checks (no account/model acceptance claim)',

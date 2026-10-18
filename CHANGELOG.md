@@ -2,6 +2,8 @@
 
 ## 0.0.1-dev — in development
 
+- Persistent agent profile pinning and order with an independent roster revision: Ctrl+P pins, Alt+Up/Down moves within a group, selected profile identity survives rearrangement. Schema14 migrates the existing order with a durable backup; metadata-only CAS updates preserve live terminals, launch settings and layouts.
+
 - Native Git commit from frozen staged review (Git list → Create Commit / Ctrl+Enter), retaining native hooks and signing. Durable tickets, prepared/committed ref proofs, bounded background execution and host-restart inspection prevent automatic duplicate commits; missing proof stays Unknown. Initial scope is Linux/Git2.55.0 attached local/unborn branches; merge/rebase/amend/commit-all/remotes remain unsupported.
 
 - Fixed hover entry before window activation and matched Dwindle nearest-pane fallback for drops across canvas gaps.

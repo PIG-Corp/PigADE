@@ -107,6 +107,11 @@ static Args parse_args(int argc, char **argv) {
         strcmp(a.stage, "catalog-stop-cancel") && strcmp(a.stage, "catalog-stop-confirm") &&
         strcmp(a.stage, "catalog-sessions-open") && strcmp(a.stage, "catalog-sessions-action") &&
         strcmp(a.stage, "catalog-hidden-stop-review") && strcmp(a.stage, "catalog-hidden-stop-confirm") &&
+        strcmp(a.stage, "catalog-profiles-open") && strcmp(a.stage, "catalog-profiles-query") &&
+        strcmp(a.stage, "catalog-profiles-refresh") &&
+        strcmp(a.stage, "catalog-profiles-select-first") && strcmp(a.stage, "catalog-profiles-select-next") &&
+        strcmp(a.stage, "catalog-profiles-pin") && strcmp(a.stage, "catalog-profiles-move-up") &&
+        strcmp(a.stage, "catalog-profiles-move-down") && strcmp(a.stage, "catalog-profiles-close") &&
         strcmp(a.stage, "catalog-git-open") && strcmp(a.stage, "catalog-git-query") &&
         strcmp(a.stage, "catalog-git-refresh") && strcmp(a.stage, "catalog-git-close") &&
         strcmp(a.stage, "catalog-git-diff-first") &&
@@ -1466,6 +1471,28 @@ int main(int argc, char **argv) {
                    !strcmp(a.stage, "catalog-hidden-stop-confirm")) {
             key(dpy, XK_Tab);
             key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-profiles-open")) {
+            setup_prefix(dpy, XK_p, 0);
+        } else if (!strcmp(a.stage, "catalog-profiles-query")) {
+            const KeySym query[] = { XK_p, XK_r, XK_o, XK_f, XK_i, XK_l, XK_e, XK_s };
+            for (size_t i = 0; i < sizeof(query) / sizeof(query[0]); ++i) key(dpy, query[i]);
+            struct timespec palette_settle = { .tv_sec = 0, .tv_nsec = 400000000 };
+            nanosleep(&palette_settle, NULL);
+            key(dpy, XK_Return);
+        } else if (!strcmp(a.stage, "catalog-profiles-refresh")) {
+            modified_key(dpy, XK_Control_L, XK_r);
+        } else if (!strcmp(a.stage, "catalog-profiles-select-first")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "catalog-profiles-select-next")) {
+            key(dpy, XK_Down);
+        } else if (!strcmp(a.stage, "catalog-profiles-pin")) {
+            modified_key(dpy, XK_Control_L, XK_p);
+        } else if (!strcmp(a.stage, "catalog-profiles-move-up")) {
+            modified_key(dpy, XK_Alt_L, XK_Up);
+        } else if (!strcmp(a.stage, "catalog-profiles-move-down")) {
+            modified_key(dpy, XK_Alt_L, XK_Down);
+        } else if (!strcmp(a.stage, "catalog-profiles-close")) {
+            key(dpy, XK_Escape);
         } else if (!strcmp(a.stage, "catalog-git-open")) {
             setup_prefix(dpy, XK_p, 0);
         } else if (!strcmp(a.stage, "catalog-git-query")) {
@@ -1896,6 +1923,15 @@ int main(int argc, char **argv) {
                             !strcmp(a.stage, "catalog-sessions-action") ? "9" :
                             !strcmp(a.stage, "catalog-hidden-stop-review") ? "2" :
                             !strcmp(a.stage, "catalog-hidden-stop-confirm") ? "2" :
+                            !strcmp(a.stage, "catalog-profiles-open") ? "4" :
+                            !strcmp(a.stage, "catalog-profiles-query") ? "9" :
+                            !strcmp(a.stage, "catalog-profiles-refresh") ? "2" :
+                            !strcmp(a.stage, "catalog-profiles-select-first") ? "1" :
+                            !strcmp(a.stage, "catalog-profiles-select-next") ? "1" :
+                            !strcmp(a.stage, "catalog-profiles-pin") ? "2" :
+                            !strcmp(a.stage, "catalog-profiles-move-up") ? "2" :
+                            !strcmp(a.stage, "catalog-profiles-move-down") ? "2" :
+                            !strcmp(a.stage, "catalog-profiles-close") ? "1" :
                             !strcmp(a.stage, "catalog-git-open") ? "4" :
                             !strcmp(a.stage, "catalog-git-query") ? "8" :
                             !strcmp(a.stage, "catalog-git-refresh") ? "2" :

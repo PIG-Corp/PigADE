@@ -2286,6 +2286,7 @@ mod tests {
             template_launch_schema: Some(1),
             pane_labels: Some(Vec::new()),
             agent_profiles: None,
+            agent_profile_roster: None,
             prompts: None,
             tab_close_schema: None,
             engine_options_schema: Some(1),
